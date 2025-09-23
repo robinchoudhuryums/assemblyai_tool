@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download, BarChart2, Smile, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AudioWaveform } from "lucide-react";
 
 // Define a type for our combined report data
 interface ReportData {
@@ -25,9 +26,14 @@ export default function ReportsPage() {
     queryKey: ["/api/reports/summary"],
   });
 
-  if (isLoading) {
-    return <div>Loading report data...</div>;
-  }
+if (isLoading) {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+      <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+    </div>
+  );
+}
 
   return (
     <div className="min-h-screen" data-testid="reports-page">
