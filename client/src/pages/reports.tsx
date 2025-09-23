@@ -74,10 +74,14 @@ export default function ReportsPage() {
             </h3>
             <ul className="space-y-3">
               {report?.performers.map((p, i) => (
-                <li key={i} className="flex justify-between items-center">
-                  <span className="font-medium">{p.name}</span>
-                  <span className="font-bold text-green-500">{p.avgPerformanceScore.toFixed(1)}</span>
-                </li>
+              <li key={i} className="flex justify-between items-center">
+                <span className="font-medium">{p.name}</span>
+                
+                {/* This check prevents the crash if the score is missing */}
+                <span className="font-bold text-green-500">
+                  {p.avgPerformanceScore ? p.avgPerformanceScore.toFixed(1) : 'N/A'}
+                </span>
+              </li>
               ))}
             </ul>
           </div>
