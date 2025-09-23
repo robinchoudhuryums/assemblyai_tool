@@ -48,7 +48,8 @@ export default function PerformancePage() {
                   <span className="text-xs text-muted-foreground">Avg. Score</span>
                   <span className="text-xl font-bold text-green-500 flex items-center">
                     <Star className="w-4 h-4 mr-1 fill-current" />
-                    {employee.avgPerformanceScore.toFixed(1)}/10
+                    {/* This check prevents the crash if the score is missing */}
+                    {employee.avgPerformanceScore ? employee.avgPerformanceScore.toFixed(1) : 'N/A'}/10
                   </span>
                 </div>
                 <div className="flex flex-col items-center">
