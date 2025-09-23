@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import Upload from "@/pages/upload";
 import Transcripts from "@/pages/transcripts";
+import SentimentPage from "@/pages/sentiment";
 import PerformancePage from "@/pages/performance";
 import Search from "@/pages/search";
 import NotFound from "@/pages/not-found";
@@ -22,6 +23,7 @@ function Router() {
           <Route path="/transcripts" component={Transcripts} />
           <Route path="/transcripts/:id" component={Transcripts} />
           <Route path="/search" component={Search} />
+          <Route path="/sentiment" component={SentimentPage} />
           <Route path="/performance" component={PerformancePage} /> 
           <Route component={NotFound} />
         </Switch>
