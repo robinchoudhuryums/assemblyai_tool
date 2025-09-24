@@ -27,32 +27,28 @@ export default function FileUpload() {
   });
 
 const uploadMutation = useMutation({
-    mutationFn: async ({ file, employeeId }: { file: File; employeeId: string }) => {
-      const formData = new FormData();
-      // NOTE: Your server expects the file with the key "audioFile", not "audio".
-      // Let's correct that based on our previous discussions.
-      formData.append('audioFile', file); 
-      formData.append('employeeId', employeeId);
-
-      // SOLUTION: Use the standard `fetch` API directly for file uploads.
-      // The browser will automatically set the correct Content-Type header.
-      const response = await fetch('/api/calls/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        // If the server returns an error, parse it and throw an error
-        // so that React Query knows the mutation failed.
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Upload failed');
-      }
-
-      return response.json();
+    mutationFn: async ({ file, employeeId }: { file: File; employeeId:string }) => {
+      // ...fetch logic (this part stays the same)...
     },
     onSuccess: () => {
+      // This part stays the same
       queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
+      
+      // ADD THIS: Show a success toast
+      toast({
+        title: "Upload Successful",
+        description: "Your file is now being processed.",
+        variant: "default", // This usually results in a green or neutral color
+      });
+    },
+    onError: (error) => {
+      // ADD THIS: Show an error toast
+      toast({
+        title: "Upload Failed",
+        description: error.message || "An unknown error occurred.",
+        variant: "destructive", // This usually results in a red color
+      });
     },
   });
 
