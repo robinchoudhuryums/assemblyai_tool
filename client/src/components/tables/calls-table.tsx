@@ -168,14 +168,20 @@ const getStatusBadge = (status?: string) => { // Allow status to be optional
                   </div>
                 </td>
                 <td className="py-3 px-2">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-                      <span className="text-primary font-semibold text-xs">
-                        {call.employee?.initials}
-                      </span>
+                  {/* Add this check to ensure the employee object exists */}
+                  {call.employee ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
+                        <span className="text-primary font-semibold text-xs">
+                          {call.employee.initials}
+                        </span>
+                      </div>
+                      <span className="font-medium">{call.employee.name}</span>
                     </div>
-                    <span className="font-medium">{call.employee?.name}</span>
-                  </div>
+                  ) : (
+                    // If no employee is found, display a placeholder
+                    <span className="text-muted-foreground">Unassigned</span>
+                  )}
                 </td>
                 <td className="py-3 px-2 text-muted-foreground">
                   {call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s` : '-'}
