@@ -1,14 +1,13 @@
 import { defineConfig } from "drizzle-kit";
-
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL, ensure the database is provisioned");
-}
+import "dotenv/config"; // This line loads your .env file and environment variables
 
 export default defineConfig({
-  out: "./migrations",
-  schema: "./shared/schema.ts",
+  schema: "./server/db/schema.ts",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL,
+    // This now correctly reads your DATABASE_URL from the Codespaces secrets
+    url: process.env.DATABASE_URL!, 
   },
+  verbose: true,
+  strict: true,
 });
