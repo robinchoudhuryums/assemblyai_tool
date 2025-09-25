@@ -79,8 +79,16 @@ export class DbStorage implements IStorage {
     const result = await this.db.insert(schema.employees).values(employee).returning();
     return result[0];
   }
-  async getAllEmployees() {
-    return await this.db.query.employees.findMany();
+async getAllEmployees() {
+    console.log("Attempting to fetch all employees from the database...");
+    try {
+      const employeesResult = await this.db.select().from(schema.employees);
+      console.log(`Found ${employeesResult.length} employees in the database.`);
+      return employeesResult;
+    } catch (error) {
+      console.error("Error fetching employees from database:", error);
+      return []; // Return an empty array on error
+    }
   }
 
   // --- Call Methods ---
