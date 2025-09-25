@@ -8,6 +8,7 @@ export const employees = pgTable('employees', {
   role: text('role'),
   email: text('email').notNull().unique(),
   initials: varchar('initials', { length: 2 }),
+  status: text('status').default('Active'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
