@@ -17,6 +17,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './db/schema';
 import { eq, desc, count, avg, sql } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
 
 export interface IStorage {
   // Employee operations
@@ -75,8 +76,16 @@ export class DbStorage implements IStorage {
   async getEmployeeByEmail(email: string) {
     return await this.db.query.employees.findFirst({ where: eq(schema.employees.email, email) });
   }
-  async createEmployee(employee: InsertEmployee) {
-    const result = await this.db.insert(schema.employees).values(employee).returning();
+  async createEmployee(employee: InsertEmployee): Promise<Employee> {
+    const newId = randomUUID(); // 1. Generate a new unique ID
+
+    const newEmployee = {
+      ...employee,
+      id: newId, // 2. Add the new ID to the employee object
+    };
+    
+    // 3. Save the complete object (with an ID) to the database
+    const result = await this.db.insert(schema.employees).values(newEmployee).returning();
     return result[0];
   }
 async getAllEmployees() {
