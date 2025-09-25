@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import fs from 'fs';
 import csv from 'csv-parser';
 import { storage } from './server/storage'; // Make sure this path is correct
