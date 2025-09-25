@@ -1,10 +1,16 @@
 import fs from 'fs';
 import csv from 'csv-parser';
-import { DbStorage } from './server/storage'; // Import the class directly
+import { DbStorage } from './server/storage';
 import dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-// --- NEW LOGIC TO READ .env MANUALLY ---
+// --- ADD THIS BLOCK TO DEFINE __dirname ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// --- END OF BLOCK ---
+
+// This logic now works because __dirname is defined
 const envPath = path.resolve(__dirname, '.env');
 const envConfig = dotenv.parse(fs.readFileSync(envPath));
 const databaseUrl = envConfig.DATABASE_URL;
@@ -12,7 +18,6 @@ const databaseUrl = envConfig.DATABASE_URL;
 if (!databaseUrl) {
   throw new Error("Could not find DATABASE_URL in the .env file.");
 }
-// --- END OF NEW LOGIC ---
 
 // Create a new storage instance, passing the URL directly
 const storage = new DbStorage(databaseUrl); 
