@@ -183,7 +183,7 @@ const uploadMutation = useMutation({
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-foreground">Files to Upload</h4>
-            <Button onClick={uploadAll} disabled={uploadMutation.isPending} data-testid="upload-all-button">
+            <Button type="button" onClick={uploadAll} disabled={uploadMutation.isPending} data-testid="upload-all-button">
               Upload All
             </Button>
           </div>
