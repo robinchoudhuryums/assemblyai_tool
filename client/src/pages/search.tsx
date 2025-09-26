@@ -27,7 +27,7 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const { data: employees } = useQuery<Employee[]>({
+  const { data: employees, isLoading: isLoadingEmployees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
   });
 
@@ -47,7 +47,7 @@ export default function SearchPage() {
   });
 
   const displayCalls = (debouncedQuery.length > 2 ? searchResults : allCalls) ?? [];
-  const isLoading = isLoadingSearch || isLoadingCalls;
+  const isLoading = isLoadingSearch || isLoadingCalls || isLoadingEmployees;
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -56,6 +56,11 @@ export default function SearchPage() {
     setStatusFilter("all");
     setDebouncedQuery("");
   };
+
+  // --- DEFINITIVE DATA LOGGING ---
+  console.log("--- RAW EMPLOYEE DATA FROM API ---");
+  console.log(employees);
+  console.log("--- END OF RAW DATA ---");
 
   return (
     <div className="min-h-screen" data-testid="search-page">
@@ -81,11 +86,12 @@ export default function SearchPage() {
                 <SelectTrigger><User className="w-4 h-4 mr-2" /><SelectValue placeholder="All Employees" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Employees</SelectItem>
-                  {/* --- FINAL SAFETY CHECK ADDED HERE --- */}
-                  {employees?.filter(e => e && e.id && e.name).map((employee) => (
-                    <SelectItem key={employee.id} value={employee.id}>
-                      {employee.name}
-                    </SelectItem>
+                  {employees
+                    ?.filter(e => e && e.id && e.name)
+                    .map((employee) => (
+                      <SelectItem key={employee.id} value={employee.id}>
+                        {employee.name}
+                      </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
