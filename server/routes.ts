@@ -182,25 +182,29 @@ app.get("/api/calls", async (req, res) => {
 async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer) {
   console.log(`[${callId}] Starting audio processing...`);
   try {
-    // Step 1: Upload to AssemblyAI (No change)
+    // Step 1: Upload to AssemblyAI
     console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
     const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
     console.log(`[${callId}] Step 1/7: Upload successful. Audio URL: ${audioUrl}`);
 
-    // Step 2: Start transcription (No change)
+    // Step 2: Start transcription
     console.log(`[${callId}] Step 2/7: Submitting for transcription...`);
     const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
     console.log(`[${callId}] Step 2/7: Transcription submitted. Transcript ID: ${transcriptId}`);
 
-    // Update call with AssemblyAI ID
     await storage.updateCall(callId, { assemblyAiId: transcriptId });
 
-    // Step 3: Poll for transcription completion (No change)
+    // Step 3: Poll for transcription completion
     console.log(`[${callId}] Step 3/7: Polling for transcript results...`);
     const transcriptResponse = await assemblyAIService.pollTranscript(transcriptId);
+
+    // --- CRITICAL SAFETY CHECK ---
+    // This prevents the crash if polling fails to return a valid result.
+    if (!transcriptResponse || transcriptResponse.status !== 'completed') {
+      throw new Error(`Transcription polling failed or did not complete. Final status: ${transcriptResponse?.status}`);
+    }
     console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
 
-    // --- NEW LeMUR STEPS ---
     // Step 4: Submit task to LeMUR
     console.log(`[${callId}] Step 4/7: Submitting task to LeMUR...`);
     const lemurTaskId = await assemblyAIService.submitLeMURTask(transcriptId);
@@ -220,14 +224,12 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
 
-    // Update call status
     await storage.updateCall(callId, {
       status: "completed",
       duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
     });
     console.log(`[${callId}] Step 7/7: Database updated. Status is now 'completed'.`);
 
-    // Cleanup uploaded file
     await cleanupFile(filePath);
     console.log(`[${callId}] Processing finished successfully.`);
 
