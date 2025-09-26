@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -6,13 +6,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import Upload from "@/pages/upload";
 import Transcripts from "@/pages/transcripts";
-import SentimentPage from "@/pages/sentiment";
-import PerformancePage from "@/pages/performance";
-import ReportsPage from "@/pages/reports";
-import SearchV2Page from "@/pages/search-v2";
-import Search from "@/pages/search";
+import SearchPage from "@/pages/search"; // Using the simplified search page
 import NotFound from "@/pages/not-found";
 import Sidebar from "@/components/layout/sidebar";
+import { ErrorBoundary } from "@/components/lib/error-boundary"; // 1. Import the ErrorBoundary
 
 function Router() {
   return (
@@ -24,10 +21,8 @@ function Router() {
           <Route path="/upload" component={Upload} />
           <Route path="/transcripts" component={Transcripts} />
           <Route path="/transcripts/:id" component={Transcripts} />
-          <Route path="/search" component={SearchV2Page} />
-          <Route path="/sentiment" component={SentimentPage} />
-          <Route path="/performance" component={PerformancePage} />
-          <Route path="/reports" component={ReportsPage} />
+          <Route path="/search" component={SearchPage} />
+          {/* Add other page routes back here if you have them */}
           <Route component={NotFound} />
         </Switch>
       </main>
@@ -40,10 +35,14 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <Router />
+        {/* 2. Wrap the entire Router in the ErrorBoundary */}
+        <ErrorBoundary>
+          <Router />
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   );
 }
 
 export default App;
+
