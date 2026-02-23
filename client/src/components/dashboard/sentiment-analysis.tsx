@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import type { SentimentDistribution } from "@shared/schema";
 
@@ -24,28 +23,25 @@ export default function SentimentAnalysis() {
     );
   }
 
+  const positive = sentimentData?.positive ?? 0;
+  const neutral = sentimentData?.neutral ?? 0;
+  const negative = sentimentData?.negative ?? 0;
+  const total = positive + neutral + negative;
+
   const chartData = [
-    { name: "Positive", value: sentimentData?.positive ?? 0, color: "hsl(158, 64%, 52%)" },
-    { name: "Neutral", value: sentimentData?.neutral ?? 0, color: "hsl(45, 93%, 58%)" },
-    { name: "Negative", value: sentimentData?.negative ?? 0, color: "hsl(0, 84%, 60%)" },
+    { name: "Positive", value: positive, color: "hsl(158, 64%, 52%)" },
+    { name: "Neutral", value: neutral, color: "hsl(45, 93%, 58%)" },
+    { name: "Negative", value: negative, color: "hsl(0, 84%, 60%)" },
   ];
+
+  const pct = (val: number) => total > 0 ? Math.round((val / total) * 100) : 0;
 
   return (
     <div className="bg-card rounded-lg border border-border p-6" data-testid="sentiment-analysis">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Sentiment Analysis</h3>
-        <Select defaultValue="7days">
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="7days">Last 7 days</SelectItem>
-            <SelectItem value="30days">Last 30 days</SelectItem>
-            <SelectItem value="90days">Last 90 days</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
-      
+
       <div className="chart-container mb-4">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
@@ -65,25 +61,25 @@ export default function SentimentAnalysis() {
           </PieChart>
         </ResponsiveContainer>
       </div>
-      
+
       <div className="grid grid-cols-3 gap-4">
         <div className="text-center p-3 sentiment-positive rounded-lg">
           <p className="text-2xl font-bold" data-testid="sentiment-positive">
-            {sentimentData?.positive ?? 0}%
+            {pct(positive)}%
           </p>
-          <p className="text-sm font-medium">Positive</p>
+          <p className="text-sm font-medium">Positive ({positive})</p>
         </div>
         <div className="text-center p-3 sentiment-neutral rounded-lg">
           <p className="text-2xl font-bold" data-testid="sentiment-neutral">
-            {sentimentData?.neutral ?? 0}%
+            {pct(neutral)}%
           </p>
-          <p className="text-sm font-medium">Neutral</p>
+          <p className="text-sm font-medium">Neutral ({neutral})</p>
         </div>
         <div className="text-center p-3 sentiment-negative rounded-lg">
           <p className="text-2xl font-bold" data-testid="sentiment-negative">
-            {sentimentData?.negative ?? 0}%
+            {pct(negative)}%
           </p>
-          <p className="text-sm font-medium">Negative</p>
+          <p className="text-sm font-medium">Negative ({negative})</p>
         </div>
       </div>
     </div>

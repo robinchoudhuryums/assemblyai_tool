@@ -31,8 +31,8 @@ export default function MetricsOverview() {
     },
     {
       title: "Avg Sentiment",
-      value: `${metrics?.avgSentiment ?? 0}/10`,
-      change: "+0.3 improvement",
+      value: `${(metrics?.avgSentiment ?? 0).toFixed(1)}/10`,
+      change: "Avg across calls",
       changeType: "positive" as const,
       icon: Heart,
       iconBg: "bg-green-100",
@@ -49,8 +49,8 @@ export default function MetricsOverview() {
     },
     {
       title: "Team Score",
-      value: `${metrics?.teamScore ?? 0}/10`,
-      change: "+0.2 improvement",
+      value: `${(metrics?.avgPerformanceScore ?? 0).toFixed(1)}/10`,
+      change: "Avg performance",
       changeType: "positive" as const,
       icon: Star,
       iconBg: "bg-purple-100",

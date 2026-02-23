@@ -44,9 +44,11 @@ if (isLoading) {
     );
   }
 
-  const formatTimestamp = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
+  // AssemblyAI word timestamps are in milliseconds
+  const formatTimestamp = (ms: number) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -78,7 +80,7 @@ if (isLoading) {
       const timeGap = word.start - currentSegment.end;
       const speakerChange = word.speaker && word.speaker !== currentSegment.speaker;
 
-      if (timeGap > 2 || speakerChange) {
+      if (timeGap > 2000 || speakerChange) {
         segments.push({ ...currentSegment });
         currentSegment = {
           start: word.start,

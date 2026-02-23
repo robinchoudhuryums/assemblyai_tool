@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Filter, Calendar, Heart } from "lucide-react";
+import { Search, Filter, Heart } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import type { CallWithDetails } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
@@ -27,11 +26,16 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const { data: searchResults, isLoading: isLoadingSearch } = useQuery<CallWithDetails[]>({
+  const { data: searchResults, isLoading: isLoadingSearch, error: searchError } = useQuery<CallWithDetails[]>({
     queryKey: ["/api/search", { q: debouncedQuery }],
     enabled: debouncedQuery.length > 2,
-    onError: (error) => toast({ title: "Search Failed", description: error.message, variant: "destructive" }),
   });
+
+  useEffect(() => {
+    if (searchError) {
+      toast({ title: "Search Failed", description: searchError.message, variant: "destructive" });
+    }
+  }, [searchError, toast]);
 
   const { data: allCalls, isLoading: isLoadingCalls } = useQuery<CallWithDetails[]>({
     queryKey: ["/api/calls", {

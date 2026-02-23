@@ -8,11 +8,17 @@ import { assemblyAIService } from "./services/assemblyai";
 import { insertCallSchema, insertEmployeeSchema } from "@shared/schema";
 import { z } from "zod";
 
+// Ensure uploads directory exists
+const uploadsDir = 'uploads';
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Configure multer for file uploads
 const upload = multer({
-  dest: 'uploads/',
+  dest: uploadsDir,
   limits: {
-    fileSize: 500 * 1024 * 1024, // 500MB limit
+    fileSize: 100 * 1024 * 1024, // 100MB limit (reasonable for audio files)
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg'];
@@ -134,6 +140,8 @@ app.get("/api/calls", async (req, res) => {
 
       const { employeeId } = req.body;
       if (!employeeId) {
+        // HIPAA: Clean up uploaded file if validation fails
+        await cleanupFile(req.file.path);
         res.status(400).json({ message: "Employee ID is required" });
         return;
       }
@@ -141,6 +149,7 @@ app.get("/api/calls", async (req, res) => {
       // Verify employee exists
       const employee = await storage.getEmployee(employeeId);
       if (!employee) {
+        await cleanupFile(req.file.path);
         res.status(404).json({ message: "Employee not found" });
         return;
       }
@@ -153,8 +162,9 @@ app.get("/api/calls", async (req, res) => {
         status: "processing"
       });
 
-      // Start processing asynchronously
-      processAudioFile(call.id, req.file.path, req.file.buffer || fs.readFileSync(req.file.path))
+      // Read file buffer for API upload, then start async processing
+      const audioBuffer = fs.readFileSync(req.file.path);
+      processAudioFile(call.id, req.file.path, audioBuffer)
         .catch(error => {
           console.error(`Failed to process call ${call.id}:`, error);
           storage.updateCall(call.id, { status: "failed" });
@@ -162,7 +172,9 @@ app.get("/api/calls", async (req, res) => {
 
       res.status(201).json(call);
     } catch (error) {
-        console.error("Error during file upload:", error); 
+      console.error("Error during file upload:", error);
+      // HIPAA: Ensure file is cleaned up on any error
+      if (req.file?.path) await cleanupFile(req.file.path);
       res.status(500).json({ message: "Failed to upload call" });
     }
   });
@@ -205,21 +217,18 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     }
     console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
 
-    // Step 4: Submit task to LeMUR
-    console.log(`[${callId}] Step 4/7: Submitting task to LeMUR...`);
-    const lemurTaskId = await assemblyAIService.submitLeMURTask(transcriptId);
+    // Step 4: Submit task to LeMUR (returns result synchronously)
+    console.log(`[${callId}] Step 4/6: Submitting task to LeMUR...`);
+    const lemurResponse = await assemblyAIService.submitLeMURTask(transcriptId);
+    console.log(`[${callId}] Step 4/6: LeMUR analysis complete.`);
 
-    // Step 5: Poll for LeMUR results
-    console.log(`[${callId}] Step 5/7: Polling for LeMUR results...`);
-    const lemurResponse = await assemblyAIService.pollLeMURResult(lemurTaskId);
-    
-    // Step 6: Process combined results
-    console.log(`[${callId}] Step 6/7: Processing combined transcript and LeMUR data...`);
+    // Step 5: Process combined results
+    console.log(`[${callId}] Step 5/6: Processing combined transcript and LeMUR data...`);
     const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, lemurResponse, callId);
-    console.log(`[${callId}] Step 6/7: Data processing complete.`);
+    console.log(`[${callId}] Step 5/6: Data processing complete.`);
 
-    // Step 7: Store rich results
-    console.log(`[${callId}] Step 7/7: Saving rich analysis to the database...`);
+    // Step 6: Store rich results
+    console.log(`[${callId}] Step 6/6: Saving rich analysis to the database...`);
     await storage.createTranscript(transcript);
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
@@ -228,7 +237,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       status: "completed",
       duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
     });
-    console.log(`[${callId}] Step 7/7: Database updated. Status is now 'completed'.`);
+    console.log(`[${callId}] Step 6/6: Database updated. Status is now 'completed'.`);
 
     await cleanupFile(filePath);
     console.log(`[${callId}] Processing finished successfully.`);

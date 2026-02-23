@@ -255,9 +255,33 @@ async getAllEmployees() {
   }
   
   async searchCalls(query: string): Promise<CallWithDetails[]> {
-    // A true database search is more complex. This is a simplified version.
-    console.warn("searchCalls is not fully implemented for DbStorage yet.");
-    return [];
+    // Search transcripts for matching text, then return associated calls with details
+    const searchPattern = `%${query}%`;
+
+    const matchingTranscripts = await this.db
+      .select({ callId: schema.transcripts.callId })
+      .from(schema.transcripts)
+      .where(sql`${schema.transcripts.text} ILIKE ${searchPattern}`);
+
+    if (matchingTranscripts.length === 0) {
+      return [];
+    }
+
+    const matchingCallIds = matchingTranscripts.map(t => t.callId);
+
+    // Fetch full call details for matching calls
+    const calls = await this.db.query.calls.findMany({
+      with: {
+        employee: true,
+        transcript: true,
+        sentiment: true,
+        analysis: true,
+      },
+      where: sql`${schema.calls.id} IN (${sql.join(matchingCallIds.map(id => sql`${id}`), sql`, `)})`,
+      orderBy: [desc(schema.calls.uploadedAt)],
+    });
+
+    return calls as CallWithDetails[];
   }
 }
 

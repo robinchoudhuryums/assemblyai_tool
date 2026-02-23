@@ -27,11 +27,18 @@ async function syncFromCSV() {
   fs.createReadStream(csvFilePath)
     .pipe(csv())
     .on('data', (row) => {
+      const name = row["Agent Name"] || '';
+      const nameParts = name.trim().split(/\s+/);
+      const initials = nameParts.length >= 2
+        ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+        : name.slice(0, 2).toUpperCase();
+
       employeesFromCSV.push({
-        name: row["Agent Name"],
+        name,
         role: row.Department,
         email: `${row.Extension}@company.com`,
-        status: row.Status, // Read the status column
+        initials,
+        status: row.Status,
       });
     })
     .on('end', async () => {

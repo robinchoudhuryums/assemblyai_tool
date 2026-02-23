@@ -1,7 +1,6 @@
 import { Search, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import MetricsOverview from "@/components/dashboard/metrics-overview";
 import SentimentAnalysis from "@/components/dashboard/sentiment-analysis";
 import PerformanceCard from "@/components/dashboard/performance-card";
@@ -9,6 +8,8 @@ import FileUpload from "@/components/upload/file-upload";
 import CallsTable from "@/components/tables/calls-table";
 
 export default function Dashboard() {
+  const [, navigate] = useLocation();
+
   return (
     <div className="min-h-screen" data-testid="dashboard-page">
       {/* Header */}
@@ -19,15 +20,15 @@ export default function Dashboard() {
             <p className="text-muted-foreground">Monitor performance and sentiment across all customer interactions</p>
           </div>
           <div className="flex items-center space-x-4">
-            <div className="relative">
-              <Input
-                type="text"
-                placeholder="Search calls..."
-                className="w-64 pl-10"
-                data-testid="search-input"
-              />
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-            </div>
+            <Button
+              variant="outline"
+              className="w-64 justify-start text-muted-foreground"
+              onClick={() => navigate("/search")}
+              data-testid="search-input"
+            >
+              <Search className="w-4 h-4 mr-2" />
+              Search calls...
+            </Button>
             <Link href="/upload">
               <Button data-testid="upload-call-button">
                 <Plus className="w-4 h-4 mr-2" />

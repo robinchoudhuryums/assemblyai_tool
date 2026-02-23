@@ -109,7 +109,7 @@ export type DashboardMetrics = {
   totalCalls: number;
   avgSentiment: number;
   avgTranscriptionTime: number;
-  teamScore: number;
+  avgPerformanceScore: number;
 };
 
 export type SentimentDistribution = {
