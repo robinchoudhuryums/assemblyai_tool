@@ -208,6 +208,39 @@ export class GcsClient {
     return names;
   }
 
+  /** List objects with metadata (name, size, updated) */
+  async listObjectsWithMetadata(prefix: string): Promise<Array<{ name: string; size: string; updated: string }>> {
+    const token = await this.getAccessToken();
+    const items: Array<{ name: string; size: string; updated: string }> = [];
+    let pageToken: string | undefined;
+
+    do {
+      const params = new URLSearchParams({ prefix });
+      if (pageToken) params.set("pageToken", pageToken);
+
+      const response = await fetch(
+        `https://storage.googleapis.com/storage/v1/b/${this.bucketName}/o?${params}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`GCS list failed for prefix ${prefix}: ${await response.text()}`);
+      }
+
+      const data: GcsListResponse = await response.json();
+      if (data.items) {
+        for (const item of data.items) {
+          items.push(item);
+        }
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+
+    return items;
+  }
+
   /** List and download all JSON objects with a given prefix */
   async listAndDownloadJson<T>(prefix: string): Promise<T[]> {
     const names = await this.listObjects(prefix);

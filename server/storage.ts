@@ -61,6 +61,11 @@ export interface IStorage {
 
   // Audio file operations (GCS-specific)
   uploadAudioToGcs(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
+  getAudioFiles(callId: string): Promise<string[]>;
+  downloadAudioFromGcs(objectName: string): Promise<Buffer | undefined>;
+
+  // Data retention
+  purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
 
 export class GcsStorage implements IStorage {
@@ -272,6 +277,14 @@ export class GcsStorage implements IStorage {
     await this.gcs.uploadFile(`audio/${callId}/${fileName}`, buffer, contentType);
   }
 
+  async getAudioFiles(callId: string): Promise<string[]> {
+    return this.gcs.listObjects(`audio/${callId}/`);
+  }
+
+  async downloadAudioFromGcs(objectName: string): Promise<Buffer | undefined> {
+    return this.gcs.downloadFile(objectName);
+  }
+
   // --- Dashboard and Reporting Methods ---
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     const [calls, sentiments, analyses] = await Promise.all([
@@ -373,6 +386,26 @@ export class GcsStorage implements IStorage {
     return allCalls.filter((call) =>
       call.transcript?.text?.toLowerCase().includes(lowerQuery)
     );
+  }
+
+  // --- Data Retention ---
+  async purgeExpiredCalls(retentionDays: number): Promise<number> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - retentionDays);
+
+    const calls = await this.getAllCalls();
+    let purged = 0;
+
+    for (const call of calls) {
+      const uploadDate = new Date(call.uploadedAt || 0);
+      if (uploadDate < cutoff) {
+        console.log(`[RETENTION] Purging call ${call.id} (uploaded ${uploadDate.toISOString()}, older than ${retentionDays} days)`);
+        await this.deleteCall(call.id);
+        purged++;
+      }
+    }
+
+    return purged;
   }
 }
 

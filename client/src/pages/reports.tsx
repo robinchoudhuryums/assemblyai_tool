@@ -26,6 +26,41 @@ export default function ReportsPage() {
     queryKey: ["/api/reports/summary"],
   });
 
+  const handleDownloadReport = () => {
+    if (!report) return;
+
+    const lines: string[] = [];
+    lines.push('CallAnalyzer Performance Report');
+    lines.push('===============================');
+    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push('');
+    lines.push('Overall Metrics');
+    lines.push('---------------');
+    lines.push(`Total Calls Analyzed: ${report.metrics.totalCalls}`);
+    lines.push(`Average Sentiment Score: ${report.metrics.avgSentiment.toFixed(2)}`);
+    lines.push(`Average Performance Score: ${report.metrics.avgPerformanceScore.toFixed(1)}/10`);
+    lines.push('');
+    lines.push('Sentiment Breakdown');
+    lines.push('-------------------');
+    lines.push(`Positive: ${report.sentiment.positive}`);
+    lines.push(`Neutral: ${report.sentiment.neutral}`);
+    lines.push(`Negative: ${report.sentiment.negative}`);
+    lines.push('');
+    lines.push('Top Performers');
+    lines.push('--------------');
+    report.performers.forEach((p, i) => {
+      lines.push(`${i + 1}. ${p.name} — ${p.avgPerformanceScore ? Number(p.avgPerformanceScore).toFixed(1) : 'N/A'}/10`);
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `performance-report-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
 if (isLoading) {
   return (
     <div className="flex items-center justify-center h-64">
@@ -42,7 +77,7 @@ if (isLoading) {
           <h2 className="text-2xl font-bold text-foreground">Performance Reports</h2>
           <p className="text-muted-foreground">A summary of call center performance and key metrics.</p>
         </div>
-        <Button>
+        <Button onClick={handleDownloadReport} disabled={!report}>
           <Download className="w-4 h-4 mr-2" />
           Download Report
         </Button>

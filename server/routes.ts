@@ -302,6 +302,57 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   }
 }
 
+  // Stream audio file from GCS for playback or download
+  app.get("/api/calls/:id/audio", requireAuth, async (req, res) => {
+    try {
+      const call = await storage.getCall(req.params.id);
+      if (!call) {
+        res.status(404).json({ message: "Call not found" });
+        return;
+      }
+
+      // List audio files for this call in GCS (stored under audio/{callId}/)
+      const audioFiles = await storage.getAudioFiles(req.params.id);
+      if (!audioFiles || audioFiles.length === 0) {
+        res.status(404).json({ message: "Audio file not found in archive" });
+        return;
+      }
+
+      // Download the first audio file
+      const audioBuffer = await storage.downloadAudioFromGcs(audioFiles[0]);
+      if (!audioBuffer) {
+        res.status(404).json({ message: "Audio file could not be retrieved" });
+        return;
+      }
+
+      // Determine content type from file extension
+      const ext = path.extname(audioFiles[0]).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.m4a': 'audio/mp4',
+        '.mp4': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.ogg': 'audio/ogg',
+      };
+      const contentType = mimeTypes[ext] || 'audio/mpeg';
+
+      // If ?download=true, set Content-Disposition to force download
+      if (req.query.download === 'true') {
+        const fileName = call.fileName || `call-${req.params.id}${ext}`;
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      }
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', audioBuffer.length.toString());
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.send(audioBuffer);
+    } catch (error) {
+      console.error("Failed to stream audio:", error);
+      res.status(500).json({ message: "Failed to stream audio" });
+    }
+  });
+
   // Get transcript for a call
   app.get("/api/calls/:id/transcript", requireAuth, async (req, res) => {
     try {

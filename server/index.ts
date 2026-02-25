@@ -2,8 +2,23 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
+import { storage } from "./storage";
 
 const app = express();
+
+// HIPAA: Enforce HTTPS in production (redirect HTTP → HTTPS)
+app.use((req, res, next) => {
+  if (
+    process.env.NODE_ENV === "production" &&
+    req.headers["x-forwarded-proto"] !== "https" &&
+    !req.hostname.startsWith("localhost") &&
+    !req.hostname.startsWith("127.0.0.1")
+  ) {
+    return res.redirect(301, `https://${req.hostname}${req.originalUrl}`);
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -71,5 +86,24 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+
+    // HIPAA: Data retention — purge calls older than configured days
+    // Default 90 days, configurable via RETENTION_DAYS env var
+    const retentionDays = parseInt(process.env.RETENTION_DAYS || "90", 10);
+    const runRetention = async () => {
+      try {
+        const purged = await storage.purgeExpiredCalls(retentionDays);
+        if (purged > 0) {
+          log(`[RETENTION] Purged ${purged} call(s) older than ${retentionDays} days`);
+        }
+      } catch (error) {
+        console.error("[RETENTION] Error during purge:", error);
+      }
+    };
+
+    // Run once on startup (after 30s delay to let GCS auth settle)
+    setTimeout(runRetention, 30_000);
+    // Then run daily (every 24 hours)
+    setInterval(runRetention, 24 * 60 * 60 * 1000);
   });
 })();
