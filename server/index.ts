@@ -6,6 +6,12 @@ import { storage } from "./storage";
 
 const app = express();
 
+// Trust reverse proxy (Render, Heroku, etc.) so secure cookies and
+// x-forwarded-proto work correctly behind their load balancer.
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 // HIPAA: Enforce HTTPS in production (redirect HTTP → HTTPS)
 app.use((req, res, next) => {
   if (
