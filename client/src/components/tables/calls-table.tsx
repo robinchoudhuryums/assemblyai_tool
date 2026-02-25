@@ -149,8 +149,8 @@ export default function CallsTable() {
               <tr key={call.id} className="border-b border-border hover:bg-muted transition-colors">
                 <td className="py-3 px-2">
                   <div>
-                    <p className="font-medium text-foreground">{new Date(call.uploadedAt).toLocaleDateString()}</p>
-                    <p className="text-xs text-muted-foreground">{new Date(call.uploadedAt).toLocaleTimeString()}</p>
+                    <p className="font-medium text-foreground">{new Date(call.uploadedAt || "").toLocaleDateString()}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(call.uploadedAt || "").toLocaleTimeString()}</p>
                   </div>
                 </td>
                 <td className="py-3 px-2">

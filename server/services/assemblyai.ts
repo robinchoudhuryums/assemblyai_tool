@@ -169,7 +169,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
     const transcript: InsertTranscript = {
       callId,
       text: transcriptResponse.text || '',
-      confidence: transcriptResponse.confidence?.toString() ?? null,
+      confidence: transcriptResponse.confidence?.toString(),
       words: transcriptResponse.words || [],
     };
 
@@ -223,7 +223,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       callId,
       performanceScore: performanceScore.toString(),
       talkTimeRatio: talkTimeRatio.toString(),
-      responseTime: null,
+      responseTime: undefined,
       keywords: lemurData.topics || [],
       topics: lemurData.topics || [],
       summary: lemurData.summary || transcriptResponse.text?.slice(0, 500) || '',

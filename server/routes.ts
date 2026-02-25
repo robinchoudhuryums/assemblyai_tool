@@ -3,9 +3,11 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import passport from "passport";
 import { storage } from "./storage";
 import { assemblyAIService } from "./services/assemblyai";
-import { insertCallSchema, insertEmployeeSchema } from "@shared/schema";
+import { requireAuth } from "./auth";
+import { insertEmployeeSchema } from "@shared/schema";
 import { z } from "zod";
 
 // Ensure uploads directory exists
@@ -26,14 +28,54 @@ const upload = multer({
     if (allowedTypes.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only audio files are allowed.'));
+      cb(new Error('Invalid file type. Only audio files are allowed.'), false);
     }
   }
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+
+  // ==================== AUTH ROUTES (unauthenticated) ====================
+  // Users are managed via AUTH_USERS environment variable (no registration)
+
+  // Login
+  app.post("/api/auth/login", (req, res, next) => {
+    passport.authenticate("local", (err: any, user: Express.User | false, info: any) => {
+      if (err) return next(err);
+      if (!user) {
+        return res.status(401).json({ message: info?.message || "Invalid credentials" });
+      }
+      req.login(user, (loginErr) => {
+        if (loginErr) return next(loginErr);
+        res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
+      });
+    })(req, res, next);
+  });
+
+  // Logout
+  app.post("/api/auth/logout", (req, res) => {
+    req.logout((err) => {
+      if (err) {
+        res.status(500).json({ message: "Failed to logout" });
+        return;
+      }
+      res.json({ message: "Logged out" });
+    });
+  });
+
+  // Get current session user
+  app.get("/api/auth/me", (req, res) => {
+    if (req.isAuthenticated() && req.user) {
+      res.json(req.user);
+    } else {
+      res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
+  // ==================== PROTECTED ROUTES ====================
+
   // Dashboard metrics
-  app.get("/api/dashboard/metrics", async (req, res) => {
+  app.get("/api/dashboard/metrics", requireAuth, async (req, res) => {
     try {
       const metrics = await storage.getDashboardMetrics();
       res.json(metrics);
@@ -43,7 +85,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Sentiment distribution
-  app.get("/api/dashboard/sentiment", async (req, res) => {
+  app.get("/api/dashboard/sentiment", requireAuth, async (req, res) => {
     try {
       const distribution = await storage.getSentimentDistribution();
       res.json(distribution);
@@ -53,7 +95,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Top performers
-  app.get("/api/dashboard/performers", async (req, res) => {
+  app.get("/api/dashboard/performers", requireAuth, async (req, res) => {
     try {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 3;
       const performers = await storage.getTopPerformers(limit);
@@ -64,7 +106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get all employees
-  app.get("/api/employees", async (req, res) => {
+  app.get("/api/employees", requireAuth, async (req, res) => {
     try {
       const employees = await storage.getAllEmployees();
       res.json(employees);
@@ -74,7 +116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create employee
-  app.post("/api/employees", async (req, res) => {
+  app.post("/api/employees", requireAuth, async (req, res) => {
     try {
       const validatedData = insertEmployeeSchema.parse(req.body);
       const employee = await storage.createEmployee(validatedData);
@@ -89,7 +131,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get all calls with details
-app.get("/api/calls", async (req, res) => {
+app.get("/api/calls", requireAuth, async (req, res) => {
   try {
     const { status, sentiment, employee } = req.query;
     // Pass the filters directly to the storage function
@@ -105,7 +147,7 @@ app.get("/api/calls", async (req, res) => {
 });
 
   // Get single call with details
-  app.get("/api/calls/:id", async (req, res) => {
+  app.get("/api/calls/:id", requireAuth, async (req, res) => {
     try {
       const call = await storage.getCall(req.params.id);
       if (!call) {
@@ -131,7 +173,7 @@ app.get("/api/calls", async (req, res) => {
   });
 
   // Upload call recording
-  app.post("/api/calls/upload", upload.single('audioFile'), async (req, res) => {
+  app.post("/api/calls/upload", requireAuth, upload.single('audioFile'), async (req, res) => {
     try {
       if (!req.file) {
         res.status(400).json({ message: "No audio file provided" });
@@ -164,7 +206,9 @@ app.get("/api/calls", async (req, res) => {
 
       // Read file buffer for API upload, then start async processing
       const audioBuffer = fs.readFileSync(req.file.path);
-      processAudioFile(call.id, req.file.path, audioBuffer)
+      const originalName = req.file.originalname;
+      const mimeType = req.file.mimetype || "audio/mpeg";
+      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType)
         .catch(error => {
           console.error(`Failed to process call ${call.id}:`, error);
           storage.updateCall(call.id, { status: "failed" });
@@ -190,14 +234,23 @@ app.get("/api/calls", async (req, res) => {
     }
   }
 
-// Process audio file with AssemblyAI
-async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer) {
+// Process audio file with AssemblyAI and archive to GCS
+async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string) {
   console.log(`[${callId}] Starting audio processing...`);
   try {
-    // Step 1: Upload to AssemblyAI
+    // Step 1a: Upload to AssemblyAI
     console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
     const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
-    console.log(`[${callId}] Step 1/7: Upload successful. Audio URL: ${audioUrl}`);
+    console.log(`[${callId}] Step 1/7: Upload to AssemblyAI successful.`);
+
+    // Step 1b: Archive audio to GCS
+    console.log(`[${callId}] Step 1b/7: Archiving audio file to GCS...`);
+    try {
+      await storage.uploadAudioToGcs(callId, originalName, audioBuffer, mimeType);
+      console.log(`[${callId}] Step 1b/7: Audio archived to GCS.`);
+    } catch (gcsError) {
+      console.warn(`[${callId}] Warning: Failed to archive audio to GCS (continuing):`, gcsError);
+    }
 
     // Step 2: Start transcription
     console.log(`[${callId}] Step 2/7: Submitting for transcription...`);
@@ -227,8 +280,8 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, lemurResponse, callId);
     console.log(`[${callId}] Step 5/6: Data processing complete.`);
 
-    // Step 6: Store rich results
-    console.log(`[${callId}] Step 6/6: Saving rich analysis to the database...`);
+    // Step 6: Store rich results in GCS
+    console.log(`[${callId}] Step 6/6: Saving rich analysis to GCS...`);
     await storage.createTranscript(transcript);
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
@@ -237,7 +290,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       status: "completed",
       duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
     });
-    console.log(`[${callId}] Step 6/6: Database updated. Status is now 'completed'.`);
+    console.log(`[${callId}] Step 6/6: GCS updated. Status is now 'completed'.`);
 
     await cleanupFile(filePath);
     console.log(`[${callId}] Processing finished successfully.`);
@@ -250,7 +303,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
 }
 
   // Get transcript for a call
-  app.get("/api/calls/:id/transcript", async (req, res) => {
+  app.get("/api/calls/:id/transcript", requireAuth, async (req, res) => {
     try {
       const transcript = await storage.getTranscript(req.params.id);
       if (!transcript) {
@@ -264,7 +317,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   });
 
   // Get sentiment analysis for a call
-  app.get("/api/calls/:id/sentiment", async (req, res) => {
+  app.get("/api/calls/:id/sentiment", requireAuth, async (req, res) => {
     try {
       const sentiment = await storage.getSentimentAnalysis(req.params.id);
       if (!sentiment) {
@@ -278,7 +331,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   });
 
   // Get analysis for a call
-  app.get("/api/calls/:id/analysis", async (req, res) => {
+  app.get("/api/calls/:id/analysis", requireAuth, async (req, res) => {
     try {
       const analysis = await storage.getCallAnalysis(req.params.id);
       if (!analysis) {
@@ -292,7 +345,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   });
 
   // Search calls
-  app.get("/api/search", async (req, res) => {
+  app.get("/api/search", requireAuth, async (req, res) => {
     try {
       const query = req.query.q as string;
       if (!query) {
@@ -308,7 +361,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   });
 
   // This new route will handle requests for the Performance page
-app.get("/api/performance", async (req, res) => {
+app.get("/api/performance", requireAuth, async (req, res) => {
   try {
     // We can reuse the existing function to get top performers
     const performers = await storage.getTopPerformers(10); // Get top 10
@@ -319,7 +372,7 @@ app.get("/api/performance", async (req, res) => {
   }
 });
 
-  app.get("/api/reports/summary", async (req, res) => {
+  app.get("/api/reports/summary", requireAuth, async (req, res) => {
   try {
     const metrics = await storage.getDashboardMetrics();
     const sentiment = await storage.getSentimentDistribution();
@@ -338,7 +391,7 @@ app.get("/api/performance", async (req, res) => {
   }
 });
 
-  app.delete("/api/calls/:id", async (req, res) => {
+  app.delete("/api/calls/:id", requireAuth, async (req, res) => {
   try {
     const callId = req.params.id;
     

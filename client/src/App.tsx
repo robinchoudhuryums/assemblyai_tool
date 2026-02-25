@@ -1,6 +1,6 @@
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient, getQueryFn } from "./lib/queryClient";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
@@ -9,10 +9,19 @@ import Transcripts from "@/pages/transcripts";
 import PerformancePage from "@/pages/performance";
 import SentimentPage from "@/pages/sentiment";
 import ReportsPage from "@/pages/reports";
-import SearchPage from "@/pages/search"; // Using the simplified search page
+import SearchPage from "@/pages/search";
+import AuthPage from "@/pages/auth";
 import NotFound from "@/pages/not-found";
 import Sidebar from "@/components/layout/sidebar";
-import { ErrorBoundary } from "@/components/lib/error-boundary"; // 1. Import the ErrorBoundary
+import { ErrorBoundary } from "@/components/lib/error-boundary";
+import { AudioWaveform } from "lucide-react";
+
+interface AuthUser {
+  id: string;
+  username: string;
+  name: string;
+  role: string;
+}
 
 function Router() {
   return (
@@ -35,19 +44,49 @@ function Router() {
   );
 }
 
+function AuthenticatedApp() {
+  const { data: user, isLoading, error } = useQuery<AuthUser>({
+    queryKey: ["/api/auth/me"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    retry: false,
+    staleTime: Infinity, // Session doesn't change without user action
+    refetchOnWindowFocus: true,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user || error) {
+    return (
+      <AuthPage
+        onLogin={() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        }}
+      />
+    );
+  }
+
+  return (
+    <ErrorBoundary>
+      <Router />
+    </ErrorBoundary>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        {/* 2. Wrap the entire Router in the ErrorBoundary */}
-        <ErrorBoundary>
-          <Router />
-        </ErrorBoundary>
+        <AuthenticatedApp />
       </TooltipProvider>
     </QueryClientProvider>
   );
 }
 
 export default App;
-

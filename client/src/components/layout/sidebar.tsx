@@ -1,6 +1,8 @@
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, Search, Settings, User } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, Search, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: BarChart3 },
@@ -12,8 +14,32 @@ const navigation = [
   { name: "Search", href: "/search", icon: Search },
 ];
 
+interface AuthUser {
+  id: string;
+  username: string;
+  name: string;
+  role: string;
+}
+
 export default function Sidebar() {
   const [location] = useLocation();
+
+  const { data: user } = useQuery<AuthUser>({
+    queryKey: ["/api/auth/me"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    staleTime: Infinity,
+  });
+
+  const handleLogout = async () => {
+    try {
+      await apiRequest("POST", "/api/auth/logout");
+      queryClient.clear();
+      window.location.href = "/";
+    } catch (e) {
+      // Force reload on error
+      window.location.href = "/";
+    }
+  };
 
   return (
     <aside className="w-64 bg-card border-r border-border flex flex-col" data-testid="sidebar">
@@ -28,12 +54,12 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
-      
+
       <nav className="flex-1 p-4 space-y-2">
         {navigation.map((item) => {
           const Icon = item.icon;
           const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
-          
+
           return (
             <Link
               key={item.name}
@@ -52,18 +78,23 @@ export default function Sidebar() {
           );
         })}
       </nav>
-      
+
       <div className="p-4 border-t border-border">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center">
             <User className="text-muted-foreground w-4 h-4" />
           </div>
-          <div className="flex-1">
-            <p className="font-medium text-sm text-foreground">John Manager</p>
-            <p className="text-xs text-muted-foreground">Administrator</p>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm text-foreground truncate">{user?.name || "User"}</p>
+            <p className="text-xs text-muted-foreground capitalize">{user?.role || "viewer"}</p>
           </div>
-          <button className="text-muted-foreground hover:text-foreground" data-testid="settings-button">
-            <Settings className="w-4 h-4" />
+          <button
+            className="text-muted-foreground hover:text-foreground"
+            onClick={handleLogout}
+            title="Sign out"
+            data-testid="logout-button"
+          >
+            <LogOut className="w-4 h-4" />
           </button>
         </div>
       </div>

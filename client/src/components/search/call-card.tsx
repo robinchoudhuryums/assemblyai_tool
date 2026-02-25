@@ -41,13 +41,13 @@ export function CallCard({ call, index }: CallCardProps) {
                 </div>
                 <div>
                   <h3 className="font-semibold text-foreground">{call.employee.name ?? 'Unknown'}</h3>
-                  <p className="text-sm text-muted-foreground">{new Date(call.uploadedAt).toLocaleDateString()} • {formatDuration(call.duration)}</p>
+                  <p className="text-sm text-muted-foreground">{new Date(call.uploadedAt || "").toLocaleDateString()} • {formatDuration(call.duration)}</p>
                 </div>
               </>
             ) : (
               <div>
                 <h3 className="font-semibold text-foreground">Unassigned</h3>
-                <p className="text-sm text-muted-foreground">{new Date(call.uploadedAt).toLocaleDateString()} • {formatDuration(call.duration)}</p>
+                <p className="text-sm text-muted-foreground">{new Date(call.uploadedAt || "").toLocaleDateString()} • {formatDuration(call.duration)}</p>
               </div>
             )}
           </div>

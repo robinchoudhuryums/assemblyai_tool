@@ -110,7 +110,7 @@ if (isLoading) {
         <div>
           <h3 className="text-lg font-semibold text-foreground">Call Transcript</h3>
           <p className="text-sm text-muted-foreground">
-            {call.employee?.name} • {new Date(call.uploadedAt).toLocaleDateString()}
+            {call.employee?.name} • {new Date(call.uploadedAt || "").toLocaleDateString()}
           </p>
         </div>
         <div className="flex items-center space-x-2">
@@ -202,7 +202,7 @@ if (isLoading) {
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">Key Topics</h4>
               <div className="flex flex-wrap gap-2">
-                {call.analysis.topics.map((topic, index) => (
+                {call.analysis.topics.map((topic: string, index: number) => (
                   <Badge key={index} variant="outline" className="bg-primary/10 text-primary">
                     {topic}
                   </Badge>
@@ -215,7 +215,7 @@ if (isLoading) {
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">Action Items</h4>
               <ul className="space-y-1 text-sm">
-                {call.analysis.actionItems.map((item, index) => (
+                {call.analysis.actionItems.map((item: string, index: number) => (
                   <li key={index} className="flex items-center space-x-2">
                     <div className="w-2 h-2 bg-green-600 rounded-full"></div>
                     <span>{item}</span>

@@ -1,4 +1,6 @@
 import {
+  type User,
+  type InsertUser,
   type Employee,
   type InsertEmployee,
   type Call,
@@ -13,13 +15,15 @@ import {
   type DashboardMetrics,
   type SentimentDistribution,
 } from "@shared/schema";
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
-import * as schema from './db/schema';
-import { eq, desc, count, avg, sql } from 'drizzle-orm';
-import { randomUUID } from 'crypto';
+import { GcsClient } from "./services/gcs";
+import { randomUUID } from "crypto";
 
 export interface IStorage {
+  // User operations (env-var-based, no-op for GCS)
+  getUser(id: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+
   // Employee operations
   getEmployee(id: string): Promise<Employee | undefined>;
   getEmployeeByEmail(email: string): Promise<Employee | undefined>;
@@ -33,7 +37,7 @@ export interface IStorage {
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
-  getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string; }): Promise<CallWithDetails[]>;
+  getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
 
   // Transcript operations
   getTranscript(callId: string): Promise<Transcript | undefined>;
@@ -50,242 +54,326 @@ export interface IStorage {
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
   getSentimentDistribution(): Promise<SentimentDistribution>;
-  getTopPerformers(limit?: number): Promise<any[]>; // Adjusted return type
+  getTopPerformers(limit?: number): Promise<any[]>;
 
   // Search and filtering
   searchCalls(query: string): Promise<CallWithDetails[]>;
+
+  // Audio file operations (GCS-specific)
+  uploadAudioToGcs(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
 }
 
-export class DbStorage implements IStorage {
-  private db;
+export class GcsStorage implements IStorage {
+  private gcs: GcsClient;
 
-  constructor(databaseUrl?: string) {
-    const connectionString = databaseUrl || process.env.DATABASE_URL;
+  constructor() {
+    const bucketName = process.env.GCS_BUCKET || "ums-call-archive";
+    this.gcs = new GcsClient(bucketName);
+    console.log(`GCS storage initialized with bucket: ${bucketName}`);
+  }
 
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set in environment or passed to constructor.");
-    }
-
-    const pool = new Pool({ connectionString });
-    this.db = drizzle(pool, { schema });
+  // --- User Methods (env-var-based, users are managed in auth.ts) ---
+  async getUser(_id: string): Promise<User | undefined> {
+    return undefined; // Users come from env vars, not GCS
+  }
+  async getUserByUsername(_username: string): Promise<User | undefined> {
+    return undefined; // Users come from env vars, not GCS
+  }
+  async createUser(_user: InsertUser): Promise<User> {
+    throw new Error("Users are managed via AUTH_USERS environment variable");
   }
 
   // --- Employee Methods ---
-  async getEmployee(id: string) {
-    return await this.db.query.employees.findFirst({ where: eq(schema.employees.id, id) });
+  async getEmployee(id: string): Promise<Employee | undefined> {
+    return this.gcs.downloadJson<Employee>(`employees/${id}.json`);
   }
-  async getEmployeeByEmail(email: string) {
-    return await this.db.query.employees.findFirst({ where: eq(schema.employees.email, email) });
-  }
-  async createEmployee(employee: InsertEmployee): Promise<Employee> {
-    const newId = randomUUID(); // 1. Generate a new unique ID
 
-    const newEmployee = {
+  async getEmployeeByEmail(email: string): Promise<Employee | undefined> {
+    const employees = await this.getAllEmployees();
+    return employees.find((e) => e.email === email);
+  }
+
+  async createEmployee(employee: InsertEmployee): Promise<Employee> {
+    const id = randomUUID();
+    const newEmployee: Employee = {
       ...employee,
-      id: newId, // 2. Add the new ID to the employee object
+      id,
+      createdAt: new Date().toISOString(),
     };
-    
-    // 3. Save the complete object (with an ID) to the database
-    const result = await this.db.insert(schema.employees).values(newEmployee).returning();
-    return result[0];
+    await this.gcs.uploadJson(`employees/${id}.json`, newEmployee);
+    return newEmployee;
   }
 
   async updateEmployee(id: string, updates: Partial<Employee>): Promise<Employee | undefined> {
-    const result = await this.db.update(schema.employees)
-      .set(updates)
-      .where(eq(schema.employees.id, id))
-      .returning();
-    return result[0];
+    const employee = await this.getEmployee(id);
+    if (!employee) return undefined;
+    const updated = { ...employee, ...updates };
+    await this.gcs.uploadJson(`employees/${id}.json`, updated);
+    return updated;
   }
-async getAllEmployees() {
-    console.log("Attempting to fetch all employees from the database...");
+
+  async getAllEmployees(): Promise<Employee[]> {
+    console.log("Fetching all employees from GCS...");
     try {
-      const employeesResult = await this.db.select().from(schema.employees);
-      console.log(`Found ${employeesResult.length} employees in the database.`);
-      return employeesResult;
+      const employees = await this.gcs.listAndDownloadJson<Employee>("employees/");
+      console.log(`Found ${employees.length} employees in GCS.`);
+      return employees;
     } catch (error) {
-      console.error("Error fetching employees from database:", error);
-      return []; // Return an empty array on error
+      console.error("Error fetching employees from GCS:", error);
+      return [];
     }
   }
 
   // --- Call Methods ---
-  async getCall(id: string) {
-    return await this.db.query.calls.findFirst({ where: eq(schema.calls.id, id) });
+  async getCall(id: string): Promise<Call | undefined> {
+    return this.gcs.downloadJson<Call>(`calls/${id}.json`);
   }
+
   async createCall(call: InsertCall): Promise<Call> {
-    const newId = randomUUID(); // 1. Generate a new unique ID
-
-    const newCall = {
+    const id = randomUUID();
+    const newCall: Call = {
       ...call,
-      id: newId, // 2. Add the new ID to the call object
+      id,
+      uploadedAt: new Date().toISOString(),
     };
-    
-    // 3. Save the complete object (with an ID) to the database
-    const result = await this.db.insert(schema.calls).values(newCall).returning();
-    return result[0];
+    await this.gcs.uploadJson(`calls/${id}.json`, newCall);
+    return newCall;
   }
-  async updateCall(id: string, updates: Partial<Call>) {
-    const result = await this.db.update(schema.calls).set(updates).where(eq(schema.calls.id, id)).returning();
-    return result[0];
+
+  async updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined> {
+    const call = await this.getCall(id);
+    if (!call) return undefined;
+    const updated = { ...call, ...updates };
+    await this.gcs.uploadJson(`calls/${id}.json`, updated);
+    return updated;
   }
+
   async deleteCall(id: string): Promise<void> {
-    await this.db.delete(schema.calls).where(eq(schema.calls.id, id));
+    await Promise.all([
+      this.gcs.deleteObject(`calls/${id}.json`),
+      this.gcs.deleteObject(`transcripts/${id}.json`),
+      this.gcs.deleteObject(`sentiments/${id}.json`),
+      this.gcs.deleteObject(`analyses/${id}.json`),
+      this.gcs.deleteByPrefix(`audio/${id}/`),
+    ]);
   }
-  async getAllCalls() {
-    return await this.db.query.calls.findMany({ orderBy: [desc(schema.calls.uploadedAt)] });
+
+  async getAllCalls(): Promise<Call[]> {
+    const calls = await this.gcs.listAndDownloadJson<Call>("calls/");
+    return calls.sort(
+      (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
+    );
   }
-// In server/storage.ts, inside the DbStorage class
-  async getCallsWithDetails(filters: { status?: string; sentiment?: string; employee?: string; } = {}): Promise<CallWithDetails[]> {
-    console.log("Fetching calls with details, using filters:", filters);
 
-    // This query tells Drizzle to fetch calls and include all their related data
-    // from the other tables (employee, transcript, etc.)
-    const calls = await this.db.query.calls.findMany({
-      with: {
-        employee: true,
-        transcript: true,
-        sentiment: true,
-        analysis: true,
-      },
-      orderBy: [desc(schema.calls.uploadedAt)],
-    });
+  async getCallsWithDetails(
+    filters: { status?: string; sentiment?: string; employee?: string } = {}
+  ): Promise<CallWithDetails[]> {
+    console.log("Fetching calls with details from GCS, filters:", filters);
 
-    console.log(`Found ${calls.length} total calls with details from the database.`);
+    const calls = await this.getAllCalls();
+    const results: CallWithDetails[] = [];
 
-    // --- In-memory filtering (can be moved to the database for more efficiency later) ---
-    let filteredCalls = calls;
+    // Fetch details for all calls in parallel
+    await Promise.all(
+      calls.map(async (call) => {
+        const [employee, transcript, sentiment, analysis] = await Promise.all([
+          this.getEmployee(call.employeeId),
+          this.getTranscript(call.id),
+          this.getSentimentAnalysis(call.id),
+          this.getCallAnalysis(call.id),
+        ]);
+
+        results.push({
+          ...call,
+          employee: employee!,
+          transcript: transcript || undefined,
+          sentiment: sentiment || undefined,
+          analysis: analysis || undefined,
+        });
+      })
+    );
+
+    // Sort by upload date descending
+    results.sort(
+      (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
+    );
+
+    // Apply filters
+    let filtered = results;
     if (filters.status) {
-      filteredCalls = filteredCalls.filter(call => call.status === filters.status);
+      filtered = filtered.filter((c) => c.status === filters.status);
     }
     if (filters.sentiment) {
-      filteredCalls = filteredCalls.filter(call => call.sentiment?.overallSentiment === filters.sentiment);
+      filtered = filtered.filter((c) => c.sentiment?.overallSentiment === filters.sentiment);
     }
     if (filters.employee) {
-      filteredCalls = filteredCalls.filter(call => call.employeeId === filters.employee);
+      filtered = filtered.filter((c) => c.employeeId === filters.employee);
     }
-    
-    console.log(`Returning ${filteredCalls.length} filtered calls to the front-end.`);
-    return filteredCalls as CallWithDetails[];
+
+    console.log(`Returning ${filtered.length} filtered calls.`);
+    return filtered;
   }
 
   // --- Transcript Methods ---
-  async getTranscript(callId: string) {
-    return await this.db.query.transcripts.findFirst({ where: eq(schema.transcripts.callId, callId) });
+  async getTranscript(callId: string): Promise<Transcript | undefined> {
+    return this.gcs.downloadJson<Transcript>(`transcripts/${callId}.json`);
   }
+
   async createTranscript(transcript: InsertTranscript): Promise<Transcript> {
-    const newId = randomUUID();
-    const newTranscript = { ...transcript, id: newId };
-    const result = await this.db.insert(schema.transcripts).values(newTranscript).returning();
-    return result[0];
+    const id = randomUUID();
+    const newTranscript: Transcript = {
+      ...transcript,
+      id,
+      createdAt: new Date().toISOString(),
+    };
+    await this.gcs.uploadJson(`transcripts/${transcript.callId}.json`, newTranscript);
+    return newTranscript;
   }
 
   // --- Sentiment Analysis Methods ---
-  async getSentimentAnalysis(callId: string) {
-    return await this.db.query.sentiments.findFirst({ where: eq(schema.sentiments.callId, callId) });
+  async getSentimentAnalysis(callId: string): Promise<SentimentAnalysis | undefined> {
+    return this.gcs.downloadJson<SentimentAnalysis>(`sentiments/${callId}.json`);
   }
+
   async createSentimentAnalysis(sentiment: InsertSentimentAnalysis): Promise<SentimentAnalysis> {
-    const newId = randomUUID();
-    const newSentiment = { ...sentiment, id: newId };
-    const result = await this.db.insert(schema.sentiments).values(newSentiment).returning();
-    return result[0];
+    const id = randomUUID();
+    const newSentiment: SentimentAnalysis = {
+      ...sentiment,
+      id,
+      createdAt: new Date().toISOString(),
+    };
+    await this.gcs.uploadJson(`sentiments/${sentiment.callId}.json`, newSentiment);
+    return newSentiment;
   }
 
   // --- Call Analysis Methods ---
-  async getCallAnalysis(callId: string) {
-    return await this.db.query.analyses.findFirst({ where: eq(schema.analyses.callId, callId) });
+  async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
+    return this.gcs.downloadJson<CallAnalysis>(`analyses/${callId}.json`);
   }
+
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
-    const newId = randomUUID();
-    const newAnalysis = { ...analysis, id: newId };
-    const result = await this.db.insert(schema.analyses).values(newAnalysis).returning();
-    return result[0];
+    const id = randomUUID();
+    const newAnalysis: CallAnalysis = {
+      ...analysis,
+      id,
+      createdAt: new Date().toISOString(),
+    };
+    await this.gcs.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
+    return newAnalysis;
   }
-  
+
+  // --- Audio File Methods ---
+  async uploadAudioToGcs(
+    callId: string,
+    fileName: string,
+    buffer: Buffer,
+    contentType: string
+  ): Promise<void> {
+    await this.gcs.uploadFile(`audio/${callId}/${fileName}`, buffer, contentType);
+  }
+
   // --- Dashboard and Reporting Methods ---
   async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const totalCallsResult = await this.db.select({ value: count() }).from(schema.calls);
-    const avgSentimentResult = await this.db.select({ value: avg(schema.sentiments.overallScore) }).from(schema.sentiments);
-    const avgPerformanceScoreResult = await this.db.select({ value: avg(schema.analyses.performanceScore) }).from(schema.analyses);
+    const [calls, sentiments, analyses] = await Promise.all([
+      this.gcs.listObjects("calls/"),
+      this.gcs.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
+      this.gcs.listAndDownloadJson<CallAnalysis>("analyses/"),
+    ]);
+
+    const totalCalls = calls.length;
+
+    const avgSentiment =
+      sentiments.length > 0
+        ? (sentiments.reduce((sum, s) => sum + parseFloat(s.overallScore || "0"), 0) /
+            sentiments.length) *
+          10
+        : 0;
+
+    const avgPerformanceScore =
+      analyses.length > 0
+        ? analyses.reduce((sum, a) => sum + parseFloat(a.performanceScore || "0"), 0) /
+          analyses.length
+        : 0;
 
     return {
-      totalCalls: totalCallsResult[0]?.value ?? 0,
-      avgSentiment: parseFloat(avgSentimentResult[0]?.value ?? '0') * 10,
-      avgPerformanceScore: parseFloat(avgPerformanceScoreResult[0]?.value ?? '0'),
-      avgTranscriptionTime: 2.3, // Mock value
+      totalCalls,
+      avgSentiment: Math.round(avgSentiment * 100) / 100,
+      avgPerformanceScore: Math.round(avgPerformanceScore * 100) / 100,
+      avgTranscriptionTime: 2.3, // Estimated average
     };
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
-    const result = await this.db
-      .select({
-        sentiment: schema.sentiments.overallSentiment,
-        count: count(schema.sentiments.id),
-      })
-      .from(schema.sentiments)
-      .groupBy(schema.sentiments.overallSentiment);
-
+    const sentiments = await this.gcs.listAndDownloadJson<SentimentAnalysis>("sentiments/");
     const distribution: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
-    result.forEach(item => {
-      if (item.sentiment && item.sentiment in distribution) {
-        distribution[item.sentiment as keyof SentimentDistribution] = item.count;
+
+    for (const s of sentiments) {
+      const key = s.overallSentiment as keyof SentimentDistribution;
+      if (key in distribution) {
+        distribution[key]++;
       }
-    });
+    }
+
     return distribution;
   }
 
-  async getTopPerformers(limit = 3) {
-    const performers = await this.db
-      .select({
-        id: schema.employees.id,
-        name: schema.employees.name,
-        role: schema.employees.role,
-        avgPerformanceScore: avg(schema.analyses.performanceScore),
-        totalCalls: count(schema.calls.id),
-      })
-      .from(schema.employees)
-      .leftJoin(schema.calls, eq(schema.employees.id, schema.calls.employeeId))
-      .leftJoin(schema.analyses, eq(schema.calls.id, schema.analyses.callId))
-      .groupBy(schema.employees.id)
-      .orderBy(desc(avg(schema.analyses.performanceScore)))
-      .limit(limit);
+  async getTopPerformers(limit = 3): Promise<any[]> {
+    const [employees, calls, analyses] = await Promise.all([
+      this.getAllEmployees(),
+      this.gcs.listAndDownloadJson<Call>("calls/"),
+      this.gcs.listAndDownloadJson<CallAnalysis>("analyses/"),
+    ]);
 
-    // Convert string aggregates to numbers for frontend consumption
-    return performers.map(p => ({
-      ...p,
-      avgPerformanceScore: p.avgPerformanceScore ? parseFloat(p.avgPerformanceScore) : null,
-    }));
-  }
-  
-  async searchCalls(query: string): Promise<CallWithDetails[]> {
-    // Search transcripts for matching text, then return associated calls with details
-    const searchPattern = `%${query}%`;
-
-    const matchingTranscripts = await this.db
-      .select({ callId: schema.transcripts.callId })
-      .from(schema.transcripts)
-      .where(sql`${schema.transcripts.text} ILIKE ${searchPattern}`);
-
-    if (matchingTranscripts.length === 0) {
-      return [];
+    // Build a map of callId -> analysis
+    const analysisMap = new Map<string, CallAnalysis>();
+    for (const a of analyses) {
+      analysisMap.set(a.callId, a);
     }
 
-    const matchingCallIds = matchingTranscripts.map(t => t.callId);
+    // Build a map of employeeId -> { totalScore, callCount }
+    const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
+    for (const call of calls) {
+      const analysis = analysisMap.get(call.id);
+      if (!call.employeeId) continue;
 
-    // Fetch full call details for matching calls
-    const calls = await this.db.query.calls.findMany({
-      with: {
-        employee: true,
-        transcript: true,
-        sentiment: true,
-        analysis: true,
-      },
-      where: sql`${schema.calls.id} IN (${sql.join(matchingCallIds.map(id => sql`${id}`), sql`, `)})`,
-      orderBy: [desc(schema.calls.uploadedAt)],
-    });
+      const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
+      stats.callCount++;
+      if (analysis?.performanceScore) {
+        stats.totalScore += parseFloat(analysis.performanceScore);
+      }
+      employeeStats.set(call.employeeId, stats);
+    }
 
-    return calls as CallWithDetails[];
+    // Build performer list
+    const performers = employees
+      .map((emp) => {
+        const stats = employeeStats.get(emp.id) || { totalScore: 0, callCount: 0 };
+        return {
+          id: emp.id,
+          name: emp.name,
+          role: emp.role,
+          avgPerformanceScore:
+            stats.callCount > 0
+              ? Math.round((stats.totalScore / stats.callCount) * 100) / 100
+              : null,
+          totalCalls: stats.callCount,
+        };
+      })
+      .filter((p) => p.totalCalls > 0)
+      .sort((a, b) => (b.avgPerformanceScore || 0) - (a.avgPerformanceScore || 0))
+      .slice(0, limit);
+
+    return performers;
+  }
+
+  async searchCalls(query: string): Promise<CallWithDetails[]> {
+    const allCalls = await this.getCallsWithDetails();
+    const lowerQuery = query.toLowerCase();
+
+    return allCalls.filter((call) =>
+      call.transcript?.text?.toLowerCase().includes(lowerQuery)
+    );
   }
 }
 
-export const storage = new DbStorage();
+export const storage = new GcsStorage();

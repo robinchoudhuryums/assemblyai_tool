@@ -1,23 +1,9 @@
 import 'dotenv/config';
 import fs from 'fs';
 import csv from 'csv-parser';
-import { DbStorage } from './server/storage';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { GcsStorage } from './server/storage';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const envPath = path.resolve(__dirname, '.env');
-const envConfig = dotenv.parse(fs.readFileSync(envPath));
-const databaseUrl = envConfig.DATABASE_URL;
-
-if (!databaseUrl) {
-  throw new Error("Could not find DATABASE_URL in the .env file.");
-}
-
-const storage = new DbStorage(databaseUrl); 
+const storage = new GcsStorage();
 const csvFilePath = './employees.csv';
 
 async function syncFromCSV() {
@@ -42,7 +28,7 @@ async function syncFromCSV() {
       });
     })
     .on('end', async () => {
-      console.log('CSV file successfully processed. Starting database sync...');
+      console.log('CSV file successfully processed. Starting GCS sync...');
       for (const employee of employeesFromCSV) {
         if (!employee.name || !employee.email) {
           console.log("Skipping row with missing name or email...");
@@ -68,7 +54,7 @@ async function syncFromCSV() {
           console.error(`Failed to sync ${employee.name}:`, error);
         }
       }
-      console.log('Database sync complete!');
+      console.log('GCS sync complete!');
     });
 }
 

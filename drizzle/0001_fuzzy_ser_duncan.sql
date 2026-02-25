@@ -1,1 +1,0 @@
-ALTER TABLE "employees" ADD COLUMN "status" text DEFAULT 'Active';
