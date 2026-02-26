@@ -147,12 +147,12 @@ export class MemStorage implements IStorage {
     let results: CallWithDetails[] = await Promise.all(
       calls.map(async (call) => {
         const [employee, transcript, sentiment, analysis] = await Promise.all([
-          this.getEmployee(call.employeeId),
+          call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
           this.getTranscript(call.id),
           this.getSentimentAnalysis(call.id),
           this.getCallAnalysis(call.id),
         ]);
-        return { ...call, employee: employee!, transcript, sentiment, analysis } as CallWithDetails;
+        return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
       })
     );
     if (filters.status) results = results.filter((c) => c.status === filters.status);
@@ -387,7 +387,7 @@ export class GcsStorage implements IStorage {
     await Promise.all(
       calls.map(async (call) => {
         const [employee, transcript, sentiment, analysis] = await Promise.all([
-          this.getEmployee(call.employeeId),
+          call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
           this.getTranscript(call.id),
           this.getSentimentAnalysis(call.id),
           this.getCallAnalysis(call.id),
@@ -395,7 +395,7 @@ export class GcsStorage implements IStorage {
 
         results.push({
           ...call,
-          employee: employee!,
+          employee,
           transcript: transcript || undefined,
           sentiment: sentiment || undefined,
           analysis: analysis || undefined,

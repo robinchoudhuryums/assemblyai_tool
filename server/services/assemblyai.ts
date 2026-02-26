@@ -1,4 +1,5 @@
 import { InsertTranscript, InsertSentimentAnalysis, InsertCallAnalysis } from "@shared/schema";
+import type { GeminiAnalysis } from "./gemini";
 
 export interface AssemblyAIConfig {
   apiKey: string;
@@ -148,23 +149,9 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
 
   processTranscriptData(
     transcriptResponse: AssemblyAIResponse,
-    lemurResponse: LeMURResponse,
+    aiAnalysis: GeminiAnalysis | null,
     callId: string
   ): { transcript: InsertTranscript; sentiment: InsertSentimentAnalysis; analysis: InsertCallAnalysis } {
-    // Parse LeMUR response
-    let lemurData: any = {};
-    try {
-      // The LeMUR response text may contain JSON
-      const responseText = lemurResponse.response || '';
-      // Try to extract JSON from the response
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        lemurData = JSON.parse(jsonMatch[0]);
-      }
-    } catch (e) {
-      console.warn(`[${callId}] Could not parse LeMUR response as JSON, using defaults`);
-    }
-
     // Build transcript record
     const transcript: InsertTranscript = {
       callId,
@@ -173,12 +160,12 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       words: transcriptResponse.words || [],
     };
 
-    // Determine sentiment from AssemblyAI sentiment results or LeMUR
-    let overallSentiment = lemurData.sentiment || 'neutral';
-    let overallScore = lemurData.sentiment_score ?? 0.5;
+    // Determine sentiment: prefer Gemini analysis, fall back to AssemblyAI sentiment results
+    let overallSentiment = aiAnalysis?.sentiment || 'neutral';
+    let overallScore = aiAnalysis?.sentiment_score ?? 0.5;
 
-    // If AssemblyAI returned sentiment_analysis_results, use them for more accurate data
-    if (transcriptResponse.sentiment_analysis_results?.length) {
+    // If no AI analysis, derive sentiment from AssemblyAI's built-in sentiment results
+    if (!aiAnalysis && transcriptResponse.sentiment_analysis_results?.length) {
       const sentiments = transcriptResponse.sentiment_analysis_results;
       const positiveCount = sentiments.filter(s => s.sentiment === 'POSITIVE').length;
       const negativeCount = sentiments.filter(s => s.sentiment === 'NEGATIVE').length;
@@ -188,7 +175,6 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       else if (negativeCount > total * 0.3) overallSentiment = 'negative';
       else overallSentiment = 'neutral';
 
-      // Calculate weighted score from sentiment results
       const avgConfidence = sentiments.reduce((sum, s) => {
         const weight = s.sentiment === 'POSITIVE' ? s.confidence : s.sentiment === 'NEGATIVE' ? (1 - s.confidence) : 0.5;
         return sum + weight;
@@ -204,7 +190,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
     };
 
     // Build analysis record
-    const performanceScore = lemurData.performance_score ?? 5.0;
+    const performanceScore = aiAnalysis?.performance_score ?? 5.0;
     const words = transcriptResponse.words || [];
 
     // Calculate talk time ratio (if speaker labels exist)
@@ -224,12 +210,12 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       performanceScore: performanceScore.toString(),
       talkTimeRatio: talkTimeRatio.toString(),
       responseTime: undefined,
-      keywords: lemurData.topics || [],
-      topics: lemurData.topics || [],
-      summary: lemurData.summary || transcriptResponse.text?.slice(0, 500) || '',
-      actionItems: lemurData.action_items || [],
-      feedback: lemurData.feedback || { strengths: [], suggestions: [] },
-      lemurResponse: lemurResponse,
+      keywords: aiAnalysis?.topics || [],
+      topics: aiAnalysis?.topics || [],
+      summary: aiAnalysis?.summary || transcriptResponse.text?.slice(0, 500) || '',
+      actionItems: aiAnalysis?.action_items || [],
+      feedback: aiAnalysis?.feedback || { strengths: [], suggestions: [] },
+      lemurResponse: undefined,
     };
 
     return { transcript, sentiment, analysis };

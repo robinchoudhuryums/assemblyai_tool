@@ -29,7 +29,7 @@ export const employeeSchema = insertEmployeeSchema.extend({
 
 // --- CALL SCHEMAS ---
 export const insertCallSchema = z.object({
-  employeeId: z.string(),
+  employeeId: z.string().optional(),
   fileName: z.string().optional(),
   filePath: z.string().optional(),
   status: z.string().default("pending"),
@@ -108,7 +108,7 @@ export type CallAnalysis = z.infer<typeof callAnalysisSchema>;
 
 // --- COMBINED TYPES ---
 export type CallWithDetails = Call & {
-  employee: Employee;
+  employee?: Employee;
   transcript?: Transcript;
   sentiment?: SentimentAnalysis;
   analysis?: CallAnalysis;

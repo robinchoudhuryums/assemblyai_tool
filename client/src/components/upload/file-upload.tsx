@@ -27,10 +27,10 @@ export default function FileUpload() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, employeeId }: { file: File; employeeId: string }) => {
+    mutationFn: async ({ file, employeeId }: { file: File; employeeId?: string }) => {
       const formData = new FormData();
       formData.append('audioFile', file);
-      formData.append('employeeId', employeeId);
+      if (employeeId) formData.append('employeeId', employeeId);
       
       const response = await fetch('/api/calls/upload', {
         method: 'POST',
@@ -76,13 +76,9 @@ export default function FileUpload() {
 
   const uploadFile = async (index: number) => {
     const fileData = uploadFiles[index];
-    if (!fileData.employeeId) {
-      toast({ title: "Employee Required", description: "Please select an employee.", variant: "destructive" });
-      return;
-    }
     try {
       updateFile(index, { status: 'uploading', progress: 0 });
-      await uploadMutation.mutateAsync({ file: fileData.file, employeeId: fileData.employeeId });
+      await uploadMutation.mutateAsync({ file: fileData.file, employeeId: fileData.employeeId || undefined });
       updateFile(index, { status: 'completed', progress: 100 });
       setTimeout(() => removeFile(index), 3000);
     } catch (error) {
@@ -92,7 +88,7 @@ export default function FileUpload() {
 
   const uploadAll = () => {
     uploadFiles.forEach((file, index) => {
-      if (file.status === 'pending' && file.employeeId) {
+      if (file.status === 'pending') {
         uploadFile(index);
       }
     });
