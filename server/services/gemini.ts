@@ -1,17 +1,15 @@
 /**
- * Gemini AI client for call analysis (summary, scoring, feedback).
- * Replaces LeMUR. Supports two authentication modes:
+ * Gemini AI provider for call analysis.
  *
- * 1. GEMINI_API_KEY — Google AI Studio API key (simplest, great for testing)
- *    Uses: generativelanguage.googleapis.com
- *    Get a key at: https://aistudio.google.com/apikey
- *
- * 2. Service account credentials (Vertex AI) — for production / BAA environments
- *    Uses: {region}-aiplatform.googleapis.com
+ * Supports two authentication modes:
+ * 1. GEMINI_API_KEY — Google AI Studio (simplest, great for testing)
+ * 2. Service account credentials — Vertex AI (production / BAA)
  *    Credential priority: GEMINI_CREDENTIALS > GCS_CREDENTIALS > GOOGLE_APPLICATION_CREDENTIALS
  */
 import { createSign } from "crypto";
 import fs from "fs";
+import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
+import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 
 interface ServiceAccountKey {
   client_email: string;
@@ -19,27 +17,13 @@ interface ServiceAccountKey {
   project_id: string;
 }
 
-export interface GeminiAnalysis {
-  summary: string;
-  topics: string[];
-  sentiment: string;
-  sentiment_score: number;
-  performance_score: number;
-  action_items: string[];
-  feedback: {
-    strengths: string[];
-    suggestions: string[];
-  };
-}
-
 type AuthMode = "api_key" | "vertex_ai" | "none";
 
-// Default models per auth mode. The free tier for 2.0-flash on AI Studio is
-// heavily restricted (limit: 0 in many regions), so default to 1.5-flash there.
-const DEFAULT_MODEL_API_KEY = "gemini-1.5-flash";
+const DEFAULT_MODEL_API_KEY = "gemini-2.5-flash";
 const DEFAULT_MODEL_VERTEX = "gemini-2.0-flash";
 
-export class GeminiService {
+export class GeminiProvider implements AIAnalysisProvider {
+  readonly name = "gemini";
   private authMode: AuthMode = "none";
   private apiKey: string | null = null;
   private credentials: ServiceAccountKey | null = null;
@@ -48,12 +32,12 @@ export class GeminiService {
   private model: string;
 
   constructor() {
-    // Priority 1: GEMINI_API_KEY (Google AI Studio — simplest for personal/testing)
+    // Priority 1: GEMINI_API_KEY (Google AI Studio)
     if (process.env.GEMINI_API_KEY) {
       this.apiKey = process.env.GEMINI_API_KEY;
       this.authMode = "api_key";
       this.model = process.env.GEMINI_MODEL || DEFAULT_MODEL_API_KEY;
-      console.log(`Gemini service initialized (mode: API key via AI Studio, model: ${this.model})`);
+      console.log(`Gemini provider initialized (mode: API key via AI Studio, model: ${this.model})`);
       return;
     }
 
@@ -62,9 +46,9 @@ export class GeminiService {
     try {
       this.credentials = this.loadServiceAccountCredentials();
       this.authMode = "vertex_ai";
-      console.log(`Gemini service initialized (mode: Vertex AI, project: ${this.credentials.project_id}, model: ${this.model})`);
+      console.log(`Gemini provider initialized (mode: Vertex AI, project: ${this.credentials.project_id}, model: ${this.model})`);
     } catch {
-      console.warn("Gemini service: No credentials found. AI analysis will be unavailable.");
+      console.warn("Gemini provider: No credentials found.");
     }
   }
 
@@ -73,15 +57,12 @@ export class GeminiService {
   }
 
   private loadServiceAccountCredentials(): ServiceAccountKey {
-    // Priority 2: Dedicated GEMINI_CREDENTIALS (separate from GCS)
     if (process.env.GEMINI_CREDENTIALS) {
       return JSON.parse(process.env.GEMINI_CREDENTIALS);
     }
-    // Priority 3: Shared GCS credentials
     if (process.env.GCS_CREDENTIALS) {
       return JSON.parse(process.env.GCS_CREDENTIALS);
     }
-    // Priority 4: File-based credentials
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       const raw = fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, "utf-8");
       return JSON.parse(raw);
@@ -136,26 +117,25 @@ export class GeminiService {
 
   // --- Core analysis ---
 
-  async analyzeCallTranscript(transcriptText: string, callId: string): Promise<GeminiAnalysis> {
+  async analyzeCallTranscript(transcriptText: string, callId: string): Promise<CallAnalysis> {
     if (this.authMode === "none") {
-      throw new Error("Gemini service not configured");
+      throw new Error("Gemini provider not configured");
     }
 
     const model = this.model;
-    const prompt = this.buildPrompt(transcriptText);
+    const prompt = buildAnalysisPrompt(transcriptText);
 
     const requestBody = {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 8192,
       },
     };
 
     let response: Response;
 
     if (this.authMode === "api_key") {
-      // Google AI Studio endpoint (API key auth)
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
       console.log(`[${callId}] Calling Gemini (${model}, AI Studio) for analysis...`);
       response = await fetch(url, {
@@ -164,7 +144,6 @@ export class GeminiService {
         body: JSON.stringify(requestBody),
       });
     } else {
-      // Vertex AI endpoint (service account auth)
       const token = await this.getAccessToken();
       const projectId = this.credentials!.project_id;
       const location = "us-central1";
@@ -186,48 +165,22 @@ export class GeminiService {
     }
 
     const result = await response.json();
-    const responseText = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    // Extract JSON from response (handle potential markdown fences)
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn(`[${callId}] Gemini response was not parseable JSON:`, responseText.slice(0, 200));
-      throw new Error("Gemini response did not contain valid JSON");
+    // Gemini 2.5+ models may return a "thought" part before the actual text.
+    const parts = result.candidates?.[0]?.content?.parts || [];
+    let responseText = "";
+    for (const part of parts) {
+      if (part.text && !part.thought) {
+        responseText = part.text;
+        break;
+      }
+    }
+    if (!responseText && parts.length > 0) {
+      responseText = parts[parts.length - 1].text || "";
     }
 
-    const analysis: GeminiAnalysis = JSON.parse(jsonMatch[0]);
+    const analysis = parseJsonResponse(responseText, callId);
     console.log(`[${callId}] Gemini analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);
     return analysis;
   }
-
-  private buildPrompt(transcriptText: string): string {
-    return `You are analyzing a customer service call transcript for a medical supply company. Analyze the following transcript and provide your assessment.
-
-TRANSCRIPT:
-${transcriptText}
-
-Respond with ONLY valid JSON in this exact format (no markdown, no code fences):
-{
-  "summary": "A concise one-paragraph summary of what happened in the call",
-  "topics": ["topic1", "topic2", "topic3"],
-  "sentiment": "positive|neutral|negative",
-  "sentiment_score": 0.0,
-  "performance_score": 0.0,
-  "action_items": ["action1", "action2"],
-  "feedback": {
-    "strengths": ["strength1", "strength2"],
-    "suggestions": ["suggestion1", "suggestion2"]
-  }
 }
-
-Guidelines:
-- sentiment_score: 0.0 to 1.0 (1.0 = most positive)
-- performance_score: 0.0 to 10.0 (10.0 = best)
-- Evaluate the agent on: professionalism, product knowledge, empathy, problem resolution, and compliance with medical supply protocols
-- Be specific in strengths and suggestions — reference actual moments from the call
-- Include 2-4 action items that are concrete and actionable
-- Topics should be specific (e.g. "order tracking", "billing dispute") not generic`;
-  }
-}
-
-export const geminiService = new GeminiService();

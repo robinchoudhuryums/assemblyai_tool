@@ -1,5 +1,5 @@
 import { InsertTranscript, InsertSentimentAnalysis, InsertCallAnalysis } from "@shared/schema";
-import type { GeminiAnalysis } from "./gemini";
+import type { CallAnalysis } from "./ai-provider";
 
 export interface AssemblyAIConfig {
   apiKey: string;
@@ -149,7 +149,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
 
   processTranscriptData(
     transcriptResponse: AssemblyAIResponse,
-    aiAnalysis: GeminiAnalysis | null,
+    aiAnalysis: CallAnalysis | null,
     callId: string
   ): { transcript: InsertTranscript; sentiment: InsertSentimentAnalysis; analysis: InsertCallAnalysis } {
     // Build transcript record
