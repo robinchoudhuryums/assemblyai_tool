@@ -16,10 +16,24 @@ import {
   type SentimentDistribution,
 } from "@shared/schema";
 import { GcsClient } from "./services/gcs";
+import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
 
+/** Common interface for GCS and S3 object storage clients */
+export interface ObjectStorageClient {
+  uploadJson(objectName: string, data: unknown): Promise<void>;
+  uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void>;
+  downloadJson<T>(objectName: string): Promise<T | undefined>;
+  downloadFile(objectName: string): Promise<Buffer | undefined>;
+  listObjects(prefix: string): Promise<string[]>;
+  listObjectsWithMetadata(prefix: string): Promise<Array<{ name: string; size: string; updated: string }>>;
+  listAndDownloadJson<T>(prefix: string): Promise<T[]>;
+  deleteObject(objectName: string): Promise<void>;
+  deleteByPrefix(prefix: string): Promise<void>;
+}
+
 export interface IStorage {
-  // User operations (env-var-based, no-op for GCS)
+  // User operations (env-var-based)
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -59,17 +73,17 @@ export interface IStorage {
   // Search and filtering
   searchCalls(query: string): Promise<CallWithDetails[]>;
 
-  // Audio file operations (GCS-specific)
-  uploadAudioToGcs(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
+  // Audio file operations
+  uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
   getAudioFiles(callId: string): Promise<string[]>;
-  downloadAudioFromGcs(objectName: string): Promise<Buffer | undefined>;
+  downloadAudio(objectName: string): Promise<Buffer | undefined>;
 
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
 
 /**
- * In-memory storage fallback for when GCS credentials are not configured.
+ * In-memory storage fallback for when cloud credentials are not configured.
  * Data lives only for the lifetime of the process.
  */
 export class MemStorage implements IStorage {
@@ -191,13 +205,13 @@ export class MemStorage implements IStorage {
     return newAnalysis;
   }
 
-  async uploadAudioToGcs(callId: string, fileName: string, buffer: Buffer, _contentType: string): Promise<void> {
+  async uploadAudio(callId: string, fileName: string, buffer: Buffer, _contentType: string): Promise<void> {
     this.audioFiles.set(`audio/${callId}/${fileName}`, buffer);
   }
   async getAudioFiles(callId: string): Promise<string[]> {
     return [...this.audioFiles.keys()].filter((k) => k.startsWith(`audio/${callId}/`));
   }
-  async downloadAudioFromGcs(objectName: string): Promise<Buffer | undefined> {
+  async downloadAudio(objectName: string): Promise<Buffer | undefined> {
     return this.audioFiles.get(objectName);
   }
 
@@ -273,21 +287,19 @@ export class MemStorage implements IStorage {
   }
 }
 
-export class GcsStorage implements IStorage {
-  private gcs: GcsClient;
+export class CloudStorage implements IStorage {
+  private client: ObjectStorageClient;
 
-  constructor() {
-    const bucketName = process.env.GCS_BUCKET || "ums-call-archive";
-    this.gcs = new GcsClient(bucketName);
-    console.log(`GCS storage initialized with bucket: ${bucketName}`);
+  constructor(client: ObjectStorageClient) {
+    this.client = client;
   }
 
   // --- User Methods (env-var-based, users are managed in auth.ts) ---
   async getUser(_id: string): Promise<User | undefined> {
-    return undefined; // Users come from env vars, not GCS
+    return undefined; // Users come from env vars
   }
   async getUserByUsername(_username: string): Promise<User | undefined> {
-    return undefined; // Users come from env vars, not GCS
+    return undefined; // Users come from env vars
   }
   async createUser(_user: InsertUser): Promise<User> {
     throw new Error("Users are managed via AUTH_USERS environment variable");
@@ -295,7 +307,7 @@ export class GcsStorage implements IStorage {
 
   // --- Employee Methods ---
   async getEmployee(id: string): Promise<Employee | undefined> {
-    return this.gcs.downloadJson<Employee>(`employees/${id}.json`);
+    return this.client.downloadJson<Employee>(`employees/${id}.json`);
   }
 
   async getEmployeeByEmail(email: string): Promise<Employee | undefined> {
@@ -310,7 +322,7 @@ export class GcsStorage implements IStorage {
       id,
       createdAt: new Date().toISOString(),
     };
-    await this.gcs.uploadJson(`employees/${id}.json`, newEmployee);
+    await this.client.uploadJson(`employees/${id}.json`, newEmployee);
     return newEmployee;
   }
 
@@ -318,25 +330,25 @@ export class GcsStorage implements IStorage {
     const employee = await this.getEmployee(id);
     if (!employee) return undefined;
     const updated = { ...employee, ...updates };
-    await this.gcs.uploadJson(`employees/${id}.json`, updated);
+    await this.client.uploadJson(`employees/${id}.json`, updated);
     return updated;
   }
 
   async getAllEmployees(): Promise<Employee[]> {
-    console.log("Fetching all employees from GCS...");
+    console.log("Fetching all employees...");
     try {
-      const employees = await this.gcs.listAndDownloadJson<Employee>("employees/");
-      console.log(`Found ${employees.length} employees in GCS.`);
+      const employees = await this.client.listAndDownloadJson<Employee>("employees/");
+      console.log(`Found ${employees.length} employees.`);
       return employees;
     } catch (error) {
-      console.error("Error fetching employees from GCS:", error);
+      console.error("Error fetching employees:", error);
       return [];
     }
   }
 
   // --- Call Methods ---
   async getCall(id: string): Promise<Call | undefined> {
-    return this.gcs.downloadJson<Call>(`calls/${id}.json`);
+    return this.client.downloadJson<Call>(`calls/${id}.json`);
   }
 
   async createCall(call: InsertCall): Promise<Call> {
@@ -346,7 +358,7 @@ export class GcsStorage implements IStorage {
       id,
       uploadedAt: new Date().toISOString(),
     };
-    await this.gcs.uploadJson(`calls/${id}.json`, newCall);
+    await this.client.uploadJson(`calls/${id}.json`, newCall);
     return newCall;
   }
 
@@ -354,22 +366,22 @@ export class GcsStorage implements IStorage {
     const call = await this.getCall(id);
     if (!call) return undefined;
     const updated = { ...call, ...updates };
-    await this.gcs.uploadJson(`calls/${id}.json`, updated);
+    await this.client.uploadJson(`calls/${id}.json`, updated);
     return updated;
   }
 
   async deleteCall(id: string): Promise<void> {
     await Promise.all([
-      this.gcs.deleteObject(`calls/${id}.json`),
-      this.gcs.deleteObject(`transcripts/${id}.json`),
-      this.gcs.deleteObject(`sentiments/${id}.json`),
-      this.gcs.deleteObject(`analyses/${id}.json`),
-      this.gcs.deleteByPrefix(`audio/${id}/`),
+      this.client.deleteObject(`calls/${id}.json`),
+      this.client.deleteObject(`transcripts/${id}.json`),
+      this.client.deleteObject(`sentiments/${id}.json`),
+      this.client.deleteObject(`analyses/${id}.json`),
+      this.client.deleteByPrefix(`audio/${id}/`),
     ]);
   }
 
   async getAllCalls(): Promise<Call[]> {
-    const calls = await this.gcs.listAndDownloadJson<Call>("calls/");
+    const calls = await this.client.listAndDownloadJson<Call>("calls/");
     return calls.sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
@@ -378,7 +390,7 @@ export class GcsStorage implements IStorage {
   async getCallsWithDetails(
     filters: { status?: string; sentiment?: string; employee?: string } = {}
   ): Promise<CallWithDetails[]> {
-    console.log("Fetching calls with details from GCS, filters:", filters);
+    console.log("Fetching calls with details, filters:", filters);
 
     const calls = await this.getAllCalls();
     const results: CallWithDetails[] = [];
@@ -426,7 +438,7 @@ export class GcsStorage implements IStorage {
 
   // --- Transcript Methods ---
   async getTranscript(callId: string): Promise<Transcript | undefined> {
-    return this.gcs.downloadJson<Transcript>(`transcripts/${callId}.json`);
+    return this.client.downloadJson<Transcript>(`transcripts/${callId}.json`);
   }
 
   async createTranscript(transcript: InsertTranscript): Promise<Transcript> {
@@ -436,13 +448,13 @@ export class GcsStorage implements IStorage {
       id,
       createdAt: new Date().toISOString(),
     };
-    await this.gcs.uploadJson(`transcripts/${transcript.callId}.json`, newTranscript);
+    await this.client.uploadJson(`transcripts/${transcript.callId}.json`, newTranscript);
     return newTranscript;
   }
 
   // --- Sentiment Analysis Methods ---
   async getSentimentAnalysis(callId: string): Promise<SentimentAnalysis | undefined> {
-    return this.gcs.downloadJson<SentimentAnalysis>(`sentiments/${callId}.json`);
+    return this.client.downloadJson<SentimentAnalysis>(`sentiments/${callId}.json`);
   }
 
   async createSentimentAnalysis(sentiment: InsertSentimentAnalysis): Promise<SentimentAnalysis> {
@@ -452,13 +464,13 @@ export class GcsStorage implements IStorage {
       id,
       createdAt: new Date().toISOString(),
     };
-    await this.gcs.uploadJson(`sentiments/${sentiment.callId}.json`, newSentiment);
+    await this.client.uploadJson(`sentiments/${sentiment.callId}.json`, newSentiment);
     return newSentiment;
   }
 
   // --- Call Analysis Methods ---
   async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
-    return this.gcs.downloadJson<CallAnalysis>(`analyses/${callId}.json`);
+    return this.client.downloadJson<CallAnalysis>(`analyses/${callId}.json`);
   }
 
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
@@ -468,34 +480,34 @@ export class GcsStorage implements IStorage {
       id,
       createdAt: new Date().toISOString(),
     };
-    await this.gcs.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
+    await this.client.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
     return newAnalysis;
   }
 
   // --- Audio File Methods ---
-  async uploadAudioToGcs(
+  async uploadAudio(
     callId: string,
     fileName: string,
     buffer: Buffer,
     contentType: string
   ): Promise<void> {
-    await this.gcs.uploadFile(`audio/${callId}/${fileName}`, buffer, contentType);
+    await this.client.uploadFile(`audio/${callId}/${fileName}`, buffer, contentType);
   }
 
   async getAudioFiles(callId: string): Promise<string[]> {
-    return this.gcs.listObjects(`audio/${callId}/`);
+    return this.client.listObjects(`audio/${callId}/`);
   }
 
-  async downloadAudioFromGcs(objectName: string): Promise<Buffer | undefined> {
-    return this.gcs.downloadFile(objectName);
+  async downloadAudio(objectName: string): Promise<Buffer | undefined> {
+    return this.client.downloadFile(objectName);
   }
 
   // --- Dashboard and Reporting Methods ---
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     const [calls, sentiments, analyses] = await Promise.all([
-      this.gcs.listObjects("calls/"),
-      this.gcs.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
-      this.gcs.listAndDownloadJson<CallAnalysis>("analyses/"),
+      this.client.listObjects("calls/"),
+      this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
+      this.client.listAndDownloadJson<CallAnalysis>("analyses/"),
     ]);
 
     const totalCalls = calls.length;
@@ -522,7 +534,7 @@ export class GcsStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
-    const sentiments = await this.gcs.listAndDownloadJson<SentimentAnalysis>("sentiments/");
+    const sentiments = await this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/");
     const distribution: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
 
     for (const s of sentiments) {
@@ -538,8 +550,8 @@ export class GcsStorage implements IStorage {
   async getTopPerformers(limit = 3): Promise<any[]> {
     const [employees, calls, analyses] = await Promise.all([
       this.getAllEmployees(),
-      this.gcs.listAndDownloadJson<Call>("calls/"),
-      this.gcs.listAndDownloadJson<CallAnalysis>("analyses/"),
+      this.client.listAndDownloadJson<Call>("calls/"),
+      this.client.listAndDownloadJson<CallAnalysis>("analyses/"),
     ]);
 
     // Build a map of callId -> analysis
@@ -615,11 +627,23 @@ export class GcsStorage implements IStorage {
 }
 
 function createStorage(): IStorage {
-  if (process.env.GCS_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    console.log("[STORAGE] GCS credentials detected — using GcsStorage");
-    return new GcsStorage();
+  const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
+
+  // Explicit S3 or auto-detect via AWS credentials + S3_BUCKET
+  if (storageBackend === "s3" || (!storageBackend && process.env.S3_BUCKET)) {
+    const bucket = process.env.S3_BUCKET || "ums-call-archive";
+    console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);
+    return new CloudStorage(new S3Client(bucket));
   }
-  console.log("[STORAGE] No GCS credentials — using in-memory storage (data will not persist across restarts)");
+
+  // Explicit GCS or auto-detect via GCS credentials
+  if (storageBackend === "gcs" || process.env.GCS_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const bucket = process.env.GCS_BUCKET || "ums-call-archive";
+    console.log(`[STORAGE] Using GCS (bucket: ${bucket})`);
+    return new CloudStorage(new GcsClient(bucket));
+  }
+
+  console.log("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts)");
   return new MemStorage();
 }
 

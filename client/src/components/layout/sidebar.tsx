@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, Search, LogOut, User } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -11,6 +11,7 @@ const navigation = [
   { name: "Sentiment", href: "/sentiment", icon: Heart },
   { name: "Performance", href: "/performance", icon: Users },
   { name: "Reports", href: "/reports", icon: BarChart3 },
+  { name: "Employees", href: "/employees", icon: UserPlus },
   { name: "Search", href: "/search", icon: Search },
 ];
 

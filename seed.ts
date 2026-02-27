@@ -1,9 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import csv from 'csv-parser';
-import { GcsStorage } from './server/storage';
-
-const storage = new GcsStorage();
+import { storage } from './server/storage';
 const csvFilePath = './employees.csv';
 
 async function syncFromCSV() {
@@ -28,7 +26,7 @@ async function syncFromCSV() {
       });
     })
     .on('end', async () => {
-      console.log('CSV file successfully processed. Starting GCS sync...');
+      console.log('CSV file successfully processed. Starting cloud sync...');
       for (const employee of employeesFromCSV) {
         if (!employee.name || !employee.email) {
           console.log("Skipping row with missing name or email...");
@@ -54,7 +52,7 @@ async function syncFromCSV() {
           console.error(`Failed to sync ${employee.name}:`, error);
         }
       }
-      console.log('GCS sync complete!');
+      console.log('Sync complete!');
     });
 }
 

@@ -10,6 +10,7 @@ import PerformancePage from "@/pages/performance";
 import SentimentPage from "@/pages/sentiment";
 import ReportsPage from "@/pages/reports";
 import SearchPage from "@/pages/search";
+import EmployeesPage from "@/pages/employees";
 import AuthPage from "@/pages/auth";
 import NotFound from "@/pages/not-found";
 import Sidebar from "@/components/layout/sidebar";
@@ -37,6 +38,7 @@ function Router() {
           <Route path="/performance" component={PerformancePage} />
           <Route path="/sentiment" component={SentimentPage} />
           <Route path="/reports" component={ReportsPage} />
+          <Route path="/employees" component={EmployeesPage} />
           <Route component={NotFound} />
         </Switch>
       </main>

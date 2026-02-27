@@ -231,7 +231,7 @@ app.get("/api/calls", requireAuth, async (req, res) => {
     }
   }
 
-// Process audio file with AssemblyAI and archive to GCS
+// Process audio file with AssemblyAI and archive to cloud storage
 async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string) {
   console.log(`[${callId}] Starting audio processing...`);
   try {
@@ -240,13 +240,13 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
     console.log(`[${callId}] Step 1/7: Upload to AssemblyAI successful.`);
 
-    // Step 1b: Archive audio to GCS
-    console.log(`[${callId}] Step 1b/7: Archiving audio file to GCS...`);
+    // Step 1b: Archive audio to cloud storage
+    console.log(`[${callId}] Step 1b/7: Archiving audio file to cloud storage...`);
     try {
-      await storage.uploadAudioToGcs(callId, originalName, audioBuffer, mimeType);
-      console.log(`[${callId}] Step 1b/7: Audio archived to GCS.`);
-    } catch (gcsError) {
-      console.warn(`[${callId}] Warning: Failed to archive audio to GCS (continuing):`, gcsError);
+      await storage.uploadAudio(callId, originalName, audioBuffer, mimeType);
+      console.log(`[${callId}] Step 1b/7: Audio archived.`);
+    } catch (archiveError) {
+      console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, archiveError);
     }
 
     // Step 2: Start transcription
@@ -286,8 +286,8 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, aiAnalysis, callId);
     console.log(`[${callId}] Step 5/6: Data processing complete.`);
 
-    // Step 6: Store rich results in GCS
-    console.log(`[${callId}] Step 6/6: Saving rich analysis to GCS...`);
+    // Step 6: Store results
+    console.log(`[${callId}] Step 6/6: Saving analysis results...`);
     await storage.createTranscript(transcript);
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
@@ -296,7 +296,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       status: "completed",
       duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
     });
-    console.log(`[${callId}] Step 6/6: GCS updated. Status is now 'completed'.`);
+    console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.`);
 
     await cleanupFile(filePath);
     console.log(`[${callId}] Processing finished successfully.`);
@@ -308,7 +308,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   }
 }
 
-  // Stream audio file from GCS for playback or download
+  // Stream audio file from cloud storage for playback or download
   app.get("/api/calls/:id/audio", requireAuth, async (req, res) => {
     try {
       const call = await storage.getCall(req.params.id);
@@ -317,7 +317,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         return;
       }
 
-      // List audio files for this call in GCS (stored under audio/{callId}/)
+      // List audio files for this call (stored under audio/{callId}/)
       const audioFiles = await storage.getAudioFiles(req.params.id);
       if (!audioFiles || audioFiles.length === 0) {
         res.status(404).json({ message: "Audio file not found in archive" });
@@ -325,7 +325,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       }
 
       // Download the first audio file
-      const audioBuffer = await storage.downloadAudioFromGcs(audioFiles[0]);
+      const audioBuffer = await storage.downloadAudio(audioFiles[0]);
       if (!audioBuffer) {
         res.status(404).json({ message: "Audio file could not be retrieved" });
         return;
