@@ -20,12 +20,26 @@ export const insertEmployeeSchema = z.object({
   email: z.string(),
   initials: z.string().max(2).optional(),
   status: z.string().default("Active").optional(),
+  subTeam: z.string().optional(),
 });
 
 export const employeeSchema = insertEmployeeSchema.extend({
   id: z.string(),
   createdAt: z.string().optional(),
 });
+
+// --- POWER MOBILITY SUB-TEAMS (in chronological process order) ---
+export const POWER_MOBILITY_SUBTEAMS = [
+  "PPD",
+  "MA Education",
+  "Appt Scheduling",
+  "PT Education",
+  "Appt Passed",
+  "PT Eval",
+  "MDO Follow-Up",
+  "Medical Review",
+  "Prior Authorization",
+] as const;
 
 // --- CALL CATEGORY ---
 export const CALL_CATEGORIES = [

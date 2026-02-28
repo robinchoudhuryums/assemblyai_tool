@@ -132,6 +132,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update employee (edit email, department, sub-team, status, etc.)
+  app.patch("/api/employees/:id", requireAuth, async (req, res) => {
+    try {
+      const employee = await storage.getEmployee(req.params.id);
+      if (!employee) {
+        res.status(404).json({ message: "Employee not found" });
+        return;
+      }
+      const allowedFields = ["name", "email", "role", "status", "initials", "subTeam"];
+      const updates: Record<string, any> = {};
+      for (const field of allowedFields) {
+        if (req.body[field] !== undefined) {
+          updates[field] = req.body[field];
+        }
+      }
+      const updated = await storage.updateEmployee(req.params.id, updates);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update employee" });
+    }
+  });
+
+  // Assign/reassign employee to a call
+  app.patch("/api/calls/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const { employeeId } = req.body;
+      const call = await storage.getCall(req.params.id);
+      if (!call) {
+        res.status(404).json({ message: "Call not found" });
+        return;
+      }
+      if (employeeId) {
+        const employee = await storage.getEmployee(employeeId);
+        if (!employee) {
+          res.status(404).json({ message: "Employee not found" });
+          return;
+        }
+      }
+      const updated = await storage.updateCall(req.params.id, { employeeId: employeeId || undefined });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to assign employee to call" });
+    }
+  });
+
   // Bulk import employees from the bundled CSV file
   app.post("/api/employees/import-csv", requireAuth, async (req, res) => {
     try {

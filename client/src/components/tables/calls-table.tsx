@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2 } from "lucide-react";
+import { Eye, Play, Download, Star, Trash2, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -8,12 +8,13 @@ import { Link } from "wouter";
 import type { CallWithDetails, Employee } from "@shared/schema";
 import { AudioWaveform } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function CallsTable() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
-  
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -44,6 +45,20 @@ export default function CallsTable() {
         description: error.message || "Could not delete the call.",
         variant: "destructive",
       });
+    },
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: async ({ callId, employeeId }: { callId: string; employeeId: string }) => {
+      const res = await apiRequest("PATCH", `/api/calls/${callId}/assign`, { employeeId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+      toast({ title: "Employee Assigned", description: "Call has been assigned to the selected employee." });
+    },
+    onError: (error) => {
+      toast({ title: "Assignment Failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -130,7 +145,7 @@ export default function CallsTable() {
           </Select>
         </div>
       </div>
-      
+
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
@@ -145,7 +160,7 @@ export default function CallsTable() {
             </tr>
           </thead>
           <tbody>
-            {calls?.map((call, index) => (
+            {calls?.map((call) => (
               <tr key={call.id} className="border-b border-border hover:bg-muted transition-colors">
                 <td className="py-3 px-2">
                   <div>
@@ -159,10 +174,31 @@ export default function CallsTable() {
                       <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
                         <span className="text-primary font-semibold text-xs">{call.employee.initials ?? 'N/A'}</span>
                       </div>
-                      <span className="font-medium">{call.employee.name ?? 'Unknown'}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium">{call.employee.name ?? 'Unknown'}</span>
+                        <Select onValueChange={(empId) => assignMutation.mutate({ callId: call.id, employeeId: empId })}>
+                          <SelectTrigger className="w-7 h-7 p-0 border-0 bg-transparent">
+                            <UserCheck className="w-3 h-3 text-muted-foreground" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {employees?.filter(e => e.status === "Active").map(emp => (
+                              <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   ) : (
-                    <span className="text-muted-foreground">Unassigned</span>
+                    <Select onValueChange={(empId) => assignMutation.mutate({ callId: call.id, employeeId: empId })}>
+                      <SelectTrigger className="w-40 border-dashed text-muted-foreground">
+                        <SelectValue placeholder="Assign employee" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employees?.filter(e => e.status === "Active").map(emp => (
+                          <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
                 </td>
                 <td className="py-3 px-2 text-muted-foreground">
@@ -200,7 +236,7 @@ export default function CallsTable() {
           </tbody>
         </table>
       </div>
-      
+
       {!calls?.length && (
         <div className="text-center py-12">
           <p className="text-muted-foreground">No call recordings found</p>
