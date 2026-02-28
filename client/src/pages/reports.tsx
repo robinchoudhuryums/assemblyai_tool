@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRef } from "react";
-import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, AudioWaveform, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye } from "lucide-react";
+import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, AudioWaveform, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,6 +21,8 @@ interface FilteredReportData {
   sentiment: { positive: number; neutral: number; negative: number };
   performers: Array<{ id: string; name: string; role: string; avgPerformanceScore: number | null; totalCalls: number }>;
   trends: Array<{ month: string; calls: number; avgScore: number | null; positive: number; neutral: number; negative: number }>;
+  avgSubScores?: { compliance: number; customerExperience: number; communication: number; resolution: number } | null;
+  autoAssignedCount?: number;
 }
 
 interface AgentProfileData {
@@ -112,6 +114,8 @@ export default function ReportsPage() {
 
   // AI summary state
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+  // Granular detail toggle
+  const [showDetailedScores, setShowDetailedScores] = useState(false);
 
   const dateRange = getDateRange(datePreset, customFrom, customTo);
   const compareDateRange = getDateRange(compareDatePreset, compareCustomFrom, compareCustomTo);
@@ -465,6 +469,48 @@ export default function ReportsPage() {
             />
           </div>
         </div>
+
+        {/* Detailed Sub-Scores (toggleable) */}
+        {report?.avgSubScores && (
+          <div className="bg-card rounded-lg border border-border p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-foreground flex items-center">
+                <SlidersHorizontal className="w-5 h-5 mr-2" />
+                Score Breakdown
+              </h3>
+              <Button
+                variant={showDetailedScores ? "default" : "outline"}
+                size="sm"
+                onClick={() => setShowDetailedScores(!showDetailedScores)}
+              >
+                {showDetailedScores ? "Hide Details" : "Show Details"}
+              </Button>
+            </div>
+            {showDetailedScores && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-blue-600" barColor="from-blue-500 to-blue-400" />
+                <SubScoreCard icon={Headphones} label="Customer Experience" score={report.avgSubScores.customerExperience} color="text-green-600" barColor="from-green-500 to-emerald-400" />
+                <SubScoreCard icon={MessageCircle} label="Communication" score={report.avgSubScores.communication} color="text-purple-600" barColor="from-purple-500 to-violet-400" />
+                <SubScoreCard icon={CheckCircle2} label="Resolution" score={report.avgSubScores.resolution} color="text-amber-600" barColor="from-amber-500 to-yellow-400" />
+              </div>
+            )}
+            {!showDetailedScores && (
+              <div className="flex gap-6">
+                {[
+                  { label: "Compliance", value: report.avgSubScores.compliance, color: "text-blue-600" },
+                  { label: "Customer Exp.", value: report.avgSubScores.customerExperience, color: "text-green-600" },
+                  { label: "Communication", value: report.avgSubScores.communication, color: "text-purple-600" },
+                  { label: "Resolution", value: report.avgSubScores.resolution, color: "text-amber-600" },
+                ].map(s => (
+                  <div key={s.label} className="text-center">
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                    <p className={`text-lg font-bold ${s.color}`}>{s.value.toFixed(1)}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Trend Chart */}
         {report?.trends && report.trends.length > 0 && (
@@ -840,6 +886,33 @@ function FlaggedCallCard({ call }: {
           </Link>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SubScoreCard({ icon: Icon, label, score, color, barColor }: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  score: number;
+  color: string;
+  barColor: string;
+}) {
+  const level = score >= 8 ? "Excellent" : score >= 6 ? "Good" : score >= 4 ? "Needs Work" : "Critical";
+  const levelColor = score >= 8 ? "text-green-600" : score >= 6 ? "text-blue-600" : score >= 4 ? "text-yellow-600" : "text-red-600";
+  return (
+    <div className="p-4 bg-muted/30 rounded-lg">
+      <div className="flex items-center gap-2 mb-2">
+        <Icon className={`w-4 h-4 ${color}`} />
+        <span className="text-sm font-medium text-foreground">{label}</span>
+      </div>
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className={`text-2xl font-bold ${color}`}>{score.toFixed(1)}</span>
+        <span className="text-xs text-muted-foreground">/10</span>
+      </div>
+      <div className="w-full h-2 bg-muted-foreground/20 rounded-full overflow-hidden mb-1">
+        <div className={`h-full rounded-full bg-gradient-to-r ${barColor}`} style={{ width: `${score * 10}%` }} />
+      </div>
+      <p className={`text-xs ${levelColor}`}>{level}</p>
     </div>
   );
 }

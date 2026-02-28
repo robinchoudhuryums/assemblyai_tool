@@ -110,6 +110,13 @@ export const insertCallAnalysisSchema = z.object({
   manualEdits: z.any().optional(),
   confidenceScore: z.string().optional(),
   confidenceFactors: z.any().optional(),
+  subScores: z.object({
+    compliance: z.number().min(0).max(10).optional(),
+    customerExperience: z.number().min(0).max(10).optional(),
+    communication: z.number().min(0).max(10).optional(),
+    resolution: z.number().min(0).max(10).optional(),
+  }).optional(),
+  detectedAgentName: z.string().optional(),
 });
 
 export const callAnalysisSchema = insertCallAnalysisSchema.extend({

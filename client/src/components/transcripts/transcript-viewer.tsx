@@ -491,6 +491,35 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                   </Badge>
                 ) : 'Unknown'}</p>
                 <p><strong>Performance Score:</strong> {call.analysis?.performanceScore ? Number(call.analysis.performanceScore).toFixed(1) : 'N/A'}/10</p>
+                {call.analysis?.subScores && (
+                  <div className="mt-2 pt-2 border-t border-border space-y-1.5">
+                    {[
+                      { label: "Compliance", key: "compliance", color: "text-blue-600", bar: "from-blue-500 to-blue-400" },
+                      { label: "Customer Exp.", key: "customerExperience", color: "text-green-600", bar: "from-green-500 to-emerald-400" },
+                      { label: "Communication", key: "communication", color: "text-purple-600", bar: "from-purple-500 to-violet-400" },
+                      { label: "Resolution", key: "resolution", color: "text-amber-600", bar: "from-amber-500 to-yellow-400" },
+                    ].map(dim => {
+                      const val = (call.analysis!.subScores as any)?.[dim.key];
+                      if (val == null) return null;
+                      return (
+                        <div key={dim.key}>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{dim.label}</span>
+                            <span className={`font-semibold ${dim.color}`}>{Number(val).toFixed(1)}</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-muted-foreground/20 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar}`} style={{ width: `${Number(val) * 10}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {call.analysis?.detectedAgentName && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    <strong>Detected Agent:</strong> {call.analysis.detectedAgentName as string}
+                  </p>
+                )}
               </div>
             )}
           </div>

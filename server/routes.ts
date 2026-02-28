@@ -508,8 +508,16 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
 
     if (aiProvider.isAvailable && transcriptResponse.text) {
       try {
-        console.log(`[${callId}] Step 4/6: Running AI analysis (${aiProvider.name})...`);
-        aiAnalysis = await aiProvider.analyzeCallTranscript(transcriptResponse.text, callId, callCategory, promptTemplate);
+        const transcriptText = transcriptResponse.text;
+        const transcriptCharCount = transcriptText.length;
+        const estimatedTokens = Math.ceil(transcriptCharCount / 4);
+        console.log(`[${callId}] Step 4/6: Running AI analysis (${aiProvider.name}). Transcript: ${transcriptCharCount} chars (~${estimatedTokens} tokens)`);
+
+        if (estimatedTokens > 100000) {
+          console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens). Analysis quality may be reduced for the longest calls.`);
+        }
+
+        aiAnalysis = await aiProvider.analyzeCallTranscript(transcriptText, callId, callCategory, promptTemplate);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);
@@ -541,10 +549,12 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       aiConfidence * 0.25
     );
 
+    const transcriptCharCount = (transcriptResponse.text || "").length;
     const confidenceFactors = {
       transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
       wordCount,
       callDurationSeconds: callDuration,
+      transcriptLength: transcriptCharCount,
       aiAnalysisCompleted: hasAiAnalysis,
       overallScore: Math.round(confidenceScore * 100) / 100,
     };
@@ -552,6 +562,21 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     // Attach confidence to analysis
     analysis.confidenceScore = confidenceScore.toFixed(3);
     analysis.confidenceFactors = confidenceFactors;
+
+    // Attach sub-scores from AI analysis
+    if (aiAnalysis?.sub_scores) {
+      analysis.subScores = {
+        compliance: aiAnalysis.sub_scores.compliance ?? 0,
+        customerExperience: aiAnalysis.sub_scores.customer_experience ?? 0,
+        communication: aiAnalysis.sub_scores.communication ?? 0,
+        resolution: aiAnalysis.sub_scores.resolution ?? 0,
+      };
+    }
+
+    // Attach detected agent name
+    if (aiAnalysis?.detected_agent_name) {
+      analysis.detectedAgentName = aiAnalysis.detected_agent_name;
+    }
 
     // Flag low confidence
     if (confidenceScore < 0.7) {
@@ -569,11 +594,34 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
 
+    // Auto-assign to employee based on detected agent name (if call is unassigned)
+    const currentCall = await storage.getCall(callId);
+    let autoAssigned = false;
+    if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
+      const detectedName = aiAnalysis.detected_agent_name.toLowerCase().trim();
+      const allEmployees = await storage.getAllEmployees();
+      const matchedEmployee = allEmployees.find(emp => {
+        const empName = emp.name.toLowerCase();
+        // Match on first name, last name, or full name
+        return empName === detectedName ||
+          empName.split(" ")[0] === detectedName ||
+          empName.split(" ").pop() === detectedName;
+      });
+      if (matchedEmployee) {
+        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
+        autoAssigned = true;
+        console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.name} (detected name: "${aiAnalysis.detected_agent_name}")`);
+      } else {
+        console.log(`[${callId}] Detected agent name "${aiAnalysis.detected_agent_name}" but no matching employee found.`);
+      }
+    }
+
     await storage.updateCall(callId, {
       status: "completed",
       duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
     });
-    console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.`);
+    console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
+
 
     await cleanupFile(filePath);
     broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
@@ -904,6 +952,29 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           negative: data.negative,
         }));
 
+      // Aggregate sub-scores across all analyzed calls
+      const subScoreTotals = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0, count: 0 };
+      for (const call of filtered) {
+        const ss = (call.analysis as any)?.subScores;
+        if (ss && (ss.compliance || ss.customerExperience || ss.communication || ss.resolution)) {
+          subScoreTotals.compliance += ss.compliance || 0;
+          subScoreTotals.customerExperience += ss.customerExperience || 0;
+          subScoreTotals.communication += ss.communication || 0;
+          subScoreTotals.resolution += ss.resolution || 0;
+          subScoreTotals.count++;
+        }
+      }
+
+      const avgSubScores = subScoreTotals.count > 0 ? {
+        compliance: Math.round((subScoreTotals.compliance / subScoreTotals.count) * 100) / 100,
+        customerExperience: Math.round((subScoreTotals.customerExperience / subScoreTotals.count) * 100) / 100,
+        communication: Math.round((subScoreTotals.communication / subScoreTotals.count) * 100) / 100,
+        resolution: Math.round((subScoreTotals.resolution / subScoreTotals.count) * 100) / 100,
+      } : null;
+
+      // Count auto-assigned calls
+      const autoAssignedCount = filtered.filter(c => (c.analysis as any)?.detectedAgentName).length;
+
       res.json({
         metrics: {
           totalCalls,
@@ -913,6 +984,8 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         sentiment: sentimentDist,
         performers,
         trends,
+        avgSubScores,
+        autoAssignedCount,
       });
     } catch (error) {
       console.error("Failed to generate filtered report:", error);
