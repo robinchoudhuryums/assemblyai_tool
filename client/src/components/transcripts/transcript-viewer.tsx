@@ -258,8 +258,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       lines.push('');
       lines.push(`Action Items`);
       lines.push(`------------`);
-      call.analysis.actionItems.forEach((item: string, i: number) => {
-        lines.push(`${i + 1}. ${item}`);
+      call.analysis.actionItems.forEach((item: unknown, i: number) => {
+        const text = typeof item === "string" ? item : typeof item === "object" && item !== null ? ((item as any).text || (item as any).task || JSON.stringify(item)) : String(item);
+        lines.push(`${i + 1}. ${text}`);
       });
     }
 
@@ -272,10 +273,28 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
+  // Safely coerce a value to a display string (handles objects from Bedrock AI)
+  const toDisplayString = (val: unknown): string => {
+    if (val == null) return "";
+    if (typeof val === "string") return val;
+    if (typeof val === "number" || typeof val === "boolean") return String(val);
+    if (typeof val === "object") {
+      // Handle common object shapes from AI: {text: "..."}, {name: "..."}, {task: "..."}
+      const obj = val as Record<string, unknown>;
+      if (typeof obj.text === "string") return obj.text;
+      if (typeof obj.name === "string") return obj.name;
+      if (typeof obj.task === "string") return obj.task;
+      if (typeof obj.label === "string") return obj.label;
+      if (typeof obj.description === "string") return obj.description;
+      return JSON.stringify(val);
+    }
+    return String(val);
+  };
+
   // Build keyword set from detected topics for highlighting
   const topicKeywords = useMemo(() => {
     if (!call.analysis?.topics || !Array.isArray(call.analysis.topics)) return [];
-    return (call.analysis.topics as string[]).filter(t => typeof t === "string" && t.length >= 3).map(t => t.toLowerCase());
+    return (call.analysis.topics as unknown[]).map(t => toDisplayString(t)).filter(t => t.length >= 3).map(t => t.toLowerCase());
   }, [call.analysis?.topics]);
 
   const highlightKeywords = (text: string | any) => {
@@ -521,7 +540,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 )}
                 {call.analysis?.detectedAgentName && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    <strong>Detected Agent:</strong> {call.analysis.detectedAgentName as string}
+                    <strong>Detected Agent:</strong> {toDisplayString(call.analysis.detectedAgentName)}
                   </p>
                 )}
               </div>
@@ -543,9 +562,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">Key Topics</h4>
               <div className="flex flex-wrap gap-2">
-                {call.analysis.topics.map((topic: string, index: number) => (
+                {call.analysis.topics.map((topic: unknown, index: number) => (
                   <Badge key={index} variant="outline" className="bg-primary/10 text-primary">
-                    {topic}
+                    {toDisplayString(topic)}
                   </Badge>
                 ))}
               </div>
@@ -556,10 +575,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">Action Items</h4>
               <ul className="space-y-1 text-sm">
-                {call.analysis.actionItems.map((item: string, index: number) => (
+                {call.analysis.actionItems.map((item: unknown, index: number) => (
                   <li key={index} className="flex items-center space-x-2">
                     <div className="w-2 h-2 bg-green-600 rounded-full"></div>
-                    <span>{item}</span>
+                    <span>{toDisplayString(item)}</span>
                   </li>
                 ))}
               </ul>
@@ -633,8 +652,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           )}
 
           {/* Call Flags */}
-          {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as string[]).length > 0 && (() => {
-            const flags = call.analysis.flags as string[];
+          {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as unknown[]).length > 0 && (() => {
+            const flags = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
             const hasExceptional = flags.includes("exceptional_call");
             const hasBad = flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
             const bgClass = hasExceptional && !hasBad
@@ -683,7 +702,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               <h4 className="font-semibold text-foreground mb-2 flex items-center gap-1.5">
                 <Shield className="w-4 h-4" /> Call Party
               </h4>
-              <Badge variant="outline" className="capitalize">{(call.analysis.callPartyType as string).replace(/_/g, " ")}</Badge>
+              <Badge variant="outline" className="capitalize">{toDisplayString(call.analysis.callPartyType).replace(/_/g, " ")}</Badge>
             </div>
           )}
 
