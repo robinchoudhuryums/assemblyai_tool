@@ -107,10 +107,21 @@ export default function SearchPage() {
             {isLoading ? (
               <div className="flex items-center justify-center h-64"><AudioWaveform className="w-8 h-8 animate-spin text-primary" /></div>
             ) : !displayCalls?.length ? (
-              <div className="text-center py-12">
-                <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-foreground mb-2">{debouncedQuery.length > 0 ? 'No matching calls found' : 'No calls available'}</h3>
-                <Link href="/upload"><Button>Upload Call Recording</Button></Link>
+              <div className="text-center py-16">
+                <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">
+                  <Search className="w-8 h-8 text-primary/60" />
+                </div>
+                <h3 className="text-lg font-medium text-foreground mb-1">
+                  {debouncedQuery.length > 0 ? 'No matching calls found' : 'Search your calls'}
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4 max-w-sm mx-auto">
+                  {debouncedQuery.length > 0
+                    ? 'Try a different search term or adjust your filters.'
+                    : 'Search across transcripts, topics, and call summaries.'}
+                </p>
+                {!debouncedQuery.length && (
+                  <Link href="/upload"><Button variant="outline">Upload Call Recording</Button></Link>
+                )}
               </div>
             ) : (
               <div className="space-y-4">

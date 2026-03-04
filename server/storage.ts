@@ -14,6 +14,12 @@ import {
   type CallWithDetails,
   type DashboardMetrics,
   type SentimentDistribution,
+  type AccessRequest,
+  type InsertAccessRequest,
+  type PromptTemplate,
+  type InsertPromptTemplate,
+  type CoachingSession,
+  type InsertCoachingSession,
 } from "@shared/schema";
 import { GcsClient } from "./services/gcs";
 import { S3Client } from "./services/s3";
@@ -78,6 +84,27 @@ export interface IStorage {
   getAudioFiles(callId: string): Promise<string[]>;
   downloadAudio(objectName: string): Promise<Buffer | undefined>;
 
+  // Access request operations
+  createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest>;
+  getAllAccessRequests(): Promise<AccessRequest[]>;
+  getAccessRequest(id: string): Promise<AccessRequest | undefined>;
+  updateAccessRequest(id: string, updates: Partial<AccessRequest>): Promise<AccessRequest | undefined>;
+
+  // Prompt template operations
+  getPromptTemplate(id: string): Promise<PromptTemplate | undefined>;
+  getPromptTemplateByCategory(callCategory: string): Promise<PromptTemplate | undefined>;
+  getAllPromptTemplates(): Promise<PromptTemplate[]>;
+  createPromptTemplate(template: InsertPromptTemplate): Promise<PromptTemplate>;
+  updatePromptTemplate(id: string, updates: Partial<PromptTemplate>): Promise<PromptTemplate | undefined>;
+  deletePromptTemplate(id: string): Promise<void>;
+
+  // Coaching session operations
+  createCoachingSession(session: InsertCoachingSession): Promise<CoachingSession>;
+  getCoachingSession(id: string): Promise<CoachingSession | undefined>;
+  getAllCoachingSessions(): Promise<CoachingSession[]>;
+  getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]>;
+  updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined>;
+
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
@@ -93,6 +120,9 @@ export class MemStorage implements IStorage {
   private sentiments = new Map<string, SentimentAnalysis>();
   private analyses = new Map<string, CallAnalysis>();
   private audioFiles = new Map<string, Buffer>(); // objectName -> buffer
+  private accessRequests = new Map<string, AccessRequest>();
+  private promptTemplates = new Map<string, PromptTemplate>();
+  private coachingSessions = new Map<string, CoachingSession>();
 
   async getUser(_id: string): Promise<User | undefined> { return undefined; }
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
@@ -273,6 +303,80 @@ export class MemStorage implements IStorage {
     return allCalls.filter((call) => call.transcript?.text?.toLowerCase().includes(lowerQuery));
   }
 
+  // Access request operations
+  async createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest> {
+    const id = randomUUID();
+    const newReq: AccessRequest = { ...request, id, status: "pending", createdAt: new Date().toISOString() };
+    this.accessRequests.set(id, newReq);
+    return newReq;
+  }
+  async getAllAccessRequests(): Promise<AccessRequest[]> {
+    return Array.from(this.accessRequests.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+  async getAccessRequest(id: string): Promise<AccessRequest | undefined> {
+    return this.accessRequests.get(id);
+  }
+  async updateAccessRequest(id: string, updates: Partial<AccessRequest>): Promise<AccessRequest | undefined> {
+    const req = this.accessRequests.get(id);
+    if (!req) return undefined;
+    const updated = { ...req, ...updates };
+    this.accessRequests.set(id, updated);
+    return updated;
+  }
+
+  // Prompt template operations
+  async getPromptTemplate(id: string): Promise<PromptTemplate | undefined> {
+    return this.promptTemplates.get(id);
+  }
+  async getPromptTemplateByCategory(callCategory: string): Promise<PromptTemplate | undefined> {
+    return Array.from(this.promptTemplates.values()).find(t => t.callCategory === callCategory && t.isActive);
+  }
+  async getAllPromptTemplates(): Promise<PromptTemplate[]> {
+    return Array.from(this.promptTemplates.values());
+  }
+  async createPromptTemplate(template: InsertPromptTemplate): Promise<PromptTemplate> {
+    const id = randomUUID();
+    const newTemplate: PromptTemplate = { ...template, id, updatedAt: new Date().toISOString() };
+    this.promptTemplates.set(id, newTemplate);
+    return newTemplate;
+  }
+  async updatePromptTemplate(id: string, updates: Partial<PromptTemplate>): Promise<PromptTemplate | undefined> {
+    const tmpl = this.promptTemplates.get(id);
+    if (!tmpl) return undefined;
+    const updated = { ...tmpl, ...updates, updatedAt: new Date().toISOString() };
+    this.promptTemplates.set(id, updated);
+    return updated;
+  }
+  async deletePromptTemplate(id: string): Promise<void> {
+    this.promptTemplates.delete(id);
+  }
+
+  // Coaching session operations
+  async createCoachingSession(session: InsertCoachingSession): Promise<CoachingSession> {
+    const id = randomUUID();
+    const newSession: CoachingSession = { ...session, id, createdAt: new Date().toISOString() };
+    this.coachingSessions.set(id, newSession);
+    return newSession;
+  }
+  async getCoachingSession(id: string): Promise<CoachingSession | undefined> {
+    return this.coachingSessions.get(id);
+  }
+  async getAllCoachingSessions(): Promise<CoachingSession[]> {
+    return Array.from(this.coachingSessions.values());
+  }
+  async getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]> {
+    return Array.from(this.coachingSessions.values()).filter(s => s.employeeId === employeeId);
+  }
+  async updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined> {
+    const session = this.coachingSessions.get(id);
+    if (!session) return undefined;
+    const updated = { ...session, ...updates };
+    this.coachingSessions.set(id, updated);
+    return updated;
+  }
+
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - retentionDays);
@@ -405,12 +509,24 @@ export class CloudStorage implements IStorage {
           this.getCallAnalysis(call.id),
         ]);
 
+        // Normalize analysis for backward-compat with older stored data
+        const normalizedAnalysis = analysis ? {
+          ...analysis,
+          topics: Array.isArray(analysis.topics) ? analysis.topics : [],
+          actionItems: Array.isArray(analysis.actionItems) ? analysis.actionItems : [],
+          flags: Array.isArray(analysis.flags) ? analysis.flags : [],
+          feedback: (analysis.feedback && typeof analysis.feedback === "object" && !Array.isArray(analysis.feedback))
+            ? analysis.feedback
+            : { strengths: [], suggestions: [] },
+          summary: typeof analysis.summary === "string" ? analysis.summary : "",
+        } : undefined;
+
         results.push({
           ...call,
           employee,
           transcript: transcript || undefined,
           sentiment: sentiment || undefined,
-          analysis: analysis || undefined,
+          analysis: normalizedAnalysis,
         });
       })
     );
@@ -603,6 +719,86 @@ export class CloudStorage implements IStorage {
     return allCalls.filter((call) =>
       call.transcript?.text?.toLowerCase().includes(lowerQuery)
     );
+  }
+
+  // --- Access Request Methods ---
+  async createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest> {
+    const id = randomUUID();
+    const newReq: AccessRequest = { ...request, id, status: "pending", createdAt: new Date().toISOString() };
+    await this.client.uploadJson(`access-requests/${id}.json`, newReq);
+    return newReq;
+  }
+
+  async getAllAccessRequests(): Promise<AccessRequest[]> {
+    const requests = await this.client.listAndDownloadJson<AccessRequest>("access-requests/");
+    return requests.sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+
+  async getAccessRequest(id: string): Promise<AccessRequest | undefined> {
+    return this.client.downloadJson<AccessRequest>(`access-requests/${id}.json`);
+  }
+
+  async updateAccessRequest(id: string, updates: Partial<AccessRequest>): Promise<AccessRequest | undefined> {
+    const req = await this.getAccessRequest(id);
+    if (!req) return undefined;
+    const updated = { ...req, ...updates };
+    await this.client.uploadJson(`access-requests/${id}.json`, updated);
+    return updated;
+  }
+
+  // --- Prompt Template Methods ---
+  async getPromptTemplate(id: string): Promise<PromptTemplate | undefined> {
+    return this.client.downloadJson<PromptTemplate>(`prompt-templates/${id}.json`);
+  }
+  async getPromptTemplateByCategory(callCategory: string): Promise<PromptTemplate | undefined> {
+    const all = await this.getAllPromptTemplates();
+    return all.find(t => t.callCategory === callCategory && t.isActive);
+  }
+  async getAllPromptTemplates(): Promise<PromptTemplate[]> {
+    return this.client.listAndDownloadJson<PromptTemplate>("prompt-templates/");
+  }
+  async createPromptTemplate(template: InsertPromptTemplate): Promise<PromptTemplate> {
+    const id = randomUUID();
+    const newTemplate: PromptTemplate = { ...template, id, updatedAt: new Date().toISOString() };
+    await this.client.uploadJson(`prompt-templates/${id}.json`, newTemplate);
+    return newTemplate;
+  }
+  async updatePromptTemplate(id: string, updates: Partial<PromptTemplate>): Promise<PromptTemplate | undefined> {
+    const tmpl = await this.getPromptTemplate(id);
+    if (!tmpl) return undefined;
+    const updated = { ...tmpl, ...updates, updatedAt: new Date().toISOString() };
+    await this.client.uploadJson(`prompt-templates/${id}.json`, updated);
+    return updated;
+  }
+  async deletePromptTemplate(id: string): Promise<void> {
+    await this.client.deleteObject(`prompt-templates/${id}.json`);
+  }
+
+  // --- Coaching Session Methods ---
+  async createCoachingSession(session: InsertCoachingSession): Promise<CoachingSession> {
+    const id = randomUUID();
+    const newSession: CoachingSession = { ...session, id, createdAt: new Date().toISOString() };
+    await this.client.uploadJson(`coaching/${id}.json`, newSession);
+    return newSession;
+  }
+  async getCoachingSession(id: string): Promise<CoachingSession | undefined> {
+    return this.client.downloadJson<CoachingSession>(`coaching/${id}.json`);
+  }
+  async getAllCoachingSessions(): Promise<CoachingSession[]> {
+    return this.client.listAndDownloadJson<CoachingSession>("coaching/");
+  }
+  async getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]> {
+    const all = await this.getAllCoachingSessions();
+    return all.filter(s => s.employeeId === employeeId);
+  }
+  async updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined> {
+    const session = await this.getCoachingSession(id);
+    if (!session) return undefined;
+    const updated = { ...session, ...updates };
+    await this.client.uploadJson(`coaching/${id}.json`, updated);
+    return updated;
   }
 
   // --- Data Retention ---

@@ -33,12 +33,18 @@ export class GeminiProvider implements AIAnalysisProvider {
 
   constructor() {
     // Priority 1: GEMINI_API_KEY (Google AI Studio)
+    // HIPAA: Block AI Studio in production — it has no BAA coverage
     if (process.env.GEMINI_API_KEY) {
-      this.apiKey = process.env.GEMINI_API_KEY;
-      this.authMode = "api_key";
-      this.model = process.env.GEMINI_MODEL || DEFAULT_MODEL_API_KEY;
-      console.log(`Gemini provider initialized (mode: API key via AI Studio, model: ${this.model})`);
-      return;
+      if (process.env.NODE_ENV === "production") {
+        console.warn("HIPAA: GEMINI_API_KEY (AI Studio) is NOT BAA-eligible. Blocked in production. Use Vertex AI with service account credentials instead.");
+      } else {
+        this.apiKey = process.env.GEMINI_API_KEY;
+        this.authMode = "api_key";
+        this.model = process.env.GEMINI_MODEL || DEFAULT_MODEL_API_KEY;
+        console.log(`Gemini provider initialized (mode: API key via AI Studio, model: ${this.model})`);
+        console.warn("WARNING: AI Studio mode is not HIPAA-compliant. Use Vertex AI in production.");
+        return;
+      }
     }
 
     // Priority 2+: Service account credentials for Vertex AI
@@ -115,21 +121,74 @@ export class GeminiProvider implements AIAnalysisProvider {
     return this.accessToken!;
   }
 
+  // --- Text generation ---
+
+  async generateText(prompt: string): Promise<string> {
+    if (this.authMode === "none") {
+      throw new Error("Gemini provider not configured");
+    }
+
+    const requestBody = {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+    };
+
+    let response: Response;
+
+    if (this.authMode === "api_key") {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+    } else {
+      const token = await this.getAccessToken();
+      const projectId = this.credentials!.project_id;
+      const location = "us-central1";
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${this.model}:generateContent`;
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    const parts = result.candidates?.[0]?.content?.parts || [];
+    let responseText = "";
+    for (const part of parts) {
+      if (part.text && !part.thought) {
+        responseText = part.text;
+        break;
+      }
+    }
+    if (!responseText && parts.length > 0) {
+      responseText = parts[parts.length - 1].text || "";
+    }
+    return responseText;
+  }
+
   // --- Core analysis ---
 
-  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string): Promise<CallAnalysis> {
+  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any): Promise<CallAnalysis> {
     if (this.authMode === "none") {
       throw new Error("Gemini provider not configured");
     }
 
     const model = this.model;
-    const prompt = buildAnalysisPrompt(transcriptText, callCategory);
+    const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate);
 
     const requestBody = {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 2048,
       },
     };
 

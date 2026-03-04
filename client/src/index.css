@@ -174,4 +174,23 @@
     background: linear-gradient(135deg, rgba(34, 34, 34, 0.9), rgba(34, 34, 34, 0.6));
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
+
+  /* Recharts dark mode text fix — ensure all chart labels/text are visible */
+  .dark .recharts-cartesian-axis-tick text,
+  .dark .recharts-legend-item-text,
+  .dark .recharts-label,
+  .dark .recharts-text {
+    fill: hsl(220, 15%, 70%) !important;
+  }
+
+  .dark .recharts-default-tooltip {
+    background-color: hsl(220, 30%, 12%) !important;
+    border-color: hsl(220, 30%, 22%) !important;
+    color: hsl(220, 15%, 85%) !important;
+  }
+
+  .dark .recharts-tooltip-label,
+  .dark .recharts-tooltip-item {
+    color: hsl(220, 15%, 85%) !important;
+  }
 }

@@ -105,6 +105,18 @@ export const insertCallAnalysisSchema = z.object({
   actionItems: z.any().optional(),
   feedback: z.any().optional(),
   lemurResponse: z.any().optional(),
+  callPartyType: z.string().optional(),
+  flags: z.any().optional(),
+  manualEdits: z.any().optional(),
+  confidenceScore: z.string().optional(),
+  confidenceFactors: z.any().optional(),
+  subScores: z.object({
+    compliance: z.number().min(0).max(10).optional(),
+    customerExperience: z.number().min(0).max(10).optional(),
+    communication: z.number().min(0).max(10).optional(),
+    resolution: z.number().min(0).max(10).optional(),
+  }).optional(),
+  detectedAgentName: z.string().optional(),
 });
 
 export const callAnalysisSchema = insertCallAnalysisSchema.extend({
@@ -130,6 +142,107 @@ export type SentimentAnalysis = z.infer<typeof sentimentAnalysisSchema>;
 
 export type InsertCallAnalysis = z.infer<typeof insertCallAnalysisSchema>;
 export type CallAnalysis = z.infer<typeof callAnalysisSchema>;
+
+// --- ACCESS REQUEST SCHEMAS ---
+export const insertAccessRequestSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  reason: z.string().optional(),
+  requestedRole: z.enum(["viewer", "manager"]).default("viewer"),
+});
+
+export const accessRequestSchema = insertAccessRequestSchema.extend({
+  id: z.string(),
+  status: z.enum(["pending", "approved", "denied"]).default("pending"),
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.string().optional(),
+  createdAt: z.string().optional(),
+});
+
+export type InsertAccessRequest = z.infer<typeof insertAccessRequestSchema>;
+export type AccessRequest = z.infer<typeof accessRequestSchema>;
+
+// --- PROMPT TEMPLATE SCHEMAS ---
+export const promptTemplateSchema = z.object({
+  id: z.string(),
+  callCategory: z.string(),
+  name: z.string(),
+  evaluationCriteria: z.string(),
+  requiredPhrases: z.array(z.object({
+    phrase: z.string(),
+    label: z.string(),
+    severity: z.enum(["required", "recommended"]).default("required"),
+  })).optional(),
+  scoringWeights: z.object({
+    compliance: z.number().min(0).max(100).default(25),
+    customerExperience: z.number().min(0).max(100).default(25),
+    communication: z.number().min(0).max(100).default(25),
+    resolution: z.number().min(0).max(100).default(25),
+  }).optional(),
+  additionalInstructions: z.string().optional(),
+  isActive: z.boolean().default(true),
+  updatedAt: z.string().optional(),
+  updatedBy: z.string().optional(),
+});
+
+export const insertPromptTemplateSchema = promptTemplateSchema.omit({ id: true });
+
+export type PromptTemplate = z.infer<typeof promptTemplateSchema>;
+export type InsertPromptTemplate = z.infer<typeof insertPromptTemplateSchema>;
+
+// --- ROLE DEFINITIONS ---
+export const USER_ROLES = [
+  {
+    value: "viewer" as const,
+    label: "Viewer",
+    description: "View-only access to dashboards, reports, transcripts, and team data. Cannot edit or delete anything.",
+  },
+  {
+    value: "manager" as const,
+    label: "Manager / QA",
+    description: "Everything a Viewer can do, plus: assign calls, edit analysis, manage employees, and export reports.",
+  },
+  {
+    value: "admin" as const,
+    label: "Administrator",
+    description: "Full access. Manage users, approve access requests, bulk import, delete calls, and configure system settings.",
+  },
+] as const;
+
+export type UserRole = typeof USER_ROLES[number]["value"];
+
+// --- COACHING SESSION SCHEMAS ---
+export const COACHING_CATEGORIES = [
+  { value: "compliance", label: "Compliance" },
+  { value: "customer_experience", label: "Customer Experience" },
+  { value: "communication", label: "Communication" },
+  { value: "resolution", label: "Resolution" },
+  { value: "general", label: "General" },
+] as const;
+
+export const insertCoachingSessionSchema = z.object({
+  employeeId: z.string(),
+  callId: z.string().optional(),
+  assignedBy: z.string(),
+  category: z.string().default("general"),
+  title: z.string(),
+  notes: z.string().optional(),
+  actionPlan: z.array(z.object({
+    task: z.string(),
+    completed: z.boolean().default(false),
+  })).optional(),
+  status: z.enum(["pending", "in_progress", "completed", "dismissed"]).default("pending"),
+  dueDate: z.string().optional(),
+});
+
+export const coachingSessionSchema = insertCoachingSessionSchema.extend({
+  id: z.string(),
+  createdAt: z.string().optional(),
+  completedAt: z.string().optional(),
+});
+
+export type InsertCoachingSession = z.infer<typeof insertCoachingSessionSchema>;
+export type CoachingSession = z.infer<typeof coachingSessionSchema>;
 
 // --- COMBINED TYPES ---
 export type CallWithDetails = Call & {

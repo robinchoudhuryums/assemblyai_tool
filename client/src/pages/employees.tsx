@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare } from "lucide-react";
+import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
 
@@ -73,6 +74,71 @@ function getAllDepartments(employees: Employee[]): string[] {
   return Array.from(set).sort();
 }
 
+interface AgentProfileData {
+  totalCalls: number;
+  avgPerformanceScore: number | null;
+  highScore: number | null;
+  lowScore: number | null;
+  sentimentBreakdown: { positive: number; neutral: number; negative: number };
+}
+
+function CompareCard({ employee }: { employee: Employee }) {
+  const { data: profile, isLoading } = useQuery<AgentProfileData>({
+    queryKey: [`/api/reports/agent-profile/${employee.id}`],
+  });
+
+  return (
+    <div className="bg-muted/50 rounded-lg p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center">
+          {employee.initials || employee.name?.slice(0, 2).toUpperCase()}
+        </span>
+        <div>
+          <p className="font-semibold text-sm">{employee.name}</p>
+          <p className="text-xs text-muted-foreground">{employee.role || "No department"}</p>
+        </div>
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading stats...</p>
+      ) : profile ? (
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <p className="text-xs text-muted-foreground">Total Calls</p>
+            <p className="font-bold">{profile.totalCalls}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Avg Score</p>
+            <p className="font-bold text-primary">{profile.avgPerformanceScore?.toFixed(1) ?? "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">High / Low</p>
+            <p className="font-bold">
+              <span className="text-green-600">{profile.highScore?.toFixed(1) ?? "—"}</span>
+              {" / "}
+              <span className="text-red-600">{profile.lowScore?.toFixed(1) ?? "—"}</span>
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Sentiment</p>
+            <div className="flex gap-1 text-xs">
+              <span className="text-green-600">{profile.sentimentBreakdown?.positive ?? 0}+</span>
+              <span className="text-gray-500">{profile.sentimentBreakdown?.neutral ?? 0}~</span>
+              <span className="text-red-600">{profile.sentimentBreakdown?.negative ?? 0}-</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">No data available</p>
+      )}
+      <Link href={`/reports?employee=${employee.id}`}>
+        <Button size="sm" variant="outline" className="w-full mt-3 text-xs">
+          <Eye className="w-3 h-3 mr-1" /> Full Profile
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
 export default function EmployeesPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -82,19 +148,26 @@ export default function EmployeesPage() {
 
   // Add form
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [role, setRole] = useState("");
   const [subTeam, setSubTeam] = useState("");
   const [status, setStatus] = useState("Active");
 
   // Edit form
   const [editName, setEditName] = useState("");
-  const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState("");
   const [editSubTeam, setEditSubTeam] = useState("");
   const [editStatus, setEditStatus] = useState("Active");
 
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+
+  const toggleCompare = (id: string) => {
+    setCompareIds(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      if (prev.length >= 2) return [prev[1], id]; // Replace oldest
+      return [...prev, id];
+    });
+  };
 
   const { data: employees, isLoading } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
@@ -120,7 +193,7 @@ export default function EmployeesPage() {
   };
 
   const createMutation = useMutation({
-    mutationFn: async (data: { name: string; email: string; role?: string; initials?: string; status?: string; subTeam?: string }) => {
+    mutationFn: async (data: { name: string; email: string; role?: string; initials?: string; status?: string; subTeam?: string; }) => {
       const res = await apiRequest("POST", "/api/employees", data);
       return res.json();
     },
@@ -166,13 +239,12 @@ export default function EmployeesPage() {
   });
 
   const resetAddForm = () => {
-    setName(""); setEmail(""); setRole(""); setSubTeam(""); setStatus("Active");
+    setName(""); setRole(""); setSubTeam(""); setStatus("Active");
   };
 
   const openEditDialog = (emp: Employee) => {
     setEditEmployee(emp);
     setEditName(emp.name);
-    setEditEmail(emp.email);
     setEditRole(emp.role || "");
     setEditSubTeam(emp.subTeam || "");
     setEditStatus(emp.status || "Active");
@@ -181,18 +253,22 @@ export default function EmployeesPage() {
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) {
-      toast({ title: "Validation Error", description: "Name and email are required.", variant: "destructive" });
+    if (!name.trim()) {
+      toast({ title: "Validation Error", description: "Name is required.", variant: "destructive" });
       return;
     }
-    const nameParts = name.trim().split(/\s+/);
+    const trimmedName = name.trim();
+    const nameParts = trimmedName.split(/\s+/);
     const initials = nameParts.length >= 2
       ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
-      : name.slice(0, 2).toUpperCase();
+      : trimmedName.slice(0, 2).toUpperCase();
+
+    // Auto-generate email from name for backend storage
+    const autoEmail = `${trimmedName.toLowerCase().replace(/\s+/g, ".")}@company.com`;
 
     createMutation.mutate({
-      name: name.trim(),
-      email: email.trim(),
+      name: trimmedName,
+      email: autoEmail,
       role: role.trim() || undefined,
       initials,
       status,
@@ -207,7 +283,6 @@ export default function EmployeesPage() {
       id: editEmployee.id,
       updates: {
         name: editName.trim(),
-        email: editEmail.trim(),
         role: editRole.trim() || undefined,
         subTeam: editSubTeam && editSubTeam !== "none" ? editSubTeam : undefined,
         status: editStatus,
@@ -222,7 +297,7 @@ export default function EmployeesPage() {
   const totalActive = employees?.filter(e => e.status === "Active").length || 0;
 
   const renderEmployeeRow = (emp: Employee) => (
-    <tr key={emp.id} className="hover:bg-muted/30">
+    <tr key={emp.id} className={`hover:bg-muted/30 ${compareIds.includes(emp.id) ? "bg-primary/5" : ""}`}>
       <td className="px-4 py-2.5 text-sm font-medium text-foreground">
         <div className="flex items-center gap-2">
           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">
@@ -231,7 +306,6 @@ export default function EmployeesPage() {
           {emp.name}
         </div>
       </td>
-      <td className="px-4 py-2.5 text-sm text-muted-foreground">{emp.email}</td>
       <td className="px-4 py-2.5 text-sm text-muted-foreground">{emp.subTeam || "—"}</td>
       <td className="px-4 py-2.5 text-sm">
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -241,9 +315,25 @@ export default function EmployeesPage() {
         </span>
       </td>
       <td className="px-4 py-2.5 text-sm">
-        <Button size="sm" variant="ghost" onClick={() => openEditDialog(emp)}>
-          <Pencil className="w-3.5 h-3.5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Link href={`/reports?employee=${emp.id}`}>
+            <Button size="sm" variant="ghost" title="View Agent Profile">
+              <Eye className="w-3.5 h-3.5" />
+            </Button>
+          </Link>
+          <Button
+            size="sm"
+            variant={compareIds.includes(emp.id) ? "default" : "ghost"}
+            onClick={() => toggleCompare(emp.id)}
+            title="Compare"
+            className="w-7 h-7 p-0"
+          >
+            <GitCompare className="w-3.5 h-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => openEditDialog(emp)}>
+            <Pencil className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </td>
     </tr>
   );
@@ -253,7 +343,6 @@ export default function EmployeesPage() {
       <thead>
         <tr className="border-b border-border">
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Name</th>
-          <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Email</th>
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Sub-Team</th>
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Status</th>
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground w-12"></th>
@@ -334,10 +423,6 @@ export default function EmployeesPage() {
                   <Label htmlFor="add-name">Full Name *</Label>
                   <Input id="add-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Smith" />
                 </div>
-                <div>
-                  <Label htmlFor="add-email">Email *</Label>
-                  <Input id="add-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane.smith@company.com" />
-                </div>
                 {renderDepartmentField(role, setRole, "add-role")}
                 {renderSubTeamField(role, subTeam, setSubTeam)}
                 <div>
@@ -371,10 +456,6 @@ export default function EmployeesPage() {
                 <Label htmlFor="edit-name">Full Name</Label>
                 <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
               </div>
-              <div>
-                <Label htmlFor="edit-email">Email</Label>
-                <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} />
-              </div>
               {renderDepartmentField(editRole, setEditRole, "edit-role")}
               {renderSubTeamField(editRole, editSubTeam, setEditSubTeam)}
               <div>
@@ -394,6 +475,28 @@ export default function EmployeesPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Team Comparison Panel */}
+      {compareIds.length === 2 && employees && (() => {
+        const emp1 = employees.find(e => e.id === compareIds[0]);
+        const emp2 = employees.find(e => e.id === compareIds[1]);
+        if (!emp1 || !emp2) return null;
+        return (
+          <div className="mx-6 mt-6 bg-card rounded-lg border border-primary/30 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
+                <GitCompare className="w-5 h-5 text-primary" />
+                Comparing Agents
+              </h3>
+              <Button size="sm" variant="ghost" onClick={() => setCompareIds([])}>Clear</Button>
+            </div>
+            <div className="grid grid-cols-2 gap-6">
+              <CompareCard employee={emp1} />
+              <CompareCard employee={emp2} />
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="p-6">
         {isLoading ? (

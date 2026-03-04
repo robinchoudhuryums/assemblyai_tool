@@ -14,7 +14,7 @@ import { createHmac, createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 
-const DEFAULT_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_REGION = "us-east-1";
 
 interface AwsCredentials {
@@ -49,12 +49,39 @@ export class BedrockProvider implements AIAnalysisProvider {
     return this.credentials !== null;
   }
 
-  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string): Promise<CallAnalysis> {
+  async generateText(prompt: string): Promise<string> {
     if (!this.credentials) {
       throw new Error("Bedrock provider not configured");
     }
 
-    const prompt = buildAnalysisPrompt(transcriptText, callCategory);
+    const region = this.credentials.region;
+    const host = `bedrock-runtime.${region}.amazonaws.com`;
+    const rawPath = `/model/${this.model}/converse`;
+    const url = `https://${host}${rawPath}`;
+
+    const body = JSON.stringify({
+      messages: [{ role: "user", content: [{ text: prompt }] }],
+      inferenceConfig: { temperature: 0.4, maxTokens: 2048 },
+    });
+
+    const headers = this.signRequest("POST", host, rawPath, body, region);
+    const response = await fetch(url, { method: "POST", headers, body });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Bedrock API error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    return result.output?.message?.content?.[0]?.text || "";
+  }
+
+  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any): Promise<CallAnalysis> {
+    if (!this.credentials) {
+      throw new Error("Bedrock provider not configured");
+    }
+
+    const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate);
     const region = this.credentials.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
     // Raw path for the HTTP request (no encoding — colons in model IDs are fine)
@@ -67,7 +94,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       ],
       inferenceConfig: {
         temperature: 0.3,
-        maxTokens: 4096,
+        maxTokens: 2048,
       },
     });
 

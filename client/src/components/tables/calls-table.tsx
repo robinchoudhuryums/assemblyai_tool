@@ -1,19 +1,36 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2, UserCheck } from "lucide-react";
+import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import type { CallWithDetails, Employee } from "@shared/schema";
 import { AudioWaveform } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+
+type SortField = "date" | "duration" | "score" | "sentiment";
+type SortDir = "asc" | "desc";
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
 export default function CallsTable() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
+
+  // Pagination
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+
+  // Sorting
+  const [sortField, setSortField] = useState<SortField>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -62,6 +79,86 @@ export default function CallsTable() {
     },
   });
 
+  // Sorted and paginated data
+  const sortedCalls = useMemo(() => {
+    if (!calls) return [];
+    const sorted = [...calls].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "date":
+          cmp = new Date(a.uploadedAt || 0).getTime() - new Date(b.uploadedAt || 0).getTime();
+          break;
+        case "duration":
+          cmp = (a.duration || 0) - (b.duration || 0);
+          break;
+        case "score":
+          cmp = parseFloat(a.analysis?.performanceScore || "0") - parseFloat(b.analysis?.performanceScore || "0");
+          break;
+        case "sentiment": {
+          const sentOrder: Record<string, number> = { positive: 3, neutral: 2, negative: 1 };
+          cmp = (sentOrder[a.sentiment?.overallSentiment || ""] || 0) - (sentOrder[b.sentiment?.overallSentiment || ""] || 0);
+          break;
+        }
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return sorted;
+  }, [calls, sortField, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedCalls.length / pageSize));
+  const pagedCalls = sortedCalls.slice(page * pageSize, (page + 1) * pageSize);
+
+  // Reset page when filters change
+  const handleFilterChange = (setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    setPage(0);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDir("desc");
+    }
+    setPage(0);
+  };
+
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return sortDir === "asc" ? <ArrowUp className="w-3 h-3 ml-1" /> : <ArrowDown className="w-3 h-3 ml-1" />;
+  };
+
+  // Bulk selection helpers
+  const allOnPageSelected = pagedCalls.length > 0 && pagedCalls.every(c => selectedIds.has(c.id));
+  const toggleAll = () => {
+    if (allOnPageSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(pagedCalls.map(c => c.id)));
+    }
+  };
+  const toggleOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Are you sure you want to permanently delete ${selectedIds.size} call(s)?`)) return;
+    Array.from(selectedIds).forEach(id => deleteMutation.mutate(id));
+    setSelectedIds(new Set());
+  };
+
+  const handleBulkAssign = (employeeId: string) => {
+    Array.from(selectedIds).forEach(callId => assignMutation.mutate({ callId, employeeId }));
+    setSelectedIds(new Set());
+  };
+
   const handleDelete = (callId: string) => {
     if (window.confirm("Are you sure you want to permanently delete this call and all its data?")) {
       deleteMutation.mutate(callId);
@@ -70,9 +167,29 @@ export default function CallsTable() {
 
   if (isLoadingCalls || isLoadingEmployees) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
-        <p className="ml-2 text-muted-foreground">Loading calls...</p>
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="flex items-center justify-between mb-4">
+          <Skeleton className="h-6 w-32" />
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-36" />
+            <Skeleton className="h-9 w-36" />
+          </div>
+        </div>
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 py-3 border-b border-border last:border-0">
+              <Skeleton className="h-4 w-4" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-8 w-8 rounded-full" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-4 w-12" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-5 w-20 rounded-full" />
+              <Skeleton className="h-8 w-24" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -117,9 +234,14 @@ export default function CallsTable() {
   return (
     <div className="bg-card rounded-lg border border-border p-6" data-testid="calls-table">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-foreground">Recent Calls</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-lg font-semibold text-foreground">Recent Calls</h3>
+          <span className="text-xs text-muted-foreground">
+            {sortedCalls.length} total
+          </span>
+        </div>
         <div className="flex items-center space-x-2">
-          <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
+          <Select value={employeeFilter} onValueChange={handleFilterChange(setEmployeeFilter)}>
             <SelectTrigger className="w-40" data-testid="employee-filter">
               <SelectValue placeholder="All Employees" />
             </SelectTrigger>
@@ -132,7 +254,7 @@ export default function CallsTable() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
+          <Select value={sentimentFilter} onValueChange={handleFilterChange(setSentimentFilter)}>
             <SelectTrigger className="w-40" data-testid="sentiment-filter">
               <SelectValue placeholder="All Sentiment" />
             </SelectTrigger>
@@ -146,22 +268,72 @@ export default function CallsTable() {
         </div>
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="bg-primary/5 border border-primary/20 rounded-lg px-4 py-2 mb-3 flex items-center gap-3">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <Select onValueChange={handleBulkAssign}>
+            <SelectTrigger className="w-44 h-8 text-xs">
+              <SelectValue placeholder="Assign to..." />
+            </SelectTrigger>
+            <SelectContent>
+              {employees?.filter(e => e.status === "Active").map(emp => (
+                <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={handleBulkDelete}>
+            <Trash2 className="w-3 h-3 mr-1" /> Delete Selected
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 text-xs ml-auto" onClick={() => setSelectedIds(new Set())}>
+            Clear Selection
+          </Button>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="border-b border-border">
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Date</th>
+              <th className="py-3 px-2 w-8">
+                <button onClick={toggleAll} className="text-muted-foreground hover:text-foreground">
+                  {allOnPageSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                </button>
+              </th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
+                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("date")}>
+                  Date <SortIcon field="date" />
+                </button>
+              </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">Employee</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Duration</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Sentiment</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Score</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
+                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("duration")}>
+                  Duration <SortIcon field="duration" />
+                </button>
+              </th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
+                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("sentiment")}>
+                  Sentiment <SortIcon field="sentiment" />
+                </button>
+              </th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
+                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("score")}>
+                  Score <SortIcon field="score" />
+                </button>
+              </th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Party</th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">Status</th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {calls?.map((call) => (
-              <tr key={call.id} className="border-b border-border hover:bg-muted transition-colors">
+            {pagedCalls.map((call) => (
+              <tr key={call.id} className={`border-b border-border hover:bg-muted transition-colors ${selectedIds.has(call.id) ? "bg-primary/5" : ""}`}>
+                <td className="py-3 px-2">
+                  <button onClick={() => toggleOne(call.id)} className="text-muted-foreground hover:text-foreground">
+                    {selectedIds.has(call.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
+                  </button>
+                </td>
                 <td className="py-3 px-2">
                   <div>
                     <p className="font-medium text-foreground">{new Date(call.uploadedAt || "").toLocaleDateString()}</p>
@@ -206,14 +378,65 @@ export default function CallsTable() {
                 </td>
                 <td className="py-3 px-2">{getSentimentBadge(call.sentiment?.overallSentiment)}</td>
                 <td className="py-3 px-2">
-                  {call.analysis?.performanceScore && (
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-green-600">{Number(call.analysis.performanceScore).toFixed(1)}</span>
-                      {renderStars(Number(call.analysis.performanceScore))}
-                    </div>
-                  )}
+                  {call.analysis?.performanceScore && (() => {
+                    const score = Number(call.analysis.performanceScore);
+                    const scoreColor = score >= 8 ? "text-green-600" : score >= 6 ? "text-blue-600" : score >= 4 ? "text-yellow-600" : "text-red-600";
+                    const barColor = score >= 8 ? "from-green-500 to-emerald-400" : score >= 6 ? "from-blue-500 to-cyan-400" : score >= 4 ? "from-yellow-500 to-amber-400" : "from-red-500 to-orange-400";
+                    return (
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className={`font-bold ${scoreColor}`}>{score.toFixed(1)}</span>
+                          {renderStars(score)}
+                        </div>
+                        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full bg-gradient-to-r ${barColor}`} style={{ width: `${score * 10}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </td>
-                <td className="py-3 px-2">{getStatusBadge(call.status)}</td>
+                <td className="py-3 px-2">
+                  {call.analysis?.callPartyType ? (
+                    <Badge variant="outline" className="text-xs capitalize">
+                      {(call.analysis.callPartyType as string).replace(/_/g, " ")}
+                    </Badge>
+                  ) : <span className="text-muted-foreground text-xs">—</span>}
+                </td>
+                <td className="py-3 px-2">
+                  <div className="flex items-center gap-1.5">
+                    {getStatusBadge(call.status)}
+                    {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as string[]).length > 0 && (() => {
+                      const flags = call.analysis.flags as string[];
+                      const hasExceptional = flags.includes("exceptional_call");
+                      const hasBad = flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
+                      const hasLowConfidence = flags.includes("low_confidence");
+                      return (
+                        <>
+                          {hasExceptional && (
+                            <span title="Exceptional Call">
+                              <Award className="w-4 h-4 text-emerald-500" />
+                            </span>
+                          )}
+                          {hasBad && (
+                            <span title={flags.filter(f => f !== "exceptional_call" && f !== "medicare_call" && f !== "low_confidence").join(", ")}>
+                              <AlertTriangle className="w-4 h-4 text-red-500" />
+                            </span>
+                          )}
+                          {!hasExceptional && !hasBad && flags.includes("medicare_call") && (
+                            <span title="Medicare Call">
+                              <AlertTriangle className="w-4 h-4 text-blue-500" />
+                            </span>
+                          )}
+                          {hasLowConfidence && (
+                            <span title="Low AI Confidence — may need manual review">
+                              <ShieldQuestion className="w-4 h-4 text-yellow-500" />
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </td>
                 <td className="py-3 px-2">
                   <div className="flex items-center space-x-2">
                     <Link href={`/transcripts/${call.id}`}>
@@ -237,10 +460,60 @@ export default function CallsTable() {
         </table>
       </div>
 
+      {/* Pagination Controls */}
+      {sortedCalls.length > 0 && (
+        <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Rows per page:</span>
+            <Select value={String(pageSize)} onValueChange={v => { setPageSize(Number(v)); setPage(0); }}>
+              <SelectTrigger className="w-16 h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map(n => (
+                  <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="ml-2">
+              {page * pageSize + 1}–{Math.min((page + 1) * pageSize, sortedCalls.length)} of {sortedCalls.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+              const pageNum = totalPages <= 5 ? i : Math.max(0, Math.min(page - 2, totalPages - 5)) + i;
+              return (
+                <Button
+                  key={pageNum}
+                  size="sm"
+                  variant={page === pageNum ? "default" : "ghost"}
+                  className="w-8 h-8 p-0 text-xs"
+                  onClick={() => setPage(pageNum)}
+                >
+                  {pageNum + 1}
+                </Button>
+              );
+            })}
+            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {!calls?.length && (
-        <div className="text-center py-12">
-          <p className="text-muted-foreground">No call recordings found</p>
-          <Link href="/upload"><Button className="mt-4">Upload Your First Call</Button></Link>
+        <div className="text-center py-16">
+          <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">
+            <FileAudio className="w-8 h-8 text-primary/60" />
+          </div>
+          <h4 className="font-semibold text-foreground mb-1">No call recordings yet</h4>
+          <p className="text-sm text-muted-foreground mb-4 max-w-sm mx-auto">
+            Upload your first audio file to get started with AI-powered call analysis.
+          </p>
+          <Link href="/upload"><Button>Upload Your First Call</Button></Link>
         </div>
       )}
     </div>

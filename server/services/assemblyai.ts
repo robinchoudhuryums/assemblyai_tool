@@ -205,17 +205,44 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       }
     }
 
+    // Determine flags
+    const flags: string[] = aiAnalysis?.flags || [];
+    if (performanceScore <= 2.0 && !flags.includes("low_score")) {
+      flags.push("low_score");
+    }
+    if (performanceScore >= 9.0 && !flags.includes("exceptional_call")) {
+      flags.push("exceptional_call");
+    }
+
+    // Normalize array fields from AI — coerce any objects to strings
+    const normalizeStringArray = (arr: unknown): string[] => {
+      if (!Array.isArray(arr)) return [];
+      return arr.map((item: unknown) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const obj = item as Record<string, unknown>;
+          if (typeof obj.text === "string") return obj.text;
+          if (typeof obj.name === "string") return obj.name;
+          if (typeof obj.task === "string") return obj.task;
+          return JSON.stringify(item);
+        }
+        return String(item ?? "");
+      });
+    };
+
     const analysis: InsertCallAnalysis = {
       callId,
       performanceScore: performanceScore.toString(),
       talkTimeRatio: talkTimeRatio.toString(),
       responseTime: undefined,
-      keywords: aiAnalysis?.topics || [],
-      topics: aiAnalysis?.topics || [],
-      summary: aiAnalysis?.summary || transcriptResponse.text?.slice(0, 500) || '',
-      actionItems: aiAnalysis?.action_items || [],
+      keywords: normalizeStringArray(aiAnalysis?.topics),
+      topics: normalizeStringArray(aiAnalysis?.topics),
+      summary: typeof aiAnalysis?.summary === "string" ? aiAnalysis.summary : (aiAnalysis?.summary ? JSON.stringify(aiAnalysis.summary) : transcriptResponse.text?.slice(0, 500) || ''),
+      actionItems: normalizeStringArray(aiAnalysis?.action_items),
       feedback: aiAnalysis?.feedback || { strengths: [], suggestions: [] },
       lemurResponse: undefined,
+      callPartyType: typeof aiAnalysis?.call_party_type === "string" ? aiAnalysis.call_party_type : undefined,
+      flags: flags.length > 0 ? flags : undefined,
     };
 
     return { transcript, sentiment, analysis };

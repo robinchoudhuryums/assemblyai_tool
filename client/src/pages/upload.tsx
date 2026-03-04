@@ -44,9 +44,9 @@ export default function Upload() {
             </div>
           </div>
           
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>Note:</strong> Processing typically takes 2-3 minutes per audio file. 
+          <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
+            <p className="text-sm text-blue-800 dark:text-blue-300">
+              <strong>Note:</strong> Processing typically takes 2-3 minutes per audio file.
               You'll receive real-time updates on the transcription status.
             </p>
           </div>

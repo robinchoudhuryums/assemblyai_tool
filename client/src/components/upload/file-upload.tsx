@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, FileAudio, X } from "lucide-react";
+import { CloudUpload, FileAudio, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
@@ -16,12 +16,72 @@ interface UploadFile {
   progress: number;
   status: 'pending' | 'uploading' | 'processing' | 'completed' | 'error';
   error?: string;
+  callId?: string;
+  processingStep?: string;
+  processingProgress?: number;
 }
+
+const PROCESSING_STEPS = [
+  { key: "uploading", label: "Uploading audio" },
+  { key: "transcribing", label: "Transcribing" },
+  { key: "analyzing", label: "AI analysis" },
+  { key: "processing", label: "Processing results" },
+  { key: "saving", label: "Saving" },
+  { key: "completed", label: "Complete" },
+];
 
 export default function FileUpload() {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Listen for WebSocket processing updates
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${window.location.host}/ws`;
+
+    try {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "call_update" && data.callId) {
+            setUploadFiles(prev => prev.map(f => {
+              if (f.callId === data.callId) {
+                const stepIndex = PROCESSING_STEPS.findIndex(s => s.key === data.status);
+                const progress = stepIndex >= 0 ? Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100) : f.processingProgress;
+                return {
+                  ...f,
+                  processingStep: data.label || data.status,
+                  processingProgress: progress || 0,
+                  status: data.status === "completed" ? "completed" as const :
+                          data.status === "failed" ? "error" as const : "processing" as const,
+                  error: data.status === "failed" ? "Processing failed" : undefined,
+                };
+              }
+              return f;
+            }));
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      ws.onclose = () => { wsRef.current = null; };
+    } catch {
+      // WebSocket not available
+    }
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, []);
 
   const { data: employees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
@@ -48,7 +108,6 @@ export default function FileUpload() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
-      toast({ title: "Upload Successful", description: "Your file is now being processed." });
     },
     onError: (error) => {
       toast({ title: "Upload Failed", description: error.message, variant: "destructive" });
@@ -62,10 +121,24 @@ export default function FileUpload() {
     setUploadFiles(prev => [...prev, ...newFiles]);
   }, []);
 
+  const MAX_BATCH_SIZE = 20;
+  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB — matches server limit
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'audio/*': ['.mp3', '.wav', '.m4a'] },
-    maxSize: 500 * 1024 * 1024,
+    onDrop: (accepted, rejected) => {
+      if (rejected.length > 0) {
+        const reasons = rejected.map(r => r.errors.map(e => e.message).join(", ")).join("; ");
+        toast({ title: "Some files rejected", description: reasons, variant: "destructive" });
+      }
+      const currentCount = uploadFiles.length;
+      const allowed = accepted.slice(0, MAX_BATCH_SIZE - currentCount);
+      if (allowed.length < accepted.length) {
+        toast({ title: "Batch limit", description: `Maximum ${MAX_BATCH_SIZE} files per batch. ${accepted.length - allowed.length} file(s) were skipped.`, variant: "destructive" });
+      }
+      onDrop(allowed);
+    },
+    accept: { 'audio/*': ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg'] },
+    maxSize: MAX_FILE_SIZE,
   });
 
   const updateFile = (index: number, updates: Partial<UploadFile>) => {
@@ -79,67 +152,154 @@ export default function FileUpload() {
   const uploadFile = async (index: number) => {
     const fileData = uploadFiles[index];
     try {
-      updateFile(index, { status: 'uploading', progress: 0 });
-      await uploadMutation.mutateAsync({
+      updateFile(index, { status: 'uploading', progress: 0, processingStep: "Uploading to server..." });
+      const result = await uploadMutation.mutateAsync({
         file: fileData.file,
         employeeId: fileData.employeeId || undefined,
         callCategory: fileData.callCategory || undefined,
       });
-      updateFile(index, { status: 'completed', progress: 100 });
-      setTimeout(() => removeFile(index), 3000);
+      // The API returns the call ID — track it for WebSocket updates
+      const callId = result?.id || result?.callId;
+      updateFile(index, {
+        status: 'processing',
+        progress: 100,
+        callId,
+        processingStep: "Queued for processing...",
+        processingProgress: 10,
+      });
+      toast({ title: "Upload Successful", description: "Your file is now being processed." });
     } catch (error) {
       updateFile(index, { status: 'error', error: error instanceof Error ? error.message : 'Upload failed' });
     }
   };
 
-  const uploadAll = () => {
-    uploadFiles.forEach((file, index) => {
-      if (file.status === 'pending') {
-        uploadFile(index);
-      }
-    });
+  const MAX_CONCURRENT = 3;
+
+  const uploadAll = async () => {
+    const pendingIndices = uploadFiles
+      .map((file, index) => file.status === 'pending' ? index : -1)
+      .filter(i => i >= 0);
+
+    // Process in batches of MAX_CONCURRENT
+    for (let i = 0; i < pendingIndices.length; i += MAX_CONCURRENT) {
+      const batch = pendingIndices.slice(i, i + MAX_CONCURRENT);
+      await Promise.allSettled(batch.map(idx => uploadFile(idx)));
+    }
   };
 
   return (
     <div className="bg-card rounded-lg border border-border p-6">
       <h3 className="text-lg font-semibold text-foreground mb-4">Upload Call Recordings</h3>
-      <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer`}>
+      <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+        isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+      }`}>
         <input {...getInputProps()} />
-        <CloudUpload className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-2 text-sm text-gray-600">Drag & drop files here, or click to select files</p>
+        <CloudUpload className={`mx-auto h-12 w-12 ${isDragActive ? "text-primary" : "text-muted-foreground"}`} />
+        <p className="mt-2 text-sm text-muted-foreground">
+          {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select files"}
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">MP3, WAV, M4A, MP4, FLAC, OGG — up to 100MB per file, {MAX_BATCH_SIZE} files max</p>
       </div>
 
       {uploadFiles.length > 0 && (
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="font-medium text-foreground">Files to Upload</h4>
-            <Button type="button" onClick={uploadAll} disabled={uploadMutation.isPending}>
-              Upload All
-            </Button>
+            <h4 className="font-medium text-foreground">
+              Files to Upload
+              <span className="text-xs text-muted-foreground ml-2 font-normal">
+                ({uploadFiles.filter(f => f.status === 'completed').length}/{uploadFiles.length} complete)
+              </span>
+            </h4>
+            <div className="flex items-center gap-2">
+              {uploadFiles.length > 1 && uploadFiles.some(f => f.status !== 'pending') && (
+                <span className="text-xs text-muted-foreground">
+                  {uploadFiles.filter(f => f.status === 'uploading' || f.status === 'processing').length} in progress
+                </span>
+              )}
+              {uploadFiles.some(f => f.status === 'pending') && (
+                <Button type="button" onClick={uploadAll} disabled={uploadMutation.isPending}>
+                  Upload All ({uploadFiles.filter(f => f.status === 'pending').length})
+                </Button>
+              )}
+            </div>
           </div>
           {uploadFiles.map((fileData, index) => (
-            <div key={index} className="flex items-center space-x-3 p-4 bg-muted rounded-lg">
-              <FileAudio className="text-primary w-8 h-8 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm truncate">{fileData.file.name}</p>
+            <div key={index} className="p-4 bg-muted rounded-lg space-y-3">
+              <div className="flex items-center space-x-3">
+                <FileAudio className="text-primary w-8 h-8 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{fileData.file.name}</p>
+                  <p className="text-xs text-muted-foreground">{(fileData.file.size / 1024 / 1024).toFixed(1)} MB</p>
+                </div>
+
+                {fileData.status === 'pending' && (
+                  <>
+                    <Select onValueChange={(value) => updateFile(index, { callCategory: value })}>
+                      <SelectTrigger className="w-40"><SelectValue placeholder="Call type" /></SelectTrigger>
+                      <SelectContent>
+                        {CALL_CATEGORIES.map(cat => (
+                          <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select onValueChange={(value) => updateFile(index, { employeeId: value === "__unassigned__" ? "" : value })}>
+                      <SelectTrigger className="w-44"><SelectValue placeholder="Assign to agent" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unassigned__">
+                          <span className="text-muted-foreground italic">Unassigned (auto-detect)</span>
+                        </SelectItem>
+                        {employees?.map(employee => (
+                          <SelectItem key={employee.id} value={employee.id}>{employee.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                  </>
+                )}
+
+                {fileData.status === 'completed' && (
+                  <div className="flex items-center gap-2 text-green-600">
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span className="text-sm font-medium">Complete</span>
+                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                  </div>
+                )}
+
+                {fileData.status === 'error' && (
+                  <div className="flex items-center gap-2 text-red-600">
+                    <XCircle className="w-5 h-5" />
+                    <span className="text-sm">{fileData.error}</span>
+                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                  </div>
+                )}
               </div>
-              <Select onValueChange={(value) => updateFile(index, { callCategory: value })}>
-                <SelectTrigger className="w-40"><SelectValue placeholder="Call type" /></SelectTrigger>
-                <SelectContent>
-                  {CALL_CATEGORIES.map(cat => (
-                    <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select onValueChange={(value) => updateFile(index, { employeeId: value })}>
-                <SelectTrigger className="w-44"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                <SelectContent>
-                  {employees?.map(employee => (
-                    <SelectItem key={employee.id} value={employee.id}>{employee.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+
+              {/* Processing Progress Indicator */}
+              {(fileData.status === 'uploading' || fileData.status === 'processing') && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                    <span className="text-xs font-medium text-primary">
+                      {fileData.processingStep || "Processing..."}
+                    </span>
+                  </div>
+                  <Progress value={fileData.processingProgress || 0} className="h-2" />
+                  <div className="flex justify-between text-[10px] text-muted-foreground px-0.5">
+                    {PROCESSING_STEPS.map((step, i) => {
+                      const currentIdx = PROCESSING_STEPS.findIndex(s =>
+                        fileData.processingStep?.toLowerCase().includes(s.key)
+                      );
+                      const isDone = i <= currentIdx;
+                      const isCurrent = i === currentIdx;
+                      return (
+                        <span key={step.key} className={`${isDone ? "text-primary" : ""} ${isCurrent ? "font-semibold" : ""}`}>
+                          {step.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
