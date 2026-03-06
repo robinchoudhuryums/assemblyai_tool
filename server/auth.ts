@@ -114,6 +114,9 @@ declare global {
   }
 }
 
+// Exposed so WebSocket upgrade handler can verify sessions (HIPAA requirement)
+export let sessionMiddleware: RequestHandler;
+
 export async function setupAuth(app: Express) {
   // Load users from environment variables on startup
   await loadUsersFromEnv();
@@ -131,25 +134,24 @@ export async function setupAuth(app: Express) {
   const SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
   const SESSION_ABSOLUTE_MAX_MS = 8 * 60 * 60 * 1000; // 8 hours absolute max
 
-  app.use(
-    session({
-      secret: sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      store: new MemoryStore({
-        checkPeriod: 60 * 1000, // Prune expired entries every minute
-      }),
-      cookie: {
-        secure: process.env.NODE_ENV === "production",
-        httpOnly: true,
-        maxAge: SESSION_IDLE_TIMEOUT_MS,
-        sameSite: "lax",
-      },
-      // HIPAA: rolling=true resets cookie expiry on each request (acts as idle timeout).
-      // maxAge=15min means session expires after 15 minutes of inactivity.
-      rolling: true,
-    })
-  );
+  sessionMiddleware = session({
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    store: new MemoryStore({
+      checkPeriod: 60 * 1000, // Prune expired entries every minute
+    }),
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      httpOnly: true,
+      maxAge: SESSION_IDLE_TIMEOUT_MS,
+      sameSite: "lax",
+    },
+    // HIPAA: rolling=true resets cookie expiry on each request (acts as idle timeout).
+    // maxAge=15min means session expires after 15 minutes of inactivity.
+    rolling: true,
+  });
+  app.use(sessionMiddleware);
 
   app.use(passport.initialize());
   app.use(passport.session());
@@ -255,11 +257,9 @@ export function requireRole(...allowedRoles: string[]): RequestHandler {
       return res.status(401).json({ message: "Authentication required" });
     }
     const userRole = req.user.role || "viewer";
-    if (allowedRoles.includes(userRole)) {
-      return next();
-    }
-    // Admin always has access
-    if (userRole === "admin") {
+    const userLevel = ROLE_HIERARCHY[userRole] ?? 0;
+    const requiredLevel = Math.min(...allowedRoles.map(r => ROLE_HIERARCHY[r] ?? 0));
+    if (userLevel >= requiredLevel) {
       return next();
     }
     return res.status(403).json({ message: "Insufficient permissions" });

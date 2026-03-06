@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { ConfirmDialog } from "@/components/lib/confirm-dialog";
 import { CALL_CATEGORIES } from "@shared/schema";
 import type { PromptTemplate } from "@shared/schema";
 
@@ -32,6 +33,7 @@ export default function PromptTemplatesPage() {
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const { data: templates, isLoading } = useQuery<PromptTemplate[]>({
     queryKey: ["/api/prompt-templates"],
@@ -78,9 +80,7 @@ export default function PromptTemplatesPage() {
   });
 
   const handleDelete = (id: string) => {
-    if (window.confirm("Delete this prompt template?")) {
-      deleteMutation.mutate(id);
-    }
+    setDeleteConfirmId(id);
   };
 
   // Categories that don't have templates yet
@@ -88,6 +88,15 @@ export default function PromptTemplatesPage() {
 
   return (
     <div className="min-h-screen" data-testid="prompt-templates-page">
+      <ConfirmDialog
+        open={deleteConfirmId !== null}
+        onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}
+        title="Delete prompt template?"
+        description="This will permanently remove this prompt template. New calls with this category will use the default evaluation criteria."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => { if (deleteConfirmId) deleteMutation.mutate(deleteConfirmId); setDeleteConfirmId(null); }}
+      />
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           <div>

@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudUpload, FileAudio, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
@@ -34,53 +34,31 @@ export default function FileUpload() {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const wsRef = useRef<WebSocket | null>(null);
 
-  // Listen for WebSocket processing updates
+  // Listen for WebSocket call updates via the shared connection (dispatched by useWebSocket hook)
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/ws`;
-
-    try {
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "call_update" && data.callId) {
-            setUploadFiles(prev => prev.map(f => {
-              if (f.callId === data.callId) {
-                const stepIndex = PROCESSING_STEPS.findIndex(s => s.key === data.status);
-                const progress = stepIndex >= 0 ? Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100) : f.processingProgress;
-                return {
-                  ...f,
-                  processingStep: data.label || data.status,
-                  processingProgress: progress || 0,
-                  status: data.status === "completed" ? "completed" as const :
-                          data.status === "failed" ? "error" as const : "processing" as const,
-                  error: data.status === "failed" ? "Processing failed" : undefined,
-                };
-              }
-              return f;
-            }));
+    const handler = (e: Event) => {
+      const data = (e as CustomEvent).detail;
+      if (data?.callId) {
+        setUploadFiles(prev => prev.map(f => {
+          if (f.callId === data.callId) {
+            const stepIndex = PROCESSING_STEPS.findIndex(s => s.key === data.status);
+            const progress = stepIndex >= 0 ? Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100) : f.processingProgress;
+            return {
+              ...f,
+              processingStep: data.label || data.status,
+              processingProgress: progress || 0,
+              status: data.status === "completed" ? "completed" as const :
+                      data.status === "failed" ? "error" as const : "processing" as const,
+              error: data.status === "failed" ? "Processing failed" : undefined,
+            };
           }
-        } catch {
-          // ignore
-        }
-      };
-
-      ws.onclose = () => { wsRef.current = null; };
-    } catch {
-      // WebSocket not available
-    }
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+          return f;
+        }));
       }
     };
+    window.addEventListener("ws:call_update", handler);
+    return () => window.removeEventListener("ws:call_update", handler);
   }, []);
 
   const { data: employees } = useQuery<Employee[]>({
@@ -97,6 +75,7 @@ export default function FileUpload() {
       const response = await fetch('/api/calls/upload', {
         method: 'POST',
         body: formData,
+        credentials: 'include',
       });
 
       if (!response.ok) {

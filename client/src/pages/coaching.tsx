@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useBeforeUnload } from "@/hooks/use-before-unload";
 import { apiRequest } from "@/lib/queryClient";
 import type { Employee } from "@shared/schema";
 import { COACHING_CATEGORIES } from "@shared/schema";
@@ -48,7 +49,7 @@ export default function CoachingPage() {
     }
   }, []);
 
-  const { data: sessions, isLoading } = useQuery<CoachingSession[]>({
+  const { data: sessions, isLoading, error: sessionsError } = useQuery<CoachingSession[]>({
     queryKey: ["/api/coaching"],
   });
 
@@ -139,6 +140,14 @@ export default function CoachingPage() {
       <main className="p-6 space-y-3">
         {isLoading && (
           <div className="text-center py-12 text-muted-foreground">Loading coaching sessions...</div>
+        )}
+
+        {sessionsError && (
+          <div className="text-center py-12 text-destructive">
+            <X className="w-8 h-8 mx-auto mb-2" />
+            <p className="font-semibold">Failed to load coaching sessions</p>
+            <p className="text-sm text-muted-foreground">{sessionsError.message}</p>
+          </div>
         )}
 
         {!isLoading && filtered.length === 0 && (
@@ -272,6 +281,9 @@ function CoachingForm({ employees, onClose, prefillEmployeeId, prefillCallId, pr
   const [tasks, setTasks] = useState<string[]>([""]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Warn before navigating away with unsaved form data
+  useBeforeUnload(title.trim().length > 0 || notes.trim().length > 0);
 
   const createMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {

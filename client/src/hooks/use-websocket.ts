@@ -29,6 +29,9 @@ export function useWebSocket() {
         try {
           const data = JSON.parse(event.data) as CallUpdate;
           if (data.type === "call_update") {
+            // Broadcast to other components (e.g., file-upload progress tracking)
+            window.dispatchEvent(new CustomEvent("ws:call_update", { detail: data }));
+
             if (data.status === "completed") {
               toast({
                 title: "Call Processing Complete",

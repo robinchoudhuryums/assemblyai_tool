@@ -108,7 +108,9 @@ app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
     const message = err.message || "Internal Server Error";
 
     res.status(status).json({ message });
-    throw err;
+    if (status >= 500) {
+      console.error(`[ERROR] ${status}: ${message}`);
+    }
   });
 
   // importantly only setup vite in development and after

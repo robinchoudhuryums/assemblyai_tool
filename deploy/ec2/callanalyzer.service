@@ -1,0 +1,49 @@
+# CallAnalyzer — systemd service unit
+# Install to: /etc/systemd/system/callanalyzer.service
+#
+# Commands:
+#   sudo systemctl enable callanalyzer   # Start on boot
+#   sudo systemctl start callanalyzer    # Start now
+#   sudo systemctl status callanalyzer   # Check status
+#   sudo journalctl -u callanalyzer -f   # Tail logs
+
+[Unit]
+Description=CallAnalyzer - AI-Powered Call Quality Analysis
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=callanalyzer
+Group=callanalyzer
+WorkingDirectory=/opt/callanalyzer
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+
+# Environment
+Environment=NODE_ENV=production
+Environment=PORT=5000
+EnvironmentFile=/opt/callanalyzer/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/callanalyzer
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=512M
+
+# Logging (goes to journald → accessible via journalctl)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callanalyzer
+
+[Install]
+WantedBy=multi-user.target

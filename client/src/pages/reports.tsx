@@ -163,7 +163,7 @@ export default function ReportsPage() {
 
   // Primary data
   const primaryQueryKey = ["/api/reports/filtered", buildParams(dateRange)];
-  const { data: report, isLoading } = useQuery<FilteredReportData>({
+  const { data: report, isLoading, error: reportError } = useQuery<FilteredReportData>({
     queryKey: primaryQueryKey,
     queryFn: async () => {
       const res = await fetch(`/api/reports/filtered?${buildParams(dateRange)}`, { credentials: "include" });
@@ -174,7 +174,7 @@ export default function ReportsPage() {
 
   // Comparison data
   const compareQueryKey = ["/api/reports/filtered", buildParams(compareDateRange), "compare"];
-  const { data: compareReport } = useQuery<FilteredReportData>({
+  const { data: compareReport, isLoading: isCompareLoading } = useQuery<FilteredReportData>({
     queryKey: compareQueryKey,
     queryFn: async () => {
       const res = await fetch(`/api/reports/filtered?${buildParams(compareDateRange)}`, { credentials: "include" });
@@ -281,6 +281,16 @@ export default function ReportsPage() {
       <div className="flex items-center justify-center h-64">
         <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
         <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+      </div>
+    );
+  }
+
+  if (reportError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-destructive">
+        <AlertTriangle className="w-8 h-8 mb-2" />
+        <p className="font-semibold">Failed to load report</p>
+        <p className="text-sm text-muted-foreground">{reportError.message}</p>
       </div>
     );
   }
@@ -448,25 +458,31 @@ export default function ReportsPage() {
               label="Total Calls Analyzed"
               value={report?.metrics.totalCalls ?? 0}
               format="int"
-              compareValue={compareEnabled ? compareReport?.metrics.totalCalls : undefined}
-              delta={compareEnabled ? delta(report?.metrics.totalCalls ?? 0, compareReport?.metrics.totalCalls) : null}
+              compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.totalCalls : undefined}
+              delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.totalCalls ?? 0, compareReport?.metrics.totalCalls) : null}
             />
             <MetricCard
               label="Average Sentiment Score"
               value={report?.metrics.avgSentiment ?? 0}
               format="sentiment"
               color="text-blue-500"
-              compareValue={compareEnabled ? compareReport?.metrics.avgSentiment : undefined}
-              delta={compareEnabled ? delta(report?.metrics.avgSentiment ?? 0, compareReport?.metrics.avgSentiment) : null}
+              compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgSentiment : undefined}
+              delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgSentiment ?? 0, compareReport?.metrics.avgSentiment) : null}
             />
             <MetricCard
               label="Average Performance Score"
               value={report?.metrics.avgPerformanceScore ?? 0}
               format="score"
               color="text-green-500"
-              compareValue={compareEnabled ? compareReport?.metrics.avgPerformanceScore : undefined}
-              delta={compareEnabled ? delta(report?.metrics.avgPerformanceScore ?? 0, compareReport?.metrics.avgPerformanceScore) : null}
+              compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgPerformanceScore : undefined}
+              delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgPerformanceScore ?? 0, compareReport?.metrics.avgPerformanceScore) : null}
             />
+            {compareEnabled && isCompareLoading && (
+              <div className="col-span-3 text-center text-sm text-muted-foreground">
+                <AudioWaveform className="w-4 h-4 animate-spin inline mr-2" />
+                Loading comparison data...
+              </div>
+            )}
           </div>
         </div>
 

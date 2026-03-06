@@ -1,12 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
-import { Phone, Heart, Clock, Star, TrendingUp, TrendingDown } from "lucide-react";
+import { Phone, Heart, Clock, Star, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DashboardMetrics } from "@shared/schema";
 
 export default function MetricsOverview() {
-  const { data: metrics, isLoading } = useQuery<DashboardMetrics>({
+  const { data: metrics, isLoading, error } = useQuery<DashboardMetrics>({
     queryKey: ["/api/dashboard/metrics"],
   });
+
+  if (error) {
+    return (
+      <div className="bg-card rounded-lg border border-destructive/30 p-6 text-center">
+        <AlertTriangle className="w-6 h-6 text-destructive mx-auto mb-2" />
+        <p className="text-sm font-medium text-destructive">Failed to load metrics</p>
+        <p className="text-xs text-muted-foreground">{error.message}</p>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -27,12 +37,12 @@ export default function MetricsOverview() {
     );
   }
 
+  const totalCalls = metrics?.totalCalls ?? 0;
   const metricCards = [
     {
       title: "Total Calls",
-      value: metrics?.totalCalls ?? 0,
-      change: "+12% from last month",
-      changeType: "positive" as const,
+      value: totalCalls,
+      change: `${totalCalls} analyzed`,
       icon: Phone,
       iconBg: "bg-gradient-to-br from-primary/20 to-primary/5",
       iconColor: "text-primary",
@@ -42,7 +52,6 @@ export default function MetricsOverview() {
       title: "Avg Sentiment",
       value: `${(metrics?.avgSentiment ?? 0).toFixed(1)}/10`,
       change: "Avg across calls",
-      changeType: "positive" as const,
       icon: Heart,
       iconBg: "bg-gradient-to-br from-green-200 to-green-50 dark:from-green-900/40 dark:to-green-900/10",
       iconColor: "text-green-600",
@@ -51,8 +60,7 @@ export default function MetricsOverview() {
     {
       title: "Transcription Time",
       value: `${metrics?.avgTranscriptionTime ?? 0}min`,
-      change: "-15% faster",
-      changeType: "positive" as const,
+      change: "Avg per call",
       icon: Clock,
       iconBg: "bg-gradient-to-br from-blue-200 to-blue-50 dark:from-blue-900/40 dark:to-blue-900/10",
       iconColor: "text-blue-600",
@@ -62,7 +70,6 @@ export default function MetricsOverview() {
       title: "Team Score",
       value: `${(metrics?.avgPerformanceScore ?? 0).toFixed(1)}/10`,
       change: "Avg performance",
-      changeType: "positive" as const,
       icon: Star,
       iconBg: "bg-gradient-to-br from-purple-200 to-purple-50 dark:from-purple-900/40 dark:to-purple-900/10",
       iconColor: "text-purple-600",
@@ -82,14 +89,7 @@ export default function MetricsOverview() {
                 <p className="text-2xl font-bold text-foreground" data-testid={`metric-${metric.title.toLowerCase().replace(/\s+/g, '-')}`}>
                   {metric.value}
                 </p>
-                <p className={`text-xs mt-1 flex items-center ${
-                  metric.changeType === 'positive' ? 'text-green-600' : 'text-red-600'
-                }`}>
-                  {metric.changeType === 'positive' ? (
-                    <TrendingUp className="w-3 h-3 mr-1" />
-                  ) : (
-                    <TrendingDown className="w-3 h-3 mr-1" />
-                  )}
+                <p className="text-xs mt-1 text-muted-foreground">
                   {metric.change}
                 </p>
               </div>

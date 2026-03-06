@@ -1,0 +1,63 @@
+{
+  "_comment": "AWS Security Group reference — create via console or CLI",
+  "_usage": "aws ec2 create-security-group --group-name callanalyzer-sg --description 'CallAnalyzer web server' --vpc-id vpc-XXXXX",
+  "GroupName": "callanalyzer-sg",
+  "Description": "CallAnalyzer - HTTPS web server with SSH access",
+  "IngressRules": [
+    {
+      "Description": "SSH — restrict to your IP only",
+      "IpProtocol": "tcp",
+      "FromPort": 22,
+      "ToPort": 22,
+      "CidrIp": "YOUR_IP/32",
+      "_note": "Replace YOUR_IP with your office/home IP. Never use 0.0.0.0/0 for SSH."
+    },
+    {
+      "Description": "HTTP — for Caddy ACME challenge + redirect to HTTPS",
+      "IpProtocol": "tcp",
+      "FromPort": 80,
+      "ToPort": 80,
+      "CidrIp": "0.0.0.0/0"
+    },
+    {
+      "Description": "HTTPS — main application traffic",
+      "IpProtocol": "tcp",
+      "FromPort": 443,
+      "ToPort": 443,
+      "CidrIp": "0.0.0.0/0"
+    }
+  ],
+  "EgressRules": [
+    {
+      "Description": "All outbound — needed for S3, Bedrock, AssemblyAI, npm, Let's Encrypt",
+      "IpProtocol": "-1",
+      "CidrIp": "0.0.0.0/0"
+    }
+  ],
+  "_iam_role": {
+    "_comment": "Attach an IAM instance profile with this policy so the app can use S3 + Bedrock without hardcoded keys",
+    "PolicyName": "CallAnalyzerEC2Policy",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ],
+        "Resource": [
+          "arn:aws:s3:::ums-call-archive",
+          "arn:aws:s3:::ums-call-archive/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:InvokeModel"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }
+}

@@ -1,9 +1,10 @@
-import { useEffect, lazy, Suspense } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient, getQueryFn } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { AudioWaveform } from "lucide-react";
@@ -56,8 +57,37 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
   );
 }
 
+const KEYBOARD_SHORTCUTS = [
+  { key: "D", description: "Go to Dashboard" },
+  { key: "K", description: "Go to Search" },
+  { key: "N", description: "Upload new call" },
+  { key: "R", description: "Go to Reports" },
+  { key: "?", description: "Show this help" },
+];
+
+function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Keyboard Shortcuts</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 mt-2">
+          {KEYBOARD_SHORTCUTS.map(({ key, description }) => (
+            <div key={key} className="flex items-center justify-between py-1.5">
+              <span className="text-sm text-muted-foreground">{description}</span>
+              <kbd className="px-2 py-1 text-xs font-mono bg-muted rounded border border-border">{key}</kbd>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function Router() {
   const [location, navigate] = useLocation();
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   // WebSocket listener for real-time notifications
   useWebSocket();
@@ -70,20 +100,28 @@ function Router() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      switch (e.key.toLowerCase()) {
+      switch (e.key) {
+        case "?":
+          e.preventDefault();
+          setShowShortcuts(prev => !prev);
+          break;
         case "k":
+        case "K":
           e.preventDefault();
           navigate("/search");
           break;
         case "n":
+        case "N":
           e.preventDefault();
           navigate("/upload");
           break;
         case "d":
+        case "D":
           e.preventDefault();
           navigate("/");
           break;
         case "r":
+        case "R":
           e.preventDefault();
           navigate("/reports");
           break;
@@ -95,24 +133,25 @@ function Router() {
 
   return (
     <div className="flex h-screen">
+      <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar />
       <main className="flex-1 overflow-auto">
         <Suspense fallback={<PageLoader />}>
           <AnimatePresence mode="wait">
             <Switch key={location}>
-              <Route path="/">{() => <AnimatedPage><Dashboard /></AnimatedPage>}</Route>
-              <Route path="/upload">{() => <AnimatedPage><Upload /></AnimatedPage>}</Route>
-              <Route path="/transcripts">{() => <AnimatedPage><Transcripts /></AnimatedPage>}</Route>
-              <Route path="/transcripts/:id">{() => <AnimatedPage><Transcripts /></AnimatedPage>}</Route>
-              <Route path="/search">{() => <AnimatedPage><SearchPage /></AnimatedPage>}</Route>
-              <Route path="/performance">{() => <AnimatedPage><PerformancePage /></AnimatedPage>}</Route>
-              <Route path="/sentiment">{() => <AnimatedPage><SentimentPage /></AnimatedPage>}</Route>
-              <Route path="/reports">{() => <AnimatedPage><ReportsPage /></AnimatedPage>}</Route>
-              <Route path="/employees">{() => <AnimatedPage><EmployeesPage /></AnimatedPage>}</Route>
-              <Route path="/insights">{() => <AnimatedPage><InsightsPage /></AnimatedPage>}</Route>
-              <Route path="/coaching">{() => <AnimatedPage><CoachingPage /></AnimatedPage>}</Route>
-              <Route path="/admin">{() => <AnimatedPage><AdminPage /></AnimatedPage>}</Route>
-              <Route path="/admin/templates">{() => <AnimatedPage><PromptTemplatesPage /></AnimatedPage>}</Route>
+              <Route path="/">{() => <ErrorBoundary><AnimatedPage><Dashboard /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/upload">{() => <ErrorBoundary><AnimatedPage><Upload /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/transcripts">{() => <ErrorBoundary><AnimatedPage><Transcripts /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/transcripts/:id">{() => <ErrorBoundary><AnimatedPage><Transcripts /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/search">{() => <ErrorBoundary><AnimatedPage><SearchPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/performance">{() => <ErrorBoundary><AnimatedPage><PerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/sentiment">{() => <ErrorBoundary><AnimatedPage><SentimentPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/reports">{() => <ErrorBoundary><AnimatedPage><ReportsPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/employees">{() => <ErrorBoundary><AnimatedPage><EmployeesPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/insights">{() => <ErrorBoundary><AnimatedPage><InsightsPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/coaching">{() => <ErrorBoundary><AnimatedPage><CoachingPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/admin">{() => <ErrorBoundary><AnimatedPage><AdminPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/admin/templates">{() => <ErrorBoundary><AnimatedPage><PromptTemplatesPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>
           </AnimatePresence>

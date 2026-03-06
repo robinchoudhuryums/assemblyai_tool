@@ -169,7 +169,7 @@ export default function EmployeesPage() {
     });
   };
 
-  const { data: employees, isLoading } = useQuery<Employee[]>({
+  const { data: employees, isLoading, error: employeesError } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
   });
 
@@ -501,6 +501,12 @@ export default function EmployeesPage() {
       <div className="p-6">
         {isLoading ? (
           <p className="text-muted-foreground">Loading employees...</p>
+        ) : employeesError ? (
+          <div className="text-center py-12 text-destructive">
+            <Users className="w-8 h-8 mx-auto mb-2" />
+            <p className="font-semibold">Failed to load employees</p>
+            <p className="text-sm text-muted-foreground">{employeesError.message}</p>
+          </div>
         ) : !employees || employees.length === 0 ? (
           <div className="text-center py-12">
             <Users className="mx-auto h-12 w-12 text-muted-foreground" />

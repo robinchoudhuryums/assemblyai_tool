@@ -10,6 +10,7 @@ import { AudioWaveform } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { ConfirmDialog } from "@/components/lib/confirm-dialog";
 
 type SortField = "date" | "duration" | "score" | "sentiment";
 type SortDir = "asc" | "desc";
@@ -32,6 +33,9 @@ export default function CallsTable() {
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Confirm dialog state
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; callId?: string; bulk?: boolean }>({ open: false });
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -48,7 +52,7 @@ export default function CallsTable() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (callId: string) => fetch(`/api/calls/${callId}`, { method: 'DELETE' }),
+    mutationFn: (callId: string) => apiRequest("DELETE", `/api/calls/${callId}`),
     onSuccess: () => {
       toast({
         title: "Call Deleted",
@@ -149,20 +153,43 @@ export default function CallsTable() {
 
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Are you sure you want to permanently delete ${selectedIds.size} call(s)?`)) return;
-    Array.from(selectedIds).forEach(id => deleteMutation.mutate(id));
-    setSelectedIds(new Set());
+    setDeleteConfirm({ open: true, bulk: true });
   };
 
-  const handleBulkAssign = (employeeId: string) => {
-    Array.from(selectedIds).forEach(callId => assignMutation.mutate({ callId, employeeId }));
+  const confirmBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
     setSelectedIds(new Set());
+    setDeleteConfirm({ open: false });
+    try {
+      await Promise.all(ids.map(id => apiRequest("DELETE", `/api/calls/${id}`)));
+      toast({ title: "Calls Deleted", description: `${ids.length} call(s) deleted successfully.` });
+    } catch {
+      toast({ title: "Delete Failed", description: "Some calls could not be deleted.", variant: "destructive" });
+    }
+    queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+  };
+
+  const handleBulkAssign = async (employeeId: string) => {
+    const ids = Array.from(selectedIds);
+    setSelectedIds(new Set());
+    try {
+      await Promise.all(ids.map(callId => apiRequest("PATCH", `/api/calls/${callId}/assign`, { employeeId })));
+      toast({ title: "Calls Assigned", description: `${ids.length} call(s) assigned.` });
+    } catch {
+      toast({ title: "Assignment Failed", description: "Some calls could not be assigned.", variant: "destructive" });
+    }
+    queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
   };
 
   const handleDelete = (callId: string) => {
-    if (window.confirm("Are you sure you want to permanently delete this call and all its data?")) {
-      deleteMutation.mutate(callId);
+    setDeleteConfirm({ open: true, callId });
+  };
+
+  const confirmDelete = () => {
+    if (deleteConfirm.callId) {
+      deleteMutation.mutate(deleteConfirm.callId);
     }
+    setDeleteConfirm({ open: false });
   };
 
   if (isLoadingCalls || isLoadingEmployees) {
@@ -503,6 +530,18 @@ export default function CallsTable() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirm.open}
+        onOpenChange={(open) => setDeleteConfirm({ open })}
+        title={deleteConfirm.bulk ? `Delete ${selectedIds.size} call(s)?` : "Delete this call?"}
+        description={deleteConfirm.bulk
+          ? `This will permanently remove ${selectedIds.size} call recording(s) and all associated data. This action cannot be undone.`
+          : "This will permanently remove this call recording and all its data. This action cannot be undone."}
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={deleteConfirm.bulk ? confirmBulkDelete : confirmDelete}
+      />
 
       {!calls?.length && (
         <div className="text-center py-16">

@@ -1,0 +1,42 @@
+# CallAnalyzer — Caddy reverse proxy with automatic TLS
+# Replace YOUR_DOMAIN with your actual domain (e.g., calls.yourcompany.com)
+#
+# Caddy automatically provisions and renews Let's Encrypt TLS certificates.
+# No manual cert management required.
+
+YOUR_DOMAIN {
+    # Reverse proxy to the Node.js app
+    reverse_proxy localhost:5000
+
+    # Security headers (supplement what Express already sets)
+    header {
+        # HSTS — tell browsers to always use HTTPS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent MIME type sniffing
+        X-Content-Type-Options "nosniff"
+        # Clickjacking protection
+        X-Frame-Options "DENY"
+        # Remove Caddy server header
+        -Server
+    }
+
+    # Access logging for HIPAA audit trail
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 50mb
+            roll_keep 10
+            roll_keep_for 90d
+        }
+        format json
+    }
+
+    # Request size limit (50MB for audio uploads)
+    request_body {
+        max_size 50MB
+    }
+}
+
+# HTTP → HTTPS redirect (automatic with Caddy, but explicit for clarity)
+http://YOUR_DOMAIN {
+    redir https://YOUR_DOMAIN{uri} permanent
+}

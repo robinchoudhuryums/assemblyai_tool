@@ -198,7 +198,11 @@ export class S3Client {
 
   private async getObject(objectName: string): Promise<Response | undefined> {
     const response = await this.request("GET", `/${objectName}`);
-    if (response.status === 404 || response.status === 403) return undefined;
+    if (response.status === 404) return undefined;
+    if (response.status === 403) {
+      console.error(`[S3] Access denied (403) for ${objectName} — check IAM permissions`);
+      return undefined;
+    }
     if (!response.ok) {
       throw new Error(`S3 download failed for ${objectName}: ${await response.text()}`);
     }
@@ -261,6 +265,10 @@ export class S3Client {
     if (creds.sessionToken) {
       headerEntries.push(["x-amz-security-token", creds.sessionToken]);
     }
+    // HIPAA: Enforce server-side encryption at rest for all uploaded objects
+    if (method === "PUT") {
+      headerEntries.push(["x-amz-server-side-encryption", "AES256"]);
+    }
     headerEntries.sort((a, b) => a[0].localeCompare(b[0]));
 
     const canonicalHeaders = headerEntries.map(([k, v]) => `${k}:${v}\n`).join("");
@@ -299,6 +307,7 @@ export class S3Client {
     };
     if (contentType) result["Content-Type"] = contentType;
     if (creds.sessionToken) result["X-Amz-Security-Token"] = creds.sessionToken;
+    if (method === "PUT") result["X-Amz-Server-Side-Encryption"] = "AES256";
 
     return result;
   }

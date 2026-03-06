@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Link } from "wouter";
+import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { AudioWaveform } from "lucide-react";
 
@@ -44,6 +45,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [editScore, setEditScore] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
+
+  // Warn before navigating away with unsaved edits
+  useBeforeUnload(isEditing && (editScore !== "" || editSummary !== "" || editReason !== ""));
 
   const { data: call, isLoading } = useQuery<CallWithDetails>({
     queryKey: ["/api/calls", callId],
@@ -186,9 +190,12 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     }
   };
 
-  const transcriptSegments = call.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0 ?
-    generateSegmentsFromWords(call.transcript.words as TranscriptWord[]) :
-    [];
+  const transcriptSegments = useMemo(() => {
+    if (call.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0) {
+      return generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+    }
+    return [];
+  }, [call.transcript?.words]);
 
   function generateSegmentsFromWords(words: TranscriptWord[]) {
     const segments: any[] = [];

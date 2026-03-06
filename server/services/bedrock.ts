@@ -69,7 +69,8 @@ export class BedrockProvider implements AIAnalysisProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Bedrock API error (${response.status}): ${errorText}`);
+      // HIPAA: Truncate error to avoid leaking PHI in logs
+      throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
     }
 
     const result = await response.json();
@@ -109,7 +110,8 @@ export class BedrockProvider implements AIAnalysisProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Bedrock API error (${response.status}): ${errorText}`);
+      // HIPAA: Truncate error to avoid leaking PHI in logs
+      throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
     }
 
     const result = await response.json();

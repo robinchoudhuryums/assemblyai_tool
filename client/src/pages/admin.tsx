@@ -17,7 +17,7 @@ export default function AdminPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: requests, isLoading } = useQuery<AccessRequest[]>({
+  const { data: requests, isLoading, error: requestsError } = useQuery<AccessRequest[]>({
     queryKey: ["/api/access-requests"],
   });
 
@@ -129,7 +129,13 @@ export default function AdminPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {isLoading ? (
+                {requestsError ? (
+                  <div className="text-center py-12 text-destructive">
+                    <Shield className="w-8 h-8 mx-auto mb-2" />
+                    <p className="font-semibold">Failed to load access requests</p>
+                    <p className="text-sm text-muted-foreground">{requestsError.message}</p>
+                  </div>
+                ) : isLoading ? (
                   <div className="space-y-3">
                     {Array.from({ length: 3 }).map((_, i) => (
                       <div key={i} className="flex items-center gap-3 py-3">
