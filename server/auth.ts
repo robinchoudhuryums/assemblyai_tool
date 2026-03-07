@@ -142,7 +142,7 @@ export async function setupAuth(app: Express) {
       checkPeriod: 60 * 1000, // Prune expired entries every minute
     }),
     cookie: {
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE,
       httpOnly: true,
       maxAge: SESSION_IDLE_TIMEOUT_MS,
       sameSite: "lax",
