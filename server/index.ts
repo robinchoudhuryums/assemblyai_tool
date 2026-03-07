@@ -36,7 +36,7 @@ setInterval(() => {
 
 // Trust reverse proxy (Render, Heroku, etc.) so secure cookies and
 // x-forwarded-proto work correctly behind their load balancer.
-if (process.env.NODE_ENV === "production") {
+if (process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE) {
   app.set("trust proxy", 1);
 }
 
