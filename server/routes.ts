@@ -15,10 +15,10 @@ import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSc
 import { z } from "zod";
 import csv from "csv-parser";
 
-// Ensure uploads directory exists
+// Ensure uploads directory exists with restrictive permissions (HIPAA: PHI audio files)
 const uploadsDir = 'uploads';
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
 }
 
 // Configure multer for file uploads
@@ -33,7 +33,7 @@ const upload = multer({
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
       'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/flac', 'audio/x-flac',
-      'audio/ogg', 'audio/vorbis', 'video/mp4', 'application/octet-stream',
+      'audio/ogg', 'audio/vorbis', 'video/mp4',
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     const mimeOk = allowedMimeTypes.includes(file.mimetype);
@@ -134,6 +134,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(404).json({ message: "Access request not found" });
         return;
       }
+
+      // HIPAA: Log access request review
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: `access_request_${parsed.data.status}`,
+        resourceType: "access_request",
+        resourceId: req.params.id,
+      });
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update access request" });
@@ -162,6 +172,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...parsed.data,
         updatedBy: req.user?.username,
       });
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "create_prompt_template",
+        resourceType: "prompt_template",
+        resourceId: template.id,
+      });
+
       res.status(201).json(template);
     } catch (error) {
       res.status(500).json({ message: "Failed to create prompt template" });
@@ -194,6 +213,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/prompt-templates/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePromptTemplate(req.params.id);
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "delete_prompt_template",
+        resourceType: "prompt_template",
+        resourceId: req.params.id,
+      });
+
       res.json({ message: "Template deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete template" });
@@ -248,6 +276,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertEmployeeSchema.parse(req.body);
       const employee = await storage.createEmployee(validatedData);
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "create_employee",
+        resourceType: "employee",
+        resourceId: employee.id,
+      });
+
       res.status(201).json(employee);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -281,6 +318,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       const updated = await storage.updateEmployee(req.params.id, parsed.data);
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "update_employee",
+        resourceType: "employee",
+        resourceId: req.params.id,
+        detail: `fields: ${Object.keys(parsed.data).join(",")}`,
+      });
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update employee" });
@@ -313,6 +360,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const updated = await storage.updateCall(req.params.id, { employeeId: employeeId || undefined });
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "assign_call",
+        resourceType: "call",
+        resourceId: req.params.id,
+        detail: `employeeId: ${employeeId || "unassigned"}`,
+      });
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to assign employee to call" });
@@ -365,15 +422,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             results.push({ name, action: "created" });
           }
         } catch (err) {
-          results.push({ name, action: `error: ${(err as Error).message}` });
+          console.error(`CSV import error for "${name}":`, (err as Error).message);
+          results.push({ name, action: "error: failed to create" });
         }
       }
 
       const created = results.filter(r => r.action === "created").length;
       const skipped = results.filter(r => r.action.startsWith("skipped")).length;
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "csv_import_employees",
+        resourceType: "employee",
+        detail: `created: ${created}, skipped: ${skipped}, errors: ${results.filter(r => r.action.startsWith("error")).length}`,
+      });
+
       res.json({ message: `Import complete: ${created} created, ${skipped} skipped`, details: results });
     } catch (error) {
-      console.error("CSV import failed:", error);
+      console.error("CSV import failed:", (error as Error).message);
       res.status(500).json({ message: "Failed to import employees from CSV" });
     }
   });
@@ -468,6 +535,16 @@ app.get("/api/calls", requireAuth, async (req, res) => {
         filePath: req.file.path,
         status: "processing",
         callCategory: callCategory || undefined,
+      });
+
+      // HIPAA: Log PHI upload
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "upload_call",
+        resourceType: "call",
+        resourceId: call.id,
+        detail: `file: ${req.file.originalname}, category: ${callCategory || "none"}`,
       });
 
       // Read file buffer for API upload, then start async processing
@@ -740,12 +817,13 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       };
       const contentType = mimeTypes[ext] || 'audio/mpeg';
 
-      // If ?download=true, set Content-Disposition to force download
+      const rawName = call.fileName || `call-${req.params.id}${ext}`;
+      // Sanitize filename: remove path traversal, control chars, and non-ASCII
+      const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_");
       if (req.query.download === 'true') {
-        const rawName = call.fileName || `call-${req.params.id}${ext}`;
-        // Sanitize filename: remove path traversal, control chars, and non-ASCII
-        const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_");
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      } else {
+        res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
       }
 
       res.setHeader('Content-Type', contentType);
@@ -899,7 +977,20 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         res.status(400).json({ message: "Search query is required" });
         return;
       }
-      
+      if (query.length > 200) {
+        res.status(400).json({ message: "Search query too long (max 200 characters)" });
+        return;
+      }
+
+      // HIPAA: Log search access
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "search_calls",
+        resourceType: "search",
+        detail: `query_length: ${query.length}`,
+      });
+
       const results = await storage.searchCalls(query);
       res.json(results);
     } catch (error) {
@@ -1430,6 +1521,16 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         return;
       }
       const session = await storage.createCoachingSession(parsed.data);
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "create_coaching_session",
+        resourceType: "coaching",
+        resourceId: session.id,
+        detail: `employee: ${parsed.data.employeeId}`,
+      });
+
       res.status(201).json(session);
     } catch (error) {
       res.status(500).json({ message: "Failed to create coaching session" });
@@ -1462,6 +1563,16 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         res.status(404).json({ message: "Coaching session not found" });
         return;
       }
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "update_coaching_session",
+        resourceType: "coaching",
+        resourceId: req.params.id,
+        detail: `fields: ${Object.keys(parsed.data).join(",")}`,
+      });
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update coaching session" });

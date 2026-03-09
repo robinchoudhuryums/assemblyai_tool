@@ -24,6 +24,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Employee data (HIPAA: contains PII — never commit real employee data)
+employees.csv
+
 # Logs
 *.log
 npm-debug.log*

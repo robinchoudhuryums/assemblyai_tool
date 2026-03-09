@@ -122,6 +122,9 @@ export async function setupAuth(app: Express) {
   await loadUsersFromEnv();
 
   // HIPAA: Session configuration with proper memory store and idle timeout
+  if (!process.env.SESSION_SECRET && process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET is required in production. Set it to a strong random value.");
+  }
   const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
   if (!process.env.SESSION_SECRET) {
     console.warn("SESSION_SECRET not set - using random secret (sessions will not persist across restarts)");
@@ -142,7 +145,7 @@ export async function setupAuth(app: Express) {
       checkPeriod: 60 * 1000, // Prune expired entries every minute
     }),
     cookie: {
-      secure: process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE,
+      secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       maxAge: SESSION_IDLE_TIMEOUT_MS,
       sameSite: "lax",
