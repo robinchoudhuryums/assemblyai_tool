@@ -4,6 +4,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
+import { logPhiAccess } from "./services/audit-log";
 import crypto from "crypto";
 
 // HIPAA: Production environment safety checks
@@ -164,6 +165,13 @@ app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
         const purged = await storage.purgeExpiredCalls(retentionDays);
         if (purged > 0) {
           log(`[RETENTION] Purged ${purged} call(s) older than ${retentionDays} days`);
+          // HIPAA: Audit log for automated PHI deletion
+          logPhiAccess({
+            timestamp: new Date().toISOString(),
+            event: "retention_purge",
+            resourceType: "call",
+            detail: `Auto-purged ${purged} call(s) older than ${retentionDays} days`,
+          });
         }
       } catch (error) {
         console.error("[RETENTION] Error during purge:", error);

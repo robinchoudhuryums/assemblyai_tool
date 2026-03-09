@@ -75,7 +75,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // MFA verification during login
-  app.post("/api/auth/mfa/verify", (req, res) => {
+  app.post("/api/auth/mfa/verify", async (req, res) => {
     const { mfaToken, code, recoveryCode } = req.body;
     if (!mfaToken || (!code && !recoveryCode)) {
       return res.status(400).json({ message: "MFA token and verification code are required" });
@@ -92,7 +92,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (code) {
       verified = verifyTotpCode(user.username, code);
     } else if (recoveryCode) {
-      verified = verifyRecoveryCode(user.username, recoveryCode);
+      verified = await verifyRecoveryCode(user.username, recoveryCode);
     }
 
     if (!verified) {
@@ -420,6 +420,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
       }
+      // HIPAA: Log call assignment change (who can view this PHI is changing)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "assign_call",
+        resourceType: "call",
+        resourceId: req.params.id,
+        detail: employeeId ? `assigned to employee ${employeeId}` : "unassigned",
+      });
+
       const updated = await storage.updateCall(req.params.id, { employeeId: employeeId || undefined });
       res.json(updated);
     } catch (error) {
@@ -895,6 +905,15 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   // Get sentiment analysis for a call
   app.get("/api/calls/:id/sentiment", requireAuth, async (req, res) => {
     try {
+      // HIPAA: Log PHI access (sentiment data derived from PHI)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "view_sentiment",
+        resourceType: "sentiment",
+        resourceId: req.params.id,
+      });
+
       const sentiment = await storage.getSentimentAnalysis(req.params.id);
       if (!sentiment) {
         res.status(404).json({ message: "Sentiment analysis not found" });
@@ -909,6 +928,15 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   // Get analysis for a call
   app.get("/api/calls/:id/analysis", requireAuth, async (req, res) => {
     try {
+      // HIPAA: Log PHI access (AI analysis contains call summary and insights)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "view_analysis",
+        resourceType: "analysis",
+        resourceId: req.params.id,
+      });
+
       const analysis = await storage.getCallAnalysis(req.params.id);
       if (!analysis) {
         res.status(404).json({ message: "Call analysis not found" });
@@ -1007,7 +1035,16 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         res.status(400).json({ message: "Search query is required" });
         return;
       }
-      
+
+      // HIPAA: Log PHI search (search queries may return PHI results)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "search_calls",
+        resourceType: "search",
+        detail: `query: ${query.substring(0, 100)}`,
+      });
+
       const results = await storage.searchCalls(query);
       res.json(results);
     } catch (error) {

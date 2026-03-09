@@ -7,8 +7,11 @@
  */
 import * as OTPAuth from "otpauth";
 import QRCode from "qrcode";
-import { randomBytes } from "crypto";
+import { randomBytes, scrypt, timingSafeEqual } from "crypto";
+import { promisify } from "util";
 import { logPhiAccess } from "./audit-log";
+
+const scryptAsync = promisify(scrypt);
 
 // In-memory cache of MFA configs, loaded from S3 on startup
 const mfaStore = new Map<string, MfaConfig>();
@@ -18,7 +21,7 @@ interface MfaConfig {
   secret: string;
   /** Whether MFA setup is complete (user has verified a code) */
   enabled: boolean;
-  /** One-time recovery codes (hashed would be ideal, but kept simple for now) */
+  /** One-time recovery codes, stored as scrypt hashes (format: hash.salt) */
   recoveryCodes: string[];
   /** Timestamp of when MFA was enabled */
   enabledAt?: string;
@@ -67,15 +70,33 @@ export async function generateQrCodeDataUrl(otpauthUrl: string): Promise<string>
   });
 }
 
-/** Generate random recovery codes */
-function generateRecoveryCodes(): string[] {
-  const codes: string[] = [];
+/** Hash a recovery code using scrypt (same approach as password hashing) */
+async function hashRecoveryCode(code: string): Promise<string> {
+  const salt = randomBytes(16).toString("hex");
+  const buf = (await scryptAsync(code.toUpperCase().trim(), salt, 64)) as Buffer;
+  return `${buf.toString("hex")}.${salt}`;
+}
+
+/** Compare a plaintext recovery code against a stored hash (timing-safe) */
+async function compareRecoveryCode(supplied: string, stored: string): Promise<boolean> {
+  const [hashedCode, salt] = stored.split(".");
+  if (!hashedCode || !salt) return false;
+  const hashedCodeBuf = Buffer.from(hashedCode, "hex");
+  const suppliedBuf = (await scryptAsync(supplied.toUpperCase().trim(), salt, 64)) as Buffer;
+  return timingSafeEqual(hashedCodeBuf, suppliedBuf);
+}
+
+/** Generate random recovery codes. Returns { plaintext, hashed } for display and storage. */
+async function generateRecoveryCodes(): Promise<{ plaintext: string[]; hashed: string[] }> {
+  const plaintext: string[] = [];
+  const hashed: string[] = [];
   for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
-    // 8-character alphanumeric codes in format XXXX-XXXX
     const raw = randomBytes(4).toString("hex").toUpperCase();
-    codes.push(`${raw.slice(0, 4)}-${raw.slice(4, 8)}`);
+    const code = `${raw.slice(0, 4)}-${raw.slice(4, 8)}`;
+    plaintext.push(code);
+    hashed.push(await hashRecoveryCode(code));
   }
-  return codes;
+  return { plaintext, hashed };
 }
 
 /** Verify a TOTP code for a user. Allows 1-step window drift. */
@@ -89,16 +110,22 @@ export function verifyTotpCode(username: string, code: string): boolean {
 }
 
 /** Check a recovery code. If valid, consume it (one-time use). */
-export function verifyRecoveryCode(username: string, code: string): boolean {
+export async function verifyRecoveryCode(username: string, code: string): Promise<boolean> {
   const config = mfaStore.get(username);
   if (!config?.enabled) return false;
 
-  const normalizedCode = code.toUpperCase().trim();
-  const index = config.recoveryCodes.indexOf(normalizedCode);
-  if (index === -1) return false;
+  // Find the matching hashed recovery code
+  let matchIndex = -1;
+  for (let i = 0; i < config.recoveryCodes.length; i++) {
+    if (await compareRecoveryCode(code, config.recoveryCodes[i])) {
+      matchIndex = i;
+      break;
+    }
+  }
+  if (matchIndex === -1) return false;
 
   // Consume the recovery code
-  config.recoveryCodes.splice(index, 1);
+  config.recoveryCodes.splice(matchIndex, 1);
   mfaStore.set(username, config);
 
   // Persist change (fire-and-forget)
@@ -123,13 +150,13 @@ export async function setupMfa(username: string): Promise<{
   recoveryCodes: string[];
 }> {
   const { secret, otpauthUrl } = generateMfaSecret(username);
-  const recoveryCodes = generateRecoveryCodes();
+  const { plaintext, hashed } = await generateRecoveryCodes();
 
-  // Store as pending (not enabled until user verifies a code)
+  // Store hashed recovery codes (not plaintext) — plaintext is returned to user once
   const config: MfaConfig = {
     secret,
     enabled: false,
-    recoveryCodes,
+    recoveryCodes: hashed,
   };
   mfaStore.set(username, config);
   await saveMfaConfig(username, config);
@@ -143,7 +170,8 @@ export async function setupMfa(username: string): Promise<{
     resourceType: "auth",
   });
 
-  return { secret, otpauthUrl, qrCodeDataUrl, recoveryCodes };
+  // Return plaintext codes to user (only time they'll see them)
+  return { secret, otpauthUrl, qrCodeDataUrl, recoveryCodes: plaintext };
 }
 
 /** Confirm MFA setup by verifying an initial TOTP code */
