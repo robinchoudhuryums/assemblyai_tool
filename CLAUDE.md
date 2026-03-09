@@ -8,7 +8,7 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
 - **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
 - **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates
-- **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin)
+- **Auth**: Session-based with scrypt, role-based (viewer/manager/admin), optional TOTP MFA
 - **Hosting**: Render.com
 
 ## Local Development Setup
@@ -210,7 +210,17 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
 | **Data retention** | `server/index.ts` | Auto-purges calls older than `RETENTION_DAYS` (default 90) |
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
-| **MFA (TOTP)** | `server/services/mfa.ts` | Optional TOTP-based two-factor auth with recovery codes; configs persisted to S3 |
+| **MFA (TOTP)** | `server/services/mfa.ts` | Optional TOTP-based two-factor auth with scrypt-hashed recovery codes; configs persisted to S3 |
+| **PHI audit coverage** | `server/routes.ts` | All PHI-access routes have `logPhiAccess()` calls: view_call, view_transcript, view_sentiment, view_analysis, edit_call_analysis, search_calls, assign_call, delete_call, stream_audio |
+| **Retention audit** | `server/index.ts` | Auto-purge logs `retention_purge` audit event with count and policy |
+
+## MFA Implementation Details
+- **Library**: `otpauth` for TOTP generation/verification, `qrcode` for QR code data URLs
+- **Login flow**: Two-phase when MFA enabled — password auth returns a temporary `mfaToken` (5-min TTL stored in-memory), then `/api/auth/mfa/verify` completes the session
+- **Recovery codes**: 8 one-time codes (format `XXXX-XXXX`), stored as scrypt hashes in S3 at `config/mfa/{username}.json`. Plaintext only returned once during setup.
+- **Frontend**: MFA setup dialog in `client/src/components/mfa-setup-dialog.tsx`, accessible via key icon in sidebar. Login OTP input uses `input-otp` component with auto-submit.
+- **Pending MFA sessions**: Stored in-memory (`pendingMfaSessions` Map in `server/auth.ts`), cleaned up every 60 seconds. Not persisted — server restart invalidates pending MFA challenges (users just re-login).
+- **Storage accessor**: `CloudStorage.getObjectClient()` exposes the underlying `ObjectStorageClient` for direct JSON operations (used by MFA service to read/write config files)
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
@@ -225,6 +235,13 @@ No `render.yaml` in repo — deployment is configured via the Render dashboard.
 - **Start command**: `npm run start` (`NODE_ENV=production node dist/index.js`)
 - **Environment variables**: Configured in Render dashboard
 - Server serves both API and static frontend assets from the same process
+
+## Production Readiness — Remaining Items
+Before deploying with real PHI, these non-code items must be completed:
+- **BAA Agreements**: Confirm signed BAAs with AWS (S3 + Bedrock), AssemblyAI (transcription), and Render.com (hosting)
+- **S3 bucket encryption**: Verify default encryption is enabled at the bucket policy level in AWS Console (code sends `x-amz-server-side-encryption: AES256` per-object, but bucket-level policy is also needed)
+- **Audit log retention**: Set up a durable log sink (CloudWatch, Datadog, ELK) — HIPAA requires 6-year audit log retention; Render stdout logs don't persist that long
+- **Rate limiting**: Consider adding rate limits to `/api/calls/upload` and `/api/search` (currently only login is rate-limited)
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data
