@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import MfaSetupDialog from "@/components/mfa-setup-dialog";
 import type { CallWithDetails, Employee, AccessRequest } from "@shared/schema";
 
 type NavItem = { name: string; href: string; icon: any; section?: string; requireRole?: string[] };
@@ -27,6 +29,7 @@ interface AuthUser {
   username: string;
   name: string;
   role: string;
+  mfaEnabled?: boolean;
 }
 
 export default function Sidebar() {
@@ -94,6 +97,8 @@ export default function Sidebar() {
       window.location.href = "/";
     }
   };
+
+  const [mfaDialogOpen, setMfaDialogOpen] = useState(false);
 
   const handleQuickSwitch = (employeeId: string) => {
     navigate(`/reports?employee=${employeeId}`);
@@ -244,6 +249,25 @@ export default function Sidebar() {
             <p className="font-medium text-sm text-foreground truncate">{user?.name || "User"}</p>
             <p className="text-xs text-muted-foreground capitalize">{user?.role || "viewer"}</p>
           </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className={cn(
+                  "transition-colors",
+                  user?.mfaEnabled
+                    ? "text-green-600 hover:text-green-700"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setMfaDialogOpen(true)}
+                title="Two-factor authentication"
+              >
+                <KeyRound className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {user?.mfaEnabled ? "MFA enabled" : "Set up MFA"}
+            </TooltipContent>
+          </Tooltip>
           <button
             className="text-muted-foreground hover:text-foreground"
             onClick={handleLogout}
@@ -254,6 +278,16 @@ export default function Sidebar() {
           </button>
         </div>
       </div>
+
+      {/* MFA Setup Dialog */}
+      <MfaSetupDialog
+        open={mfaDialogOpen}
+        onOpenChange={setMfaDialogOpen}
+        mfaEnabled={user?.mfaEnabled || false}
+        onMfaChange={() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        }}
+      />
     </aside>
   );
 }

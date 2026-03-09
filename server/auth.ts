@@ -6,6 +6,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
+import { isMfaEnabled, verifyTotpCode, verifyRecoveryCode, loadMfaConfigs } from "./services/mfa";
 
 const scryptAsync = promisify(scrypt);
 
@@ -56,6 +57,49 @@ interface EnvUser {
 
 // In-memory store of hashed user credentials parsed from env vars
 const envUsers: EnvUser[] = [];
+
+// Pending MFA sessions: maps a temporary token to the user who passed password auth
+// but still needs to verify their TOTP code. Tokens expire after 5 minutes.
+interface PendingMfaSession {
+  user: Express.User;
+  expiresAt: number;
+}
+const pendingMfaSessions = new Map<string, PendingMfaSession>();
+const MFA_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Create a pending MFA session and return the temporary token */
+export function createPendingMfaSession(user: Express.User): string {
+  const token = randomBytes(32).toString("hex");
+  pendingMfaSessions.set(token, {
+    user,
+    expiresAt: Date.now() + MFA_SESSION_TTL_MS,
+  });
+  return token;
+}
+
+/** Validate and consume a pending MFA session */
+export function consumePendingMfaSession(token: string): Express.User | null {
+  const session = pendingMfaSessions.get(token);
+  if (!session) return null;
+  pendingMfaSessions.delete(token);
+  if (Date.now() > session.expiresAt) return null;
+  return session.user;
+}
+
+// Clean up expired pending MFA sessions every minute
+setInterval(() => {
+  const now = Date.now();
+  pendingMfaSessions.forEach((session, token) => {
+    if (now > session.expiresAt) pendingMfaSessions.delete(token);
+  });
+}, 60 * 1000);
+
+/** Look up a user by ID (used by MFA routes to find current user) */
+export function findUserById(id: string): Express.User | undefined {
+  const u = envUsers.find((u) => u.id === id);
+  if (!u) return undefined;
+  return { id: u.id, username: u.username, name: u.name, role: u.role };
+}
 
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("hex");
@@ -120,6 +164,9 @@ export let sessionMiddleware: RequestHandler;
 export async function setupAuth(app: Express) {
   // Load users from environment variables on startup
   await loadUsersFromEnv();
+
+  // Load MFA configurations from storage
+  await loadMfaConfigs();
 
   // HIPAA: Session configuration with proper memory store and idle timeout
   const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");

@@ -398,6 +398,11 @@ export class CloudStorage implements IStorage {
     this.client = client;
   }
 
+  /** Expose the underlying object storage client for direct access (e.g., MFA config storage) */
+  getObjectClient(): ObjectStorageClient {
+    return this.client;
+  }
+
   // --- User Methods (env-var-based, users are managed in auth.ts) ---
   async getUser(_id: string): Promise<User | undefined> {
     return undefined; // Users come from env vars

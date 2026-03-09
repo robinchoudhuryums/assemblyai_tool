@@ -51,10 +51,10 @@ npx vite build       # Frontend-only build (useful for quick verification)
 ```
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
-server/services/         # AI providers, S3/GCS clients, AssemblyAI, WebSocket
+server/services/         # AI providers, S3/GCS clients, AssemblyAI, WebSocket, MFA
 server/routes.ts         # All API routes + audio processing pipeline
 server/storage.ts        # Storage abstraction (memory, S3, GCS backends)
-server/auth.ts           # Authentication middleware + session management
+server/auth.ts           # Authentication middleware + session management + MFA integration
 shared/schema.ts         # Zod schemas shared between client/server
 tests/                   # Unit tests (Node test runner)
 ```
@@ -132,6 +132,15 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/reports/agent-profile/:id` | authenticated | Detailed agent profile |
 | POST | `/api/reports/agent-summary/:id` | authenticated | Generate agent summary |
 
+### MFA (Multi-Factor Authentication)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| POST | `/api/auth/mfa/verify` | public | Verify TOTP/recovery code during login (requires mfaToken) |
+| GET | `/api/auth/mfa/status` | authenticated | Get MFA status for current user |
+| POST | `/api/auth/mfa/setup` | authenticated | Begin MFA setup (returns QR code + recovery codes) |
+| POST | `/api/auth/mfa/confirm` | authenticated | Confirm MFA setup with initial TOTP code |
+| POST | `/api/auth/mfa/disable` | authenticated | Disable MFA for current user |
+
 ### Coaching & Admin
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
@@ -201,6 +210,7 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
 | **Data retention** | `server/index.ts` | Auto-purges calls older than `RETENTION_DAYS` (default 90) |
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
+| **MFA (TOTP)** | `server/services/mfa.ts` | Optional TOTP-based two-factor auth with recovery codes; configs persisted to S3 |
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually

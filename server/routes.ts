@@ -8,7 +8,8 @@ import { storage } from "./storage";
 import { assemblyAIService } from "./services/assemblyai";
 import { aiProvider } from "./services/ai-factory";
 import { buildAgentSummaryPrompt } from "./services/ai-provider";
-import { requireAuth, requireRole } from "./auth";
+import { requireAuth, requireRole, createPendingMfaSession, consumePendingMfaSession } from "./auth";
+import { isMfaEnabled, verifyTotpCode, verifyRecoveryCode, setupMfa, confirmMfaSetup, disableMfa, getMfaStatus } from "./services/mfa";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
 import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema } from "@shared/schema";
@@ -50,18 +51,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ROUTES (unauthenticated) ====================
   // Users are managed via AUTH_USERS environment variable (no registration)
 
-  // Login
+  // Login (with MFA support)
   app.post("/api/auth/login", (req, res, next) => {
     passport.authenticate("local", (err: any, user: Express.User | false, info: any) => {
       if (err) return next(err);
       if (!user) {
         return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
+
+      // Check if MFA is enabled for this user
+      if (isMfaEnabled(user.username)) {
+        // Don't create a session yet — issue a temporary MFA token
+        const mfaToken = createPendingMfaSession(user);
+        return res.json({ mfaRequired: true, mfaToken });
+      }
+
+      // No MFA — complete login normally
       req.login(user, (loginErr) => {
         if (loginErr) return next(loginErr);
         res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
       });
     })(req, res, next);
+  });
+
+  // MFA verification during login
+  app.post("/api/auth/mfa/verify", (req, res) => {
+    const { mfaToken, code, recoveryCode } = req.body;
+    if (!mfaToken || (!code && !recoveryCode)) {
+      return res.status(400).json({ message: "MFA token and verification code are required" });
+    }
+
+    // Consume the pending session
+    const user = consumePendingMfaSession(mfaToken);
+    if (!user) {
+      return res.status(401).json({ message: "MFA session expired or invalid. Please login again." });
+    }
+
+    // Verify the TOTP code or recovery code
+    let verified = false;
+    if (code) {
+      verified = verifyTotpCode(user.username, code);
+    } else if (recoveryCode) {
+      verified = verifyRecoveryCode(user.username, recoveryCode);
+    }
+
+    if (!verified) {
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "mfa_verification_failed",
+        username: user.username,
+        resourceType: "auth",
+      });
+      return res.status(401).json({ message: "Invalid verification code" });
+    }
+
+    // MFA verified — complete the login
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "mfa_verification_success",
+      userId: user.id,
+      username: user.username,
+      resourceType: "auth",
+    });
+
+    req.login(user, (loginErr) => {
+      if (loginErr) {
+        return res.status(500).json({ message: "Failed to complete login" });
+      }
+      res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
+    });
   });
 
   // Logout
@@ -75,12 +133,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // Get current session user
+  // Get current session user (includes MFA status)
   app.get("/api/auth/me", (req, res) => {
     if (req.isAuthenticated() && req.user) {
-      res.json(req.user);
+      const mfaStatus = getMfaStatus(req.user.username);
+      res.json({ ...req.user, mfaEnabled: mfaStatus.enabled });
     } else {
       res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
+  // ==================== MFA MANAGEMENT ROUTES (authenticated) ====================
+
+  // Get MFA status for current user
+  app.get("/api/auth/mfa/status", requireAuth, (req, res) => {
+    const status = getMfaStatus(req.user!.username);
+    res.json(status);
+  });
+
+  // Begin MFA setup — returns QR code and recovery codes
+  app.post("/api/auth/mfa/setup", requireAuth, async (req, res) => {
+    try {
+      const result = await setupMfa(req.user!.username);
+      res.json({
+        qrCodeDataUrl: result.qrCodeDataUrl,
+        secret: result.secret,
+        recoveryCodes: result.recoveryCodes,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up MFA" });
+    }
+  });
+
+  // Confirm MFA setup by verifying an initial code
+  app.post("/api/auth/mfa/confirm", requireAuth, async (req, res) => {
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ message: "Verification code is required" });
+    }
+    try {
+      const success = await confirmMfaSetup(req.user!.username, code);
+      if (!success) {
+        return res.status(400).json({ message: "Invalid code. Please try again." });
+      }
+      res.json({ message: "MFA enabled successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to confirm MFA setup" });
+    }
+  });
+
+  // Disable MFA for current user
+  app.post("/api/auth/mfa/disable", requireAuth, async (req, res) => {
+    try {
+      await disableMfa(req.user!.username);
+      res.json({ message: "MFA disabled" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to disable MFA" });
     }
   });
 

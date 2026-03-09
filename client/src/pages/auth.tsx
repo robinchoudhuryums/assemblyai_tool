@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { useToast } from "@/hooks/use-toast";
-import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings } from "lucide-react";
+import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings, KeyRound, ArrowLeft } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,7 +13,7 @@ interface AuthPageProps {
   onLogin: () => void;
 }
 
-type AuthView = "login" | "request-access";
+type AuthView = "login" | "request-access" | "mfa";
 
 export default function AuthPage({ onLogin }: AuthPageProps) {
   const [view, setView] = useState<AuthView>("login");
@@ -20,6 +21,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+
+  // MFA state
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   // Request access form state
   const [requestName, setRequestName] = useState("");
@@ -33,8 +40,16 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     setIsLoading(true);
 
     try {
-      await apiRequest("POST", "/api/auth/login", { username, password });
-      onLogin();
+      const res = await apiRequest("POST", "/api/auth/login", { username, password });
+      const data = await res.json();
+
+      if (data.mfaRequired) {
+        // Password verified, but MFA is required
+        setMfaToken(data.mfaToken);
+        setView("mfa");
+      } else {
+        onLogin();
+      }
     } catch (error: any) {
       const message = error.message?.includes(":")
         ? error.message.split(": ").slice(1).join(": ")
@@ -44,6 +59,40 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         description: message,
         variant: "destructive",
       });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const body: any = { mfaToken };
+      if (useRecoveryCode) {
+        body.recoveryCode = recoveryCode;
+      } else {
+        body.code = mfaCode;
+      }
+
+      await apiRequest("POST", "/api/auth/mfa/verify", body);
+      onLogin();
+    } catch (error: any) {
+      const message = error.message?.includes(":")
+        ? error.message.split(": ").slice(1).join(": ")
+        : error.message;
+      toast({
+        title: "Verification Failed",
+        description: message,
+        variant: "destructive",
+      });
+      // If session expired, go back to login
+      if (message?.includes("expired")) {
+        setView("login");
+        setMfaToken("");
+        setMfaCode("");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -94,35 +143,39 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             </div>
             <CardTitle className="text-2xl">CallAnalyzer</CardTitle>
             <CardDescription>
-              {view === "login"
-                ? "Sign in to access the call analysis dashboard"
-                : requestSubmitted
-                  ? "Your request has been submitted"
-                  : "Request access to the platform"}
+              {view === "mfa"
+                ? "Enter the code from your authenticator app"
+                : view === "login"
+                  ? "Sign in to access the call analysis dashboard"
+                  : requestSubmitted
+                    ? "Your request has been submitted"
+                    : "Request access to the platform"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Tab switcher */}
-            <div className="flex rounded-lg bg-muted p-1 mb-6">
-              <button
-                className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-                  view === "login" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setView("login")}
-              >
-                <LogIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-                Sign In
-              </button>
-              <button
-                className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-                  view === "request-access" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setView("request-access")}
-              >
-                <UserPlus className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-                Request Access
-              </button>
-            </div>
+            {/* Tab switcher (hidden during MFA verification) */}
+            {view !== "mfa" && (
+              <div className="flex rounded-lg bg-muted p-1 mb-6">
+                <button
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    view === "login" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setView("login")}
+                >
+                  <LogIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
+                  Sign In
+                </button>
+                <button
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    view === "request-access" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setView("request-access")}
+                >
+                  <UserPlus className="w-4 h-4 inline mr-1.5 -mt-0.5" />
+                  Request Access
+                </button>
+              </div>
+            )}
 
             {/* LOGIN FORM */}
             {view === "login" && (
@@ -164,6 +217,106 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                   Sign In
                 </Button>
               </form>
+            )}
+
+            {/* MFA VERIFICATION FORM */}
+            {view === "mfa" && (
+              <div className="space-y-4">
+                {!useRecoveryCode ? (
+                  <form onSubmit={handleMfaVerify} className="space-y-4">
+                    <div className="flex justify-center">
+                      <div className="w-14 h-14 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center">
+                        <KeyRound className="w-7 h-7 text-primary" />
+                      </div>
+                    </div>
+                    <p className="text-sm text-center text-muted-foreground">
+                      Enter the 6-digit code from your authenticator app
+                    </p>
+                    <div className="flex justify-center">
+                      <InputOTP
+                        maxLength={6}
+                        value={mfaCode}
+                        onChange={(value) => {
+                          setMfaCode(value);
+                          // Auto-submit when 6 digits are entered
+                          if (value.length === 6) {
+                            setTimeout(() => handleMfaVerify(), 100);
+                          }
+                        }}
+                      >
+                        <InputOTPGroup>
+                          <InputOTPSlot index={0} />
+                          <InputOTPSlot index={1} />
+                          <InputOTPSlot index={2} />
+                        </InputOTPGroup>
+                        <span className="text-muted-foreground">-</span>
+                        <InputOTPGroup>
+                          <InputOTPSlot index={3} />
+                          <InputOTPSlot index={4} />
+                          <InputOTPSlot index={5} />
+                        </InputOTPGroup>
+                      </InputOTP>
+                    </div>
+                    <Button type="submit" className="w-full" disabled={isLoading || mfaCode.length !== 6}>
+                      {isLoading ? (
+                        <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <KeyRound className="w-4 h-4 mr-2" />
+                      )}
+                      Verify
+                    </Button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleMfaVerify} className="space-y-4">
+                    <p className="text-sm text-center text-muted-foreground">
+                      Enter one of your recovery codes
+                    </p>
+                    <Input
+                      type="text"
+                      placeholder="XXXX-XXXX"
+                      value={recoveryCode}
+                      onChange={(e) => setRecoveryCode(e.target.value)}
+                      className="text-center font-mono tracking-wider"
+                      autoFocus
+                    />
+                    <Button type="submit" className="w-full" disabled={isLoading || !recoveryCode.trim()}>
+                      {isLoading ? (
+                        <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <KeyRound className="w-4 h-4 mr-2" />
+                      )}
+                      Verify Recovery Code
+                    </Button>
+                  </form>
+                )}
+                <div className="flex items-center justify-between pt-2">
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => {
+                      setView("login");
+                      setMfaToken("");
+                      setMfaCode("");
+                      setRecoveryCode("");
+                      setUseRecoveryCode(false);
+                    }}
+                  >
+                    <ArrowLeft className="w-3 h-3 inline mr-1" />
+                    Back to login
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => {
+                      setUseRecoveryCode(!useRecoveryCode);
+                      setMfaCode("");
+                      setRecoveryCode("");
+                    }}
+                  >
+                    {useRecoveryCode ? "Use authenticator app" : "Use recovery code"}
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* REQUEST ACCESS FORM */}
