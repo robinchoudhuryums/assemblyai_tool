@@ -6,6 +6,25 @@ import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
 import crypto from "crypto";
 
+// HIPAA: Production environment safety checks
+if (process.env.NODE_ENV === "production") {
+  const missing: string[] = [];
+  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+    missing.push("SESSION_SECRET (must be at least 32 characters)");
+  }
+  if (!process.env.AUTH_USERS) {
+    missing.push("AUTH_USERS (no authenticated users configured)");
+  }
+  if (!process.env.ASSEMBLYAI_API_KEY) {
+    missing.push("ASSEMBLYAI_API_KEY (transcription will fail)");
+  }
+  if (missing.length > 0) {
+    console.error("[HIPAA] FATAL: Missing required environment variables for production:");
+    missing.forEach((m) => console.error(`  - ${m}`));
+    process.exit(1);
+  }
+}
+
 const app = express();
 
 // HIPAA: Simple rate limiter for sensitive endpoints (login, search)
@@ -36,7 +55,7 @@ setInterval(() => {
 
 // Trust reverse proxy (Render, Heroku, etc.) so secure cookies and
 // x-forwarded-proto work correctly behind their load balancer.
-if (process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE) {
+if (process.env.NODE_ENV === "production") {
   app.set("trust proxy", 1);
 }
 

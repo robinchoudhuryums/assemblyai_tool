@@ -839,7 +839,14 @@ function createStorage(): IStorage {
     return new CloudStorage(new GcsClient(bucket));
   }
 
-  console.log("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts)");
+  // HIPAA: Block in-memory storage in production — PHI must be stored encrypted at rest
+  if (process.env.NODE_ENV === "production") {
+    console.error("[STORAGE] FATAL: No cloud storage credentials configured. In-memory storage is not allowed in production (HIPAA requirement).");
+    console.error("[STORAGE] Set S3_BUCKET (with AWS credentials) or GCS_BUCKET (with GCS_CREDENTIALS) to continue.");
+    process.exit(1);
+  }
+
+  console.warn("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts). NOT suitable for PHI.");
   return new MemStorage();
 }
 

@@ -90,7 +90,7 @@ export class GcsClient {
     return encodeURIComponent(name);
   }
 
-  /** Upload a JSON object */
+  /** Upload a JSON object (GCS encrypts at rest with Google-managed AES-256 by default) */
   async uploadJson(objectName: string, data: unknown): Promise<void> {
     const token = await this.getAccessToken();
     const body = JSON.stringify(data);
@@ -103,6 +103,7 @@ export class GcsClient {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
+          "x-goog-meta-hipaa-encryption": "google-managed-aes256",
         },
         body,
       }
@@ -113,7 +114,7 @@ export class GcsClient {
     }
   }
 
-  /** Upload a binary file (audio, etc.) */
+  /** Upload a binary file (audio, etc.) — GCS encrypts at rest with Google-managed AES-256 by default */
   async uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void> {
     const token = await this.getAccessToken();
     const encoded = this.encodeObjectName(objectName);
@@ -125,6 +126,7 @@ export class GcsClient {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": contentType,
+          "x-goog-meta-hipaa-encryption": "google-managed-aes256",
         },
         body: buffer,
       }
