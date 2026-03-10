@@ -22,7 +22,7 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
    - **Required**: `ASSEMBLYAI_API_KEY`, `SESSION_SECRET`
    - **Auth users**: `AUTH_USERS` — format: `username:password:role:displayName` (comma-separated for multiple)
    - **AWS (for Bedrock + S3)**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
-   - **Storage**: `S3_BUCKET` or `GCS_BUCKET` + `GCS_CREDENTIALS` — without these, falls back to **in-memory storage (data lost on restart)**
+   - **Storage**: `S3_BUCKET` — without this, falls back to **in-memory storage (data lost on restart)**
 
 3. Start the dev server:
    ```bash
@@ -51,9 +51,9 @@ npx vite build       # Frontend-only build (useful for quick verification)
 ```
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
-server/services/         # AI providers, S3/GCS clients, AssemblyAI, WebSocket
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket
 server/routes.ts         # All API routes + audio processing pipeline
-server/storage.ts        # Storage abstraction (memory, S3, GCS backends)
+server/storage.ts        # Storage abstraction (memory or S3 backends)
 server/auth.ts           # Authentication middleware + session management
 shared/schema.ts         # Zod schemas shared between client/server
 tests/                   # Unit tests (Node test runner)
@@ -78,7 +78,6 @@ tests/                   # Unit tests (Node test runner)
 
 ### Storage Backend Selection (server/storage.ts)
 - `STORAGE_BACKEND=s3` or `S3_BUCKET` env var → S3
-- `STORAGE_BACKEND=gcs` or GCS creds → Google Cloud Storage
 - Otherwise → **in-memory (non-persistent — data is lost on restart)**
 
 ## API Routes Overview
@@ -174,9 +173,6 @@ AWS_SESSION_TOKEN               # Optional, for IAM roles
 
 # Storage
 S3_BUCKET                       # Default: ums-call-archive
-# OR for GCS:
-GCS_BUCKET
-GCS_CREDENTIALS
 
 # AI Model
 BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)

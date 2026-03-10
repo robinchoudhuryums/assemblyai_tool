@@ -6,8 +6,7 @@ node_modules/
 .env.local
 .env.production
 
-# GCS service account key (HIPAA: never commit credentials)
-gcs-key.json
+# Service account keys (HIPAA: never commit credentials)
 *.keyfile.json
 
 # Uploaded audio files (HIPAA: may contain PHI)

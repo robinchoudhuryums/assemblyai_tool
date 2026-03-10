@@ -22,7 +22,6 @@ import {
   type InsertCoachingSession,
   type PerformerSummary,
 } from "@shared/schema";
-import { GcsClient } from "./services/gcs";
 import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
 
@@ -33,7 +32,7 @@ function safeFloat(value: string | undefined | null, fallback = 0): number {
   return Number.isNaN(n) ? fallback : n;
 }
 
-/** Common interface for GCS and S3 object storage clients */
+/** Common interface for S3 object storage client */
 export interface ObjectStorageClient {
   uploadJson(objectName: string, data: unknown): Promise<void>;
   uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void>;
@@ -833,18 +832,11 @@ export class CloudStorage implements IStorage {
 function createStorage(): IStorage {
   const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
 
-  // Explicit S3 or auto-detect via AWS credentials + S3_BUCKET
-  if (storageBackend === "s3" || (!storageBackend && process.env.S3_BUCKET)) {
+  // S3 storage (explicit or auto-detect via S3_BUCKET)
+  if (storageBackend === "s3" || process.env.S3_BUCKET) {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
     console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);
     return new CloudStorage(new S3Client(bucket));
-  }
-
-  // Explicit GCS or auto-detect via GCS credentials
-  if (storageBackend === "gcs" || process.env.GCS_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const bucket = process.env.GCS_BUCKET || "ums-call-archive";
-    console.log(`[STORAGE] Using GCS (bucket: ${bucket})`);
-    return new CloudStorage(new GcsClient(bucket));
   }
 
   console.log("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts)");

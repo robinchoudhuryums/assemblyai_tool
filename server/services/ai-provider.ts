@@ -1,11 +1,5 @@
 /**
- * AI Analysis Provider — shared interface and factory.
- *
- * Supports multiple backends:
- *   AI_PROVIDER=gemini   — Google AI Studio or Vertex AI (default)
- *   AI_PROVIDER=bedrock  — AWS Bedrock with Claude
- *
- * All providers implement the same interface and return identical output shapes.
+ * AI Analysis Provider — shared interface for AWS Bedrock (Claude).
  */
 
 export interface CallAnalysis {
