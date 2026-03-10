@@ -268,7 +268,7 @@ When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnai
 
 ## Documentation Maintenance
 
-Keep `CLAUDE.md` and `replit.md` updated when making structural changes. Specifically, update docs when:
+Keep `CLAUDE.md` updated when making structural changes. Specifically, update docs when:
 
 - **New API routes** are added or existing routes change → update the API Routes table
 - **Environment variables** are added/removed → update the Environment Variables section
@@ -278,8 +278,6 @@ Keep `CLAUDE.md` and `replit.md` updated when making structural changes. Specifi
 - **Dependencies** are significantly added/removed → update Tech Stack
 - **Auth/RBAC** rules change → update Role-Based Access Control
 - **AI model** defaults change → update Environment Variables and Common Gotchas
-
-**Note**: `replit.md` is a legacy file from the original Replit development environment. It should mirror the key architecture info in `CLAUDE.md` but is less detailed. When in doubt, keep `CLAUDE.md` as the single source of truth.
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data
