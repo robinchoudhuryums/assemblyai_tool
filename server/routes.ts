@@ -7,7 +7,8 @@ import passport from "passport";
 import { storage } from "./storage";
 import { assemblyAIService } from "./services/assemblyai";
 import { aiProvider } from "./services/ai-factory";
-import { buildAgentSummaryPrompt } from "./services/ai-provider";
+import { BedrockProvider } from "./services/bedrock";
+import { buildAgentSummaryPrompt, buildAnalysisPrompt, parseJsonResponse } from "./services/ai-provider";
 import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
@@ -1636,6 +1637,194 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       res.status(500).json({ message: "Failed to compute company insights" });
     }
   });
+
+  // ==================== A/B MODEL TESTING ROUTES (admin only) ====================
+
+  // List all A/B tests
+  app.get("/api/ab-tests", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const tests = await storage.getAllABTests();
+      res.json(tests);
+    } catch (error) {
+      console.error("Error fetching A/B tests:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch A/B tests" });
+    }
+  });
+
+  // Get a single A/B test
+  app.get("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const test = await storage.getABTest(req.params.id);
+      if (!test) {
+        res.status(404).json({ message: "A/B test not found" });
+        return;
+      }
+      res.json(test);
+    } catch (error) {
+      console.error("Error fetching A/B test:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch A/B test" });
+    }
+  });
+
+  // Upload audio for A/B model comparison
+  app.post("/api/ab-tests/upload", requireAuth, requireRole("admin"), upload.single('audioFile'), async (req, res) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ message: "No audio file provided" });
+        return;
+      }
+
+      const { testModel, callCategory } = req.body;
+      if (!testModel) {
+        await cleanupFile(req.file.path);
+        res.status(400).json({ message: "Test model ID is required" });
+        return;
+      }
+
+      const user = req.user as any;
+      const baselineModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+
+      // Create the A/B test record
+      const abTest = await storage.createABTest({
+        fileName: req.file.originalname,
+        callCategory: callCategory || undefined,
+        baselineModel,
+        testModel,
+        status: "processing",
+        createdBy: user?.username || "admin",
+      });
+
+      // Read file and kick off async processing
+      const audioBuffer = fs.readFileSync(req.file.path);
+      const filePath = req.file.path;
+
+      processABTest(abTest.id, filePath, audioBuffer, callCategory)
+        .catch(async (error) => {
+          console.error(`[AB-${abTest.id}] Processing failed:`, (error as Error).message);
+          try {
+            await storage.updateABTest(abTest.id, { status: "failed" });
+          } catch (updateErr) {
+            console.error(`[AB-${abTest.id}] Failed to mark as failed:`, (updateErr as Error).message);
+          }
+        });
+
+      res.status(201).json(abTest);
+    } catch (error) {
+      console.error("Error starting A/B test:", (error as Error).message);
+      if (req.file?.path) await cleanupFile(req.file.path);
+      res.status(500).json({ message: "Failed to start A/B test" });
+    }
+  });
+
+  // Delete an A/B test
+  app.delete("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const test = await storage.getABTest(req.params.id);
+      if (!test) {
+        res.status(404).json({ message: "A/B test not found" });
+        return;
+      }
+      await storage.deleteABTest(req.params.id);
+      res.json({ message: "A/B test deleted" });
+    } catch (error) {
+      console.error("Error deleting A/B test:", (error as Error).message);
+      res.status(500).json({ message: "Failed to delete A/B test" });
+    }
+  });
+
+  // A/B test processing pipeline
+  async function processABTest(testId: string, filePath: string, audioBuffer: Buffer, callCategory?: string) {
+    console.log(`[AB-${testId}] Starting A/B model comparison...`);
+    try {
+      const abTest = await storage.getABTest(testId);
+      if (!abTest) throw new Error("A/B test record not found");
+
+      // Step 1: Upload to AssemblyAI and transcribe
+      console.log(`[AB-${testId}] Step 1: Uploading to AssemblyAI...`);
+      const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
+      const transcriptResponse = await assemblyAIService.pollTranscript(transcriptId);
+
+      if (!transcriptResponse || transcriptResponse.status !== 'completed') {
+        throw new Error(`Transcription failed. Status: ${transcriptResponse?.status}`);
+      }
+
+      const transcriptText = transcriptResponse.text || "";
+      await storage.updateABTest(testId, { transcriptText, status: "analyzing" });
+      console.log(`[AB-${testId}] Transcription complete (${transcriptText.length} chars)`);
+
+      // Load prompt template if applicable
+      let promptTemplate = undefined;
+      if (callCategory) {
+        try {
+          const tmpl = await storage.getPromptTemplateByCategory(callCategory);
+          if (tmpl) {
+            promptTemplate = {
+              evaluationCriteria: tmpl.evaluationCriteria,
+              requiredPhrases: tmpl.requiredPhrases,
+              scoringWeights: tmpl.scoringWeights,
+              additionalInstructions: tmpl.additionalInstructions,
+            };
+          }
+        } catch (e) {
+          console.warn(`[AB-${testId}] Failed to load prompt template:`, (e as Error).message);
+        }
+      }
+
+      // Step 2: Run both models in parallel
+      console.log(`[AB-${testId}] Step 2: Running analysis with both models...`);
+      const baselineProvider = BedrockProvider.createWithModel(abTest.baselineModel);
+      const testProvider = BedrockProvider.createWithModel(abTest.testModel);
+
+      const [baselineResult, testResult] = await Promise.allSettled([
+        (async () => {
+          const start = Date.now();
+          const analysis = await baselineProvider.analyzeCallTranscript(transcriptText, `ab-baseline-${testId}`, callCategory, promptTemplate);
+          return { analysis, latencyMs: Date.now() - start };
+        })(),
+        (async () => {
+          const start = Date.now();
+          const analysis = await testProvider.analyzeCallTranscript(transcriptText, `ab-test-${testId}`, callCategory, promptTemplate);
+          return { analysis, latencyMs: Date.now() - start };
+        })(),
+      ]);
+
+      const updates: Record<string, any> = { status: "completed" };
+
+      if (baselineResult.status === "fulfilled") {
+        updates.baselineAnalysis = baselineResult.value.analysis;
+        updates.baselineLatencyMs = baselineResult.value.latencyMs;
+        console.log(`[AB-${testId}] Baseline (${abTest.baselineModel}): score=${baselineResult.value.analysis.performance_score}, ${baselineResult.value.latencyMs}ms`);
+      } else {
+        console.error(`[AB-${testId}] Baseline model failed:`, baselineResult.reason?.message);
+        updates.baselineAnalysis = { error: baselineResult.reason?.message || "Analysis failed" };
+      }
+
+      if (testResult.status === "fulfilled") {
+        updates.testAnalysis = testResult.value.analysis;
+        updates.testLatencyMs = testResult.value.latencyMs;
+        console.log(`[AB-${testId}] Test (${abTest.testModel}): score=${testResult.value.analysis.performance_score}, ${testResult.value.latencyMs}ms`);
+      } else {
+        console.error(`[AB-${testId}] Test model failed:`, testResult.reason?.message);
+        updates.testAnalysis = { error: testResult.reason?.message || "Analysis failed" };
+      }
+
+      // If both failed, mark as failed
+      if (baselineResult.status === "rejected" && testResult.status === "rejected") {
+        updates.status = "failed";
+      }
+
+      await storage.updateABTest(testId, updates);
+      await cleanupFile(filePath);
+      broadcastCallUpdate(testId, "ab-test-completed", { label: "A/B test complete" });
+      console.log(`[AB-${testId}] A/B comparison complete.`);
+
+    } catch (error) {
+      console.error(`[AB-${testId}] Processing error:`, (error as Error).message);
+      await storage.updateABTest(testId, { status: "failed" });
+      await cleanupFile(filePath);
+    }
+  }
 
   const httpServer = createServer(app);
   return httpServer;

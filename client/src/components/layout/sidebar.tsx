@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -207,6 +207,19 @@ export default function Sidebar() {
             >
               <SlidersHorizontal className="w-5 h-5" />
               <span>Prompt Templates</span>
+            </Link>
+            <Link
+              href="/admin/ab-testing"
+              className={cn(
+                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                location === "/admin/ab-testing"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              data-testid="nav-link-ab-testing"
+            >
+              <FlaskConical className="w-5 h-5" />
+              <span>Model Testing</span>
             </Link>
           </>
         )}

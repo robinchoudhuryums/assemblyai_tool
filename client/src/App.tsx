@@ -24,6 +24,7 @@ const AdminPage = lazy(() => import("@/pages/admin"));
 const PromptTemplatesPage = lazy(() => import("@/pages/prompt-templates"));
 const InsightsPage = lazy(() => import("@/pages/insights"));
 const CoachingPage = lazy(() => import("@/pages/coaching"));
+const ABTestingPage = lazy(() => import("@/pages/ab-testing"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -152,6 +153,7 @@ function Router() {
               <Route path="/coaching">{() => <ErrorBoundary><AnimatedPage><CoachingPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin">{() => <ErrorBoundary><AnimatedPage><AdminPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/templates">{() => <ErrorBoundary><AnimatedPage><PromptTemplatesPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/admin/ab-testing">{() => <ErrorBoundary><AnimatedPage><ABTestingPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>
           </AnimatePresence>

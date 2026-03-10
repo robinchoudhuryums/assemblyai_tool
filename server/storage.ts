@@ -21,6 +21,8 @@ import {
   type CoachingSession,
   type InsertCoachingSession,
   type PerformerSummary,
+  type ABTest,
+  type InsertABTest,
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
@@ -112,6 +114,13 @@ export interface IStorage {
   getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]>;
   updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined>;
 
+  // A/B model test operations
+  createABTest(test: InsertABTest): Promise<ABTest>;
+  getABTest(id: string): Promise<ABTest | undefined>;
+  getAllABTests(): Promise<ABTest[]>;
+  updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined>;
+  deleteABTest(id: string): Promise<void>;
+
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
@@ -130,6 +139,7 @@ export class MemStorage implements IStorage {
   private accessRequests = new Map<string, AccessRequest>();
   private promptTemplates = new Map<string, PromptTemplate>();
   private coachingSessions = new Map<string, CoachingSession>();
+  private abTests = new Map<string, ABTest>();
 
   async getUser(_id: string): Promise<User | undefined> { return undefined; }
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
@@ -382,6 +392,32 @@ export class MemStorage implements IStorage {
     const updated = { ...session, ...updates };
     this.coachingSessions.set(id, updated);
     return updated;
+  }
+
+  // A/B test operations
+  async createABTest(test: InsertABTest): Promise<ABTest> {
+    const id = randomUUID();
+    const newTest: ABTest = { ...test, id, createdAt: new Date().toISOString() };
+    this.abTests.set(id, newTest);
+    return newTest;
+  }
+  async getABTest(id: string): Promise<ABTest | undefined> {
+    return this.abTests.get(id);
+  }
+  async getAllABTests(): Promise<ABTest[]> {
+    return Array.from(this.abTests.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+  async updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined> {
+    const test = this.abTests.get(id);
+    if (!test) return undefined;
+    const updated = { ...test, ...updates };
+    this.abTests.set(id, updated);
+    return updated;
+  }
+  async deleteABTest(id: string): Promise<void> {
+    this.abTests.delete(id);
   }
 
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
@@ -806,6 +842,33 @@ export class CloudStorage implements IStorage {
     const updated = { ...session, ...updates };
     await this.client.uploadJson(`coaching/${id}.json`, updated);
     return updated;
+  }
+
+  // --- A/B Model Test Methods ---
+  async createABTest(test: InsertABTest): Promise<ABTest> {
+    const id = randomUUID();
+    const newTest: ABTest = { ...test, id, createdAt: new Date().toISOString() };
+    await this.client.uploadJson(`ab-tests/${id}.json`, newTest);
+    return newTest;
+  }
+  async getABTest(id: string): Promise<ABTest | undefined> {
+    return this.client.downloadJson<ABTest>(`ab-tests/${id}.json`);
+  }
+  async getAllABTests(): Promise<ABTest[]> {
+    const tests = await this.client.listAndDownloadJson<ABTest>("ab-tests/");
+    return tests.sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+  async updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined> {
+    const test = await this.getABTest(id);
+    if (!test) return undefined;
+    const updated = { ...test, ...updates };
+    await this.client.uploadJson(`ab-tests/${id}.json`, updated);
+    return updated;
+  }
+  async deleteABTest(id: string): Promise<void> {
+    await this.client.deleteObject(`ab-tests/${id}.json`);
   }
 
   // --- Data Retention ---
