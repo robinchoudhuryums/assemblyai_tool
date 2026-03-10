@@ -124,6 +124,7 @@ CallAnalyzer has three user roles with increasing permissions:
 - Bulk import employees via CSV upload
 - Create, edit, and delete custom prompt templates (per call category)
 - A/B model testing — compare different Bedrock models on the same call
+- Spend tracking — monitor estimated API costs by period, service, and user
 - System configuration
 
 Users are defined via the `AUTH_USERS` environment variable (format: `username:password:role:displayName`). New users can submit an access request through the login page, which an admin must approve.
@@ -150,6 +151,7 @@ The app has a sidebar navigation that adapts based on user role:
 | **Administration** | `/admin` | Access request management (admin only) |
 | **Prompt Templates** | `/admin/templates` | Custom AI prompt configuration per call category (admin only) |
 | **Model Testing** | `/admin/ab-testing` | A/B model comparison tool (admin only) |
+| **Spend Tracking** | `/admin/spend` | Estimated API cost tracking with charts (admin only) |
 
 Keyboard shortcuts: `D` (Dashboard), `K` (Search), `N` (Upload), `R` (Reports), `?` (Help)
 
@@ -261,6 +263,30 @@ Admin-only feature for comparing Bedrock models to optimize cost vs. quality.
 
 ---
 
+## Spend Tracking
+
+Admin-only feature to monitor estimated API costs. Every call analysis and A/B test automatically records a usage entry with estimated costs.
+
+### Cost Estimation
+- **AssemblyAI**: ~$0.37/minute of audio ($0.00615/second)
+- **AWS Bedrock**: Per-model token pricing (input + output tokens). Sonnet ~$3/M input, $15/M output; Haiku ~$1/M input, $5/M output
+
+### Dashboard Views
+- **Current Month**: Spend so far this month
+- **Last Month**: Previous month's total
+- **Year to Date**: Cumulative spend for the year
+- **All Time**: Complete history
+
+Each view shows: total estimated cost, calls processed, average cost per call, daily spend chart, cost breakdown by service (AssemblyAI vs Bedrock), and cost by user.
+
+### How It Works
+1. After each successful call analysis, a `UsageRecord` is saved to `usage/{id}.json` in S3
+2. The record includes: estimated AssemblyAI cost (from audio duration), estimated Bedrock cost (from transcript token count), user who uploaded, and type (call vs A/B test)
+3. A/B tests track costs for both models separately
+4. All costs are estimates — actual AWS/AssemblyAI billing may vary slightly
+
+---
+
 ## Data Storage
 
 All persistent data is stored in AWS S3 (bucket: `ums-call-archive`). There is no traditional database. Each data type is stored as JSON files under a specific prefix:
@@ -277,6 +303,7 @@ All persistent data is stored in AWS S3 (bucket: `ums-call-archive`). There is n
 | `prompt-templates/` | Custom AI prompt configurations | `prompt-templates/{uuid}.json` |
 | `access-requests/` | User access requests | `access-requests/{uuid}.json` |
 | `ab-tests/` | A/B model comparison results | `ab-tests/{uuid}.json` |
+| `usage/` | API cost tracking records | `usage/{uuid}.json` |
 
 ### Storage Backend Selection
 - If `S3_BUCKET` or `STORAGE_BACKEND=s3` is set → uses S3
@@ -414,6 +441,7 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/ab-tests/:id` | Get A/B test details |
 | `POST` | `/api/ab-tests/upload` | Start A/B model comparison |
 | `DELETE` | `/api/ab-tests/:id` | Delete A/B test |
+| `GET` | `/api/usage` | Get all usage/cost records |
 
 ---
 
@@ -437,6 +465,7 @@ assemblyai_tool/
 │       │   ├── admin.tsx           # Access request management
 │       │   ├── prompt-templates.tsx # Custom prompt template CRUD
 │       │   ├── ab-testing.tsx      # A/B model comparison tool
+│       │   ├── spend-tracking.tsx # API cost tracking dashboard
 │       │   └── auth.tsx            # Login + access request form
 │       ├── components/
 │       │   ├── ui/                 # shadcn/ui components (card, dialog, table, etc.)

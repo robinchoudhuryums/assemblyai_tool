@@ -161,6 +161,13 @@ tests/                   # Unit tests (Node test runner)
 
 Test calls are stored separately from production data (`ab-tests/{id}.json`), never assigned to employees, and never included in dashboard metrics, reports, or performance scores.
 
+### Usage / Spend Tracking (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/usage` | admin | List all usage records with estimated costs |
+
+Usage records are automatically created after each call analysis and A/B test. Estimated costs are calculated from audio duration (AssemblyAI) and token counts (Bedrock). Stored under `usage/` S3 prefix. The admin Spend Tracking page shows current month, last month, YTD, and all-time views with charts.
+
 ## Role-Based Access Control
 
 Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireRole()` middleware in `server/auth.ts`.
@@ -169,7 +176,7 @@ Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireR
 |------|-------------|
 | **viewer** | Read-only: dashboards, reports, transcripts, call playback, team data |
 | **manager** | Everything viewer can do, plus: assign calls, edit AI analysis, manage employees, create coaching sessions, export reports, delete calls |
-| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, A/B model testing, system configuration |
+| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, A/B model testing, spend tracking, system configuration |
 
 Access requests can request "viewer" or "manager" roles (not admin).
 

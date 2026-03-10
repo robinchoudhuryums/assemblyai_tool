@@ -23,6 +23,7 @@ import {
   type PerformerSummary,
   type ABTest,
   type InsertABTest,
+  type UsageRecord,
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
@@ -121,6 +122,10 @@ export interface IStorage {
   updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined>;
   deleteABTest(id: string): Promise<void>;
 
+  // Usage tracking
+  createUsageRecord(record: UsageRecord): Promise<void>;
+  getAllUsageRecords(): Promise<UsageRecord[]>;
+
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
@@ -140,6 +145,7 @@ export class MemStorage implements IStorage {
   private promptTemplates = new Map<string, PromptTemplate>();
   private coachingSessions = new Map<string, CoachingSession>();
   private abTests = new Map<string, ABTest>();
+  private usageRecords = new Map<string, UsageRecord>();
 
   async getUser(_id: string): Promise<User | undefined> { return undefined; }
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
@@ -418,6 +424,16 @@ export class MemStorage implements IStorage {
   }
   async deleteABTest(id: string): Promise<void> {
     this.abTests.delete(id);
+  }
+
+  // Usage tracking
+  async createUsageRecord(record: UsageRecord): Promise<void> {
+    this.usageRecords.set(record.id, record);
+  }
+  async getAllUsageRecords(): Promise<UsageRecord[]> {
+    return Array.from(this.usageRecords.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   }
 
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
@@ -869,6 +885,17 @@ export class CloudStorage implements IStorage {
   }
   async deleteABTest(id: string): Promise<void> {
     await this.client.deleteObject(`ab-tests/${id}.json`);
+  }
+
+  // --- Usage Tracking Methods ---
+  async createUsageRecord(record: UsageRecord): Promise<void> {
+    await this.client.uploadJson(`usage/${record.id}.json`, record);
+  }
+  async getAllUsageRecords(): Promise<UsageRecord[]> {
+    const records = await this.client.listAndDownloadJson<UsageRecord>("usage/");
+    return records.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   }
 
   // --- Data Retention ---

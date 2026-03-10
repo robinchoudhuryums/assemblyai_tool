@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -220,6 +220,19 @@ export default function Sidebar() {
             >
               <FlaskConical className="w-5 h-5" />
               <span>Model Testing</span>
+            </Link>
+            <Link
+              href="/admin/spend"
+              className={cn(
+                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                location === "/admin/spend"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              data-testid="nav-link-spend"
+            >
+              <DollarSign className="w-5 h-5" />
+              <span>Spend Tracking</span>
             </Link>
           </>
         )}

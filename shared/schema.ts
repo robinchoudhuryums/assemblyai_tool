@@ -276,6 +276,38 @@ export const abTestSchema = insertABTestSchema.extend({
 export type InsertABTest = z.infer<typeof insertABTestSchema>;
 export type ABTest = z.infer<typeof abTestSchema>;
 
+// --- USAGE TRACKING SCHEMAS ---
+export const usageRecordSchema = z.object({
+  id: z.string(),
+  callId: z.string(),
+  type: z.enum(["call", "ab-test"]),
+  timestamp: z.string(),
+  user: z.string(),
+  services: z.object({
+    assemblyai: z.object({
+      durationSeconds: z.number().default(0),
+      estimatedCost: z.number().default(0),
+    }).optional(),
+    bedrock: z.object({
+      model: z.string(),
+      estimatedInputTokens: z.number().default(0),
+      estimatedOutputTokens: z.number().default(0),
+      estimatedCost: z.number().default(0),
+      latencyMs: z.number().optional(),
+    }).optional(),
+    bedrockSecondary: z.object({
+      model: z.string(),
+      estimatedInputTokens: z.number().default(0),
+      estimatedOutputTokens: z.number().default(0),
+      estimatedCost: z.number().default(0),
+      latencyMs: z.number().optional(),
+    }).optional(),
+  }),
+  totalEstimatedCost: z.number(),
+});
+
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
+
 // --- COMBINED TYPES ---
 export type CallWithDetails = Call & {
   employee?: Employee;

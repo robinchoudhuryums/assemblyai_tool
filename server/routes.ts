@@ -12,8 +12,9 @@ import { buildAgentSummaryPrompt, buildAnalysisPrompt, parseJsonResponse } from 
 import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
-import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema } from "@shared/schema";
+import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import csv from "csv-parser";
 
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
@@ -35,6 +36,25 @@ function safeFloat(value: string | undefined | null, fallback = 0): number {
   if (!value) return fallback;
   const n = parseFloat(value);
   return Number.isNaN(n) ? fallback : n;
+}
+
+/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
+function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
+  // Approximate pricing per 1K tokens (input, output) — updated as of 2026
+  const pricing: Record<string, [number, number]> = {
+    "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
+    "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
+    "us.anthropic.claude-haiku-4-5-20251001": [0.001, 0.005],
+    "anthropic.claude-3-haiku-20240307": [0.00025, 0.00125],
+    "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
+  };
+  const [inputRate, outputRate] = pricing[model] || [0.003, 0.015]; // default to Sonnet pricing
+  return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
+}
+
+/** Estimate AssemblyAI cost: ~$0.00615/second ($0.37/min or $22.20/hr) */
+function estimateAssemblyAICost(durationSeconds: number): number {
+  return durationSeconds * 0.00615;
 }
 
 // Ensure uploads directory exists
@@ -510,7 +530,8 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       const audioBuffer = fs.readFileSync(req.file.path);
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
-      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType, callCategory)
+      const uploadUser = (req.user as any)?.username || "unknown";
+      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType, callCategory, uploadUser)
         .catch(async (error) => {
           console.error(`Failed to process call ${call.id}:`, error);
           try {
@@ -541,7 +562,7 @@ app.get("/api/calls", requireAuth, async (req, res) => {
   }
 
 // Process audio file with AssemblyAI and archive to cloud storage
-async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string) {
+async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string) {
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -718,6 +739,37 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     });
     console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
 
+
+    // Track usage/cost
+    try {
+      const audioDuration = callDuration || 0;
+      const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+      const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500; // transcript + prompt overhead
+      const estimatedOutputTokens = 800; // typical analysis response
+      const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+      const bedrockCost = hasAiAnalysis ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) : 0;
+
+      const usageRecord: UsageRecord = {
+        id: randomUUID(),
+        callId,
+        type: "call",
+        timestamp: new Date().toISOString(),
+        user: uploadedBy || "unknown",
+        services: {
+          assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+          bedrock: hasAiAnalysis ? {
+            model: bedrockModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+          } : undefined,
+        },
+        totalEstimatedCost: Math.round((assemblyaiCost + bedrockCost) * 10000) / 10000,
+      };
+      await storage.createUsageRecord(usageRecord);
+    } catch (usageErr) {
+      console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+    }
 
     await cleanupFile(filePath);
     broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
@@ -1638,6 +1690,18 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     }
   });
 
+  // ==================== USAGE TRACKING ROUTES (admin only) ====================
+
+  app.get("/api/usage", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const records = await storage.getAllUsageRecords();
+      res.json(records);
+    } catch (error) {
+      console.error("Error fetching usage records:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch usage data" });
+    }
+  });
+
   // ==================== A/B MODEL TESTING ROUTES (admin only) ====================
 
   // List all A/B tests
@@ -1815,6 +1879,57 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       }
 
       await storage.updateABTest(testId, updates);
+
+      // Track usage/cost for A/B test
+      try {
+        const audioDuration = transcriptText.length > 0
+          ? Math.max(30, Math.ceil(transcriptText.length / 20)) // rough estimate from text length
+          : 60;
+        const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+        const estimatedInputTokens = Math.ceil(transcriptText.length / 4) + 500;
+        const estimatedOutputTokens = 800;
+
+        let baselineCost = 0;
+        let testCost = 0;
+        const services: UsageRecord["services"] = {
+          assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+        };
+
+        if (baselineResult.status === "fulfilled") {
+          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens);
+          services.bedrock = {
+            model: abTest.baselineModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(baselineCost * 10000) / 10000,
+            latencyMs: baselineResult.value.latencyMs,
+          };
+        }
+        if (testResult.status === "fulfilled") {
+          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens);
+          services.bedrockSecondary = {
+            model: abTest.testModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(testCost * 10000) / 10000,
+            latencyMs: testResult.value.latencyMs,
+          };
+        }
+
+        const usageRecord: UsageRecord = {
+          id: randomUUID(),
+          callId: testId,
+          type: "ab-test",
+          timestamp: new Date().toISOString(),
+          user: abTest.createdBy,
+          services,
+          totalEstimatedCost: Math.round((assemblyaiCost + baselineCost + testCost) * 10000) / 10000,
+        };
+        await storage.createUsageRecord(usageRecord);
+      } catch (usageErr) {
+        console.warn(`[AB-${testId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+      }
+
       await cleanupFile(filePath);
       broadcastCallUpdate(testId, "ab-test-completed", { label: "A/B test complete" });
       console.log(`[AB-${testId}] A/B comparison complete.`);
