@@ -208,13 +208,78 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
 
-## Deployment (Render.com)
+## Deployment
+
+### Render.com (Primary)
 No `render.yaml` in repo — deployment is configured via the Render dashboard.
 
 - **Build command**: `npm run build` (Vite frontend → `dist/client/`, esbuild backend → `dist/index.js`)
 - **Start command**: `npm run start` (`NODE_ENV=production node dist/index.js`)
 - **Environment variables**: Configured in Render dashboard
 - Server serves both API and static frontend assets from the same process
+
+### EC2 (Secondary / Testing)
+The app can also run on an EC2 instance managed with **pm2**.
+
+#### SSH Access
+```bash
+ssh -i /path/to/your-key.pem ec2-user@<ec2-ip-or-hostname>
+# Username may be 'ubuntu' depending on AMI
+```
+To find your key pair name: AWS Console → EC2 → Instances → select instance → "Key pair name".
+To find your IP: AWS Console → EC2 → Instances → "Public IPv4 address".
+You can also use **EC2 Instance Connect** (no key needed) via the AWS Console "Connect" button.
+
+#### pm2 Commands
+```bash
+pm2 list                    # Show running processes
+pm2 restart all             # Restart the app after config changes
+pm2 logs --lines 50         # View recent logs
+pm2 logs --err --lines 50   # View error logs only
+pm2 stop all                # Stop the app
+pm2 start dist/index.js --name callanalyzer  # Start fresh
+pm2 save                    # Save process list for auto-restart on reboot
+```
+
+#### Updating the App on EC2
+```bash
+cd /path/to/assemblyai_tool
+git pull origin main
+npm install
+npm run build
+pm2 restart all
+```
+
+#### Updating Environment Variables
+```bash
+nano .env                   # Edit the file
+pm2 restart all             # Restart to pick up changes
+pm2 logs --lines 20         # Verify startup — look for:
+                            #   [STORAGE] Using S3 (bucket: ums-call-archive)
+                            #   NOT: "S3 authentication not configured"
+```
+
+#### AWS Credential Rotation on EC2
+When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):
+1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env`
+2. `pm2 restart all`
+3. Verify with `pm2 logs --lines 20` — confirm S3 and Bedrock initialize without errors
+4. **Remember**: Update credentials on ALL services using this IAM user
+
+## Documentation Maintenance
+
+Keep `CLAUDE.md` and `replit.md` updated when making structural changes. Specifically, update docs when:
+
+- **New API routes** are added or existing routes change → update the API Routes table
+- **Environment variables** are added/removed → update the Environment Variables section
+- **Storage backend** logic changes → update Storage Backend Selection
+- **New services** are added under `server/services/` → update Architecture section
+- **Deployment** process changes (new hosting, new process manager) → update Deployment section
+- **Dependencies** are significantly added/removed → update Tech Stack
+- **Auth/RBAC** rules change → update Role-Based Access Control
+- **AI model** defaults change → update Environment Variables and Common Gotchas
+
+**Note**: `replit.md` is a legacy file from the original Replit development environment. It should mirror the key architecture info in `CLAUDE.md` but is less detailed. When in doubt, keep `CLAUDE.md` as the single source of truth.
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data

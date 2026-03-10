@@ -1,6 +1,6 @@
 # Overview
 
-CallAnalyzer is a comprehensive call analysis platform that transcribes audio recordings and provides AI-powered insights including sentiment analysis, performance scoring, and detailed transcript review. The application integrates with AssemblyAI for speech-to-text processing and uses a PostgreSQL database to store call data, transcripts, and analysis results.
+CallAnalyzer is a HIPAA-compliant call analysis platform for a medical supply company (UMS). Agents upload call recordings, which are transcribed by AssemblyAI and analyzed by AWS Bedrock (Claude) for performance scoring, compliance, sentiment analysis, and coaching insights.
 
 # User Preferences
 
@@ -12,64 +12,74 @@ Preferred communication style: Simple, everyday language.
 
 The client-side is built using React with TypeScript and follows a modern component-based architecture:
 
-- **UI Framework**: React with TypeScript for type safety
+- **UI Framework**: React 18 with TypeScript for type safety
 - **Styling**: Tailwind CSS with a custom design system based on shadcn/ui components
 - **Routing**: Wouter for lightweight client-side routing
 - **State Management**: TanStack Query for server state management and caching
 - **Build Tool**: Vite for fast development and optimized builds
+- **Charts**: Recharts for data visualization
 
 The frontend is organized into logical directories:
-- `/pages` - Route components for different application views
-- `/components` - Reusable UI components organized by feature
-- `/hooks` - Custom React hooks for shared logic
-- `/lib` - Utility functions and configuration
+- `client/src/pages/` - Route components for different application views
+- `client/src/components/` - Reusable UI components organized by feature (ui/, tables/, transcripts/, dashboard/)
+- `client/src/hooks/` - Custom React hooks for shared logic
+- `client/src/lib/` - Utility functions and configuration
 
 ## Backend Architecture
 
 The server uses Express.js with TypeScript in an ESM configuration:
 
 - **Framework**: Express.js for HTTP server and API routing
-- **Database**: PostgreSQL with Neon serverless driver
-- **ORM**: Drizzle ORM for type-safe database operations
+- **AI Services**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
+- **Storage**: AWS S3 (`ums-call-archive` bucket) for all persistent data — no traditional database
 - **File Upload**: Multer middleware for handling audio file uploads
-- **API Integration**: AssemblyAI service for speech transcription and analysis
+- **Real-time**: WebSocket for live processing status updates
+- **Auth**: Session-based with bcrypt, role-based access control (viewer/manager/admin)
 
 The backend follows a service-oriented architecture with clear separation of concerns:
-- Route handlers manage HTTP requests/responses
-- Storage layer abstracts database operations
-- Service layer handles external API integrations
+- `server/routes.ts` - Route handlers manage HTTP requests/responses and the audio processing pipeline
+- `server/storage.ts` - Storage abstraction layer (supports S3, GCS, or in-memory backends)
+- `server/services/` - External API integrations (AssemblyAI, Bedrock, S3, WebSocket, audit logging)
+- `server/auth.ts` - Authentication middleware and session management
 
 ## Data Storage Solutions
 
-**Database Schema**: PostgreSQL with the following core entities:
-- `employees` - Staff members who handle calls
-- `calls` - Audio file metadata and processing status
-- `transcripts` - Speech-to-text results with confidence scores
-- `sentiment_analysis` - AI-generated sentiment scores and segments
-- `call_analysis` - Performance metrics and keyword extraction
+**AWS S3**: All data is stored as JSON objects in S3 (bucket: `ums-call-archive`):
+- `employees/` - Staff members who handle calls
+- `calls/` - Call metadata and processing status
+- `transcripts/` - Speech-to-text results with timestamps
+- `sentiment/` - AI-generated sentiment scores and segments
+- `analysis/` - Performance metrics, scoring, and AI feedback
+- `coaching/` - Coaching session records
+- `prompt-templates/` - Custom AI prompt templates per call category
+- `audio/` - Uploaded call recordings
 
-**File Storage**: Audio files are stored locally in an `uploads/` directory with metadata tracked in the database.
+**No traditional database** — the app uses S3 as a document store. Falls back to in-memory storage if no cloud credentials are configured (data lost on restart).
 
 ## Authentication and Authorization
 
-The application currently uses a simple session-based approach without complex authentication. The architecture supports future implementation of user authentication and role-based access control.
+Session-based authentication with bcrypt password hashing. Role hierarchy: admin > manager > viewer.
+- Users configured via `AUTH_USERS` environment variable
+- 15-minute idle timeout + 8-hour absolute session max
+- Rate limiting: 5 login attempts per 15 minutes per IP
+- Access request system for new users (admin approval required)
 
 # External Dependencies
 
 ## Third-Party Services
 
-**AssemblyAI API**: Primary integration for speech processing capabilities:
+**AssemblyAI API**: Speech processing capabilities:
 - Speech-to-text transcription with word-level timestamps
-- Real-time sentiment analysis on transcript segments
-- Topic detection and keyword extraction
+- Sentiment analysis on transcript segments
 - Speaker identification for multi-party calls
 
-## Database
+**AWS Bedrock**: AI analysis via Claude Sonnet:
+- Performance scoring with sub-scores
+- Compliance checking and flag detection
+- Coaching feedback (strengths and suggestions)
+- Agent name detection for auto-assignment
 
-**Neon PostgreSQL**: Serverless PostgreSQL database hosting:
-- Managed database service with automatic scaling
-- Connection pooling and edge optimization
-- Backup and disaster recovery handled by provider
+**AWS S3**: Primary data storage for all application data.
 
 ## UI Component Library
 
@@ -79,16 +89,13 @@ The application currently uses a simple session-based approach without complex a
 - Form handling with React Hook Form and Zod validation
 - Chart components using Recharts for data visualization
 
-## Development Tools
-
-**Replit Integration**: Development environment optimizations:
-- Custom Vite plugins for Replit-specific features
-- Error overlay and development banner
-- Cartographer plugin for enhanced debugging
-
 ## Build and Deployment
 
 **Build Pipeline**: Vite for frontend bundling and esbuild for server compilation:
 - Fast hot module replacement in development
 - Optimized production builds with code splitting
 - TypeScript compilation and type checking
+
+**Hosting**: Render.com (primary), EC2 with pm2 (secondary/testing)
+
+**Key Design Decision**: No AWS SDK — both S3 and Bedrock use raw REST APIs with manual SigV4 signing to reduce bundle size.
