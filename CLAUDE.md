@@ -9,7 +9,7 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 - **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
 - **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates
 - **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin)
-- **Hosting**: Render.com
+- **Hosting**: AWS EC2 (pm2 process manager)
 
 ## Local Development Setup
 
@@ -208,12 +208,18 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
 
-## Deployment (Render.com)
-No `render.yaml` in repo — deployment is configured via the Render dashboard.
+## Deployment (AWS EC2)
+Hosted on EC2 instance (`ec2-user@ip-172-31-71-248`), managed with pm2.
 
+- **App directory**: `~/assemblyai_tool`
 - **Build command**: `npm run build` (Vite frontend → `dist/client/`, esbuild backend → `dist/index.js`)
-- **Start command**: `npm run start` (`NODE_ENV=production node dist/index.js`)
-- **Environment variables**: Configured in Render dashboard
+- **Process manager**: pm2 (process name: `callanalyzer`)
+- **Environment variables**: Stored in `~/.env` on EC2, must be sourced and exported before pm2 restart
+- **Deploy sequence** (run on EC2):
+  ```bash
+  cd ~/assemblyai_tool && git pull origin <branch> && npm run build && source .env && export ASSEMBLYAI_API_KEY SESSION_SECRET AUTH_USERS AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION S3_BUCKET PORT NODE_ENV=production && pm2 restart callanalyzer --update-env
+  ```
+- **Useful pm2 commands**: `pm2 logs callanalyzer --lines 20 --nostream`, `pm2 restart callanalyzer`, `pm2 status`
 - Server serves both API and static frontend assets from the same process
 
 ## Common Gotchas
@@ -223,3 +229,6 @@ No `render.yaml` in repo — deployment is configured via the Render dashboard.
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
 - `.env.example` may be outdated (e.g., shows haiku model but code defaults to sonnet) — always check `server/services/bedrock.ts` for the actual default
+- **S3 encryption**: The `ums-call-archive` bucket has default KMS encryption enabled at the bucket level. Do NOT add `x-amz-server-side-encryption: AES256` headers to S3 PUT requests — this causes `SignatureDoesNotMatch` errors. S3 applies KMS encryption automatically.
+- **S3 SigV4 signing** (`server/services/s3.ts`): Uses custom manual signing (no AWS SDK). Any new headers added to requests MUST be included in the canonical headers and signed headers for the signature to match.
+- **Multiple 500 errors on dashboard**: Often indicates S3 connectivity or signing issues — check pm2 error logs first (`pm2 logs callanalyzer --lines 20 --nostream`)
