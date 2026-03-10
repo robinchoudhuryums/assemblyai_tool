@@ -66,7 +66,7 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   // CSP: restrict resource loading to same-origin and trusted CDNs
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
   );
   // Only set no-cache on API routes — static assets need caching for performance
   if (req.path.startsWith("/api")) {
@@ -92,6 +92,11 @@ app.use((req, res, next) => {
   });
 
   next();
+});
+
+// Health check endpoint (no auth required — used for uptime monitoring)
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)

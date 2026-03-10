@@ -82,9 +82,10 @@ tests/                   # Unit tests (Node test runner)
 
 ## API Routes Overview
 
-### Authentication (public)
+### Public (no auth)
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/health` | Health check (returns `{ status, timestamp }`) |
 | POST | `/api/auth/login` | Login (rate limited: 5 attempts/15min per IP) |
 | POST | `/api/auth/logout` | Logout & clear session |
 | GET | `/api/auth/me` | Get current user |
