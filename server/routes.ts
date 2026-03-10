@@ -229,6 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const metrics = await storage.getDashboardMetrics();
       res.json(metrics);
     } catch (error) {
+      console.error("Failed to get dashboard metrics:", (error as Error).message);
       res.status(500).json({ message: "Failed to get dashboard metrics" });
     }
   });
@@ -239,6 +240,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const distribution = await storage.getSentimentDistribution();
       res.json(distribution);
     } catch (error) {
+      console.error("Failed to get sentiment distribution:", (error as Error).message);
       res.status(500).json({ message: "Failed to get sentiment distribution" });
     }
   });
@@ -250,6 +252,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const performers = await storage.getTopPerformers(limit);
       res.json(performers);
     } catch (error) {
+      console.error("Failed to get top performers:", (error as Error).message);
       res.status(500).json({ message: "Failed to get top performers" });
     }
   });
