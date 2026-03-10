@@ -265,10 +265,8 @@ export class S3Client {
     if (creds.sessionToken) {
       headerEntries.push(["x-amz-security-token", creds.sessionToken]);
     }
-    // HIPAA: Enforce server-side encryption at rest for all uploaded objects
-    if (method === "PUT") {
-      headerEntries.push(["x-amz-server-side-encryption", "AES256"]);
-    }
+    // HIPAA: S3 bucket has default KMS encryption enabled — no explicit header needed.
+    // Sending AES256 header conflicts with bucket-level KMS policy.
     headerEntries.sort((a, b) => a[0].localeCompare(b[0]));
 
     const canonicalHeaders = headerEntries.map(([k, v]) => `${k}:${v}\n`).join("");
