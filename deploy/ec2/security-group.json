@@ -5,12 +5,12 @@
   "Description": "CallAnalyzer - HTTPS web server with SSH access",
   "IngressRules": [
     {
-      "Description": "SSH — restrict to your IP only",
+      "Description": "SSH — restrict to your IP for CLI access",
       "IpProtocol": "tcp",
       "FromPort": 22,
       "ToPort": 22,
       "CidrIp": "YOUR_IP/32",
-      "_note": "Replace YOUR_IP with your office/home IP. Never use 0.0.0.0/0 for SSH."
+      "_note": "Replace YOUR_IP with your office/home IP. For browser-based EC2 Instance Connect, also add the EC2_INSTANCE_CONNECT_IP range for your region (see: https://ip-ranges.amazonaws.com/ip-ranges.json, filter by service=EC2_INSTANCE_CONNECT). For us-east-1 this is 18.206.107.24/29."
     },
     {
       "Description": "HTTP — for Caddy ACME challenge + redirect to HTTPS",
@@ -56,6 +56,27 @@
         "Action": [
           "bedrock:InvokeModel"
         ],
+        "Resource": "*"
+      }
+    ]
+  },
+  "_iam_user_ssh_policy": {
+    "_comment": "Add to IAM users/roles who need SSH access via EC2 Instance Connect",
+    "PolicyName": "CallAnalyzerInstanceConnect",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": "ec2-instance-connect:SendSSHPublicKey",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Condition": {
+          "StringEquals": {
+            "ec2:osuser": "ec2-user"
+          }
+        }
+      },
+      {
+        "Effect": "Allow",
+        "Action": "ec2:DescribeInstances",
         "Resource": "*"
       }
     ]

@@ -39,7 +39,7 @@ Internet → Caddy (:443, auto TLS) → Node.js (:5000) → S3 / Bedrock / Assem
 2. **Name**: `callanalyzer`
 3. **AMI**: Amazon Linux 2023 (al2023-ami-*)
 4. **Instance type**: `t3.micro`
-5. **Key pair**: Create or select an SSH key pair
+5. **Key pair**: Select "Proceed without a key pair" (we'll use EC2 Instance Connect instead — see below)
 6. **Network settings**:
    - VPC: Default VPC (or your VPC)
    - Subnet: Public subnet
@@ -54,10 +54,12 @@ Internet → Caddy (:443, auto TLS) → Node.js (:5000) → S3 / Bedrock / Assem
 
 | Type  | Port | Source      | Purpose                           |
 |-------|------|-------------|-----------------------------------|
-| SSH   | 22   | Your IP/32  | Admin access (restrict to your IP)|
+| SSH   | 22   | Your IP/32 + EC2 IC CIDR | Admin access (see note below) |
 | HTTP  | 80   | 0.0.0.0/0   | Caddy ACME challenge + redirect   |
 | HTTPS | 443  | 0.0.0.0/0   | Application traffic               |
 
+> **SSH with EC2 Instance Connect (browser)**: Add the EC2 Instance Connect IP range for your region to port 22. For `us-east-1`: `18.206.107.24/29`. Find your region's range at [AWS IP ranges](https://ip-ranges.amazonaws.com/ip-ranges.json) (filter `service=EC2_INSTANCE_CONNECT`).
+>
 > See `security-group.json` for CLI-friendly format.
 
 ### Allocate Elastic IP
@@ -97,17 +99,71 @@ Create an IAM role so the app accesses S3 and Bedrock without hardcoded keys.
 4. **Name**: `CallAnalyzerEC2Role`
 5. **Attach** to the EC2 instance (Actions → Security → Modify IAM Role)
 
+> **For EC2 Instance Connect**: Add the `ec2-instance-connect:SendSSHPublicKey` permission to the IAM user/role of anyone who needs to SSH in. See `security-group.json` for the full policy, or the Instance Connect section below.
+
 ---
 
-## Step 3: Configure the Instance
+## Step 3: Connect via EC2 Instance Connect
 
-SSH into the instance:
+EC2 Instance Connect replaces traditional SSH key pairs with **IAM-based, temporary access**. No `.pem` files to manage — your AWS credentials push a one-time SSH key valid for 60 seconds.
 
+> **Amazon Linux 2023 has EC2 Instance Connect pre-installed.** No extra setup on the instance.
+
+### Option A: AWS Console (browser-based terminal)
+
+1. Go to **EC2 → Instances → Select your instance**
+2. Click **Connect → EC2 Instance Connect tab**
+3. Username: `ec2-user`
+4. Click **Connect** — opens a browser terminal
+
+### Option B: AWS CLI (from your local machine)
+
+```bash
+# Install the EC2 Instance Connect CLI (one-time)
+pip install ec2instanceconnectcli
+
+# Connect — uses your AWS credentials (no .pem file needed)
+mssh ec2-user@i-0123456789abcdef0
+
+# Or use the two-step approach with standard SSH:
+# 1. Push your public key (valid 60 seconds)
+aws ec2-instance-connect send-ssh-public-key \
+  --instance-id i-0123456789abcdef0 \
+  --instance-os-user ec2-user \
+  --ssh-public-key file://~/.ssh/id_rsa.pub \
+  --availability-zone us-east-1a
+
+# 2. SSH in within 60 seconds (uses your existing key pair)
+ssh ec2-user@YOUR_ELASTIC_IP
+```
+
+### Option C: Traditional SSH (fallback)
+
+If you selected a key pair during launch:
 ```bash
 ssh -i your-key.pem ec2-user@YOUR_ELASTIC_IP
 ```
 
-### If user-data ran successfully, skip to configuration:
+### IAM permissions for Instance Connect
+
+Add this to the IAM user/role policy for anyone who needs SSH access:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "ec2-instance-connect:SendSSHPublicKey",
+  "Resource": "arn:aws:ec2:*:*:instance/*",
+  "Condition": {
+    "StringEquals": {
+      "ec2:osuser": "ec2-user"
+    }
+  }
+}
+```
+
+> **HIPAA note**: EC2 Instance Connect logs every connection in CloudTrail — you get a full audit trail of who accessed the instance and when, tied to their IAM identity.
+
+### Once connected, check if user-data ran successfully:
 
 ```bash
 # Check setup log
@@ -170,6 +226,7 @@ curl -I https://YOUR_DOMAIN
 | Data retention | Auto-purge after RETENTION_DAYS (default 90) |
 | Network security | Security group restricts to 22/80/443 only |
 | No hardcoded secrets | IAM instance role for AWS, .env for app secrets |
+| SSH audit trail | EC2 Instance Connect logs all access in CloudTrail (IAM identity + timestamp) |
 
 ---
 
@@ -207,8 +264,11 @@ cat /var/log/callanalyzer-setup.log
 ### Backup .env
 
 ```bash
-# Keep a local encrypted copy of your .env — it's not in the repo
-scp -i your-key.pem ec2-user@YOUR_IP:/opt/callanalyzer/.env ./env-backup-$(date +%F).enc
+# Via EC2 Instance Connect CLI
+mssh ec2-user@i-YOUR_INSTANCE_ID -- cat /opt/callanalyzer/.env > ./env-backup-$(date +%F)
+
+# Or via SCP (if using traditional SSH key)
+scp ec2-user@YOUR_IP:/opt/callanalyzer/.env ./env-backup-$(date +%F)
 ```
 
 ### Monitor costs
