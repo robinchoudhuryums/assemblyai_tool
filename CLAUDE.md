@@ -7,9 +7,9 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 - **Frontend**: React 18 + TypeScript, Vite, TailwindCSS, shadcn/ui, Recharts, Wouter (routing), TanStack Query
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
 - **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
-- **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates
+- **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates, A/B tests
 - **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin)
-- **Hosting**: Render.com
+- **Hosting**: Render.com (primary), EC2 with pm2 + Caddy (secondary)
 
 ## Local Development Setup
 
@@ -145,6 +145,22 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 
+### A/B Model Testing (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/ab-tests` | admin | List all A/B tests |
+| GET | `/api/ab-tests/:id` | admin | Get test details (both analyses) |
+| POST | `/api/ab-tests/upload` | admin | Upload audio + specify test model → starts comparison |
+| DELETE | `/api/ab-tests/:id` | admin | Delete a test |
+
+**A/B Test Processing Pipeline** (`server/routes.ts → processABTest`):
+1. Upload audio to AssemblyAI → transcribe (same as normal pipeline)
+2. Run baseline model (current production Sonnet) and test model in parallel (both timed)
+3. Store both analyses + latency to `ab-tests/` S3 prefix
+4. WebSocket notifies client on completion
+
+Test calls are stored separately from production data (`ab-tests/{id}.json`), never assigned to employees, and never included in dashboard metrics, reports, or performance scores.
+
 ## Role-Based Access Control
 
 Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireRole()` middleware in `server/auth.ts`.
@@ -153,7 +169,7 @@ Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireR
 |------|-------------|
 | **viewer** | Read-only: dashboards, reports, transcripts, call playback, team data |
 | **manager** | Everything viewer can do, plus: assign calls, edit AI analysis, manage employees, create coaching sessions, export reports, delete calls |
-| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, system configuration |
+| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, A/B model testing, system configuration |
 
 Access requests can request "viewer" or "manager" roles (not admin).
 
@@ -204,6 +220,7 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
+- **A/B test isolation**: Test calls stored under `ab-tests/` S3 prefix, completely separate from production `calls/`, `analyses/`, etc. — no risk of contaminating metrics
 
 ## Deployment
 
@@ -240,7 +257,14 @@ pm2 save                    # Save process list for auto-restart on reboot
 
 #### Updating the App on EC2
 ```bash
+# Quick deploy (recommended):
 cd /path/to/assemblyai_tool
+./deploy.sh              # Pulls main, installs, builds, restarts pm2
+
+# Or deploy a specific branch:
+./deploy.sh feature-branch
+
+# Manual steps (if deploy.sh is not available):
 git pull origin main
 npm install
 npm run build
