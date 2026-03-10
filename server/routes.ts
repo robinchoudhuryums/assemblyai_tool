@@ -7,13 +7,55 @@ import passport from "passport";
 import { storage } from "./storage";
 import { assemblyAIService } from "./services/assemblyai";
 import { aiProvider } from "./services/ai-factory";
-import { buildAgentSummaryPrompt } from "./services/ai-provider";
+import { BedrockProvider } from "./services/bedrock";
+import { buildAgentSummaryPrompt, buildAnalysisPrompt, parseJsonResponse } from "./services/ai-provider";
 import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
-import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema } from "@shared/schema";
+import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import csv from "csv-parser";
+
+/** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
+function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {
+  if (!value) return defaultVal;
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) ? defaultVal : Math.max(min, Math.min(n, max));
+}
+
+/** Parse a date query param, returning undefined if invalid. */
+function parseDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/** Safe parseFloat that returns fallback on NaN. */
+function safeFloat(value: string | undefined | null, fallback = 0): number {
+  if (!value) return fallback;
+  const n = parseFloat(value);
+  return Number.isNaN(n) ? fallback : n;
+}
+
+/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
+function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
+  // Approximate pricing per 1K tokens (input, output) — updated as of 2026
+  const pricing: Record<string, [number, number]> = {
+    "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
+    "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
+    "us.anthropic.claude-haiku-4-5-20251001": [0.001, 0.005],
+    "anthropic.claude-3-haiku-20240307": [0.00025, 0.00125],
+    "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
+  };
+  const [inputRate, outputRate] = pricing[model] || [0.003, 0.015]; // default to Sonnet pricing
+  return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
+}
+
+/** Estimate AssemblyAI cost: ~$0.00615/second ($0.37/min or $22.20/hr) */
+function estimateAssemblyAICost(durationSeconds: number): number {
+  return durationSeconds * 0.00615;
+}
 
 // Ensure uploads directory exists
 const uploadsDir = 'uploads';
@@ -208,6 +250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const metrics = await storage.getDashboardMetrics();
       res.json(metrics);
     } catch (error) {
+      console.error("Failed to get dashboard metrics:", (error as Error).message);
       res.status(500).json({ message: "Failed to get dashboard metrics" });
     }
   });
@@ -218,6 +261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const distribution = await storage.getSentimentDistribution();
       res.json(distribution);
     } catch (error) {
+      console.error("Failed to get sentiment distribution:", (error as Error).message);
       res.status(500).json({ message: "Failed to get sentiment distribution" });
     }
   });
@@ -225,10 +269,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Top performers
   app.get("/api/dashboard/performers", requireAuth, async (req, res) => {
     try {
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 3;
+      const limit = clampInt(req.query.limit as string | undefined, 3, 1, 100);
       const performers = await storage.getTopPerformers(limit);
       res.json(performers);
     } catch (error) {
+      console.error("Failed to get top performers:", (error as Error).message);
       res.status(500).json({ message: "Failed to get top performers" });
     }
   });
@@ -378,17 +423,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get all calls with details
+  // Get all calls with details (paginated)
 app.get("/api/calls", requireAuth, async (req, res) => {
   try {
     const { status, sentiment, employee } = req.query;
-    // Pass the filters directly to the storage function
-    const calls = await storage.getCallsWithDetails({ 
-      status: status as string, 
-      sentiment: sentiment as string, 
-      employee: employee as string 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 50, 200));
+
+    const calls = await storage.getCallsWithDetails({
+      status: status as string,
+      sentiment: sentiment as string,
+      employee: employee as string
     });
-    res.json(calls);
+
+    const total = calls.length;
+    const totalPages = Math.ceil(total / limit);
+    const offset = (page - 1) * limit;
+    const paginated = calls.slice(offset, offset + limit);
+
+    res.json({
+      calls: paginated,
+      pagination: { page, limit, total, totalPages },
+    });
   } catch (error) {
     res.status(500).json({ message: "Failed to get calls" });
   }
@@ -474,7 +530,8 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       const audioBuffer = fs.readFileSync(req.file.path);
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
-      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType, callCategory)
+      const uploadUser = (req.user as any)?.username || "unknown";
+      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType, callCategory, uploadUser)
         .catch(async (error) => {
           console.error(`Failed to process call ${call.id}:`, error);
           try {
@@ -505,7 +562,7 @@ app.get("/api/calls", requireAuth, async (req, res) => {
   }
 
 // Process audio file with AssemblyAI and archive to cloud storage
-async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string) {
+async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string) {
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -682,6 +739,37 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     });
     console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
 
+
+    // Track usage/cost
+    try {
+      const audioDuration = callDuration || 0;
+      const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+      const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500; // transcript + prompt overhead
+      const estimatedOutputTokens = 800; // typical analysis response
+      const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+      const bedrockCost = hasAiAnalysis ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) : 0;
+
+      const usageRecord: UsageRecord = {
+        id: randomUUID(),
+        callId,
+        type: "call",
+        timestamp: new Date().toISOString(),
+        user: uploadedBy || "unknown",
+        services: {
+          assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+          bedrock: hasAiAnalysis ? {
+            model: bedrockModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+          } : undefined,
+        },
+        totalEstimatedCost: Math.round((assemblyaiCost + bedrockCost) * 10000) / 10000,
+      };
+      await storage.createUsageRecord(usageRecord);
+    } catch (usageErr) {
+      console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+    }
 
     await cleanupFile(filePath);
     broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
@@ -886,7 +974,16 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       console.log(`[${callId}] Manual edit by ${editedBy}: ${reason} (fields: ${editRecord.fieldsChanged.join(", ")})`);
       res.json(updatedAnalysis);
     } catch (error) {
-      console.error("Failed to update call analysis:", error);
+      // HIPAA: Log failed modification attempts
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "edit_call_analysis_failed",
+        resourceType: "analysis",
+        resourceId: req.params.id,
+        detail: (error as Error).message,
+      });
+      console.error("Failed to update call analysis:", (error as Error).message);
       res.status(500).json({ message: "Failed to update call analysis" });
     }
   });
@@ -949,14 +1046,14 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       // Build employee lookup maps
       const employeeMap = new Map(employees.map(e => [e.id, e]));
 
-      // Filter by date range
+      // Filter by date range (validate dates)
       let filtered = allCalls;
-      if (from) {
-        const fromDate = new Date(from as string);
+      const fromDate = parseDate(from as string | undefined);
+      if (fromDate) {
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
       }
-      if (to) {
-        const toDate = new Date(to as string);
+      const toDate = parseDate(to as string | undefined);
+      if (toDate) {
         toDate.setHours(23, 59, 59, 999);
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
       }
@@ -989,10 +1086,10 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       const analyses = filtered.map(c => c.analysis).filter(Boolean);
 
       const avgSentiment = sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + parseFloat(s!.overallScore || "0"), 0) / sentiments.length) * 10
+        ? (sentiments.reduce((sum, s) => sum + safeFloat(s!.overallScore), 0) / sentiments.length) * 10
         : 0;
       const avgPerformanceScore = analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + parseFloat(a!.performanceScore || "0"), 0) / analyses.length
+        ? analyses.reduce((sum, a) => sum + safeFloat(a!.performanceScore), 0) / analyses.length
         : 0;
 
       const sentimentDist = { positive: 0, neutral: 0, negative: 0 };
@@ -1008,7 +1105,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
         stats.callCount++;
         if (call.analysis?.performanceScore) {
-          stats.totalScore += parseFloat(call.analysis.performanceScore);
+          stats.totalScore += safeFloat(call.analysis.performanceScore);
         }
         employeeStats.set(call.employeeId, stats);
       }
@@ -1037,7 +1134,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const entry = trendMap.get(monthKey) || { calls: 0, totalScore: 0, scored: 0, positive: 0, neutral: 0, negative: 0 };
         entry.calls++;
         if (call.analysis?.performanceScore) {
-          entry.totalScore += parseFloat(call.analysis.performanceScore);
+          entry.totalScore += safeFloat(call.analysis.performanceScore);
           entry.scored++;
         }
         if (call.sentiment?.overallSentiment) {
@@ -1113,14 +1210,14 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
       const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
 
-      // Apply optional date filters
+      // Apply optional date filters (validate dates)
       let filtered = allCalls;
-      if (from) {
-        const fromDate = new Date(from as string);
+      const fromDate = parseDate(from as string | undefined);
+      if (fromDate) {
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
       }
-      if (to) {
-        const toDate = new Date(to as string);
+      const toDate = parseDate(to as string | undefined);
+      if (toDate) {
         toDate.setHours(23, 59, 59, 999);
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
       }
@@ -1150,7 +1247,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       for (const call of filtered) {
         if (call.analysis) {
           if (call.analysis.performanceScore) {
-            scores.push(parseFloat(call.analysis.performanceScore));
+            scores.push(safeFloat(call.analysis.performanceScore));
           }
           if (call.analysis.feedback) {
             const fb = typeof call.analysis.feedback === "string"
@@ -1183,7 +1280,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
               id: call.id,
               fileName: call.fileName,
               uploadedAt: call.uploadedAt,
-              score: call.analysis.performanceScore ? parseFloat(call.analysis.performanceScore) : null,
+              score: call.analysis.performanceScore ? safeFloat(call.analysis.performanceScore) : null,
               summary: call.analysis.summary,
               flags: callFlags,
               sentiment: call.sentiment?.overallSentiment,
@@ -1201,7 +1298,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
         if (call.analysis?.performanceScore) {
           const entry = monthlyScores.get(monthKey) || { total: 0, count: 0 };
-          entry.total += parseFloat(call.analysis.performanceScore);
+          entry.total += safeFloat(call.analysis.performanceScore);
           entry.count++;
           monthlyScores.set(monthKey, entry);
         }
@@ -1297,7 +1394,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
       for (const call of filtered) {
         if (call.analysis?.performanceScore) {
-          scores.push(parseFloat(call.analysis.performanceScore));
+          scores.push(safeFloat(call.analysis.performanceScore));
         }
         if (call.analysis?.feedback) {
           const fb = typeof call.analysis.feedback === "string"
@@ -1386,7 +1483,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     // Send a 204 No Content response for a successful deletion
     res.status(204).send(); 
   } catch (error) {
-    console.error("Failed to delete call:", error);
+    logPhiAccess({
+      ...auditContext(req),
+      timestamp: new Date().toISOString(),
+      event: "delete_call_failed",
+      resourceType: "call",
+      resourceId: req.params.id,
+      detail: (error as Error).message,
+    });
+    console.error("Failed to delete call:", (error as Error).message);
     res.status(500).json({ message: "Failed to delete call" });
   }
 });
@@ -1438,7 +1543,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
   // Update a coaching session (status, notes, action plan progress)
   const updateCoachingSchema = z.object({
-    status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
+    status: z.enum(["pending", "in_progress", "completed", "dismissed"]).optional(),
     notes: z.string().optional(),
     actionPlan: z.array(z.object({ task: z.string(), completed: z.boolean() })).optional(),
     title: z.string().min(1).optional(),
@@ -1501,7 +1606,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         }
 
         // Track low-score calls as escalation patterns
-        const score = parseFloat(call.analysis?.performanceScore || "10");
+        const score = safeFloat(call.analysis?.performanceScore, 10);
         if (score <= 4) {
           escalationPatterns.push({
             summary: call.analysis?.summary || "",
@@ -1551,13 +1656,13 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       // Low-confidence calls
       const lowConfidenceCalls = completed
         .filter(c => {
-          const conf = parseFloat(c.analysis?.confidenceScore || "1");
+          const conf = safeFloat(c.analysis?.confidenceScore, 1);
           return conf < 0.7;
         })
         .map(c => ({
           callId: c.id,
           date: c.uploadedAt || "",
-          confidence: parseFloat(c.analysis?.confidenceScore || "0"),
+          confidence: safeFloat(c.analysis?.confidenceScore),
           employee: c.employee?.name || "Unassigned",
         }));
 
@@ -1570,7 +1675,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         lowConfidenceCalls: lowConfidenceCalls.slice(0, 20),
         summary: {
           avgScore: completed.length > 0
-            ? completed.reduce((sum, c) => sum + parseFloat(c.analysis?.performanceScore || "0"), 0) / completed.length
+            ? completed.reduce((sum, c) => sum + safeFloat(c.analysis?.performanceScore), 0) / completed.length
             : 0,
           negativeCallRate: completed.length > 0
             ? completed.filter(c => c.sentiment?.overallSentiment === "negative").length / completed.length
@@ -1584,6 +1689,257 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       res.status(500).json({ message: "Failed to compute company insights" });
     }
   });
+
+  // ==================== USAGE TRACKING ROUTES (admin only) ====================
+
+  app.get("/api/usage", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const records = await storage.getAllUsageRecords();
+      res.json(records);
+    } catch (error) {
+      console.error("Error fetching usage records:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch usage data" });
+    }
+  });
+
+  // ==================== A/B MODEL TESTING ROUTES (admin only) ====================
+
+  // List all A/B tests
+  app.get("/api/ab-tests", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const tests = await storage.getAllABTests();
+      res.json(tests);
+    } catch (error) {
+      console.error("Error fetching A/B tests:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch A/B tests" });
+    }
+  });
+
+  // Get a single A/B test
+  app.get("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const test = await storage.getABTest(req.params.id);
+      if (!test) {
+        res.status(404).json({ message: "A/B test not found" });
+        return;
+      }
+      res.json(test);
+    } catch (error) {
+      console.error("Error fetching A/B test:", (error as Error).message);
+      res.status(500).json({ message: "Failed to fetch A/B test" });
+    }
+  });
+
+  // Upload audio for A/B model comparison
+  app.post("/api/ab-tests/upload", requireAuth, requireRole("admin"), upload.single('audioFile'), async (req, res) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ message: "No audio file provided" });
+        return;
+      }
+
+      const { testModel, callCategory } = req.body;
+      if (!testModel) {
+        await cleanupFile(req.file.path);
+        res.status(400).json({ message: "Test model ID is required" });
+        return;
+      }
+
+      const user = req.user as any;
+      const baselineModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+
+      // Create the A/B test record
+      const abTest = await storage.createABTest({
+        fileName: req.file.originalname,
+        callCategory: callCategory || undefined,
+        baselineModel,
+        testModel,
+        status: "processing",
+        createdBy: user?.username || "admin",
+      });
+
+      // Read file and kick off async processing
+      const audioBuffer = fs.readFileSync(req.file.path);
+      const filePath = req.file.path;
+
+      processABTest(abTest.id, filePath, audioBuffer, callCategory)
+        .catch(async (error) => {
+          console.error(`[AB-${abTest.id}] Processing failed:`, (error as Error).message);
+          try {
+            await storage.updateABTest(abTest.id, { status: "failed" });
+          } catch (updateErr) {
+            console.error(`[AB-${abTest.id}] Failed to mark as failed:`, (updateErr as Error).message);
+          }
+        });
+
+      res.status(201).json(abTest);
+    } catch (error) {
+      console.error("Error starting A/B test:", (error as Error).message);
+      if (req.file?.path) await cleanupFile(req.file.path);
+      res.status(500).json({ message: "Failed to start A/B test" });
+    }
+  });
+
+  // Delete an A/B test
+  app.delete("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const test = await storage.getABTest(req.params.id);
+      if (!test) {
+        res.status(404).json({ message: "A/B test not found" });
+        return;
+      }
+      await storage.deleteABTest(req.params.id);
+      res.json({ message: "A/B test deleted" });
+    } catch (error) {
+      console.error("Error deleting A/B test:", (error as Error).message);
+      res.status(500).json({ message: "Failed to delete A/B test" });
+    }
+  });
+
+  // A/B test processing pipeline
+  async function processABTest(testId: string, filePath: string, audioBuffer: Buffer, callCategory?: string) {
+    console.log(`[AB-${testId}] Starting A/B model comparison...`);
+    try {
+      const abTest = await storage.getABTest(testId);
+      if (!abTest) throw new Error("A/B test record not found");
+
+      // Step 1: Upload to AssemblyAI and transcribe
+      console.log(`[AB-${testId}] Step 1: Uploading to AssemblyAI...`);
+      const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
+      const transcriptResponse = await assemblyAIService.pollTranscript(transcriptId);
+
+      if (!transcriptResponse || transcriptResponse.status !== 'completed') {
+        throw new Error(`Transcription failed. Status: ${transcriptResponse?.status}`);
+      }
+
+      const transcriptText = transcriptResponse.text || "";
+      await storage.updateABTest(testId, { transcriptText, status: "analyzing" });
+      console.log(`[AB-${testId}] Transcription complete (${transcriptText.length} chars)`);
+
+      // Load prompt template if applicable
+      let promptTemplate = undefined;
+      if (callCategory) {
+        try {
+          const tmpl = await storage.getPromptTemplateByCategory(callCategory);
+          if (tmpl) {
+            promptTemplate = {
+              evaluationCriteria: tmpl.evaluationCriteria,
+              requiredPhrases: tmpl.requiredPhrases,
+              scoringWeights: tmpl.scoringWeights,
+              additionalInstructions: tmpl.additionalInstructions,
+            };
+          }
+        } catch (e) {
+          console.warn(`[AB-${testId}] Failed to load prompt template:`, (e as Error).message);
+        }
+      }
+
+      // Step 2: Run both models in parallel
+      console.log(`[AB-${testId}] Step 2: Running analysis with both models...`);
+      const baselineProvider = BedrockProvider.createWithModel(abTest.baselineModel);
+      const testProvider = BedrockProvider.createWithModel(abTest.testModel);
+
+      const [baselineResult, testResult] = await Promise.allSettled([
+        (async () => {
+          const start = Date.now();
+          const analysis = await baselineProvider.analyzeCallTranscript(transcriptText, `ab-baseline-${testId}`, callCategory, promptTemplate);
+          return { analysis, latencyMs: Date.now() - start };
+        })(),
+        (async () => {
+          const start = Date.now();
+          const analysis = await testProvider.analyzeCallTranscript(transcriptText, `ab-test-${testId}`, callCategory, promptTemplate);
+          return { analysis, latencyMs: Date.now() - start };
+        })(),
+      ]);
+
+      const updates: Record<string, any> = { status: "completed" };
+
+      if (baselineResult.status === "fulfilled") {
+        updates.baselineAnalysis = baselineResult.value.analysis;
+        updates.baselineLatencyMs = baselineResult.value.latencyMs;
+        console.log(`[AB-${testId}] Baseline (${abTest.baselineModel}): score=${baselineResult.value.analysis.performance_score}, ${baselineResult.value.latencyMs}ms`);
+      } else {
+        console.error(`[AB-${testId}] Baseline model failed:`, baselineResult.reason?.message);
+        updates.baselineAnalysis = { error: baselineResult.reason?.message || "Analysis failed" };
+      }
+
+      if (testResult.status === "fulfilled") {
+        updates.testAnalysis = testResult.value.analysis;
+        updates.testLatencyMs = testResult.value.latencyMs;
+        console.log(`[AB-${testId}] Test (${abTest.testModel}): score=${testResult.value.analysis.performance_score}, ${testResult.value.latencyMs}ms`);
+      } else {
+        console.error(`[AB-${testId}] Test model failed:`, testResult.reason?.message);
+        updates.testAnalysis = { error: testResult.reason?.message || "Analysis failed" };
+      }
+
+      // If both failed, mark as failed
+      if (baselineResult.status === "rejected" && testResult.status === "rejected") {
+        updates.status = "failed";
+      }
+
+      await storage.updateABTest(testId, updates);
+
+      // Track usage/cost for A/B test
+      try {
+        const audioDuration = transcriptText.length > 0
+          ? Math.max(30, Math.ceil(transcriptText.length / 20)) // rough estimate from text length
+          : 60;
+        const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+        const estimatedInputTokens = Math.ceil(transcriptText.length / 4) + 500;
+        const estimatedOutputTokens = 800;
+
+        let baselineCost = 0;
+        let testCost = 0;
+        const services: UsageRecord["services"] = {
+          assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+        };
+
+        if (baselineResult.status === "fulfilled") {
+          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens);
+          services.bedrock = {
+            model: abTest.baselineModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(baselineCost * 10000) / 10000,
+            latencyMs: baselineResult.value.latencyMs,
+          };
+        }
+        if (testResult.status === "fulfilled") {
+          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens);
+          services.bedrockSecondary = {
+            model: abTest.testModel,
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCost: Math.round(testCost * 10000) / 10000,
+            latencyMs: testResult.value.latencyMs,
+          };
+        }
+
+        const usageRecord: UsageRecord = {
+          id: randomUUID(),
+          callId: testId,
+          type: "ab-test",
+          timestamp: new Date().toISOString(),
+          user: abTest.createdBy,
+          services,
+          totalEstimatedCost: Math.round((assemblyaiCost + baselineCost + testCost) * 10000) / 10000,
+        };
+        await storage.createUsageRecord(usageRecord);
+      } catch (usageErr) {
+        console.warn(`[AB-${testId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+      }
+
+      await cleanupFile(filePath);
+      broadcastCallUpdate(testId, "ab-test-completed", { label: "A/B test complete" });
+      console.log(`[AB-${testId}] A/B comparison complete.`);
+
+    } catch (error) {
+      console.error(`[AB-${testId}] Processing error:`, (error as Error).message);
+      await storage.updateABTest(testId, { status: "failed" });
+      await cleanupFile(filePath);
+    }
+  }
 
   const httpServer = createServer(app);
   return httpServer;

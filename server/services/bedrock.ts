@@ -29,8 +29,8 @@ export class BedrockProvider implements AIAnalysisProvider {
   private credentials: AwsCredentials | null = null;
   private model: string;
 
-  constructor() {
-    this.model = process.env.BEDROCK_MODEL || DEFAULT_MODEL;
+  constructor(modelOverride?: string) {
+    this.model = modelOverride || process.env.BEDROCK_MODEL || DEFAULT_MODEL;
 
     if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
       this.credentials = {
@@ -39,10 +39,21 @@ export class BedrockProvider implements AIAnalysisProvider {
         sessionToken: process.env.AWS_SESSION_TOKEN,
         region: process.env.AWS_REGION || DEFAULT_REGION,
       };
-      console.log(`Bedrock provider initialized (region: ${this.credentials.region}, model: ${this.model})`);
+      if (!modelOverride) {
+        console.log(`Bedrock provider initialized (region: ${this.credentials.region}, model: ${this.model})`);
+      }
     } else {
       console.warn("Bedrock provider: AWS credentials not found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.");
     }
+  }
+
+  /** Create a provider instance targeting a specific Bedrock model (for A/B testing). */
+  static createWithModel(modelId: string): BedrockProvider {
+    return new BedrockProvider(modelId);
+  }
+
+  get modelId(): string {
+    return this.model;
   }
 
   get isAvailable(): boolean {

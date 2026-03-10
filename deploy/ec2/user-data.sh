@@ -31,6 +31,11 @@ dnf install -y 'dnf-command(copr)'
 dnf copr enable -y @caddy/caddy
 dnf install -y caddy
 
+# --- Verify EC2 Instance Connect (pre-installed on AL2023) ---
+echo "Verifying EC2 Instance Connect..."
+rpm -q ec2-instance-connect || dnf install -y ec2-instance-connect
+echo "EC2 Instance Connect: $(rpm -q ec2-instance-connect)"
+
 # --- Create application user ---
 useradd --system --shell /usr/sbin/nologin --home-dir /opt/callanalyzer callanalyzer
 mkdir -p /opt/callanalyzer
@@ -149,11 +154,12 @@ echo ""
 echo "=== SETUP COMPLETE ==="
 echo ""
 echo "Next steps:"
-echo "  1. Clone your repo to /opt/callanalyzer/"
-echo "  2. Run: npm ci && npm run build && npm prune --production"
-echo "  3. Edit /opt/callanalyzer/.env with real credentials"
-echo "  4. Edit /etc/caddy/Caddyfile — replace YOUR_DOMAIN"
-echo "  5. Point your domain's DNS A record to this instance's public IP"
-echo "  6. Start services: sudo systemctl start callanalyzer && sudo systemctl start caddy"
-echo "  7. Verify: curl https://YOUR_DOMAIN/api/auth/me"
+echo "  1. Connect via EC2 Instance Connect (AWS Console → EC2 → Connect) or: mssh ec2-user@INSTANCE_ID"
+echo "  2. Clone your repo to /opt/callanalyzer/"
+echo "  3. Run: npm ci && npm run build && npm prune --production"
+echo "  4. Edit /opt/callanalyzer/.env with real credentials"
+echo "  5. Edit /etc/caddy/Caddyfile — replace YOUR_DOMAIN"
+echo "  6. Point your domain's DNS A record to this instance's public IP"
+echo "  7. Start services: sudo systemctl start callanalyzer && sudo systemctl start caddy"
+echo "  8. Verify: curl https://YOUR_DOMAIN/api/auth/me"
 echo ""

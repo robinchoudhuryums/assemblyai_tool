@@ -10,15 +10,16 @@ import SentimentAnalysis from "@/components/dashboard/sentiment-analysis";
 import PerformanceCard from "@/components/dashboard/performance-card";
 import FileUpload from "@/components/upload/file-upload";
 import CallsTable from "@/components/tables/calls-table";
-import type { CallWithDetails } from "@shared/schema";
+import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
 
 export default function Dashboard() {
   const [, navigate] = useLocation();
 
   // Fetch recent calls to extract flagged ones for the dashboard alert panel
-  const { data: calls } = useQuery<CallWithDetails[]>({
+  const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
   });
+  const calls = callsResponse?.calls;
 
   const flaggedCalls = (calls || []).filter(c => {
     const flags = c.analysis?.flags;

@@ -8,12 +8,31 @@ import { sessionMiddleware } from "../auth";
 
 let wss: WebSocketServer | null = null;
 
+const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
+
 export function setupWebSocket(server: Server) {
   wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
+    (ws as any).isAlive = true;
+    ws.on("pong", () => { (ws as any).isAlive = true; });
     ws.send(JSON.stringify({ type: "connected" }));
   });
+
+  // Periodic heartbeat: ping all clients, terminate dead connections
+  const heartbeat = setInterval(() => {
+    if (!wss) return;
+    wss.clients.forEach((ws) => {
+      if ((ws as any).isAlive === false) {
+        ws.terminate();
+        return;
+      }
+      (ws as any).isAlive = false;
+      ws.ping();
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  wss.on("close", () => clearInterval(heartbeat));
 
   // HIPAA: Authenticate WebSocket connections using the session cookie
   server.on("upgrade", (req: IncomingMessage, socket, head) => {

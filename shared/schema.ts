@@ -244,12 +244,89 @@ export const coachingSessionSchema = insertCoachingSessionSchema.extend({
 export type InsertCoachingSession = z.infer<typeof insertCoachingSessionSchema>;
 export type CoachingSession = z.infer<typeof coachingSessionSchema>;
 
+// --- A/B MODEL TEST SCHEMAS ---
+export const BEDROCK_MODEL_PRESETS = [
+  { value: "us.anthropic.claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Current)", cost: "$$" },
+  { value: "us.anthropic.claude-sonnet-4-20250514", label: "Claude Sonnet 4", cost: "$$" },
+  { value: "us.anthropic.claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", cost: "$" },
+  { value: "anthropic.claude-3-haiku-20240307", label: "Claude 3 Haiku (Cheapest)", cost: "$" },
+  { value: "anthropic.claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet v2", cost: "$$" },
+] as const;
+
+export const insertABTestSchema = z.object({
+  fileName: z.string(),
+  callCategory: z.string().optional(),
+  baselineModel: z.string(),
+  testModel: z.string(),
+  status: z.string().default("processing"),
+  transcriptText: z.string().optional(),
+  baselineAnalysis: z.any().optional(),
+  testAnalysis: z.any().optional(),
+  baselineLatencyMs: z.number().optional(),
+  testLatencyMs: z.number().optional(),
+  notes: z.string().optional(),
+  createdBy: z.string(),
+});
+
+export const abTestSchema = insertABTestSchema.extend({
+  id: z.string(),
+  createdAt: z.string().optional(),
+});
+
+export type InsertABTest = z.infer<typeof insertABTestSchema>;
+export type ABTest = z.infer<typeof abTestSchema>;
+
+// --- USAGE TRACKING SCHEMAS ---
+export const usageRecordSchema = z.object({
+  id: z.string(),
+  callId: z.string(),
+  type: z.enum(["call", "ab-test"]),
+  timestamp: z.string(),
+  user: z.string(),
+  services: z.object({
+    assemblyai: z.object({
+      durationSeconds: z.number().default(0),
+      estimatedCost: z.number().default(0),
+    }).optional(),
+    bedrock: z.object({
+      model: z.string(),
+      estimatedInputTokens: z.number().default(0),
+      estimatedOutputTokens: z.number().default(0),
+      estimatedCost: z.number().default(0),
+      latencyMs: z.number().optional(),
+    }).optional(),
+    bedrockSecondary: z.object({
+      model: z.string(),
+      estimatedInputTokens: z.number().default(0),
+      estimatedOutputTokens: z.number().default(0),
+      estimatedCost: z.number().default(0),
+      latencyMs: z.number().optional(),
+    }).optional(),
+  }),
+  totalEstimatedCost: z.number(),
+});
+
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
+
 // --- COMBINED TYPES ---
 export type CallWithDetails = Call & {
   employee?: Employee;
   transcript?: Transcript;
   sentiment?: SentimentAnalysis;
   analysis?: CallAnalysis;
+};
+
+export type PerformerSummary = {
+  id: string;
+  name: string;
+  role?: string;
+  avgPerformanceScore: number | null;
+  totalCalls: number;
+};
+
+export type PaginatedCalls = {
+  calls: CallWithDetails[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
 };
 
 export type DashboardMetrics = {

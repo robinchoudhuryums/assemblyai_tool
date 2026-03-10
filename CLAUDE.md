@@ -7,9 +7,9 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 - **Frontend**: React 18 + TypeScript, Vite, TailwindCSS, shadcn/ui, Recharts, Wouter (routing), TanStack Query
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
 - **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
-- **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates
+- **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates, A/B tests
 - **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin)
-- **Hosting**: Render.com
+- **Hosting**: Render.com (primary), EC2 with pm2 + Caddy (secondary)
 
 ## Local Development Setup
 
@@ -22,7 +22,7 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
    - **Required**: `ASSEMBLYAI_API_KEY`, `SESSION_SECRET`
    - **Auth users**: `AUTH_USERS` — format: `username:password:role:displayName` (comma-separated for multiple)
    - **AWS (for Bedrock + S3)**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
-   - **Storage**: `S3_BUCKET` or `GCS_BUCKET` + `GCS_CREDENTIALS` — without these, falls back to **in-memory storage (data lost on restart)**
+   - **Storage**: `S3_BUCKET` — without this, falls back to **in-memory storage (data lost on restart)**
 
 3. Start the dev server:
    ```bash
@@ -51,9 +51,9 @@ npx vite build       # Frontend-only build (useful for quick verification)
 ```
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
-server/services/         # AI providers, S3/GCS clients, AssemblyAI, WebSocket
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket
 server/routes.ts         # All API routes + audio processing pipeline
-server/storage.ts        # Storage abstraction (memory, S3, GCS backends)
+server/storage.ts        # Storage abstraction (memory or S3 backends)
 server/auth.ts           # Authentication middleware + session management
 shared/schema.ts         # Zod schemas shared between client/server
 tests/                   # Unit tests (Node test runner)
@@ -78,14 +78,14 @@ tests/                   # Unit tests (Node test runner)
 
 ### Storage Backend Selection (server/storage.ts)
 - `STORAGE_BACKEND=s3` or `S3_BUCKET` env var → S3
-- `STORAGE_BACKEND=gcs` or GCS creds → Google Cloud Storage
 - Otherwise → **in-memory (non-persistent — data is lost on restart)**
 
 ## API Routes Overview
 
-### Authentication (public)
+### Public (no auth)
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/health` | Health check (returns `{ status, timestamp }`) |
 | POST | `/api/auth/login` | Login (rate limited: 5 attempts/15min per IP) |
 | POST | `/api/auth/logout` | Logout & clear session |
 | GET | `/api/auth/me` | Get current user |
@@ -145,6 +145,29 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 
+### A/B Model Testing (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/ab-tests` | admin | List all A/B tests |
+| GET | `/api/ab-tests/:id` | admin | Get test details (both analyses) |
+| POST | `/api/ab-tests/upload` | admin | Upload audio + specify test model → starts comparison |
+| DELETE | `/api/ab-tests/:id` | admin | Delete a test |
+
+**A/B Test Processing Pipeline** (`server/routes.ts → processABTest`):
+1. Upload audio to AssemblyAI → transcribe (same as normal pipeline)
+2. Run baseline model (current production Sonnet) and test model in parallel (both timed)
+3. Store both analyses + latency to `ab-tests/` S3 prefix
+4. WebSocket notifies client on completion
+
+Test calls are stored separately from production data (`ab-tests/{id}.json`), never assigned to employees, and never included in dashboard metrics, reports, or performance scores.
+
+### Usage / Spend Tracking (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/usage` | admin | List all usage records with estimated costs |
+
+Usage records are automatically created after each call analysis and A/B test. Estimated costs are calculated from audio duration (AssemblyAI) and token counts (Bedrock). Stored under `usage/` S3 prefix. The admin Spend Tracking page shows current month, last month, YTD, and all-time views with charts.
+
 ## Role-Based Access Control
 
 Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireRole()` middleware in `server/auth.ts`.
@@ -153,7 +176,7 @@ Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireR
 |------|-------------|
 | **viewer** | Read-only: dashboards, reports, transcripts, call playback, team data |
 | **manager** | Everything viewer can do, plus: assign calls, edit AI analysis, manage employees, create coaching sessions, export reports, delete calls |
-| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, system configuration |
+| **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, A/B model testing, spend tracking, system configuration |
 
 Access requests can request "viewer" or "manager" roles (not admin).
 
@@ -174,9 +197,6 @@ AWS_SESSION_TOKEN               # Optional, for IAM roles
 
 # Storage
 S3_BUCKET                       # Default: ums-call-archive
-# OR for GCS:
-GCS_BUCKET
-GCS_CREDENTIALS
 
 # AI Model
 BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)
@@ -207,14 +227,85 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
+- **A/B test isolation**: Test calls stored under `ab-tests/` S3 prefix, completely separate from production `calls/`, `analyses/`, etc. — no risk of contaminating metrics
 
-## Deployment (Render.com)
+## Deployment
+
+### Render.com (Primary)
 No `render.yaml` in repo — deployment is configured via the Render dashboard.
 
 - **Build command**: `npm run build` (Vite frontend → `dist/client/`, esbuild backend → `dist/index.js`)
 - **Start command**: `npm run start` (`NODE_ENV=production node dist/index.js`)
 - **Environment variables**: Configured in Render dashboard
 - Server serves both API and static frontend assets from the same process
+
+### EC2 (Secondary / Testing)
+The app can also run on an EC2 instance managed with **pm2**.
+
+#### SSH Access
+```bash
+ssh -i /path/to/your-key.pem ec2-user@<ec2-ip-or-hostname>
+# Username may be 'ubuntu' depending on AMI
+```
+To find your key pair name: AWS Console → EC2 → Instances → select instance → "Key pair name".
+To find your IP: AWS Console → EC2 → Instances → "Public IPv4 address".
+You can also use **EC2 Instance Connect** (no key needed) via the AWS Console "Connect" button.
+
+#### pm2 Commands
+```bash
+pm2 list                    # Show running processes
+pm2 restart all             # Restart the app after config changes
+pm2 logs --lines 50         # View recent logs
+pm2 logs --err --lines 50   # View error logs only
+pm2 stop all                # Stop the app
+pm2 start dist/index.js --name callanalyzer  # Start fresh
+pm2 save                    # Save process list for auto-restart on reboot
+```
+
+#### Updating the App on EC2
+```bash
+# Quick deploy (recommended):
+cd /path/to/assemblyai_tool
+./deploy.sh              # Pulls main, installs, builds, restarts pm2
+
+# Or deploy a specific branch:
+./deploy.sh feature-branch
+
+# Manual steps (if deploy.sh is not available):
+git pull origin main
+npm install
+npm run build
+pm2 restart all
+```
+
+#### Updating Environment Variables
+```bash
+nano .env                   # Edit the file
+pm2 restart all             # Restart to pick up changes
+pm2 logs --lines 20         # Verify startup — look for:
+                            #   [STORAGE] Using S3 (bucket: ums-call-archive)
+                            #   NOT: "S3 authentication not configured"
+```
+
+#### AWS Credential Rotation on EC2
+When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):
+1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env`
+2. `pm2 restart all`
+3. Verify with `pm2 logs --lines 20` — confirm S3 and Bedrock initialize without errors
+4. **Remember**: Update credentials on ALL services using this IAM user
+
+## Documentation Maintenance
+
+Keep `CLAUDE.md` updated when making structural changes. Specifically, update docs when:
+
+- **New API routes** are added or existing routes change → update the API Routes table
+- **Environment variables** are added/removed → update the Environment Variables section
+- **Storage backend** logic changes → update Storage Backend Selection
+- **New services** are added under `server/services/` → update Architecture section
+- **Deployment** process changes (new hosting, new process manager) → update Deployment section
+- **Dependencies** are significantly added/removed → update Tech Stack
+- **Auth/RBAC** rules change → update Role-Based Access Control
+- **AI model** defaults change → update Environment Variables and Common Gotchas
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data

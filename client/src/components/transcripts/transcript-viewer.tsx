@@ -374,7 +374,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
         </div>
       </div>
 
-      {/* Hidden audio element that streams from GCS via the API */}
+      {/* Hidden audio element that streams from S3 via the API */}
       <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="metadata" />
 
       {/* Audio progress bar */}

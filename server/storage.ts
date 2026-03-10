@@ -20,12 +20,22 @@ import {
   type InsertPromptTemplate,
   type CoachingSession,
   type InsertCoachingSession,
+  type PerformerSummary,
+  type ABTest,
+  type InsertABTest,
+  type UsageRecord,
 } from "@shared/schema";
-import { GcsClient } from "./services/gcs";
 import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
 
-/** Common interface for GCS and S3 object storage clients */
+/** Safe parseFloat that returns fallback on NaN. */
+function safeFloat(value: string | undefined | null, fallback = 0): number {
+  if (!value) return fallback;
+  const n = parseFloat(value);
+  return Number.isNaN(n) ? fallback : n;
+}
+
+/** Common interface for S3 object storage client */
 export interface ObjectStorageClient {
   uploadJson(objectName: string, data: unknown): Promise<void>;
   uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void>;
@@ -74,7 +84,7 @@ export interface IStorage {
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
   getSentimentDistribution(): Promise<SentimentDistribution>;
-  getTopPerformers(limit?: number): Promise<any[]>;
+  getTopPerformers(limit?: number): Promise<PerformerSummary[]>;
 
   // Search and filtering
   searchCalls(query: string): Promise<CallWithDetails[]>;
@@ -105,6 +115,17 @@ export interface IStorage {
   getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]>;
   updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined>;
 
+  // A/B model test operations
+  createABTest(test: InsertABTest): Promise<ABTest>;
+  getABTest(id: string): Promise<ABTest | undefined>;
+  getAllABTests(): Promise<ABTest[]>;
+  updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined>;
+  deleteABTest(id: string): Promise<void>;
+
+  // Usage tracking
+  createUsageRecord(record: UsageRecord): Promise<void>;
+  getAllUsageRecords(): Promise<UsageRecord[]>;
+
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
 }
@@ -123,6 +144,8 @@ export class MemStorage implements IStorage {
   private accessRequests = new Map<string, AccessRequest>();
   private promptTemplates = new Map<string, PromptTemplate>();
   private coachingSessions = new Map<string, CoachingSession>();
+  private abTests = new Map<string, ABTest>();
+  private usageRecords = new Map<string, UsageRecord>();
 
   async getUser(_id: string): Promise<User | undefined> { return undefined; }
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
@@ -250,10 +273,10 @@ export class MemStorage implements IStorage {
     const sentiments = [...this.sentiments.values()];
     const analyses = [...this.analyses.values()];
     const avgSentiment = sentiments.length > 0
-      ? (sentiments.reduce((sum, s) => sum + parseFloat(s.overallScore || "0"), 0) / sentiments.length) * 10
+      ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) / sentiments.length) * 10
       : 0;
     const avgPerformanceScore = analyses.length > 0
-      ? analyses.reduce((sum, a) => sum + parseFloat(a.performanceScore || "0"), 0) / analyses.length
+      ? analyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) / analyses.length
       : 0;
     return {
       totalCalls,
@@ -272,7 +295,7 @@ export class MemStorage implements IStorage {
     return distribution;
   }
 
-  async getTopPerformers(limit = 3): Promise<any[]> {
+  async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
     const calls = [...this.calls.values()];
     const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
     for (const call of calls) {
@@ -280,7 +303,7 @@ export class MemStorage implements IStorage {
       const analysis = this.analyses.get(call.id);
       const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
       stats.callCount++;
-      if (analysis?.performanceScore) stats.totalScore += parseFloat(analysis.performanceScore);
+      if (analysis?.performanceScore) stats.totalScore += safeFloat(analysis.performanceScore);
       employeeStats.set(call.employeeId, stats);
     }
     return [...this.employees.values()]
@@ -375,6 +398,42 @@ export class MemStorage implements IStorage {
     const updated = { ...session, ...updates };
     this.coachingSessions.set(id, updated);
     return updated;
+  }
+
+  // A/B test operations
+  async createABTest(test: InsertABTest): Promise<ABTest> {
+    const id = randomUUID();
+    const newTest: ABTest = { ...test, id, createdAt: new Date().toISOString() };
+    this.abTests.set(id, newTest);
+    return newTest;
+  }
+  async getABTest(id: string): Promise<ABTest | undefined> {
+    return this.abTests.get(id);
+  }
+  async getAllABTests(): Promise<ABTest[]> {
+    return Array.from(this.abTests.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+  async updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined> {
+    const test = this.abTests.get(id);
+    if (!test) return undefined;
+    const updated = { ...test, ...updates };
+    this.abTests.set(id, updated);
+    return updated;
+  }
+  async deleteABTest(id: string): Promise<void> {
+    this.abTests.delete(id);
+  }
+
+  // Usage tracking
+  async createUsageRecord(record: UsageRecord): Promise<void> {
+    this.usageRecords.set(record.id, record);
+  }
+  async getAllUsageRecords(): Promise<UsageRecord[]> {
+    return Array.from(this.usageRecords.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
   }
 
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
@@ -630,14 +689,14 @@ export class CloudStorage implements IStorage {
 
     const avgSentiment =
       sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + parseFloat(s.overallScore || "0"), 0) /
+        ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) /
             sentiments.length) *
           10
         : 0;
 
     const avgPerformanceScore =
       analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + parseFloat(a.performanceScore || "0"), 0) /
+        ? analyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) /
           analyses.length
         : 0;
 
@@ -663,7 +722,7 @@ export class CloudStorage implements IStorage {
     return distribution;
   }
 
-  async getTopPerformers(limit = 3): Promise<any[]> {
+  async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
     const [employees, calls, analyses] = await Promise.all([
       this.getAllEmployees(),
       this.client.listAndDownloadJson<Call>("calls/"),
@@ -685,7 +744,7 @@ export class CloudStorage implements IStorage {
       const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
       stats.callCount++;
       if (analysis?.performanceScore) {
-        stats.totalScore += parseFloat(analysis.performanceScore);
+        stats.totalScore += safeFloat(analysis.performanceScore);
       }
       employeeStats.set(call.employeeId, stats);
     }
@@ -801,6 +860,44 @@ export class CloudStorage implements IStorage {
     return updated;
   }
 
+  // --- A/B Model Test Methods ---
+  async createABTest(test: InsertABTest): Promise<ABTest> {
+    const id = randomUUID();
+    const newTest: ABTest = { ...test, id, createdAt: new Date().toISOString() };
+    await this.client.uploadJson(`ab-tests/${id}.json`, newTest);
+    return newTest;
+  }
+  async getABTest(id: string): Promise<ABTest | undefined> {
+    return this.client.downloadJson<ABTest>(`ab-tests/${id}.json`);
+  }
+  async getAllABTests(): Promise<ABTest[]> {
+    const tests = await this.client.listAndDownloadJson<ABTest>("ab-tests/");
+    return tests.sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+  async updateABTest(id: string, updates: Partial<ABTest>): Promise<ABTest | undefined> {
+    const test = await this.getABTest(id);
+    if (!test) return undefined;
+    const updated = { ...test, ...updates };
+    await this.client.uploadJson(`ab-tests/${id}.json`, updated);
+    return updated;
+  }
+  async deleteABTest(id: string): Promise<void> {
+    await this.client.deleteObject(`ab-tests/${id}.json`);
+  }
+
+  // --- Usage Tracking Methods ---
+  async createUsageRecord(record: UsageRecord): Promise<void> {
+    await this.client.uploadJson(`usage/${record.id}.json`, record);
+  }
+  async getAllUsageRecords(): Promise<UsageRecord[]> {
+    const records = await this.client.listAndDownloadJson<UsageRecord>("usage/");
+    return records.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }
+
   // --- Data Retention ---
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
     const cutoff = new Date();
@@ -825,18 +922,11 @@ export class CloudStorage implements IStorage {
 function createStorage(): IStorage {
   const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
 
-  // Explicit S3 or auto-detect via AWS credentials + S3_BUCKET
-  if (storageBackend === "s3" || (!storageBackend && process.env.S3_BUCKET)) {
+  // S3 storage (explicit or auto-detect via S3_BUCKET)
+  if (storageBackend === "s3" || process.env.S3_BUCKET) {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
     console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);
     return new CloudStorage(new S3Client(bucket));
-  }
-
-  // Explicit GCS or auto-detect via GCS credentials
-  if (storageBackend === "gcs" || process.env.GCS_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const bucket = process.env.GCS_BUCKET || "ums-call-archive";
-    console.log(`[STORAGE] Using GCS (bucket: ${bucket})`);
-    return new CloudStorage(new GcsClient(bucket));
   }
 
   console.log("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts)");

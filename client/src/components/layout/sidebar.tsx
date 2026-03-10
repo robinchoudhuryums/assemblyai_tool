@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CallWithDetails, Employee, AccessRequest } from "@shared/schema";
+import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 
 type NavItem = { name: string; href: string; icon: any; section?: string; requireRole?: string[] };
 
@@ -59,10 +59,11 @@ export default function Sidebar() {
   });
 
   // Fetch calls for flagged count badge
-  const { data: calls } = useQuery<CallWithDetails[]>({
+  const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
     staleTime: 30000,
   });
+  const calls = callsResponse?.calls;
 
   // Fetch employees for quick-switch
   const { data: employees } = useQuery<Employee[]>({
@@ -206,6 +207,32 @@ export default function Sidebar() {
             >
               <SlidersHorizontal className="w-5 h-5" />
               <span>Prompt Templates</span>
+            </Link>
+            <Link
+              href="/admin/ab-testing"
+              className={cn(
+                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                location === "/admin/ab-testing"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              data-testid="nav-link-ab-testing"
+            >
+              <FlaskConical className="w-5 h-5" />
+              <span>Model Testing</span>
+            </Link>
+            <Link
+              href="/admin/spend"
+              className={cn(
+                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                location === "/admin/spend"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              data-testid="nav-link-spend"
+            >
+              <DollarSign className="w-5 h-5" />
+              <span>Spend Tracking</span>
             </Link>
           </>
         )}
