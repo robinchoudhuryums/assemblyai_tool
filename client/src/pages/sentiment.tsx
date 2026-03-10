@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Smile, Frown, Minus, TrendingUp } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
-import type { CallWithDetails } from "@shared/schema";
+import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
 
 interface SentimentData {
   positive: number;
@@ -15,9 +15,10 @@ export default function SentimentPage() {
     queryKey: ["/api/dashboard/sentiment"],
   });
 
-  const { data: calls } = useQuery<CallWithDetails[]>({
+  const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
   });
+  const calls = callsResponse?.calls;
 
   // Build weekly trend from calls data
   const weeklyTrend = useMemo(() => {

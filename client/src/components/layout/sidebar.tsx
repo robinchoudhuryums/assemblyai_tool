@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CallWithDetails, Employee, AccessRequest } from "@shared/schema";
+import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 
 type NavItem = { name: string; href: string; icon: any; section?: string; requireRole?: string[] };
 
@@ -59,10 +59,11 @@ export default function Sidebar() {
   });
 
   // Fetch calls for flagged count badge
-  const { data: calls } = useQuery<CallWithDetails[]>({
+  const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
     staleTime: 30000,
   });
+  const calls = callsResponse?.calls;
 
   // Fetch employees for quick-switch
   const { data: employees } = useQuery<Employee[]>({

@@ -15,6 +15,27 @@ import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSc
 import { z } from "zod";
 import csv from "csv-parser";
 
+/** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
+function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {
+  if (!value) return defaultVal;
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) ? defaultVal : Math.max(min, Math.min(n, max));
+}
+
+/** Parse a date query param, returning undefined if invalid. */
+function parseDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/** Safe parseFloat that returns fallback on NaN. */
+function safeFloat(value: string | undefined | null, fallback = 0): number {
+  if (!value) return fallback;
+  const n = parseFloat(value);
+  return Number.isNaN(n) ? fallback : n;
+}
+
 // Ensure uploads directory exists
 const uploadsDir = 'uploads';
 if (!fs.existsSync(uploadsDir)) {
@@ -225,7 +246,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Top performers
   app.get("/api/dashboard/performers", requireAuth, async (req, res) => {
     try {
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 3;
+      const limit = clampInt(req.query.limit as string | undefined, 3, 1, 100);
       const performers = await storage.getTopPerformers(limit);
       res.json(performers);
     } catch (error) {
@@ -378,17 +399,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get all calls with details
+  // Get all calls with details (paginated)
 app.get("/api/calls", requireAuth, async (req, res) => {
   try {
     const { status, sentiment, employee } = req.query;
-    // Pass the filters directly to the storage function
-    const calls = await storage.getCallsWithDetails({ 
-      status: status as string, 
-      sentiment: sentiment as string, 
-      employee: employee as string 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 50, 200));
+
+    const calls = await storage.getCallsWithDetails({
+      status: status as string,
+      sentiment: sentiment as string,
+      employee: employee as string
     });
-    res.json(calls);
+
+    const total = calls.length;
+    const totalPages = Math.ceil(total / limit);
+    const offset = (page - 1) * limit;
+    const paginated = calls.slice(offset, offset + limit);
+
+    res.json({
+      calls: paginated,
+      pagination: { page, limit, total, totalPages },
+    });
   } catch (error) {
     res.status(500).json({ message: "Failed to get calls" });
   }
@@ -886,7 +918,16 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       console.log(`[${callId}] Manual edit by ${editedBy}: ${reason} (fields: ${editRecord.fieldsChanged.join(", ")})`);
       res.json(updatedAnalysis);
     } catch (error) {
-      console.error("Failed to update call analysis:", error);
+      // HIPAA: Log failed modification attempts
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "edit_call_analysis_failed",
+        resourceType: "analysis",
+        resourceId: req.params.id,
+        detail: (error as Error).message,
+      });
+      console.error("Failed to update call analysis:", (error as Error).message);
       res.status(500).json({ message: "Failed to update call analysis" });
     }
   });
@@ -949,14 +990,14 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       // Build employee lookup maps
       const employeeMap = new Map(employees.map(e => [e.id, e]));
 
-      // Filter by date range
+      // Filter by date range (validate dates)
       let filtered = allCalls;
-      if (from) {
-        const fromDate = new Date(from as string);
+      const fromDate = parseDate(from as string | undefined);
+      if (fromDate) {
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
       }
-      if (to) {
-        const toDate = new Date(to as string);
+      const toDate = parseDate(to as string | undefined);
+      if (toDate) {
         toDate.setHours(23, 59, 59, 999);
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
       }
@@ -989,10 +1030,10 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       const analyses = filtered.map(c => c.analysis).filter(Boolean);
 
       const avgSentiment = sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + parseFloat(s!.overallScore || "0"), 0) / sentiments.length) * 10
+        ? (sentiments.reduce((sum, s) => sum + safeFloat(s!.overallScore), 0) / sentiments.length) * 10
         : 0;
       const avgPerformanceScore = analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + parseFloat(a!.performanceScore || "0"), 0) / analyses.length
+        ? analyses.reduce((sum, a) => sum + safeFloat(a!.performanceScore), 0) / analyses.length
         : 0;
 
       const sentimentDist = { positive: 0, neutral: 0, negative: 0 };
@@ -1008,7 +1049,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
         stats.callCount++;
         if (call.analysis?.performanceScore) {
-          stats.totalScore += parseFloat(call.analysis.performanceScore);
+          stats.totalScore += safeFloat(call.analysis.performanceScore);
         }
         employeeStats.set(call.employeeId, stats);
       }
@@ -1037,7 +1078,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const entry = trendMap.get(monthKey) || { calls: 0, totalScore: 0, scored: 0, positive: 0, neutral: 0, negative: 0 };
         entry.calls++;
         if (call.analysis?.performanceScore) {
-          entry.totalScore += parseFloat(call.analysis.performanceScore);
+          entry.totalScore += safeFloat(call.analysis.performanceScore);
           entry.scored++;
         }
         if (call.sentiment?.overallSentiment) {
@@ -1113,14 +1154,14 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
       const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
 
-      // Apply optional date filters
+      // Apply optional date filters (validate dates)
       let filtered = allCalls;
-      if (from) {
-        const fromDate = new Date(from as string);
+      const fromDate = parseDate(from as string | undefined);
+      if (fromDate) {
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
       }
-      if (to) {
-        const toDate = new Date(to as string);
+      const toDate = parseDate(to as string | undefined);
+      if (toDate) {
         toDate.setHours(23, 59, 59, 999);
         filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
       }
@@ -1150,7 +1191,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       for (const call of filtered) {
         if (call.analysis) {
           if (call.analysis.performanceScore) {
-            scores.push(parseFloat(call.analysis.performanceScore));
+            scores.push(safeFloat(call.analysis.performanceScore));
           }
           if (call.analysis.feedback) {
             const fb = typeof call.analysis.feedback === "string"
@@ -1183,7 +1224,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
               id: call.id,
               fileName: call.fileName,
               uploadedAt: call.uploadedAt,
-              score: call.analysis.performanceScore ? parseFloat(call.analysis.performanceScore) : null,
+              score: call.analysis.performanceScore ? safeFloat(call.analysis.performanceScore) : null,
               summary: call.analysis.summary,
               flags: callFlags,
               sentiment: call.sentiment?.overallSentiment,
@@ -1201,7 +1242,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
         if (call.analysis?.performanceScore) {
           const entry = monthlyScores.get(monthKey) || { total: 0, count: 0 };
-          entry.total += parseFloat(call.analysis.performanceScore);
+          entry.total += safeFloat(call.analysis.performanceScore);
           entry.count++;
           monthlyScores.set(monthKey, entry);
         }
@@ -1297,7 +1338,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
       for (const call of filtered) {
         if (call.analysis?.performanceScore) {
-          scores.push(parseFloat(call.analysis.performanceScore));
+          scores.push(safeFloat(call.analysis.performanceScore));
         }
         if (call.analysis?.feedback) {
           const fb = typeof call.analysis.feedback === "string"
@@ -1386,7 +1427,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     // Send a 204 No Content response for a successful deletion
     res.status(204).send(); 
   } catch (error) {
-    console.error("Failed to delete call:", error);
+    logPhiAccess({
+      ...auditContext(req),
+      timestamp: new Date().toISOString(),
+      event: "delete_call_failed",
+      resourceType: "call",
+      resourceId: req.params.id,
+      detail: (error as Error).message,
+    });
+    console.error("Failed to delete call:", (error as Error).message);
     res.status(500).json({ message: "Failed to delete call" });
   }
 });
@@ -1438,7 +1487,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
 
   // Update a coaching session (status, notes, action plan progress)
   const updateCoachingSchema = z.object({
-    status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
+    status: z.enum(["pending", "in_progress", "completed", "dismissed"]).optional(),
     notes: z.string().optional(),
     actionPlan: z.array(z.object({ task: z.string(), completed: z.boolean() })).optional(),
     title: z.string().min(1).optional(),
@@ -1501,7 +1550,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         }
 
         // Track low-score calls as escalation patterns
-        const score = parseFloat(call.analysis?.performanceScore || "10");
+        const score = safeFloat(call.analysis?.performanceScore, 10);
         if (score <= 4) {
           escalationPatterns.push({
             summary: call.analysis?.summary || "",
@@ -1551,13 +1600,13 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       // Low-confidence calls
       const lowConfidenceCalls = completed
         .filter(c => {
-          const conf = parseFloat(c.analysis?.confidenceScore || "1");
+          const conf = safeFloat(c.analysis?.confidenceScore, 1);
           return conf < 0.7;
         })
         .map(c => ({
           callId: c.id,
           date: c.uploadedAt || "",
-          confidence: parseFloat(c.analysis?.confidenceScore || "0"),
+          confidence: safeFloat(c.analysis?.confidenceScore),
           employee: c.employee?.name || "Unassigned",
         }));
 
@@ -1570,7 +1619,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         lowConfidenceCalls: lowConfidenceCalls.slice(0, 20),
         summary: {
           avgScore: completed.length > 0
-            ? completed.reduce((sum, c) => sum + parseFloat(c.analysis?.performanceScore || "0"), 0) / completed.length
+            ? completed.reduce((sum, c) => sum + safeFloat(c.analysis?.performanceScore), 0) / completed.length
             : 0,
           negativeCallRate: completed.length > 0
             ? completed.filter(c => c.sentiment?.overallSentiment === "negative").length / completed.length

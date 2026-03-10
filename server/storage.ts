@@ -20,10 +20,18 @@ import {
   type InsertPromptTemplate,
   type CoachingSession,
   type InsertCoachingSession,
+  type PerformerSummary,
 } from "@shared/schema";
 import { GcsClient } from "./services/gcs";
 import { S3Client } from "./services/s3";
 import { randomUUID } from "crypto";
+
+/** Safe parseFloat that returns fallback on NaN. */
+function safeFloat(value: string | undefined | null, fallback = 0): number {
+  if (!value) return fallback;
+  const n = parseFloat(value);
+  return Number.isNaN(n) ? fallback : n;
+}
 
 /** Common interface for GCS and S3 object storage clients */
 export interface ObjectStorageClient {
@@ -74,7 +82,7 @@ export interface IStorage {
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
   getSentimentDistribution(): Promise<SentimentDistribution>;
-  getTopPerformers(limit?: number): Promise<any[]>;
+  getTopPerformers(limit?: number): Promise<PerformerSummary[]>;
 
   // Search and filtering
   searchCalls(query: string): Promise<CallWithDetails[]>;
@@ -250,10 +258,10 @@ export class MemStorage implements IStorage {
     const sentiments = [...this.sentiments.values()];
     const analyses = [...this.analyses.values()];
     const avgSentiment = sentiments.length > 0
-      ? (sentiments.reduce((sum, s) => sum + parseFloat(s.overallScore || "0"), 0) / sentiments.length) * 10
+      ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) / sentiments.length) * 10
       : 0;
     const avgPerformanceScore = analyses.length > 0
-      ? analyses.reduce((sum, a) => sum + parseFloat(a.performanceScore || "0"), 0) / analyses.length
+      ? analyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) / analyses.length
       : 0;
     return {
       totalCalls,
@@ -272,7 +280,7 @@ export class MemStorage implements IStorage {
     return distribution;
   }
 
-  async getTopPerformers(limit = 3): Promise<any[]> {
+  async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
     const calls = [...this.calls.values()];
     const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
     for (const call of calls) {
@@ -280,7 +288,7 @@ export class MemStorage implements IStorage {
       const analysis = this.analyses.get(call.id);
       const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
       stats.callCount++;
-      if (analysis?.performanceScore) stats.totalScore += parseFloat(analysis.performanceScore);
+      if (analysis?.performanceScore) stats.totalScore += safeFloat(analysis.performanceScore);
       employeeStats.set(call.employeeId, stats);
     }
     return [...this.employees.values()]
@@ -630,14 +638,14 @@ export class CloudStorage implements IStorage {
 
     const avgSentiment =
       sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + parseFloat(s.overallScore || "0"), 0) /
+        ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) /
             sentiments.length) *
           10
         : 0;
 
     const avgPerformanceScore =
       analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + parseFloat(a.performanceScore || "0"), 0) /
+        ? analyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) /
           analyses.length
         : 0;
 
@@ -663,7 +671,7 @@ export class CloudStorage implements IStorage {
     return distribution;
   }
 
-  async getTopPerformers(limit = 3): Promise<any[]> {
+  async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
     const [employees, calls, analyses] = await Promise.all([
       this.getAllEmployees(),
       this.client.listAndDownloadJson<Call>("calls/"),
@@ -685,7 +693,7 @@ export class CloudStorage implements IStorage {
       const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
       stats.callCount++;
       if (analysis?.performanceScore) {
-        stats.totalScore += parseFloat(analysis.performanceScore);
+        stats.totalScore += safeFloat(analysis.performanceScore);
       }
       employeeStats.set(call.employeeId, stats);
     }

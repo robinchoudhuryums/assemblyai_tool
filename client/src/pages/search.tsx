@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
-import type { CallWithDetails } from "@shared/schema";
+import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { AudioWaveform } from "lucide-react";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
@@ -37,7 +37,7 @@ export default function SearchPage() {
     }
   }, [searchError, toast]);
 
-  const { data: allCalls, isLoading: isLoadingCalls } = useQuery<CallWithDetails[]>({
+  const { data: allCallsResponse, isLoading: isLoadingCalls } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", {
       sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
       status: statusFilter === "all" ? "" : statusFilter
@@ -45,7 +45,7 @@ export default function SearchPage() {
     enabled: debouncedQuery.length === 0,
   });
 
-  const displayCalls = (debouncedQuery.length > 2 ? searchResults : allCalls) ?? [];
+  const displayCalls = (debouncedQuery.length > 2 ? searchResults : allCallsResponse?.calls) ?? [];
   const isLoading = isLoadingSearch || isLoadingCalls;
 
   const clearFilters = () => {

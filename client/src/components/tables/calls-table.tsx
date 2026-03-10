@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
-import type { CallWithDetails, Employee } from "@shared/schema";
+import type { CallWithDetails, Employee, PaginatedCalls } from "@shared/schema";
 import { AudioWaveform } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -39,13 +39,14 @@ export default function CallsTable() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: calls, isLoading: isLoadingCalls } = useQuery<CallWithDetails[]>({
+  const { data: callsResponse, isLoading: isLoadingCalls } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", {
       status: statusFilter === "all" ? "" : statusFilter,
       sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
       employee: employeeFilter === "all" ? "" : employeeFilter
     }],
   });
+  const calls = callsResponse?.calls;
 
   const { data: employees, isLoading: isLoadingEmployees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],

@@ -252,6 +252,19 @@ export type CallWithDetails = Call & {
   analysis?: CallAnalysis;
 };
 
+export type PerformerSummary = {
+  id: string;
+  name: string;
+  role?: string;
+  avgPerformanceScore: number | null;
+  totalCalls: number;
+};
+
+export type PaginatedCalls = {
+  calls: CallWithDetails[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+};
+
 export type DashboardMetrics = {
   totalCalls: number;
   avgSentiment: number;
