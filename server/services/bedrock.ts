@@ -12,7 +12,7 @@
  */
 import { createHmac, createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
-import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
+import { buildAnalysisPromptParts, parseJsonResponse } from "./ai-provider";
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_REGION = "us-east-1";
@@ -93,16 +93,24 @@ export class BedrockProvider implements AIAnalysisProvider {
       throw new Error("Bedrock provider not configured");
     }
 
-    const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate);
+    const { system, user } = buildAnalysisPromptParts(transcriptText, callCategory, promptTemplate);
     const region = this.credentials.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
     // Raw path for the HTTP request (no encoding — colons in model IDs are fine)
     const rawPath = `/model/${this.model}/converse`;
     const url = `https://${host}${rawPath}`;
 
+    // Use Converse API system messages with cachePoint for prompt caching.
+    // The static system instructions are identical across calls with the same
+    // category/template, so Bedrock can cache and reuse them — reducing latency
+    // and cost (cached input tokens are 90% cheaper).
     const body = JSON.stringify({
+      system: [
+        { text: system },
+        { cachePoint: { type: "default" } },
+      ],
       messages: [
-        { role: "user", content: [{ text: prompt }] },
+        { role: "user", content: [{ text: user }] },
       ],
       inferenceConfig: {
         temperature: 0.3,
@@ -110,7 +118,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       },
     });
 
-    console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
+    console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis (prompt caching enabled)...`);
 
     const headers = this.signRequest("POST", host, rawPath, body, region);
     const response = await fetch(url, {
@@ -130,6 +138,17 @@ export class BedrockProvider implements AIAnalysisProvider {
     // Converse API response shape:
     // { output: { message: { role: "assistant", content: [{ text: "..." }] } } }
     const responseText = result.output?.message?.content?.[0]?.text || "";
+
+    // Log cache usage if available (Bedrock returns cache hit/miss metrics)
+    const usage = result.usage;
+    if (usage) {
+      const cacheInfo = usage.cacheReadInputTokens
+        ? `cache hit: ${usage.cacheReadInputTokens} tokens`
+        : usage.cacheWriteInputTokens
+          ? `cache write: ${usage.cacheWriteInputTokens} tokens`
+          : "no cache";
+      console.log(`[${callId}] Bedrock usage — input: ${usage.inputTokens || 0}, output: ${usage.outputTokens || 0}, ${cacheInfo}`);
+    }
 
     const analysis = parseJsonResponse(responseText, callId);
     console.log(`[${callId}] Bedrock analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);

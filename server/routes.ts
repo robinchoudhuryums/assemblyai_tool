@@ -17,6 +17,29 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import csv from "csv-parser";
 
+/**
+ * In-memory cache for prompt templates to avoid S3 round-trips on every call.
+ * TTL: 5 minutes — templates change rarely, but changes propagate quickly enough.
+ */
+const promptTemplateCache = new Map<string, { data: any; expiry: number }>();
+const TEMPLATE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getCachedPromptTemplate(callCategory: string): Promise<any | undefined> {
+  const cached = promptTemplateCache.get(callCategory);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.data;
+  }
+  const tmpl = await storage.getPromptTemplateByCategory(callCategory);
+  const templateConfig = tmpl ? {
+    evaluationCriteria: tmpl.evaluationCriteria,
+    requiredPhrases: tmpl.requiredPhrases,
+    scoringWeights: tmpl.scoringWeights,
+    additionalInstructions: tmpl.additionalInstructions,
+  } : undefined;
+  promptTemplateCache.set(callCategory, { data: templateConfig, expiry: Date.now() + TEMPLATE_CACHE_TTL_MS });
+  return templateConfig;
+}
+
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
 function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {
   if (!value) return defaultVal;
@@ -38,8 +61,11 @@ function safeFloat(value: string | undefined | null, fallback = 0): number {
   return Number.isNaN(n) ? fallback : n;
 }
 
-/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
-function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
+/**
+ * Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output).
+ * Accounts for prompt caching: cached input tokens are 90% cheaper than regular input tokens.
+ */
+function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number, cacheReadTokens = 0): number {
   // Approximate pricing per 1K tokens (input, output) — updated as of 2026
   const pricing: Record<string, [number, number]> = {
     "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
@@ -49,7 +75,12 @@ function estimateBedrockCost(model: string, inputTokens: number, outputTokens: n
     "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
   };
   const [inputRate, outputRate] = pricing[model] || [0.003, 0.015]; // default to Sonnet pricing
-  return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
+  // Cached input tokens are charged at 10% of the regular input rate
+  const cachedInputRate = inputRate * 0.1;
+  const uncachedInputTokens = Math.max(0, inputTokens - cacheReadTokens);
+  return (uncachedInputTokens / 1000) * inputRate
+    + (cacheReadTokens / 1000) * cachedInputRate
+    + (outputTokens / 1000) * outputRate;
 }
 
 /** Estimate AssemblyAI cost: ~$0.00615/second ($0.37/min or $22.20/hr) */
@@ -204,6 +235,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...parsed.data,
         updatedBy: req.user?.username,
       });
+      // Invalidate prompt template cache so new template is picked up immediately
+      promptTemplateCache.clear();
       res.status(201).json(template);
     } catch (error) {
       res.status(500).json({ message: "Failed to create prompt template" });
@@ -227,6 +260,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(404).json({ message: "Template not found" });
         return;
       }
+      // Invalidate prompt template cache so updates take effect immediately
+      promptTemplateCache.clear();
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update prompt template" });
@@ -236,6 +271,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/prompt-templates/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePromptTemplate(req.params.id);
+      // Invalidate prompt template cache
+      promptTemplateCache.clear();
       res.json({ message: "Template deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete template" });
@@ -604,19 +641,13 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     broadcastCallUpdate(callId, "analyzing", { step: 4, totalSteps: 6, label: "Running AI analysis..." });
     let aiAnalysis = null;
 
-    // Load custom prompt template for this call category (if configured)
+    // Load custom prompt template for this call category (cached to avoid S3 round-trips)
     let promptTemplate = undefined;
     if (callCategory) {
       try {
-        const tmpl = await storage.getPromptTemplateByCategory(callCategory);
-        if (tmpl) {
-          promptTemplate = {
-            evaluationCriteria: tmpl.evaluationCriteria,
-            requiredPhrases: tmpl.requiredPhrases,
-            scoringWeights: tmpl.scoringWeights,
-            additionalInstructions: tmpl.additionalInstructions,
-          };
-          console.log(`[${callId}] Using custom prompt template: ${tmpl.name}`);
+        promptTemplate = await getCachedPromptTemplate(callCategory);
+        if (promptTemplate) {
+          console.log(`[${callId}] Using prompt template for category: ${callCategory}`);
         }
       } catch (tmplError) {
         console.warn(`[${callId}] Failed to load prompt template (using defaults):`, (tmplError as Error).message);
@@ -1817,19 +1848,11 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       await storage.updateABTest(testId, { transcriptText, status: "analyzing" });
       console.log(`[AB-${testId}] Transcription complete (${transcriptText.length} chars)`);
 
-      // Load prompt template if applicable
+      // Load prompt template if applicable (cached to avoid S3 round-trips)
       let promptTemplate = undefined;
       if (callCategory) {
         try {
-          const tmpl = await storage.getPromptTemplateByCategory(callCategory);
-          if (tmpl) {
-            promptTemplate = {
-              evaluationCriteria: tmpl.evaluationCriteria,
-              requiredPhrases: tmpl.requiredPhrases,
-              scoringWeights: tmpl.scoringWeights,
-              additionalInstructions: tmpl.additionalInstructions,
-            };
-          }
+          promptTemplate = await getCachedPromptTemplate(callCategory);
         } catch (e) {
           console.warn(`[AB-${testId}] Failed to load prompt template:`, (e as Error).message);
         }

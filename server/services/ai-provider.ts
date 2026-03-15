@@ -122,7 +122,13 @@ function smartTruncate(text: string, maxChars = 80000): string {
   ].join("");
 }
 
-export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig): string {
+/**
+ * Build the analysis prompt split into system (cacheable) and user (per-call) parts.
+ * The system prompt contains static instructions, JSON schema, and guidelines that
+ * are identical across calls with the same category/template — enabling Bedrock
+ * prompt caching for significant cost and latency savings.
+ */
+export function buildAnalysisPromptParts(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig): { system: string; user: string } {
   const processedTranscript = smartTruncate(transcriptText);
 
   const categoryContext = callCategory && CATEGORY_CONTEXT[callCategory]
@@ -167,11 +173,9 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
     additionalSection = `\n- ADDITIONAL INSTRUCTIONS:\n${template.additionalInstructions}`;
   }
 
-  return `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.
+  // System prompt: static instructions cacheable across calls with same category/template
+  const system = `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.
 ${categoryContext}
-TRANSCRIPT:
-${processedTranscript}
-
 Respond with ONLY valid JSON (no markdown, no code fences):
 {"summary":"...","topics":["..."],"sentiment":"positive|neutral|negative","sentiment_score":0.0,"performance_score":0.0,"sub_scores":{"compliance":0.0,"customer_experience":0.0,"communication":0.0,"resolution":0.0},"action_items":["..."],"feedback":{"strengths":[{"text":"...","timestamp":"MM:SS"}],"suggestions":[{"text":"...","timestamp":"MM:SS"}]},"call_party_type":"customer|insurance|medical_facility|medicare|vendor|internal|other","flags":[],"detected_agent_name":null}
 
@@ -186,6 +190,17 @@ ${evaluationCriteria}${scoringSection}${phrasesSection}${additionalSection}
 - call_party_type: "customer" (patients), "insurance" (reps), "medical_facility" (clinics/hospitals), "medicare" (1-800-MEDICARE), "vendor", "internal" (coworkers), "other"
 - detected_agent_name: Agent's name if clearly stated (e.g. "Hi, my name is Sarah"). Return null if uncertain. Only the agent's name, not the customer's.
 - flags: "medicare_call" if Medicare involved, "low_score" if performance ≤2.0, "exceptional_call" if ≥9.0 with outstanding service, "agent_misconduct:<description>" for serious misconduct (abusive language, hanging up, HIPAA violations, etc.)`;
+
+  // User message: the per-call transcript (changes every request)
+  const user = `TRANSCRIPT:\n${processedTranscript}`;
+
+  return { system, user };
+}
+
+/** Legacy single-string prompt builder — delegates to buildAnalysisPromptParts. */
+export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig): string {
+  const parts = buildAnalysisPromptParts(transcriptText, callCategory, template);
+  return `${parts.system}\n\n${parts.user}`;
 }
 
 /**
