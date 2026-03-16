@@ -207,29 +207,35 @@ export default function SentimentPage() {
               {employeeSentiment.map((emp) => (
                 <div key={emp.name} className="flex items-center gap-3">
                   <span className="text-sm font-medium w-32 truncate">{emp.name}</span>
-                  <div className="flex-1 flex h-5 rounded-full overflow-hidden bg-muted">
+                  <div className="flex-1 flex h-5 rounded-full overflow-hidden bg-muted" role="meter" aria-label={`${emp.name}: ${emp.positive} positive, ${emp.neutral} neutral, ${emp.negative} negative`}>
                     {emp.positive > 0 && (
                       <div
                         className="bg-green-500 h-full flex items-center justify-center"
                         style={{ width: `${(emp.positive / emp.total) * 100}%` }}
+                        title={`Positive: ${emp.positive}`}
                       >
-                        {emp.positive > 1 && <span className="text-[9px] text-white font-bold">{emp.positive}</span>}
+                        <span className="text-[9px] text-white font-bold">{emp.positive > 1 ? emp.positive : ""}</span>
+                        <span className="sr-only">{emp.positive} positive</span>
                       </div>
                     )}
                     {emp.neutral > 0 && (
                       <div
                         className="bg-slate-400 h-full flex items-center justify-center"
                         style={{ width: `${(emp.neutral / emp.total) * 100}%` }}
+                        title={`Neutral: ${emp.neutral}`}
                       >
-                        {emp.neutral > 1 && <span className="text-[9px] text-white font-bold">{emp.neutral}</span>}
+                        <span className="text-[9px] text-white font-bold">{emp.neutral > 1 ? emp.neutral : ""}</span>
+                        <span className="sr-only">{emp.neutral} neutral</span>
                       </div>
                     )}
                     {emp.negative > 0 && (
                       <div
                         className="bg-red-500 h-full flex items-center justify-center"
                         style={{ width: `${(emp.negative / emp.total) * 100}%` }}
+                        title={`Negative: ${emp.negative}`}
                       >
-                        {emp.negative > 1 && <span className="text-[9px] text-white font-bold">{emp.negative}</span>}
+                        <span className="text-[9px] text-white font-bold">{emp.negative > 1 ? emp.negative : ""}</span>
+                        <span className="sr-only">{emp.negative} negative</span>
                       </div>
                     )}
                   </div>

@@ -15,15 +15,7 @@ import {
   FlaskConical, Upload, Trash2, Clock, TrendingUp, TrendingDown, Minus, AlertCircle, CheckCircle2, Loader2, FileAudio,
 } from "lucide-react";
 import { BEDROCK_MODEL_PRESETS, CALL_CATEGORIES, type ABTest } from "@shared/schema";
-
-/** Safely display a value that may be string or object from AI. */
-function toDisplayString(val: unknown): string {
-  if (typeof val === "string") return val;
-  if (val && typeof val === "object") {
-    return (val as any).text || (val as any).name || (val as any).description || JSON.stringify(val);
-  }
-  return String(val ?? "");
-}
+import { toDisplayString } from "@/lib/display-utils";
 
 function ScoreComparison({ label, baseline, test }: { label: string; baseline?: number; test?: number }) {
   const diff = (test ?? 0) - (baseline ?? 0);

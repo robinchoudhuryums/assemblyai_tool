@@ -324,7 +324,7 @@ export default function CallsTable() {
           <thead>
             <tr className="border-b border-border">
               <th className="py-3 px-2 w-8">
-                <button onClick={toggleAll} className="text-muted-foreground hover:text-foreground">
+                <button onClick={toggleAll} className="text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded" aria-label={allOnPageSelected ? "Deselect all calls" : "Select all calls"}>
                   {allOnPageSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                 </button>
               </th>
@@ -358,7 +358,7 @@ export default function CallsTable() {
             {pagedCalls.map((call) => (
               <tr key={call.id} className={`border-b border-border hover:bg-muted transition-colors ${selectedIds.has(call.id) ? "bg-primary/5" : ""}`}>
                 <td className="py-3 px-2">
-                  <button onClick={() => toggleOne(call.id)} className="text-muted-foreground hover:text-foreground">
+                  <button onClick={() => toggleOne(call.id)} className="text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded" aria-label={selectedIds.has(call.id) ? `Deselect call ${call.fileName || call.id}` : `Select call ${call.fileName || call.id}`}>
                     {selectedIds.has(call.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
                   </button>
                 </td>
