@@ -85,7 +85,7 @@ The entire pipeline runs asynchronously. The upload API returns immediately with
 
 ### AI Services
 - **AssemblyAI** — audio transcription with word-level timing, speaker detection, and confidence scores
-- **AWS Bedrock** — Claude Sonnet for call analysis. Uses the Converse API with raw `fetch` + AWS SigV4 signing (no AWS SDK)
+- **AWS Bedrock** — Claude Sonnet for call analysis. Uses the Converse API with raw `fetch` + AWS SigV4 signing (no AWS SDK). Prompt caching enabled via `cachePoint` for cost optimization.
 
 ### Infrastructure
 - **AWS S3** — all persistent data (no database). JSON files for structured data, binary files for audio
@@ -179,11 +179,11 @@ If the call has a category (inbound, outbound, internal, vendor), the server loa
 - Additional instructions
 
 ### Step 4: AI Analysis
-The transcript is sent to AWS Bedrock (Claude Sonnet) with a detailed prompt. The prompt includes:
-- The full transcript (or a smart-truncated version for very long calls)
-- Call category context
-- Evaluation criteria (custom or default)
-- Required output format (strict JSON schema)
+The transcript is sent to AWS Bedrock (Claude Sonnet) via the Converse API with prompt caching enabled. The prompt is split into:
+- **System message** (cached): Static instructions, JSON schema, evaluation criteria, scoring guidelines — identical across calls with the same category/template. A `cachePoint` marker tells Bedrock to cache this portion, reducing cost by 90% on cached input tokens.
+- **User message** (per-call): The full transcript (or a smart-truncated version for very long calls)
+
+Prompt templates for each call category are cached in-memory (5-minute TTL) to avoid S3 round-trips on every call.
 
 Claude returns a JSON object with: summary, topics, sentiment, performance scores, sub-scores, action items, feedback (strengths and suggestions with timestamps), flags, detected agent name, and call party type.
 
@@ -269,7 +269,7 @@ Admin-only feature to monitor estimated API costs. Every call analysis and A/B t
 
 ### Cost Estimation
 - **AssemblyAI**: ~$0.37/minute of audio ($0.00615/second)
-- **AWS Bedrock**: Per-model token pricing (input + output tokens). Sonnet ~$3/M input, $15/M output; Haiku ~$1/M input, $5/M output
+- **AWS Bedrock**: Per-model token pricing (input + output tokens). Sonnet ~$3/M input, $15/M output; Haiku ~$1/M input, $5/M output. Cached input tokens (via prompt caching) are charged at 10% of the regular input rate.
 
 ### Dashboard Views
 - **Current Month**: Spend so far this month

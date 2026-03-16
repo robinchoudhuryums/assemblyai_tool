@@ -72,8 +72,10 @@ tests/                   # Unit tests (Node test runner)
 
 ### AI Analysis Data Flow
 - Bedrock returns JSON with: summary, topics[], sentiment, performance_score, sub_scores, action_items[], feedback{strengths[], suggestions[]}, flags[], detected_agent_name
-- `ai-provider.ts` builds the prompt (with custom template support) and parses JSON response
+- `ai-provider.ts` builds the prompt via `buildAnalysisPromptParts()` (split into cacheable system + per-call user parts) and parses JSON response
 - `assemblyai.ts:processTranscriptData()` normalizes AI output into storage format
+- **Prompt caching**: The Bedrock Converse API `system` message with `cachePoint` caches the static instruction portion (~1500 chars) across calls with the same category/template. Cached input tokens are 90% cheaper. Cache metrics are logged per call.
+- **Prompt template caching**: Templates are cached in-memory with 5-minute TTL to avoid S3 round-trips. Cache is invalidated on template create/update/delete.
 - **Important**: AI may return objects instead of strings in arrays — server normalizes with `normalizeStringArray()`, frontend has `toDisplayString()` safety
 
 ### Storage Backend Selection (server/storage.ts)
@@ -224,6 +226,8 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
+- **Bedrock prompt caching**: Analysis prompt is split into system (static instructions, cacheable via `cachePoint`) and user (transcript) parts. The `buildAnalysisPromptParts()` function in `ai-provider.ts` returns `{ system, user }`, and `bedrock.ts` sends them as separate Converse API fields. Cached tokens are 90% cheaper.
+- **Prompt template caching**: In-memory TTL cache (5 min) in `routes.ts` via `getCachedPromptTemplate()`. Invalidated on template create/update/delete. Avoids S3 reads on every call analysis.
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
@@ -314,3 +318,6 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
 - `.env.example` may be outdated (e.g., shows haiku model but code defaults to sonnet) — always check `server/services/bedrock.ts` for the actual default
+- `buildAnalysisPrompt()` is a legacy wrapper that delegates to `buildAnalysisPromptParts()` — new code should use the parts version directly for caching benefits
+- Prompt template cache (`promptTemplateCache` in routes.ts) has a 5-min TTL — if testing template changes, templates propagate within 5 minutes (or immediately on create/update/delete via cache invalidation)
+- Cost estimation (`estimateBedrockCost`) accepts an optional `cacheReadTokens` param — cached tokens are charged at 10% of the regular input rate
