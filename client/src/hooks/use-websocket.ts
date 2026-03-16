@@ -1,15 +1,18 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { z } from "zod";
 
-interface CallUpdate {
-  type: "call_update";
-  callId: string;
-  status: string;
-  step?: number;
-  totalSteps?: number;
-  label?: string;
-}
+const callUpdateSchema = z.object({
+  type: z.literal("call_update"),
+  callId: z.string(),
+  status: z.string(),
+  step: z.number().optional(),
+  totalSteps: z.number().optional(),
+  label: z.string().optional(),
+});
+
+type CallUpdate = z.infer<typeof callUpdateSchema>;
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -27,7 +30,10 @@ export function useWebSocket() {
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as CallUpdate;
+          const raw = JSON.parse(event.data);
+          const parsed = callUpdateSchema.safeParse(raw);
+          if (!parsed.success) return; // Ignore malformed messages
+          const data = parsed.data;
           if (data.type === "call_update") {
             // Broadcast to other components (e.g., file-upload progress tracking)
             window.dispatchEvent(new CustomEvent("ws:call_update", { detail: data }));

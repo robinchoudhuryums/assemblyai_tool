@@ -12,7 +12,7 @@ import { buildAgentSummaryPrompt, buildAnalysisPrompt, parseJsonResponse } from 
 import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
-import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, type UsageRecord } from "@shared/schema";
+import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import csv from "csv-parser";
@@ -37,6 +37,35 @@ function safeFloat(value: string | undefined | null, fallback = 0): number {
   const n = parseFloat(value);
   return Number.isNaN(n) ? fallback : n;
 }
+
+/** Safe JSON.parse that returns fallback on failure. */
+function safeJsonParse<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string") return (value as T) ?? fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+/** Concurrency-limited task queue for expensive async operations. */
+class TaskQueue {
+  private running = 0;
+  private queue: Array<() => void> = [];
+  constructor(private concurrency: number) {}
+  add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        this.running++;
+        fn().then(resolve, reject).finally(() => {
+          this.running--;
+          if (this.queue.length > 0) this.queue.shift()!();
+        });
+      };
+      if (this.running < this.concurrency) run();
+      else this.queue.push(run);
+    });
+  }
+}
+
+// Limit concurrent audio processing to 3 parallel jobs
+const audioProcessingQueue = new TaskQueue(3);
 
 /** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
 function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
@@ -67,7 +96,7 @@ if (!fs.existsSync(uploadsDir)) {
 const upload = multer({
   dest: uploadsDir,
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit (reasonable for audio files)
+    fileSize: 25 * 1024 * 1024, // 25MB limit (sufficient for typical call recordings)
   },
   fileFilter: (req, file, cb) => {
     // Validate both file extension and MIME type
@@ -373,28 +402,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
+      const MAX_CSV_ROWS = 500;
       const results: Array<{ name: string; action: string }> = [];
       const rows: any[] = [];
 
       await new Promise<void>((resolve, reject) => {
         fs.createReadStream(csvFilePath)
           .pipe(csv())
-          .on("data", (row: any) => rows.push(row))
+          .on("data", (row: any) => {
+            if (rows.length < MAX_CSV_ROWS) rows.push(row);
+          })
           .on("end", resolve)
           .on("error", reject);
       });
 
+      if (rows.length === 0) {
+        res.status(400).json({ message: "CSV file is empty or has no valid rows" });
+        return;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
       for (const row of rows) {
         const name = (row["Agent Name"] || "").trim();
         const department = (row["Department"] || "").trim();
-        const extension = (row["Extension"] || "").trim();
+        const extension = (row["Extension"] || "").trim().replace(/[^\w.-]/g, "");
         const status = (row["Status"] || "Active").trim();
 
-        if (!name) continue;
+        if (!name || name.length > 100) continue;
 
         const email = extension && extension !== "NA" && extension !== "N/A" && extension !== "a"
           ? `${extension}@company.com`
           : `${name.toLowerCase().replace(/\s+/g, ".")}@company.com`;
+
+        if (!emailRegex.test(email)) {
+          results.push({ name, action: "skipped (invalid email)" });
+          continue;
+        }
 
         const nameParts = name.split(/\s+/);
         const initials = nameParts.length >= 2
@@ -505,7 +549,9 @@ app.get("/api/calls", requireAuth, async (req, res) => {
         return;
       }
 
-      const { employeeId, callCategory } = req.body;
+      const { employeeId } = req.body;
+      const validCategories = CALL_CATEGORIES.map(c => c.value) as string[];
+      const callCategory = validCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
 
       // If employeeId provided, verify employee exists
       if (employeeId) {
@@ -527,11 +573,11 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       });
 
       // Read file buffer for API upload, then start async processing
-      const audioBuffer = fs.readFileSync(req.file.path);
+      const audioBuffer = await fs.promises.readFile(req.file.path);
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
       const uploadUser = (req.user as any)?.username || "unknown";
-      processAudioFile(call.id, req.file.path, audioBuffer, originalName, mimeType, callCategory, uploadUser)
+      audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser))
         .catch(async (error) => {
           console.error(`Failed to process call ${call.id}:`, error);
           try {
@@ -875,6 +921,15 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   // Get sentiment analysis for a call
   app.get("/api/calls/:id/sentiment", requireAuth, async (req, res) => {
     try {
+      // HIPAA: Log PHI access (sentiment analysis may contain PHI)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "view_sentiment",
+        resourceType: "sentiment",
+        resourceId: req.params.id,
+      });
+
       const sentiment = await storage.getSentimentAnalysis(req.params.id);
       if (!sentiment) {
         res.status(404).json({ message: "Sentiment analysis not found" });
@@ -889,6 +944,15 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
   // Get analysis for a call
   app.get("/api/calls/:id/analysis", requireAuth, async (req, res) => {
     try {
+      // HIPAA: Log PHI access (call analysis may contain PHI)
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "view_analysis",
+        resourceType: "analysis",
+        resourceId: req.params.id,
+      });
+
       const analysis = await storage.getCallAnalysis(req.params.id);
       if (!analysis) {
         res.status(404).json({ message: "Call analysis not found" });
@@ -1250,9 +1314,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
             scores.push(safeFloat(call.analysis.performanceScore));
           }
           if (call.analysis.feedback) {
-            const fb = typeof call.analysis.feedback === "string"
-              ? JSON.parse(call.analysis.feedback)
-              : call.analysis.feedback;
+            const fb = safeJsonParse<{ strengths: Array<string | { text: string }>; suggestions: Array<string | { text: string }> }>(call.analysis.feedback, { strengths: [], suggestions: [] });
             if (fb.strengths) {
               for (const s of fb.strengths) {
                 allStrengths.push(typeof s === "string" ? s : s.text);
@@ -1265,9 +1327,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
             }
           }
           if (call.analysis.topics) {
-            const topics = typeof call.analysis.topics === "string"
-              ? JSON.parse(call.analysis.topics)
-              : call.analysis.topics;
+            const topics = safeJsonParse(call.analysis.topics, []);
             if (Array.isArray(topics)) allTopics.push(...topics);
           }
 
@@ -1397,8 +1457,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           scores.push(safeFloat(call.analysis.performanceScore));
         }
         if (call.analysis?.feedback) {
-          const fb = typeof call.analysis.feedback === "string"
-            ? JSON.parse(call.analysis.feedback) : call.analysis.feedback;
+          const fb = safeJsonParse<{ strengths: Array<string | { text: string }>; suggestions: Array<string | { text: string }> }>(call.analysis.feedback, { strengths: [], suggestions: [] });
           if (fb.strengths) {
             for (const s of fb.strengths) {
               allStrengths.push(typeof s === "string" ? s : s.text);
@@ -1411,8 +1470,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           }
         }
         if (call.analysis?.topics) {
-          const topics = typeof call.analysis.topics === "string"
-            ? JSON.parse(call.analysis.topics) : call.analysis.topics;
+          const topics = safeJsonParse(call.analysis.topics, []);
           if (Array.isArray(topics)) allTopics.push(...topics);
         }
         if (call.sentiment?.overallSentiment) {
@@ -1738,12 +1796,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         return;
       }
 
-      const { testModel, callCategory } = req.body;
-      if (!testModel) {
+      const { testModel } = req.body;
+      const validModels = BEDROCK_MODEL_PRESETS.map(m => m.value) as string[];
+      if (!testModel || !validModels.includes(testModel)) {
         await cleanupFile(req.file.path);
-        res.status(400).json({ message: "Test model ID is required" });
+        res.status(400).json({ message: `Invalid model. Must be one of: ${validModels.join(", ")}` });
         return;
       }
+      const abValidCategories = CALL_CATEGORIES.map(c => c.value) as string[];
+      const callCategory = abValidCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
 
       const user = req.user as any;
       const baselineModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
@@ -1759,10 +1820,10 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       });
 
       // Read file and kick off async processing
-      const audioBuffer = fs.readFileSync(req.file.path);
+      const audioBuffer = await fs.promises.readFile(req.file.path);
       const filePath = req.file.path;
 
-      processABTest(abTest.id, filePath, audioBuffer, callCategory)
+      audioProcessingQueue.add(() => processABTest(abTest.id, filePath, audioBuffer, callCategory))
         .catch(async (error) => {
           console.error(`[AB-${abTest.id}] Processing failed:`, (error as Error).message);
           try {

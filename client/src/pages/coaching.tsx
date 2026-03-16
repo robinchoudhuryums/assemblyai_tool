@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ClipboardCheck, Plus, User, Calendar, CheckCircle2, Clock, X, Eye, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -68,12 +68,12 @@ export default function CoachingPage() {
     },
   });
 
-  const filtered = (sessions || []).filter(s => {
+  const filtered = useMemo(() => (sessions || []).filter(s => {
     if (statusFilter === "active" && (s.status === "completed" || s.status === "dismissed")) return false;
     if (statusFilter === "completed" && s.status !== "completed") return false;
     if (employeeFilter !== "all" && s.employeeId !== employeeFilter) return false;
     return true;
-  });
+  }), [sessions, statusFilter, employeeFilter]);
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",

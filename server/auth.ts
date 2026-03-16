@@ -122,10 +122,15 @@ export async function setupAuth(app: Express) {
   await loadUsersFromEnv();
 
   // HIPAA: Session configuration with proper memory store and idle timeout
-  const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
-  if (!process.env.SESSION_SECRET) {
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (!sessionSecret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("FATAL: SESSION_SECRET must be set in production");
+      process.exit(1);
+    }
     console.warn("SESSION_SECRET not set - using random secret (sessions will not persist across restarts)");
   }
+  const effectiveSessionSecret = sessionSecret || randomBytes(32).toString("hex");
 
   // Use MemoryStore to prevent memory leaks and support session expiry
   const MemoryStore = createMemoryStore(session);
@@ -135,7 +140,7 @@ export async function setupAuth(app: Express) {
   const SESSION_ABSOLUTE_MAX_MS = 8 * 60 * 60 * 1000; // 8 hours absolute max
 
   sessionMiddleware = session({
-    secret: sessionSecret,
+    secret: effectiveSessionSecret,
     resave: false,
     saveUninitialized: false,
     store: new MemoryStore({

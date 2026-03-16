@@ -94,6 +94,24 @@ app.use((req, res, next) => {
   next();
 });
 
+// CSRF protection: Require a custom header on state-changing requests.
+// Browsers will not send custom headers on cross-origin requests without CORS preflight,
+// so the presence of this header proves the request is same-origin.
+app.use((req, res, next) => {
+  if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method) && req.path.startsWith("/api")) {
+    // Exempt file uploads (Content-Type is multipart) and login/access-requests (unauthenticated)
+    const exempt = ["/api/auth/login", "/api/auth/logout", "/api/access-requests"];
+    const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
+    if (!exempt.includes(req.path) && !isMultipart) {
+      const hasJsonContent = (req.headers["content-type"] || "").includes("application/json");
+      if (!hasJsonContent) {
+        return res.status(403).json({ message: "CSRF check failed: Content-Type must be application/json" });
+      }
+    }
+  }
+  next();
+});
+
 // Health check endpoint (no auth required — used for uptime monitoring)
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -101,6 +119,14 @@ app.get("/api/health", (_req, res) => {
 
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)
 app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
+
+// Rate limiting on expensive endpoints (prevent abuse)
+const expensiveRateLimit = rateLimit(60 * 1000, 10); // 10 per minute
+app.post("/api/calls/upload", expensiveRateLimit);
+app.post("/api/ab-tests/upload", expensiveRateLimit);
+app.get("/api/search", rateLimit(60 * 1000, 20)); // 20 searches per minute
+app.post("/api/reports/agent-summary/:employeeId", rateLimit(60 * 1000, 5)); // 5 AI summaries per minute
+app.post("/api/access-requests", rateLimit(15 * 60 * 1000, 3)); // 3 access requests per 15 min
 
 (async () => {
   // Authentication (must come before routes) - async to hash env var passwords on startup

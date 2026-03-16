@@ -71,8 +71,12 @@ function getDateRange(preset: DatePreset, customFrom: string, customTo: string):
       const y = now.getFullYear() - 1;
       return { from: `${y}-01-01`, to: `${y}-12-31` };
     }
-    case "custom":
-      return { from: customFrom || to, to: customTo || to };
+    case "custom": {
+      const f = customFrom || to;
+      const t = customTo || to;
+      // Ensure from <= to
+      return f > t ? { from: t, to: f } : { from: f, to: t };
+    }
   }
 }
 

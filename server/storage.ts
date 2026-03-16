@@ -86,8 +86,8 @@ export interface IStorage {
   getSentimentDistribution(): Promise<SentimentDistribution>;
   getTopPerformers(limit?: number): Promise<PerformerSummary[]>;
 
-  // Search and filtering
-  searchCalls(query: string): Promise<CallWithDetails[]>;
+  // Search and filtering (limit controls max results returned)
+  searchCalls(query: string, limit?: number): Promise<CallWithDetails[]>;
 
   // Audio file operations
   uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
@@ -320,10 +320,17 @@ export class MemStorage implements IStorage {
       .slice(0, limit);
   }
 
-  async searchCalls(query: string): Promise<CallWithDetails[]> {
+  async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
     const allCalls = await this.getCallsWithDetails();
     const lowerQuery = query.toLowerCase();
-    return allCalls.filter((call) => call.transcript?.text?.toLowerCase().includes(lowerQuery));
+    const results: CallWithDetails[] = [];
+    for (const call of allCalls) {
+      if (call.transcript?.text?.toLowerCase().includes(lowerQuery)) {
+        results.push(call);
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
   }
 
   // Access request operations
@@ -555,40 +562,42 @@ export class CloudStorage implements IStorage {
   ): Promise<CallWithDetails[]> {
     console.log("Fetching calls with details, filters:", filters);
 
-    const calls = await this.getAllCalls();
-    const results: CallWithDetails[] = [];
+    // Batch load all data in parallel to avoid N+1 queries
+    const [calls, allEmployees, allTranscripts, allSentiments, allAnalyses] = await Promise.all([
+      this.getAllCalls(),
+      this.client.listAndDownloadJson<Employee>("employees/"),
+      this.client.listAndDownloadJson<Transcript>("transcripts/"),
+      this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
+      this.client.listAndDownloadJson<CallAnalysis>("analyses/"),
+    ]);
 
-    // Fetch details for all calls in parallel
-    await Promise.all(
-      calls.map(async (call) => {
-        const [employee, transcript, sentiment, analysis] = await Promise.all([
-          call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
-          this.getTranscript(call.id),
-          this.getSentimentAnalysis(call.id),
-          this.getCallAnalysis(call.id),
-        ]);
+    // Build lookup maps for O(1) access
+    const employeeMap = new Map(allEmployees.map(e => [e.id, e]));
+    const transcriptMap = new Map(allTranscripts.map(t => [t.callId, t]));
+    const sentimentMap = new Map(allSentiments.map(s => [s.callId, s]));
+    const analysisMap = new Map(allAnalyses.map(a => [a.callId, a]));
 
-        // Normalize analysis for backward-compat with older stored data
-        const normalizedAnalysis = analysis ? {
-          ...analysis,
-          topics: Array.isArray(analysis.topics) ? analysis.topics : [],
-          actionItems: Array.isArray(analysis.actionItems) ? analysis.actionItems : [],
-          flags: Array.isArray(analysis.flags) ? analysis.flags : [],
-          feedback: (analysis.feedback && typeof analysis.feedback === "object" && !Array.isArray(analysis.feedback))
-            ? analysis.feedback
-            : { strengths: [], suggestions: [] },
-          summary: typeof analysis.summary === "string" ? analysis.summary : "",
-        } : undefined;
+    const results: CallWithDetails[] = calls.map(call => {
+      const analysis = analysisMap.get(call.id);
+      const normalizedAnalysis = analysis ? {
+        ...analysis,
+        topics: Array.isArray(analysis.topics) ? analysis.topics : [],
+        actionItems: Array.isArray(analysis.actionItems) ? analysis.actionItems : [],
+        flags: Array.isArray(analysis.flags) ? analysis.flags : [],
+        feedback: (analysis.feedback && typeof analysis.feedback === "object" && !Array.isArray(analysis.feedback))
+          ? analysis.feedback
+          : { strengths: [], suggestions: [] },
+        summary: typeof analysis.summary === "string" ? analysis.summary : "",
+      } : undefined;
 
-        results.push({
-          ...call,
-          employee,
-          transcript: transcript || undefined,
-          sentiment: sentiment || undefined,
-          analysis: normalizedAnalysis,
-        });
-      })
-    );
+      return {
+        ...call,
+        employee: call.employeeId ? employeeMap.get(call.employeeId) : undefined,
+        transcript: transcriptMap.get(call.id),
+        sentiment: sentimentMap.get(call.id),
+        analysis: normalizedAnalysis,
+      };
+    });
 
     // Sort by upload date descending
     results.sort(
@@ -771,13 +780,17 @@ export class CloudStorage implements IStorage {
     return performers;
   }
 
-  async searchCalls(query: string): Promise<CallWithDetails[]> {
+  async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
     const allCalls = await this.getCallsWithDetails();
     const lowerQuery = query.toLowerCase();
-
-    return allCalls.filter((call) =>
-      call.transcript?.text?.toLowerCase().includes(lowerQuery)
-    );
+    const results: CallWithDetails[] = [];
+    for (const call of allCalls) {
+      if (call.transcript?.text?.toLowerCase().includes(lowerQuery)) {
+        results.push(call);
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
   }
 
   // --- Access Request Methods ---
