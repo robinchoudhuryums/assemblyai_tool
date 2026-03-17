@@ -268,7 +268,7 @@ Admin-only feature for comparing Bedrock models to optimize cost vs. quality.
 Admin-only feature to monitor estimated API costs. Every call analysis and A/B test automatically records a usage entry with estimated costs.
 
 ### Cost Estimation
-- **AssemblyAI**: ~$0.37/minute of audio ($0.00615/second)
+- **AssemblyAI**: ~$0.17/hr of audio ($0.15/hr base + $0.02/hr sentiment = $0.0000472/sec)
 - **AWS Bedrock**: Per-model token pricing (input + output tokens). Sonnet ~$3/M input, $15/M output; Haiku ~$1/M input, $5/M output
 
 ### Dashboard Views
@@ -289,7 +289,13 @@ Each view shows: total estimated cost, calls processed, average cost per call, d
 
 ## Data Storage
 
-All persistent data is stored in AWS S3 (bucket: `ums-call-archive`). There is no traditional database. Each data type is stored as JSON files under a specific prefix:
+### Storage Backend Selection (Priority Order)
+1. **`DATABASE_URL` set** → **PostgresStorage** (recommended for production): Metadata in AWS RDS PostgreSQL, audio blobs in S3. Enables durable sessions, job queue with retry, HIPAA audit log table, and fast SQL queries.
+2. **`S3_BUCKET` or `STORAGE_BACKEND=s3` set** → **CloudStorage** (legacy): All data stored as JSON files in S3. Simpler but no relational queries or durable job queue.
+3. **Neither set** → **MemStorage** (dev only): In-memory storage, all data lost on restart.
+
+### S3 Data Layout
+When using CloudStorage (S3-only mode), each data type is stored as JSON files under a specific prefix:
 
 | S3 Prefix | Data Type | Example Key |
 |-----------|-----------|-------------|
@@ -305,9 +311,7 @@ All persistent data is stored in AWS S3 (bucket: `ums-call-archive`). There is n
 | `ab-tests/` | A/B model comparison results | `ab-tests/{uuid}.json` |
 | `usage/` | API cost tracking records | `usage/{uuid}.json` |
 
-### Storage Backend Selection
-- If `S3_BUCKET` or `STORAGE_BACKEND=s3` is set → uses S3
-- Otherwise → uses in-memory storage (data lost on restart, for local development only)
+When using PostgresStorage, structured metadata lives in RDS tables while audio blobs remain in S3 under the `audio/` prefix.
 
 ### S3 Security
 - Server-side encryption with AWS KMS (SSE-KMS with bucket keys)
@@ -569,15 +573,8 @@ npm run test         # Run unit tests (Node.js test runner via tsx)
 
 ## Deployment
 
-### Render.com (Primary)
-Deployment is configured via the Render dashboard (no `render.yaml` in repo):
-- **Build**: `npm run build`
-- **Start**: `npm run start`
-- **Env vars**: Configured in Render dashboard
-- Auto-deploys from GitHub on push to main
-
-### EC2 (Secondary)
-The app runs on an Amazon Linux EC2 instance with pm2 and Caddy:
+### EC2 (Primary — Production)
+The production deployment runs on an Amazon Linux EC2 instance with pm2 and Caddy, backed by AWS RDS PostgreSQL and S3:
 
 **Quick deploy:**
 ```bash
@@ -603,6 +600,12 @@ pm2 logs --lines 20  # Verify startup
 Internet → Caddy (port 443, auto-TLS) → Node.js (port 5000) → S3, AssemblyAI, Bedrock
 ```
 Caddy handles TLS termination with Let's Encrypt certificates for `umscallanalyzer.com`.
+
+### Render.com (Testing Only)
+Render.com remains available for quick testing with non-PHI / synthetic data. Not used for production healthcare data.
+- **Build**: `npm run build`
+- **Start**: `npm run start`
+- **Env vars**: Configured in Render dashboard
 
 ---
 
