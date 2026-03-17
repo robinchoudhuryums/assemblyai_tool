@@ -34,6 +34,7 @@ function mapEmployee(row: any): Employee {
   return {
     id: row.id, name: row.name, role: row.role, email: row.email,
     initials: row.initials, status: row.status, subTeam: row.sub_team,
+    pseudonym: row.pseudonym, extension: row.extension,
     createdAt: row.created_at?.toISOString?.() ?? row.created_at,
   };
 }
@@ -159,9 +160,9 @@ export class PostgresStorage implements IStorage {
   async createEmployee(employee: InsertEmployee): Promise<Employee> {
     const id = randomUUID();
     const { rows } = await this.db.query(
-      `INSERT INTO employees (id, name, role, email, initials, status, sub_team)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [id, employee.name, employee.role, employee.email, employee.initials, employee.status ?? "Active", employee.subTeam],
+      `INSERT INTO employees (id, name, role, email, initials, status, sub_team, pseudonym, extension)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [id, employee.name, employee.role, employee.email, employee.initials, employee.status ?? "Active", employee.subTeam, employee.pseudonym, employee.extension],
     );
     return mapEmployee(rows[0]);
   }
@@ -171,9 +172,9 @@ export class PostgresStorage implements IStorage {
     if (!current) return undefined;
     const merged = { ...current, ...updates };
     const { rows } = await this.db.query(
-      `UPDATE employees SET name=$2, role=$3, email=$4, initials=$5, status=$6, sub_team=$7
+      `UPDATE employees SET name=$2, role=$3, email=$4, initials=$5, status=$6, sub_team=$7, pseudonym=$8, extension=$9
        WHERE id=$1 RETURNING *`,
-      [id, merged.name, merged.role, merged.email, merged.initials, merged.status, merged.subTeam],
+      [id, merged.name, merged.role, merged.email, merged.initials, merged.status, merged.subTeam, merged.pseudonym, merged.extension],
     );
     return rows[0] ? mapEmployee(rows[0]) : undefined;
   }

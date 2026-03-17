@@ -201,11 +201,11 @@ export default function InsightsPage() {
             </CardHeader>
             <CardContent>
               {insights.topTopics.length > 0 ? (
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={insights.topTopics.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
+                <ResponsiveContainer width="100%" height={Math.max(250, insights.topTopics.slice(0, 8).length * 36)}>
+                  <BarChart data={insights.topTopics.slice(0, 8)} layout="vertical" margin={{ left: 100, right: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                     <XAxis type="number" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                    <YAxis dataKey="topic" type="category" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={80} />
+                    <YAxis dataKey="topic" type="category" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={100} interval={0} />
                     <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 12 }} />
                     <Bar dataKey="count" name="Calls" radius={[0, 4, 4, 0]}>
                       {insights.topTopics.slice(0, 8).map((_, idx) => (

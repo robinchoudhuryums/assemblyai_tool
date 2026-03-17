@@ -477,6 +477,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const name = (row["Agent Name"] || "").trim();
         const department = (row["Department"] || "").trim();
         const extension = (row["Extension"] || "").trim().replace(/[^\w.-]/g, "");
+        const pseudonym = (row["Pseudonym"] || row["Display Name"] || "").trim();
         const status = (row["Status"] || "Active").trim();
 
         if (!name || name.length > 100) continue;
@@ -495,12 +496,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
           : name.slice(0, 2).toUpperCase();
 
+        const validExtension = extension && extension !== "NA" && extension !== "N/A" && extension !== "a"
+          ? extension : undefined;
+
         try {
           const existing = await storage.getEmployeeByEmail(email);
           if (existing) {
-            results.push({ name, action: "skipped (exists)" });
+            // Update pseudonym/extension if provided and not already set
+            if ((pseudonym || validExtension) && (!existing.pseudonym && !existing.extension)) {
+              await storage.updateEmployee(existing.id, {
+                pseudonym: pseudonym || existing.pseudonym,
+                extension: validExtension || existing.extension,
+              });
+              results.push({ name, action: "updated (pseudonym/extension)" });
+            } else {
+              results.push({ name, action: "skipped (exists)" });
+            }
           } else {
-            await storage.createEmployee({ name, email, role: department, initials, status });
+            await storage.createEmployee({
+              name, email, role: department, initials, status,
+              pseudonym: pseudonym || undefined,
+              extension: validExtension,
+            });
             results.push({ name, action: "created" });
           }
         } catch (err) {
@@ -705,10 +722,38 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       console.log(`[${callId}] Step 1b/7: Audio already archived, skipping.`);
     }
 
-    // Step 2: Start transcription
+    // Step 2: Start transcription (with agent name word boost for correct spelling)
     broadcastCallUpdate(callId, "transcribing", { step: 2, totalSteps: 6, label: "Transcribing audio..." });
     console.log(`[${callId}] Step 2/7: Submitting for transcription...`);
-    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
+
+    // Build word boost list from employee names (helps AssemblyAI spell names correctly)
+    let wordBoost: string[] | undefined;
+    try {
+      const allEmployees = await storage.getAllEmployees();
+      const nameWords = new Set<string>();
+      for (const emp of allEmployees) {
+        // Add each part of the name (first name, last name) and pseudonym parts
+        for (const part of emp.name.split(/\s+/)) {
+          if (part.length >= 3) nameWords.add(part);
+        }
+        if (emp.pseudonym) {
+          // Extract names from pseudonym like "Camila (Cheshta) Bhutani"
+          const cleaned = emp.pseudonym.replace(/[()]/g, " ");
+          for (const part of cleaned.split(/\s+/)) {
+            if (part.length >= 3) nameWords.add(part);
+          }
+        }
+      }
+      // Also add common company-specific terms
+      nameWords.add("UMS");
+      if (nameWords.size > 0) {
+        wordBoost = Array.from(nameWords).slice(0, 100); // AssemblyAI limit: 100 words
+      }
+    } catch (boostErr) {
+      console.warn(`[${callId}] Failed to build word boost list (non-blocking):`, (boostErr as Error).message);
+    }
+
+    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl, wordBoost);
     console.log(`[${callId}] Step 2/7: Transcription submitted. Transcript ID: ${transcriptId}`);
 
     await storage.updateCall(callId, { assemblyAiId: transcriptId });

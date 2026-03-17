@@ -71,18 +71,27 @@ export class AssemblyAIService {
     return (await response.json()).upload_url;
   }
 
-  async transcribeAudio(audioUrl: string): Promise<string> {
+  async transcribeAudio(audioUrl: string, wordBoost?: string[]): Promise<string> {
+    const body: Record<string, unknown> = {
+      audio_url: audioUrl,
+      speech_models: ["universal-3-pro", "universal-2"],
+      speaker_labels: true,
+      punctuate: true,
+      format_text: true,
+      sentiment_analysis: true,
+    };
+
+    // Word boost: provide correct spellings of agent names and company-specific terms
+    // This tells AssemblyAI to prefer these exact spellings when the audio is ambiguous
+    if (wordBoost && wordBoost.length > 0) {
+      body.word_boost = wordBoost;
+      body.boost_param = "high"; // "low", "default", or "high"
+    }
+
     const response = await fetch(`${this.config.baseUrl}/transcript`, {
       method: 'POST',
       headers: { 'Authorization': this.config.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audio_url: audioUrl,
-        speech_models: ["universal-3-pro", "universal-2"],
-        speaker_labels: true,
-        punctuate: true,
-        format_text: true,
-        sentiment_analysis: true,
-      })
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`Failed to start transcription: ${await response.text()}`);
     return (await response.json()).id;
