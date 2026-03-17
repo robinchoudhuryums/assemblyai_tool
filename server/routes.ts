@@ -1364,7 +1364,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           // Collect flagged calls
           const callFlags = Array.isArray(call.analysis.flags) ? call.analysis.flags as string[] : [];
           const isExceptional = callFlags.includes("exceptional_call");
-          const isBad = callFlags.includes("low_score") || callFlags.some((f: string) => f.startsWith("agent_misconduct"));
+          const isBad = callFlags.includes("low_score") || callFlags.some((f: unknown) => typeof f === "string" && f.startsWith("agent_misconduct"));
           if (isExceptional || isBad) {
             flaggedCalls.push({
               id: call.id,
