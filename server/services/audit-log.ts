@@ -26,6 +26,8 @@ export interface AuditEntry {
 
 const AUDIT_PREFIX = "[HIPAA_AUDIT]";
 
+const MAX_AUDIT_RETRIES = 3;
+
 export function logPhiAccess(entry: AuditEntry): void {
   const line = {
     ...entry,
@@ -35,18 +37,27 @@ export function logPhiAccess(entry: AuditEntry): void {
   // Always write to stdout (primary log sink)
   console.log(`${AUDIT_PREFIX} ${JSON.stringify(line)}`);
 
-  // Dual-write to PostgreSQL if available (fire-and-forget, non-blocking)
+  // Dual-write to PostgreSQL if available — retry up to 3 times for HIPAA durability
   const pool = getPool();
   if (pool) {
-    pool.query(
-      `INSERT INTO audit_log (timestamp, event, user_id, username, role, resource_type, resource_id, ip, user_agent, detail)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [line.timestamp, line.event, line.userId, line.username, line.role,
-       line.resourceType, line.resourceId, line.ip, line.userAgent, line.detail],
-    ).catch((err) => {
-      // Never let audit log writes break the application
-      console.error("[HIPAA_AUDIT] Failed to write to database:", err.message);
-    });
+    const params = [line.timestamp, line.event, line.userId, line.username, line.role,
+      line.resourceType, line.resourceId, line.ip, line.userAgent, line.detail];
+    const sql = `INSERT INTO audit_log (timestamp, event, user_id, username, role, resource_type, resource_id, ip, user_agent, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
+
+    const tryWrite = (attempt: number) => {
+      pool.query(sql, params).catch((err) => {
+        if (attempt < MAX_AUDIT_RETRIES) {
+          // Exponential backoff: 500ms, 1s, 2s
+          setTimeout(() => tryWrite(attempt + 1), 500 * Math.pow(2, attempt));
+        } else {
+          // HIPAA: Log failure loudly so ops can investigate — stdout entry is the fallback
+          console.error(`[HIPAA_AUDIT] CRITICAL: Failed to write audit entry to database after ${MAX_AUDIT_RETRIES} attempts:`, err.message);
+          console.error(`[HIPAA_AUDIT] Entry preserved in stdout log above — manual reconciliation required.`);
+        }
+      });
+    };
+    tryWrite(0);
   }
 }
 

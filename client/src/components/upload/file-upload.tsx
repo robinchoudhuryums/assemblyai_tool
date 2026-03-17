@@ -202,6 +202,44 @@ export default function FileUpload() {
               )}
             </div>
           </div>
+
+          {/* Batch controls: Apply employee/category to all pending files at once */}
+          {uploadFiles.filter(f => f.status === 'pending').length > 1 && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
+              <p className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">Apply to all pending files:</p>
+              <div className="flex items-center gap-3">
+                <Select onValueChange={(value) => {
+                  const cat = value;
+                  setUploadFiles(prev => prev.map(f =>
+                    f.status === 'pending' ? { ...f, callCategory: cat } : f
+                  ));
+                }}>
+                  <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder="Set all call types" /></SelectTrigger>
+                  <SelectContent>
+                    {CALL_CATEGORIES.map(cat => (
+                      <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select onValueChange={(value) => {
+                  const empId = value === "__unassigned__" ? "" : value;
+                  setUploadFiles(prev => prev.map(f =>
+                    f.status === 'pending' ? { ...f, employeeId: empId } : f
+                  ));
+                }}>
+                  <SelectTrigger className="w-48 h-8 text-xs"><SelectValue placeholder="Set all agents" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__unassigned__">
+                      <span className="text-muted-foreground italic">Unassigned (auto-detect)</span>
+                    </SelectItem>
+                    {employees?.map(employee => (
+                      <SelectItem key={employee.id} value={employee.id}>{employee.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
           {uploadFiles.map((fileData, index) => (
             <div key={index} className="p-4 bg-muted rounded-lg space-y-3">
               <div className="flex items-center space-x-3">

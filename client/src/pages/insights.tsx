@@ -21,7 +21,7 @@ interface InsightsData {
 }
 
 export default function InsightsPage() {
-  const { data: insights, isLoading } = useQuery<InsightsData>({
+  const { data: insights, isLoading, isError } = useQuery<InsightsData>({
     queryKey: ["/api/insights"],
   });
 
@@ -36,6 +36,19 @@ export default function InsightsPage() {
           {Array.from({ length: 4 }).map((_, i) => (
             <Card key={i}><CardContent className="pt-6"><Skeleton className="h-48 w-full" /></CardContent></Card>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen">
+        <header className="bg-card border-b border-border px-6 py-4">
+          <h2 className="text-2xl font-bold text-foreground">Company Insights</h2>
+        </header>
+        <div className="flex items-center justify-center h-64">
+          <p className="text-red-500">Failed to load insights data. Please try again later.</p>
         </div>
       </div>
     );

@@ -10,6 +10,8 @@
  */
 import { createHmac, createHash } from "crypto";
 
+const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
+
 interface AwsCredentials {
   accessKeyId: string;
   secretAccessKey: string;
@@ -221,11 +223,18 @@ export class S3Client {
       : `https://${this.host}${path}`;
 
     const headers = this.sign(method, path, queryString || "", body, contentType);
-    return fetch(url, {
-      method,
-      headers,
-      body: body || undefined,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), S3_TIMEOUT_MS);
+    try {
+      return await fetch(url, {
+        method,
+        headers,
+        body: body || undefined,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   // --- AWS Signature V4 ---

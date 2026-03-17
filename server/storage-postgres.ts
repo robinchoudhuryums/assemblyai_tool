@@ -639,11 +639,31 @@ export class PostgresStorage implements IStorage {
 
   // ── Data Retention ────────────────────────────────────────
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
+    // First, get the IDs of calls to be purged so we can clean up S3 audio
+    const { rows } = await this.db.query(
+      "SELECT id FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",
+      [retentionDays],
+    );
+    if (rows.length === 0) return 0;
+
+    const callIds = rows.map((r: any) => r.id);
+
+    // Delete audio from S3 for each expired call (HIPAA: PHI must not persist beyond retention)
+    if (this.audioClient) {
+      await Promise.allSettled(
+        callIds.map((id: string) =>
+          this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
+            console.error(`[RETENTION] Failed to delete S3 audio for call ${id}:`, err.message)
+          )
+        )
+      );
+    }
+
+    // Delete the DB records (cascading deletes handle transcripts, sentiments, analyses)
     const { rowCount } = await this.db.query(
       "DELETE FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",
       [retentionDays],
     );
-    // Audio cleanup in S3 would need to be handled separately (S3 lifecycle rules recommended)
     return rowCount ?? 0;
   }
 }

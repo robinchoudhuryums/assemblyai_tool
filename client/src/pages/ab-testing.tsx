@@ -268,10 +268,16 @@ export default function ABTestingPage() {
   const [customModel, setCustomModel] = useState("");
   const [callCategory, setCallCategory] = useState("");
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const { data: tests = [], isLoading } = useQuery<ABTest[]>({
     queryKey: ["/api/ab-tests"],
-    refetchInterval: 10000, // Poll for updates while tests are processing
+    // Only poll while tests are actively processing — stop once all are done
+    refetchInterval: (query) => {
+      const data = query.state.data as ABTest[] | undefined;
+      const hasProcessing = data?.some(t => t.status === "processing");
+      return hasProcessing ? 5000 : false;
+    },
   });
 
   const selectedTest = tests.find(t => t.id === selectedTestId);
@@ -540,16 +546,33 @@ export default function ABTestingPage() {
                   {selectedTest ? (
                     <div className="space-y-4">
                       <div className="flex justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-red-600 hover:text-red-700"
-                          onClick={() => deleteMutation.mutate(selectedTest.id)}
-                          disabled={deleteMutation.isPending}
-                        >
-                          <Trash2 className="w-3.5 h-3.5 mr-1" />
-                          Delete Test
-                        </Button>
+                        {deleteConfirmId === selectedTest.id ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-red-600">Delete this test?</span>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => { deleteMutation.mutate(selectedTest.id); setDeleteConfirmId(null); }}
+                              disabled={deleteMutation.isPending}
+                            >
+                              Confirm
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setDeleteConfirmId(null)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-red-600 hover:text-red-700"
+                            onClick={() => setDeleteConfirmId(selectedTest.id)}
+                            disabled={deleteMutation.isPending}
+                          >
+                            <Trash2 className="w-3.5 h-3.5 mr-1" />
+                            Delete Test
+                          </Button>
+                        )}
                       </div>
                       {selectedTest.status === "processing" || selectedTest.status === "analyzing" ? (
                         <Card>

@@ -88,11 +88,12 @@ The entire pipeline runs asynchronously. The upload API returns immediately with
 - **AWS Bedrock** — Claude Sonnet for call analysis. Uses the Converse API with raw `fetch` + AWS SigV4 signing (no AWS SDK)
 
 ### Infrastructure
-- **AWS S3** — all persistent data (no database). JSON files for structured data, binary files for audio
+- **AWS RDS PostgreSQL** — metadata, sessions, job queue, HIPAA audit log (recommended for production)
+- **AWS S3** — audio blob storage (with PostgreSQL) or all data as JSON (legacy S3-only mode)
 - **AWS KMS** — S3 server-side encryption
 - **Caddy** — reverse proxy with automatic TLS (Let's Encrypt) on EC2
 - **pm2** — process manager on EC2 (auto-restart, log management)
-- **Render.com** — primary hosting (auto-deploys from GitHub)
+- **EC2** — primary production hosting
 
 ---
 
@@ -334,7 +335,8 @@ Format: `username:password:role:displayName` (comma-separated for multiple users
 Passwords are hashed with scrypt + salt at startup. The plaintext passwords in the env var are never stored or logged.
 
 ### Session Management
-- Sessions stored in memory (express-session with MemoryStore)
+- Sessions stored in PostgreSQL via `connect-pg-simple` when `DATABASE_URL` is set (survives restarts)
+- Falls back to in-memory MemoryStore without `DATABASE_URL` (lost on restart)
 - 15-minute idle timeout (rolling — resets on each request)
 - 8-hour absolute maximum session lifetime
 - Secure cookies in production (httpOnly, sameSite=lax, secure flag)
@@ -524,9 +526,13 @@ AWS_SECRET_ACCESS_KEY           # IAM user secret key
 AWS_REGION                      # Default: us-east-1
 AWS_SESSION_TOKEN               # Optional: for temporary credentials / IAM roles
 
+# === Database (recommended for production) ===
+DATABASE_URL                    # postgresql://user:password@host:5432/dbname
+                                # Enables: PostgresStorage, durable sessions, job queue, audit log
+
 # === Storage ===
 S3_BUCKET                       # S3 bucket name (default: ums-call-archive)
-                                # Without this, falls back to in-memory storage
+                                # Without DATABASE_URL or S3_BUCKET, falls back to in-memory storage
 
 # === AI Model ===
 BEDROCK_MODEL                   # Bedrock model ID (default: us.anthropic.claude-sonnet-4-6)
@@ -534,6 +540,8 @@ BEDROCK_MODEL                   # Bedrock model ID (default: us.anthropic.claude
 # === Optional ===
 PORT                            # Server port (default: 5000)
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
+JOB_CONCURRENCY                 # Max parallel audio processing jobs (default: 5, requires DATABASE_URL)
+JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000, requires DATABASE_URL)
 ```
 
 ---
@@ -601,11 +609,8 @@ Internet → Caddy (port 443, auto-TLS) → Node.js (port 5000) → S3, Assembly
 ```
 Caddy handles TLS termination with Let's Encrypt certificates for `umscallanalyzer.com`.
 
-### Render.com (Testing Only)
-Render.com remains available for quick testing with non-PHI / synthetic data. Not used for production healthcare data.
-- **Build**: `npm run build`
-- **Start**: `npm run start`
-- **Env vars**: Configured in Render dashboard
+### Render.com (Deprecated)
+Render.com was previously used for testing. All hosting is now on EC2 with RDS PostgreSQL.
 
 ---
 

@@ -21,21 +21,24 @@ export default function Dashboard() {
   });
   const calls = callsResponse?.calls;
 
-  const flaggedCalls = (calls || []).filter(c => {
-    const flags = c.analysis?.flags;
-    return Array.isArray(flags) && flags.length > 0 && flags.some(f =>
-      f === "low_score" || f.startsWith("agent_misconduct") || f === "exceptional_call"
-    );
-  });
-
-  const badCalls = flaggedCalls.filter(c => {
-    const flags = c.analysis?.flags;
-    return Array.isArray(flags) && flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
-  });
-  const goodCalls = flaggedCalls.filter(c => {
-    const flags = c.analysis?.flags;
-    return Array.isArray(flags) && flags.includes("exceptional_call");
-  });
+  // Single pass over calls to classify flagged calls
+  const { flaggedCalls, badCalls, goodCalls } = useMemo(() => {
+    const flagged: CallWithDetails[] = [];
+    const bad: CallWithDetails[] = [];
+    const good: CallWithDetails[] = [];
+    for (const c of calls || []) {
+      const flags = c.analysis?.flags;
+      if (!Array.isArray(flags) || flags.length === 0) continue;
+      const isBad = flags.some(f => typeof f === "string" && (f === "low_score" || f.startsWith("agent_misconduct")));
+      const isGood = flags.includes("exceptional_call");
+      if (isBad || isGood) {
+        flagged.push(c);
+        if (isBad) bad.push(c);
+        if (isGood) good.push(c);
+      }
+    }
+    return { flaggedCalls: flagged, badCalls: bad, goodCalls: good };
+  }, [calls]);
 
   // Compute daily trend data from calls for the last 30 days
   const trendData = useMemo(() => {
