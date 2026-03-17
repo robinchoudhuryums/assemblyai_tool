@@ -242,7 +242,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       feedback: aiAnalysis?.feedback || { strengths: [], suggestions: [] },
       lemurResponse: undefined,
       callPartyType: typeof aiAnalysis?.call_party_type === "string" ? aiAnalysis.call_party_type : undefined,
-      flags: flags.length > 0 ? flags : undefined,
+      flags: flags.length > 0 ? normalizeStringArray(flags) : undefined,
     };
 
     return { transcript, sentiment, analysis };
