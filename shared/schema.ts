@@ -67,12 +67,22 @@ export const callSchema = insertCallSchema.extend({
   uploadedAt: z.string().optional(),
 });
 
+// --- Reusable schema for AI data that may be strings or objects ---
+// Bedrock may return objects where strings are expected; use z.unknown() + runtime normalization
+const aiDataField = z.unknown().optional();
+
 // --- TRANSCRIPT SCHEMAS ---
 export const insertTranscriptSchema = z.object({
   callId: z.string(),
   text: z.string().optional(),
   confidence: z.string().optional(),
-  words: z.any().optional(),
+  words: z.array(z.object({
+    text: z.string(),
+    start: z.number(),
+    end: z.number(),
+    confidence: z.number(),
+    speaker: z.string().optional(),
+  })).optional(),
 });
 
 export const transcriptSchema = insertTranscriptSchema.extend({
@@ -85,7 +95,14 @@ export const insertSentimentAnalysisSchema = z.object({
   callId: z.string(),
   overallSentiment: z.string().optional(),
   overallScore: z.string().optional(),
-  segments: z.any().optional(),
+  segments: z.array(z.object({
+    text: z.string().optional(),
+    sentiment: z.string().optional(),
+    confidence: z.number().optional(),
+    start: z.number().optional(),
+    end: z.number().optional(),
+    speaker: z.string().optional(),
+  })).optional(),
 });
 
 export const sentimentAnalysisSchema = insertSentimentAnalysisSchema.extend({
@@ -99,17 +116,33 @@ export const insertCallAnalysisSchema = z.object({
   performanceScore: z.string().optional(),
   talkTimeRatio: z.string().optional(),
   responseTime: z.string().optional(),
-  keywords: z.any().optional(),
-  topics: z.any().optional(),
+  keywords: z.array(z.unknown()).optional(),
+  topics: z.array(z.unknown()).optional(),
   summary: z.string().optional(),
-  actionItems: z.any().optional(),
-  feedback: z.any().optional(),
-  lemurResponse: z.any().optional(),
+  actionItems: z.array(z.unknown()).optional(),
+  feedback: z.object({
+    strengths: z.array(z.unknown()).optional(),
+    suggestions: z.array(z.unknown()).optional(),
+  }).passthrough().optional(),
+  lemurResponse: aiDataField,
   callPartyType: z.string().optional(),
-  flags: z.any().optional(),
-  manualEdits: z.any().optional(),
+  flags: z.array(z.unknown()).optional(),
+  manualEdits: z.array(z.object({
+    editedBy: z.string().optional(),
+    editedAt: z.string().optional(),
+    reason: z.string().optional(),
+    changes: z.record(z.unknown()).optional(),
+  })).optional(),
   confidenceScore: z.string().optional(),
-  confidenceFactors: z.any().optional(),
+  confidenceFactors: z.object({
+    transcriptConfidence: z.number().optional(),
+    wordCount: z.number().optional(),
+    callDurationSeconds: z.number().optional(),
+    callDuration: z.number().optional(),
+    transcriptLength: z.number().optional(),
+    aiAnalysisCompleted: z.boolean().optional(),
+    overallScore: z.number().optional(),
+  }).passthrough().optional(),
   subScores: z.object({
     compliance: z.number().min(0).max(10).optional(),
     customerExperience: z.number().min(0).max(10).optional(),
@@ -260,8 +293,8 @@ export const insertABTestSchema = z.object({
   testModel: z.string(),
   status: z.string().default("processing"),
   transcriptText: z.string().optional(),
-  baselineAnalysis: z.any().optional(),
-  testAnalysis: z.any().optional(),
+  baselineAnalysis: z.record(z.unknown()).optional(),
+  testAnalysis: z.record(z.unknown()).optional(),
   baselineLatencyMs: z.number().optional(),
   testLatencyMs: z.number().optional(),
   notes: z.string().optional(),

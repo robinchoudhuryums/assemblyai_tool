@@ -109,7 +109,7 @@ const upload = multer({
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
       'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/flac', 'audio/x-flac',
-      'audio/ogg', 'audio/vorbis', 'video/mp4', 'application/octet-stream',
+      'audio/ogg', 'audio/vorbis', 'video/mp4',
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     const mimeOk = allowedMimeTypes.includes(file.mimetype);
@@ -793,19 +793,30 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
       const detectedName = aiAnalysis.detected_agent_name.toLowerCase().trim();
       const allEmployees = await storage.getAllEmployees();
-      const matchedEmployee = allEmployees.find(emp => {
-        const empName = emp.name.toLowerCase();
-        // Match on first name, last name, or full name
-        return empName === detectedName ||
-          empName.split(" ")[0] === detectedName ||
-          empName.split(" ").pop() === detectedName;
-      });
+
+      // Priority 1: Exact full name match
+      let matchedEmployee = allEmployees.find(emp =>
+        emp.name.toLowerCase() === detectedName
+      );
+
+      // Priority 2: First name match — only if exactly one employee matches (avoid ambiguity)
+      if (!matchedEmployee) {
+        const firstNameMatches = allEmployees.filter(emp =>
+          emp.name.toLowerCase().split(" ")[0] === detectedName
+        );
+        if (firstNameMatches.length === 1) {
+          matchedEmployee = firstNameMatches[0];
+        } else if (firstNameMatches.length > 1) {
+          console.log(`[${callId}] Detected agent "${detectedName}" matches ${firstNameMatches.length} employees — skipping ambiguous auto-assign.`);
+        }
+      }
+
       if (matchedEmployee) {
         await storage.updateCall(callId, { employeeId: matchedEmployee.id });
         autoAssigned = true;
-        console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.id}`);
+        console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
       } else {
-        console.log(`[${callId}] Detected agent name but no matching employee found.`);
+        console.log(`[${callId}] Detected agent name "${detectedName}" but no matching employee found.`);
       }
     }
 
@@ -913,11 +924,28 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       }
 
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Length', audioBuffer.length.toString());
       res.setHeader('Accept-Ranges', 'bytes');
       // HIPAA: Prevent browser/proxy caching of PHI audio data
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
+
+      // Support HTTP Range requests for audio seeking/streaming
+      const rangeHeader = req.headers.range;
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+        if (match) {
+          const start = parseInt(match[1], 10);
+          const end = match[2] ? parseInt(match[2], 10) : audioBuffer.length - 1;
+          const chunkSize = end - start + 1;
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${audioBuffer.length}`);
+          res.setHeader('Content-Length', chunkSize.toString());
+          res.send(audioBuffer.subarray(start, end + 1));
+          return;
+        }
+      }
+
+      res.setHeader('Content-Length', audioBuffer.length.toString());
       res.send(audioBuffer);
     } catch (error) {
       console.error("Failed to stream audio:", error);

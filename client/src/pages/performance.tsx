@@ -24,7 +24,7 @@ export default function PerformancePage() {
   const [sortBy, setSortBy] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const { data: performers, isLoading } = useQuery<Performer[]>({
+  const { data: performers, isLoading, isError } = useQuery<Performer[]>({
     queryKey: ["/api/performance"],
   });
 
@@ -87,6 +87,19 @@ export default function PerformancePage() {
     if (sortBy !== field) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
     return sortDir === "asc" ? <ArrowUp className="w-3 h-3 ml-1" /> : <ArrowDown className="w-3 h-3 ml-1" />;
   };
+
+  if (isError) {
+    return (
+      <div className="min-h-screen">
+        <header className="bg-card border-b border-border px-6 py-4">
+          <h2 className="text-2xl font-bold text-foreground">Agent Performance</h2>
+        </header>
+        <div className="flex items-center justify-center h-64">
+          <p className="text-red-500">Failed to load performance data. Please try again later.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

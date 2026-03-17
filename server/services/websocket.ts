@@ -1,6 +1,8 @@
 /**
  * WebSocket service for broadcasting real-time call processing updates to connected clients.
  * HIPAA: Connections are authenticated via session cookie verification.
+ * Broadcasts are filtered to only send to authenticated users (not role-filtered for call updates
+ * since all authenticated users can view calls).
  */
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server, ServerResponse, IncomingMessage } from "http";
@@ -10,12 +12,26 @@ let wss: WebSocketServer | null = null;
 
 const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
 
+interface AuthenticatedWebSocket extends WebSocket {
+  isAlive: boolean;
+  userId?: string;
+  userRole?: string;
+}
+
 export function setupWebSocket(server: Server) {
   wss = new WebSocketServer({ noServer: true });
 
-  wss.on("connection", (ws) => {
-    (ws as any).isAlive = true;
-    ws.on("pong", () => { (ws as any).isAlive = true; });
+  wss.on("connection", (ws: AuthenticatedWebSocket, req: IncomingMessage) => {
+    ws.isAlive = true;
+    ws.on("pong", () => { ws.isAlive = true; });
+
+    // Store user info from the authenticated session
+    const session = (req as any).session;
+    const passport = session?.passport;
+    if (passport?.user) {
+      ws.userId = passport.user;
+    }
+
     ws.send(JSON.stringify({ type: "connected" }));
   });
 
@@ -23,11 +39,12 @@ export function setupWebSocket(server: Server) {
   const heartbeat = setInterval(() => {
     if (!wss) return;
     wss.clients.forEach((ws) => {
-      if ((ws as any).isAlive === false) {
+      const aws = ws as AuthenticatedWebSocket;
+      if (aws.isAlive === false) {
         ws.terminate();
         return;
       }
-      (ws as any).isAlive = false;
+      aws.isAlive = false;
       ws.ping();
     });
   }, HEARTBEAT_INTERVAL_MS);
@@ -65,7 +82,9 @@ export function broadcastCallUpdate(callId: string, status: string, extra?: Reco
   if (!wss) return;
   const message = JSON.stringify({ type: "call_update", callId, status, ...extra });
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
+    const aws = client as AuthenticatedWebSocket;
+    // Only send to authenticated, connected clients
+    if (client.readyState === WebSocket.OPEN && aws.userId) {
       client.send(message);
     }
   });

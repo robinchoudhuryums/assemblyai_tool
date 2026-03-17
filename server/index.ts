@@ -54,6 +54,30 @@ app.use((req, res, next) => {
   next();
 });
 
+// HIPAA: Explicit CORS policy — restrict to same-origin only
+app.use((req, res, next) => {
+  // No Access-Control-Allow-Origin header = same-origin only
+  // Block all cross-origin requests explicitly
+  const origin = req.headers.origin;
+  if (origin) {
+    // In production, reject cross-origin requests
+    if (process.env.NODE_ENV === "production") {
+      res.status(403).json({ message: "Cross-origin requests are not allowed" });
+      return;
+    }
+    // In development, allow same-host (Vite proxy)
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 

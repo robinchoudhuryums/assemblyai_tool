@@ -11,7 +11,7 @@ interface SentimentData {
 }
 
 export default function SentimentPage() {
-  const { data: sentiment, isLoading } = useQuery<SentimentData>({
+  const { data: sentiment, isLoading, isError } = useQuery<SentimentData>({
     queryKey: ["/api/dashboard/sentiment"],
   });
 
@@ -77,6 +77,19 @@ export default function SentimentPage() {
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64"><p className="text-muted-foreground">Loading sentiment data...</p></div>;
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen">
+        <header className="bg-card border-b border-border px-6 py-4">
+          <h2 className="text-2xl font-bold text-foreground">Sentiment Analysis</h2>
+        </header>
+        <div className="flex items-center justify-center h-64">
+          <p className="text-red-500">Failed to load sentiment data. Please try again later.</p>
+        </div>
+      </div>
+    );
   }
 
   const positive = sentiment?.positive ?? 0;

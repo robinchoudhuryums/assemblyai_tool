@@ -16,6 +16,7 @@ import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_REGION = "us-east-1";
+const BEDROCK_TIMEOUT_MS = 120_000; // 2 minutes — prevents indefinite hangs
 
 interface AwsCredentials {
   accessKeyId: string;
@@ -76,16 +77,22 @@ export class BedrockProvider implements AIAnalysisProvider {
     });
 
     const headers = this.signRequest("POST", host, rawPath, body, region);
-    const response = await fetch(url, { method: "POST", headers, body });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      // HIPAA: Truncate error to avoid leaking PHI in logs
-      throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        // HIPAA: Truncate error to avoid leaking PHI in logs
+        throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+      }
+
+      const result = await response.json();
+      return result.output?.message?.content?.[0]?.text || "";
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const result = await response.json();
-    return result.output?.message?.content?.[0]?.text || "";
   }
 
   async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any): Promise<CallAnalysis> {
@@ -113,19 +120,27 @@ export class BedrockProvider implements AIAnalysisProvider {
     console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
 
     const headers = this.signRequest("POST", host, rawPath, body, region);
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
+    let result: any;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      // HIPAA: Truncate error to avoid leaking PHI in logs
-      throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        // HIPAA: Truncate error to avoid leaking PHI in logs
+        throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+      }
+
+      result = await response.json();
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const result = await response.json();
 
     // Converse API response shape:
     // { output: { message: { role: "assistant", content: [{ text: "..." }] } } }

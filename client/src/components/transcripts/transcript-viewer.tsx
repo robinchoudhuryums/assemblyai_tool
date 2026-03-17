@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [audioReady, setAudioReady] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const queryClient = useQueryClient();
 
@@ -77,7 +79,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   const startEditing = () => {
     setEditScore(call?.analysis?.performanceScore?.toString() || "");
-    setEditSummary(call?.analysis?.summary?.toString() || "");
+    setEditSummary(toDisplayString(call?.analysis?.summary) || "");
     setEditReason("");
     setIsEditing(true);
   };
@@ -88,7 +90,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     if (editScore !== (call?.analysis?.performanceScore?.toString() || "")) {
       updates.performanceScore = editScore;
     }
-    if (editSummary !== (call?.analysis?.summary?.toString() || "")) {
+    if (editSummary !== (toDisplayString(call?.analysis?.summary) || "")) {
       updates.summary = editSummary;
     }
     if (Object.keys(updates).length === 0) {
@@ -133,15 +135,29 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onEnded = () => setIsPlaying(false);
+    const onLoadedMetadata = () => {
+      setAudioDuration(audio.duration * 1000);
+      setAudioReady(true);
+    };
+    const onError = () => setAudioReady(false);
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("error", onError);
+    // If metadata already loaded (e.g. cached)
+    if (audio.readyState >= 1) {
+      setAudioDuration(audio.duration * 1000);
+      setAudioReady(true);
+    }
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("error", onError);
     };
   }, [call]);
 
@@ -308,17 +324,17 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
-  const highlightKeywords = (text: string | any) => {
-    if (typeof text !== "string") return String(text ?? "");
-    if (topicKeywords.length === 0) return text;
+  const highlightKeywords = (text: string | any): React.ReactNode => {
+    const str = typeof text === "string" ? text : toDisplayString(text);
+    if (topicKeywords.length === 0) return <>{str}</>;
     const pattern = topicKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
     const regex = new RegExp(`(${pattern})`, "gi");
-    const parts = text.split(regex);
-    return parts.map((part, i) =>
+    const parts = str.split(regex);
+    return <>{parts.map((part, i) =>
       topicKeywords.includes(part.toLowerCase())
         ? <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>
         : part
-    );
+    )}</>;
   };
 
   // Determine which segment is currently active based on audio time
@@ -365,10 +381,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       </div>
 
       {/* Hidden audio element that streams from S3 via the API */}
-      <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="metadata" />
+      <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="auto" />
 
       {/* Audio progress bar */}
-      {audioRef.current && (
+      {audioReady && (
         <div className="mb-4">
           <div className="flex items-center space-x-3">
             <span className="text-xs text-muted-foreground w-10 text-right">
@@ -378,7 +394,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               type="range"
               className="flex-1 h-1.5 accent-primary cursor-pointer"
               min={0}
-              max={(audioRef.current?.duration || 0) * 1000}
+              max={audioDuration}
               value={currentTime}
               onChange={(e) => {
                 const ms = Number(e.target.value);
@@ -387,7 +403,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               }}
             />
             <span className="text-xs text-muted-foreground w-10">
-              {formatTimestamp((audioRef.current?.duration || 0) * 1000)}
+              {formatTimestamp(audioDuration)}
             </span>
           </div>
         </div>
@@ -518,7 +534,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             ) : (
               <div className="space-y-2 text-sm">
                 <p><strong>Duration:</strong> {call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s` : 'Unknown'}</p>
-                <p><strong>Status:</strong> <Badge>{call.status}</Badge></p>
+                <p><strong>Status:</strong> <Badge>{toDisplayString(call.status)}</Badge></p>
                 <p><strong>Sentiment:</strong> {call.sentiment?.overallSentiment && typeof call.sentiment.overallSentiment === "string" ? (
                   <Badge className={getSentimentColor(call.sentiment.overallSentiment)}>
                     {call.sentiment.overallSentiment.charAt(0).toUpperCase() + call.sentiment.overallSentiment.slice(1)}
@@ -558,11 +574,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             )}
           </div>
 
-          {!isEditing && call.analysis?.summary && typeof call.analysis.summary === "string" && (
+          {!isEditing && call.analysis?.summary && (
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">Key Points</h4>
               <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-                {call.analysis.summary.split('\n').map((point, index) => (
+                {toDisplayString(call.analysis.summary).split('\n').map((point, index) => (
                   point.trim() && <li key={index}>{point.trim().replace(/^- /, '')}</li>
                 ))}
               </ul>
