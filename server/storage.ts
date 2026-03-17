@@ -26,6 +26,8 @@ import {
   type UsageRecord,
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
+import { getPool } from "./db/pool";
+import { PostgresStorage } from "./storage-postgres";
 import { randomUUID } from "crypto";
 
 /** Safe parseFloat that returns fallback on NaN. */
@@ -933,9 +935,18 @@ export class CloudStorage implements IStorage {
 }
 
 function createStorage(): IStorage {
+  // PostgreSQL + S3 (preferred for production)
+  const dbPool = getPool();
+  if (dbPool) {
+    const bucket = process.env.S3_BUCKET || "ums-call-archive";
+    const audioClient = (process.env.S3_BUCKET || process.env.AWS_ACCESS_KEY_ID) ? new S3Client(bucket) : undefined;
+    console.log(`[STORAGE] Using PostgreSQL (metadata) + S3 (audio, bucket: ${bucket})`);
+    return new PostgresStorage(dbPool, audioClient);
+  }
+
   const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
 
-  // S3 storage (explicit or auto-detect via S3_BUCKET)
+  // S3-only storage (legacy, all data as JSON files in S3)
   if (storageBackend === "s3" || process.env.S3_BUCKET) {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
     console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);

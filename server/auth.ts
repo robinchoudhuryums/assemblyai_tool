@@ -2,10 +2,12 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import session from "express-session";
 import createMemoryStore from "memorystore";
+import connectPgSimple from "connect-pg-simple";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
+import { getPool } from "./db/pool";
 
 const scryptAsync = promisify(scrypt);
 
@@ -132,20 +134,34 @@ export async function setupAuth(app: Express) {
   }
   const effectiveSessionSecret = sessionSecret || randomBytes(32).toString("hex");
 
-  // Use MemoryStore to prevent memory leaks and support session expiry
-  const MemoryStore = createMemoryStore(session);
-
   // HIPAA: 15-minute idle timeout (addressable requirement, standard in healthcare)
   const SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
   const SESSION_ABSOLUTE_MAX_MS = 8 * 60 * 60 * 1000; // 8 hours absolute max
+
+  // Use PostgreSQL session store if DATABASE_URL is set, otherwise MemoryStore
+  let sessionStore: session.Store;
+  const dbPool = getPool();
+  if (dbPool) {
+    const PgSession = connectPgSimple(session);
+    sessionStore = new PgSession({
+      pool: dbPool,
+      tableName: "session",
+      pruneSessionInterval: 60, // Prune expired sessions every 60 seconds
+    });
+    console.log("[AUTH] Using PostgreSQL session store (sessions persist across restarts)");
+  } else {
+    const MemoryStore = createMemoryStore(session);
+    sessionStore = new MemoryStore({
+      checkPeriod: 60 * 1000,
+    });
+    console.log("[AUTH] Using in-memory session store (sessions lost on restart)");
+  }
 
   sessionMiddleware = session({
     secret: effectiveSessionSecret,
     resave: false,
     saveUninitialized: false,
-    store: new MemoryStore({
-      checkPeriod: 60 * 1000, // Prune expired entries every minute
-    }),
+    store: sessionStore,
     cookie: {
       secure: process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE,
       httpOnly: true,
