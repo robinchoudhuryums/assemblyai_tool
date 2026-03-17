@@ -46,6 +46,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
 - **Location**: `tests/` directory
   - `tests/schema.test.ts` — Zod schema validation for data integrity
   - `tests/ai-provider.test.ts` — AI provider utilities (parseJsonResponse, buildAnalysisPrompt, smartTruncate)
+  - `tests/auth.test.ts` — Authentication, session management, and role-based access control
+  - `tests/storage.test.ts` — Storage abstraction CRUD operations (all backends)
   - `tests/postgres-storage.test.ts` — PostgresStorage integration tests (requires `DATABASE_URL`)
   - `tests/job-queue.test.ts` — Job queue integration tests (requires `DATABASE_URL`)
 
