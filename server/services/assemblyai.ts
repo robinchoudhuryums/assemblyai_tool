@@ -77,7 +77,7 @@ export class AssemblyAIService {
       headers: { 'Authorization': this.config.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         audio_url: audioUrl,
-        speech_model: "best",
+        speech_models: ["universal-3-pro", "universal-2"],
         speaker_labels: true,
         punctuate: true,
         format_text: true,

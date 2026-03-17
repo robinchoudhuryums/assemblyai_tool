@@ -13,6 +13,7 @@ import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
 import { JobQueue, type Job } from "./services/job-queue";
+import { bedrockBatchService, type PendingBatchItem, type BatchJob } from "./services/bedrock-batch";
 import { getPool } from "./db/pool";
 import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
@@ -72,9 +73,11 @@ const audioProcessingQueue = new TaskQueue(3);
 // Durable job queue (initialized if PostgreSQL is available)
 let jobQueue: JobQueue | null = null;
 
-/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
+/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output).
+ *  Note: When BEDROCK_BATCH_MODE=true, actual cost is 50% of these rates. Callers
+ *  for batch usage should multiply result by 0.5. */
 function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
-  // Approximate pricing per 1K tokens (input, output) — updated as of 2026
+  // Approximate on-demand pricing per 1K tokens (input, output) — updated as of 2026
   const pricing: Record<string, [number, number]> = {
     "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
     "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
@@ -676,7 +679,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     }
     console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
 
-    // Step 4: AI analysis (Gemini or Bedrock/Claude — or fall back to defaults)
+    // Step 4: AI analysis (Bedrock/Claude — or fall back to defaults)
     broadcastCallUpdate(callId, "analyzing", { step: 4, totalSteps: 6, label: "Running AI analysis..." });
     let aiAnalysis = null;
 
@@ -696,6 +699,88 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         }
       } catch (tmplError) {
         console.warn(`[${callId}] Failed to load prompt template (using defaults):`, (tmplError as Error).message);
+      }
+    }
+
+    // Batch mode: defer AI analysis for 50% cost savings
+    if (bedrockBatchService.isAvailable && aiProvider.isAvailable && transcriptResponse.text) {
+      const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate);
+      const pendingItem: PendingBatchItem = {
+        callId,
+        prompt,
+        callCategory,
+        uploadedBy,
+        timestamp: new Date().toISOString(),
+      };
+
+      try {
+        // Save pending item and transcript data to S3 for batch processing
+        const s3Client = (storage as any).audioClient || (storage as any).client;
+        if (s3Client) {
+          await s3Client.uploadJson(`batch-inference/pending/${callId}.json`, {
+            ...pendingItem,
+            transcriptResponse: {
+              text: transcriptResponse.text,
+              confidence: transcriptResponse.confidence,
+              words: transcriptResponse.words,
+              sentiment_analysis_results: transcriptResponse.sentiment_analysis_results,
+              status: transcriptResponse.status,
+            },
+          });
+        }
+        console.log(`[${callId}] Step 4/6: Deferred to batch analysis (50% cost savings). Will be processed in next batch cycle.`);
+        broadcastCallUpdate(callId, "awaiting_analysis", { step: 4, totalSteps: 6, label: "Queued for batch analysis..." });
+
+        // Store transcript and sentiment now (analysis will come later from batch)
+        const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
+        await storage.createTranscript(transcript);
+        await storage.createSentimentAnalysis(sentiment);
+        // Store partial analysis with defaults — batch will overwrite when complete
+        analysis.confidenceScore = "0.300";
+        analysis.confidenceFactors = {
+          transcriptConfidence: transcriptResponse.confidence || 0,
+          wordCount: transcriptResponse.words?.length || 0,
+          callDurationSeconds: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+          transcriptLength: transcriptResponse.text.length,
+          aiAnalysisCompleted: false,
+          overallScore: 0.3,
+        };
+        const existingFlags = (analysis.flags as string[]) || [];
+        existingFlags.push("awaiting_batch_analysis");
+        analysis.flags = existingFlags;
+        await storage.createCallAnalysis(analysis);
+
+        await storage.updateCall(callId, {
+          status: "awaiting_analysis",
+          duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+        });
+
+        // Track usage (transcription only — Bedrock cost tracked when batch completes)
+        try {
+          const audioDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+          const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+          const usageRecord: UsageRecord = {
+            id: randomUUID(),
+            callId,
+            type: "call",
+            timestamp: new Date().toISOString(),
+            user: uploadedBy || "unknown",
+            services: {
+              assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+            },
+            totalEstimatedCost: Math.round(assemblyaiCost * 10000) / 10000,
+          };
+          await storage.createUsageRecord(usageRecord);
+        } catch (usageErr) {
+          console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+        }
+
+        await cleanupFile(filePath);
+        console.log(`[${callId}] Transcription complete, awaiting batch analysis.`);
+        return; // Exit early — batch scheduler handles the rest
+      } catch (batchErr) {
+        console.warn(`[${callId}] Failed to defer to batch (falling back to on-demand):`, (batchErr as Error).message);
+        // Fall through to on-demand analysis
       }
     }
 
@@ -2073,6 +2158,244 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       res.status(500).json({ message: "Failed to get queue status" });
     }
   });
+
+  // ==================== ADMIN: BATCH INFERENCE STATUS ====================
+  app.get("/api/admin/batch-status", requireRole("admin"), async (_req, res) => {
+    try {
+      const s3Client = (storage as any).audioClient || (storage as any).client;
+      if (!s3Client || !bedrockBatchService.isAvailable) {
+        res.json({ enabled: false, message: "Batch mode not enabled. Set BEDROCK_BATCH_MODE=true and BEDROCK_BATCH_ROLE_ARN." });
+        return;
+      }
+
+      // Count pending items
+      const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
+      const activeJobs = await s3Client.listAndDownloadJson<BatchJob>("batch-inference/active-jobs/");
+
+      res.json({
+        enabled: true,
+        pendingItems: pendingKeys.length,
+        activeJobs: activeJobs.map((j: BatchJob) => ({
+          jobId: j.jobId,
+          status: j.status,
+          callCount: j.callIds.length,
+          createdAt: j.createdAt,
+        })),
+        batchIntervalMinutes: parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10),
+        costSavings: "50% on Bedrock inference",
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get batch status" });
+    }
+  });
+
+  // ==================== BATCH INFERENCE SCHEDULER ====================
+  if (bedrockBatchService.isAvailable) {
+    const batchIntervalMinutes = parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10);
+    console.log(`[BATCH] Batch inference mode enabled. Scheduling every ${batchIntervalMinutes} minutes.`);
+
+    const runBatchCycle = async () => {
+      try {
+        const s3Client = (storage as any).audioClient || (storage as any).client;
+        if (!s3Client) return;
+
+        // 1. Check active jobs for completion
+        const activeJobKeys = await s3Client.listObjects("batch-inference/active-jobs/");
+        for (const jobKey of activeJobKeys) {
+          try {
+            const job = await s3Client.downloadJson<BatchJob>(jobKey);
+            if (!job) continue;
+
+            const status = await bedrockBatchService.getJobStatus(job.jobArn);
+            console.log(`[BATCH] Job ${job.jobId}: ${status.status}`);
+
+            if (status.status === "Completed") {
+              // Read results and process
+              const results = await bedrockBatchService.readBatchOutput(job.outputS3Uri);
+              console.log(`[BATCH] Job ${job.jobId} completed. Processing ${results.size} results.`);
+
+              for (const [callId, analysis] of results) {
+                try {
+                  // Read the pending data for this call
+                  const pendingData = await s3Client.downloadJson<any>(`batch-inference/pending/${callId}.json`);
+                  const transcriptResponse = pendingData?.transcriptResponse;
+
+                  if (!transcriptResponse) {
+                    console.warn(`[BATCH] No transcript data found for call ${callId}, skipping.`);
+                    continue;
+                  }
+
+                  // Reprocess with the AI analysis
+                  const { transcript: _, sentiment: __, analysis: updatedAnalysis } =
+                    assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId);
+
+                  // Compute confidence
+                  const transcriptConfidence = transcriptResponse.confidence || 0;
+                  const wordCount = transcriptResponse.words?.length || 0;
+                  const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+                  const wordConfidence = Math.min(wordCount / 50, 1);
+                  const durationConfidence = callDuration > 30 ? 1 : callDuration / 30;
+                  const confidenceScore = transcriptConfidence * 0.4 + wordConfidence * 0.2 + durationConfidence * 0.15 + 0.25;
+
+                  updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
+                  updatedAnalysis.confidenceFactors = {
+                    transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
+                    wordCount,
+                    callDurationSeconds: callDuration,
+                    transcriptLength: (transcriptResponse.text || "").length,
+                    aiAnalysisCompleted: true,
+                    overallScore: Math.round(confidenceScore * 100) / 100,
+                  };
+
+                  if (analysis.sub_scores) {
+                    updatedAnalysis.subScores = {
+                      compliance: analysis.sub_scores.compliance ?? 0,
+                      customerExperience: analysis.sub_scores.customer_experience ?? 0,
+                      communication: analysis.sub_scores.communication ?? 0,
+                      resolution: analysis.sub_scores.resolution ?? 0,
+                    };
+                  }
+
+                  if (analysis.detected_agent_name) {
+                    updatedAnalysis.detectedAgentName = analysis.detected_agent_name;
+                  }
+
+                  // Remove the awaiting_batch_analysis flag
+                  if (Array.isArray(updatedAnalysis.flags)) {
+                    updatedAnalysis.flags = (updatedAnalysis.flags as string[]).filter(f => f !== "awaiting_batch_analysis");
+                  }
+
+                  if (confidenceScore < 0.7) {
+                    const flags = (updatedAnalysis.flags as string[]) || [];
+                    flags.push("low_confidence");
+                    updatedAnalysis.flags = flags;
+                  }
+
+                  // Update existing analysis (overwrite the placeholder)
+                  await storage.createCallAnalysis(updatedAnalysis);
+                  await storage.updateCall(callId, { status: "completed" });
+
+                  // Auto-assign employee
+                  if (analysis.detected_agent_name) {
+                    const currentCall = await storage.getCall(callId);
+                    if (currentCall && !currentCall.employeeId) {
+                      const detectedName = analysis.detected_agent_name.toLowerCase().trim();
+                      const allEmployees = await storage.getAllEmployees();
+                      let matchedEmployee = allEmployees.find(emp => emp.name.toLowerCase() === detectedName);
+                      if (!matchedEmployee) {
+                        const firstNameMatches = allEmployees.filter(emp =>
+                          emp.name.toLowerCase().split(" ")[0] === detectedName
+                        );
+                        if (firstNameMatches.length === 1) matchedEmployee = firstNameMatches[0];
+                      }
+                      if (matchedEmployee) {
+                        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
+                        console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
+                      }
+                    }
+                  }
+
+                  // Track Bedrock usage (at batch pricing — 50% off)
+                  try {
+                    const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+                    const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
+                    const estimatedOutputTokens = 800;
+                    const bedrockCost = estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) * 0.5;
+
+                    const usageRecord: UsageRecord = {
+                      id: randomUUID(),
+                      callId,
+                      type: "call",
+                      timestamp: new Date().toISOString(),
+                      user: pendingData?.uploadedBy || "batch",
+                      services: {
+                        bedrock: {
+                          model: bedrockModel,
+                          estimatedInputTokens,
+                          estimatedOutputTokens,
+                          estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+                        },
+                      },
+                      totalEstimatedCost: Math.round(bedrockCost * 10000) / 10000,
+                    };
+                    await storage.createUsageRecord(usageRecord);
+                  } catch {}
+
+                  broadcastCallUpdate(callId, "completed", { label: "Batch analysis complete" });
+
+                  // Clean up pending file
+                  await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+                  console.log(`[BATCH] Call ${callId} analysis stored successfully.`);
+                } catch (callErr) {
+                  console.warn(`[BATCH] Failed to process result for ${callId}:`, (callErr as Error).message);
+                }
+              }
+
+              // Clean up active job record
+              await s3Client.deleteObject(jobKey);
+            } else if (status.status === "Failed" || status.status === "Stopped" || status.status === "Expired") {
+              console.error(`[BATCH] Job ${job.jobId} failed: ${status.message || status.status}`);
+              // Mark calls as failed and clean up
+              for (const callId of job.callIds) {
+                await storage.updateCall(callId, { status: "failed" });
+                broadcastCallUpdate(callId, "failed", { label: "Batch analysis failed" });
+                await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+              }
+              await s3Client.deleteObject(jobKey);
+            }
+            // For InProgress/Submitted/Scheduled/Validating — keep polling next cycle
+          } catch (jobErr) {
+            console.warn(`[BATCH] Error checking job status:`, (jobErr as Error).message);
+          }
+        }
+
+        // 2. Collect pending items and submit new batch if any
+        const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
+        if (pendingKeys.length === 0) return;
+
+        // Minimum batch size to avoid overhead (unless items are > 30 min old)
+        const MIN_BATCH_SIZE = 5;
+        if (pendingKeys.length < MIN_BATCH_SIZE) {
+          // Check if any pending items are old enough to force-batch
+          const oldestItem = await s3Client.downloadJson<PendingBatchItem>(pendingKeys[0]);
+          if (oldestItem) {
+            const age = Date.now() - new Date(oldestItem.timestamp).getTime();
+            if (age < batchIntervalMinutes * 60 * 1000 * 2) {
+              // Not old enough — wait for more items
+              console.log(`[BATCH] ${pendingKeys.length} pending items (below threshold of ${MIN_BATCH_SIZE}). Waiting for more.`);
+              return;
+            }
+          }
+        }
+
+        console.log(`[BATCH] Collecting ${pendingKeys.length} pending items for batch submission.`);
+
+        const items: PendingBatchItem[] = [];
+        for (const key of pendingKeys) {
+          const data = await s3Client.downloadJson<PendingBatchItem & { transcriptResponse: any }>(key);
+          if (data) items.push({ callId: data.callId, prompt: data.prompt, callCategory: data.callCategory, uploadedBy: data.uploadedBy, timestamp: data.timestamp });
+        }
+
+        if (items.length === 0) return;
+
+        // Create and submit batch
+        const { s3Uri, batchId } = await bedrockBatchService.createBatchInput(items);
+        const callIds = items.map(i => i.callId);
+        const batchJob = await bedrockBatchService.createJob(s3Uri, batchId, callIds);
+
+        // Save active job record
+        await s3Client.uploadJson(`batch-inference/active-jobs/${batchJob.jobId}.json`, batchJob);
+        console.log(`[BATCH] Submitted batch job ${batchJob.jobId} with ${items.length} calls.`);
+
+      } catch (batchErr) {
+        console.error(`[BATCH] Batch cycle error:`, (batchErr as Error).message);
+      }
+    };
+
+    // Run batch cycle on interval
+    setTimeout(runBatchCycle, 60_000); // First run after 1 minute
+    setInterval(runBatchCycle, batchIntervalMinutes * 60 * 1000);
+  }
 
   // ==================== JOB QUEUE INITIALIZATION ====================
   const dbPool = getPool();
