@@ -7,9 +7,10 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 - **Frontend**: React 18 + TypeScript, Vite, TailwindCSS, shadcn/ui, Recharts, Wouter (routing), TanStack Query
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
 - **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
-- **Storage**: AWS S3 (`ums-call-archive` bucket) — employees, calls, transcripts, analyses, audio, coaching, prompt templates, A/B tests
-- **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin)
-- **Hosting**: Render.com (primary), EC2 with pm2 + Caddy (secondary)
+- **Database**: AWS RDS PostgreSQL — metadata, sessions, job queue, HIPAA audit log (optional; falls back to S3-only or in-memory)
+- **Storage**: AWS S3 (`ums-call-archive` bucket) — audio blobs (when PostgreSQL is configured, metadata lives in RDS)
+- **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin), PostgreSQL session store (falls back to memorystore)
+- **Hosting**: EC2 with pm2 + Caddy (primary)
 
 ## Local Development Setup
 
@@ -22,7 +23,8 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
    - **Required**: `ASSEMBLYAI_API_KEY`, `SESSION_SECRET`
    - **Auth users**: `AUTH_USERS` — format: `username:password:role:displayName` (comma-separated for multiple)
    - **AWS (for Bedrock + S3)**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
-   - **Storage**: `S3_BUCKET` — without this, falls back to **in-memory storage (data lost on restart)**
+   - **Database** (recommended): `DATABASE_URL` — PostgreSQL connection string for durable metadata, sessions, and job queue
+   - **Storage**: `S3_BUCKET` — audio blob storage (without DATABASE_URL or S3_BUCKET, falls back to **in-memory storage**)
 
 3. Start the dev server:
    ```bash
@@ -44,6 +46,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
 - **Location**: `tests/` directory
   - `tests/schema.test.ts` — Zod schema validation for data integrity
   - `tests/ai-provider.test.ts` — AI provider utilities (parseJsonResponse, buildAnalysisPrompt, smartTruncate)
+  - `tests/postgres-storage.test.ts` — PostgresStorage integration tests (requires `DATABASE_URL`)
+  - `tests/job-queue.test.ts` — Job queue integration tests (requires `DATABASE_URL`)
 
 ## Architecture
 
@@ -51,24 +55,34 @@ npx vite build       # Frontend-only build (useful for quick verification)
 ```
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket
+server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue
 server/routes.ts         # All API routes + audio processing pipeline
-server/storage.ts        # Storage abstraction (memory or S3 backends)
-server/auth.ts           # Authentication middleware + session management
+server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
+server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
+server/auth.ts           # Authentication middleware + session management (PostgreSQL or memory store)
 shared/schema.ts         # Zod schemas shared between client/server
 tests/                   # Unit tests (Node test runner)
 ```
 
 ### Audio Processing Pipeline (server/routes.ts → processAudioFile)
-1. Upload audio to S3 (archive failure is non-blocking — continues with warning)
-2. Send to AssemblyAI for transcription (with polling; throws if polling fails/incomplete)
-3. Load custom prompt template by call category (falls back to default if template fails)
-4. Send transcript to Bedrock for AI analysis (falls back to transcript-based defaults if Bedrock fails)
-5. Process results: normalize data, compute confidence scores, detect agent name, set flags
-6. Store transcript, sentiment, and analysis to S3
-7. Auto-assign call to employee if agent name detected
+1. Archive audio to S3 immediately on upload (before queuing)
+2. Enqueue job in PostgreSQL job queue (falls back to in-memory TaskQueue if no DB)
+3. Job worker reads audio from S3 and sends to AssemblyAI for transcription
+4. Load custom prompt template by call category (falls back to default if template fails)
+5. Send transcript to Bedrock for AI analysis (falls back to transcript-based defaults if Bedrock fails)
+6. Process results: normalize data, compute confidence scores, detect agent name, set flags
+7. Store transcript, sentiment, and analysis to storage (PostgreSQL or S3)
+8. Auto-assign call to employee if agent name detected
 
-**On failure**: Call status set to "failed", WebSocket notifies client, uploaded file cleaned up. Error messages are logged without full stack traces (HIPAA — avoids logging PHI). No automatic retry — users re-upload manually.
+**Job Queue** (when PostgreSQL is configured):
+- Durable: jobs survive server restarts
+- Uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent processing
+- Configurable concurrency via `JOB_CONCURRENCY` env var (default 5)
+- Auto-retry with dead-letter pattern (3 max attempts)
+- Stale job reclaim after 10 minutes of inactivity
+
+**On failure**: Call status set to "failed", WebSocket notifies client. Job queue retries up to 3 times before marking as "dead". Error messages are logged without full stack traces (HIPAA — avoids logging PHI).
 
 ### AI Analysis Data Flow
 - Bedrock returns JSON with: summary, topics[], sentiment, performance_score, sub_scores, action_items[], feedback{strengths[], suggestions[]}, flags[], detected_agent_name
@@ -77,8 +91,9 @@ tests/                   # Unit tests (Node test runner)
 - **Important**: AI may return objects instead of strings in arrays — server normalizes with `normalizeStringArray()`, frontend has `toDisplayString()` safety
 
 ### Storage Backend Selection (server/storage.ts)
-- `STORAGE_BACKEND=s3` or `S3_BUCKET` env var → S3
-- Otherwise → **in-memory (non-persistent — data is lost on restart)**
+1. `DATABASE_URL` env var → **PostgresStorage** (metadata in RDS, audio in S3) — **recommended for production**
+2. `STORAGE_BACKEND=s3` or `S3_BUCKET` env var → **CloudStorage** (legacy, all data as JSON in S3)
+3. Neither → **MemStorage** (in-memory, non-persistent — dev only)
 
 ## API Routes Overview
 
@@ -144,6 +159,7 @@ tests/                   # Unit tests (Node test runner)
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
+| GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -195,8 +211,12 @@ AWS_SECRET_ACCESS_KEY
 AWS_REGION                      # Default: us-east-1
 AWS_SESSION_TOKEN               # Optional, for IAM roles
 
+# PostgreSQL Database (recommended for production)
+DATABASE_URL                    # postgresql://user:password@host:5432/dbname
+                                # Enables: PostgresStorage, durable sessions, job queue, audit log table
+
 # Storage
-S3_BUCKET                       # Default: ums-call-archive
+S3_BUCKET                       # Default: ums-call-archive (audio blobs when DB is set, everything when DB is not)
 
 # AI Model
 BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)
@@ -204,6 +224,8 @@ BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see s
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
+JOB_CONCURRENCY                 # Max parallel audio processing jobs (default: 5, requires DATABASE_URL)
+JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000, requires DATABASE_URL)
 ```
 
 ## HIPAA Compliance
@@ -211,11 +233,12 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 | Feature | Location | Details |
 |---------|----------|---------|
 | **Account lockout** | `server/auth.ts` | 5 failed login attempts → 15-min lockout per IP/username |
-| **Audit logging** | `server/services/audit-log.ts` | Structured JSON logs (`[HIPAA_AUDIT]`) for all PHI access — user identity, resource type, timestamps |
+| **Audit logging** | `server/services/audit-log.ts` | Dual-write: stdout JSON logs (`[HIPAA_AUDIT]`) + PostgreSQL `audit_log` table (6-year retention) |
 | **API access audit** | `server/index.ts` | Middleware logs all API calls with user, method, status, duration |
 | **Rate limiting** | `server/index.ts` | Login: 5/15min per IP. Generic limiter on sensitive paths |
 | **CSP headers** | `server/index.ts` | Content-Security-Policy restricts to same-origin + trusted CDNs |
 | **Security headers** | `server/index.ts` | X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS, Referrer-Policy, Permissions-Policy |
+| **Durable sessions** | `server/auth.ts` | PostgreSQL session store via `connect-pg-simple` (survives restarts) |
 | **Session timeout** | `server/auth.ts` | 15-min idle timeout (rolling) + 8-hour absolute max |
 | **Secure cookies** | `server/auth.ts` | httpOnly, sameSite=lax, secure in production |
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
@@ -224,6 +247,8 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
+- **Hybrid storage**: PostgreSQL for structured metadata (fast queries, JOINs, transactions) + S3 for audio blobs (cheap, durable). Falls back gracefully without DATABASE_URL.
+- **Durable job queue**: PostgreSQL-backed with `SELECT ... FOR UPDATE SKIP LOCKED` — survives restarts, supports concurrent workers, auto-retry with dead-letter
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
@@ -231,16 +256,8 @@ RETENTION_DAYS                  # Auto-purge calls older than N days (default: 9
 
 ## Deployment
 
-### Render.com (Primary)
-No `render.yaml` in repo — deployment is configured via the Render dashboard.
-
-- **Build command**: `npm run build` (Vite frontend → `dist/client/`, esbuild backend → `dist/index.js`)
-- **Start command**: `npm run start` (`NODE_ENV=production node dist/index.js`)
-- **Environment variables**: Configured in Render dashboard
-- Server serves both API and static frontend assets from the same process
-
-### EC2 (Secondary / Testing)
-The app can also run on an EC2 instance managed with **pm2**.
+### EC2 (Primary)
+Production runs on an EC2 instance managed with **pm2**, with AWS RDS PostgreSQL for metadata and S3 for audio.
 
 #### SSH Access
 ```bash
@@ -313,4 +330,6 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - Recharts uses inline styles that override CSS; dark mode fixes use `!important`
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
-- `.env.example` may be outdated (e.g., shows haiku model but code defaults to sonnet) — always check `server/services/bedrock.ts` for the actual default
+- Without `DATABASE_URL`, sessions use memorystore (lost on restart) and job queue falls back to in-memory TaskQueue (no retry on crash)
+- PostgreSQL schema auto-initializes on startup (`server/db/pool.ts:initializeDatabase`) — no manual migration step needed
+- AssemblyAI costs: $0.15/hr base + $0.02/hr sentiment = $0.17/hr ($0.0000472/sec)

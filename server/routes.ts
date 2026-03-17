@@ -12,6 +12,8 @@ import { buildAgentSummaryPrompt, buildAnalysisPrompt, parseJsonResponse } from 
 import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
+import { JobQueue, type Job } from "./services/job-queue";
+import { getPool } from "./db/pool";
 import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -64,8 +66,11 @@ class TaskQueue {
   }
 }
 
-// Limit concurrent audio processing to 3 parallel jobs
+// Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 const audioProcessingQueue = new TaskQueue(3);
+
+// Durable job queue (initialized if PostgreSQL is available)
+let jobQueue: JobQueue | null = null;
 
 /** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
 function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
@@ -81,9 +86,9 @@ function estimateBedrockCost(model: string, inputTokens: number, outputTokens: n
   return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
 }
 
-/** Estimate AssemblyAI cost: ~$0.00615/second ($0.37/min or $22.20/hr) */
+/** Estimate AssemblyAI cost: base $0.15/hr + sentiment $0.02/hr = $0.17/hr = ~$0.0000472/sec */
 function estimateAssemblyAICost(durationSeconds: number): number {
-  return durationSeconds * 0.00615;
+  return durationSeconds * 0.0000472;
 }
 
 // Ensure uploads directory exists
@@ -577,15 +582,35 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
       const uploadUser = (req.user as any)?.username || "unknown";
-      audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser))
-        .catch(async (error) => {
-          console.error(`Failed to process call ${call.id}:`, error);
-          try {
-            await storage.updateCall(call.id, { status: "failed" });
-          } catch (updateErr) {
-            console.error(`Failed to mark call ${call.id} as failed:`, updateErr);
-          }
+
+      // Archive audio to S3 immediately (before queuing)
+      try {
+        await storage.uploadAudio(call.id, originalName, audioBuffer, mimeType);
+      } catch (archiveError) {
+        console.warn(`[${call.id}] Warning: Failed to archive audio to S3 (continuing):`, archiveError);
+      }
+
+      // Use durable job queue if PostgreSQL is available, otherwise fall back to in-memory queue
+      if (jobQueue) {
+        await jobQueue.enqueue("process_audio", {
+          callId: call.id,
+          filePath: req.file.path,
+          originalName,
+          mimeType,
+          callCategory: callCategory || null,
+          uploadedBy: uploadUser,
         });
+      } else {
+        audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser))
+          .catch(async (error) => {
+            console.error(`Failed to process call ${call.id}:`, error);
+            try {
+              await storage.updateCall(call.id, { status: "failed" });
+            } catch (updateErr) {
+              console.error(`Failed to mark call ${call.id} as failed:`, updateErr);
+            }
+          });
+      }
 
       res.status(201).json(call);
     } catch (error) {
@@ -617,13 +642,18 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
     console.log(`[${callId}] Step 1/7: Upload to AssemblyAI successful.`);
 
-    // Step 1b: Archive audio to cloud storage
-    console.log(`[${callId}] Step 1b/7: Archiving audio file to cloud storage...`);
-    try {
-      await storage.uploadAudio(callId, originalName, audioBuffer, mimeType);
-      console.log(`[${callId}] Step 1b/7: Audio archived.`);
-    } catch (archiveError) {
-      console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, archiveError);
+    // Step 1b: Archive audio to cloud storage (skip if already archived by job queue)
+    const existingAudio = await storage.getAudioFiles(callId);
+    if (existingAudio.length === 0) {
+      console.log(`[${callId}] Step 1b/7: Archiving audio file to cloud storage...`);
+      try {
+        await storage.uploadAudio(callId, originalName, audioBuffer, mimeType);
+        console.log(`[${callId}] Step 1b/7: Audio archived.`);
+      } catch (archiveError) {
+        console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, archiveError);
+      }
+    } else {
+      console.log(`[${callId}] Step 1b/7: Audio already archived, skipping.`);
     }
 
     // Step 2: Start transcription
@@ -2000,6 +2030,58 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       await storage.updateABTest(testId, { status: "failed" });
       await cleanupFile(filePath);
     }
+  }
+
+  // ==================== ADMIN: QUEUE STATUS ====================
+  app.get("/api/admin/queue-status", requireRole("admin"), async (_req, res) => {
+    try {
+      if (jobQueue) {
+        const stats = await jobQueue.getStats();
+        res.json(stats);
+      } else {
+        res.json({ pending: 0, running: 0, completedToday: 0, failedToday: 0, backend: "in-memory" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get queue status" });
+    }
+  });
+
+  // ==================== JOB QUEUE INITIALIZATION ====================
+  const dbPool = getPool();
+  if (dbPool) {
+    const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
+    const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
+    jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
+
+    // Job handler: dispatches to the correct processor based on job type
+    jobQueue.start(async (job: Job) => {
+      if (job.type === "process_audio") {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy } = job.payload as {
+          callId: string; filePath: string; originalName: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string;
+        };
+
+        // Re-read audio from S3 (it was archived before enqueueing)
+        const audioFiles = await storage.getAudioFiles(callId);
+        let audioBuffer: Buffer | undefined;
+        if (audioFiles.length > 0) {
+          audioBuffer = await storage.downloadAudio(audioFiles[0]);
+        }
+
+        if (!audioBuffer) {
+          // Fall back to local file if still available
+          if (fs.existsSync(filePath)) {
+            audioBuffer = await fs.promises.readFile(filePath);
+          } else {
+            throw new Error(`No audio data available for call ${callId}`);
+          }
+        }
+
+        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy);
+      } else {
+        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
+      }
+    });
   }
 
   const httpServer = createServer(app);

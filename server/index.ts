@@ -4,6 +4,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
+import { getPool, initializeDatabase } from "./db/pool";
 import crypto from "crypto";
 
 const app = express();
@@ -113,8 +114,28 @@ app.use((req, res, next) => {
 });
 
 // Health check endpoint (no auth required — used for uptime monitoring)
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+app.get("/api/health", async (_req, res) => {
+  const health: Record<string, unknown> = {
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: Math.round(process.uptime()),
+  };
+
+  // Check database connectivity
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query("SELECT 1");
+      health.database = "connected";
+    } catch {
+      health.database = "error";
+      health.status = "degraded";
+    }
+  } else {
+    health.database = "not_configured";
+  }
+
+  res.json(health);
 });
 
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)
@@ -129,6 +150,9 @@ app.post("/api/reports/agent-summary/:employeeId", rateLimit(60 * 1000, 5)); // 
 app.post("/api/access-requests", rateLimit(15 * 60 * 1000, 3)); // 3 access requests per 15 min
 
 (async () => {
+  // Initialize database schema if PostgreSQL is configured
+  await initializeDatabase();
+
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
 
