@@ -236,6 +236,9 @@ BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see s
 BEDROCK_BATCH_MODE              # Set to "true" to enable batch inference (default: disabled)
 BEDROCK_BATCH_ROLE_ARN          # IAM role ARN for Bedrock batch jobs (required if batch mode enabled)
 BATCH_INTERVAL_MINUTES          # How often to submit/check batch jobs (default: 15)
+BATCH_SCHEDULE_START            # Time-of-day to START using batch mode (24h format, e.g. "18:00")
+BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h format, e.g. "08:00")
+                                # When both set: batch during window, immediate outside. Uploads can override per-call.
 
 # Optional
 PORT                            # Default: 5000

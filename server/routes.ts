@@ -94,6 +94,48 @@ function estimateAssemblyAICost(durationSeconds: number): number {
   return durationSeconds * 0.0000472;
 }
 
+/**
+ * Determine if batch processing should be used for a given upload.
+ * Considers: BEDROCK_BATCH_MODE env var, time-of-day schedule, and per-upload override.
+ *
+ * Schedule: BATCH_SCHEDULE_START / BATCH_SCHEDULE_END (24h format, e.g. "18:00" / "08:00")
+ * When set, batch mode is only active during the scheduled window.
+ * Outside the window, on-demand is used even if BEDROCK_BATCH_MODE=true.
+ *
+ * Per-upload override: "immediate" forces on-demand, "batch" forces batch.
+ */
+function shouldUseBatchMode(perUploadOverride?: string): boolean {
+  // Per-upload override takes priority
+  if (perUploadOverride === "immediate") return false;
+  if (perUploadOverride === "batch") return bedrockBatchService.isAvailable;
+
+  // Must have batch mode enabled at all
+  if (!bedrockBatchService.isAvailable) return false;
+
+  // Check time-of-day schedule
+  const scheduleStart = process.env.BATCH_SCHEDULE_START; // e.g. "18:00"
+  const scheduleEnd = process.env.BATCH_SCHEDULE_END;     // e.g. "08:00"
+
+  if (scheduleStart && scheduleEnd) {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const [startH, startM] = scheduleStart.split(":").map(Number);
+    const [endH, endM] = scheduleEnd.split(":").map(Number);
+    const startMinutes = startH * 60 + (startM || 0);
+    const endMinutes = endH * 60 + (endM || 0);
+
+    if (startMinutes <= endMinutes) {
+      // Same-day window (e.g. 09:00 - 17:00)
+      if (currentMinutes < startMinutes || currentMinutes >= endMinutes) return false;
+    } else {
+      // Overnight window (e.g. 18:00 - 08:00)
+      if (currentMinutes < startMinutes && currentMinutes >= endMinutes) return false;
+    }
+  }
+
+  return true;
+}
+
 // Ensure uploads directory exists
 const uploadsDir = 'uploads';
 if (!fs.existsSync(uploadsDir)) {
@@ -560,6 +602,9 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       const { employeeId } = req.body;
       const validCategories = CALL_CATEGORIES.map(c => c.value) as string[];
       const callCategory = validCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
+      const processingMode = (req.body.processingMode === "immediate" || req.body.processingMode === "batch")
+        ? req.body.processingMode as "immediate" | "batch"
+        : undefined;
 
       // If employeeId provided, verify employee exists
       if (employeeId) {
@@ -602,9 +647,10 @@ app.get("/api/calls", requireAuth, async (req, res) => {
           mimeType,
           callCategory: callCategory || null,
           uploadedBy: uploadUser,
+          processingMode: processingMode || null,
         });
       } else {
-        audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser))
+        audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser, processingMode))
           .catch(async (error) => {
             console.error(`Failed to process call ${call.id}:`, error);
             try {
@@ -636,7 +682,7 @@ app.get("/api/calls", requireAuth, async (req, res) => {
   }
 
 // Process audio file with AssemblyAI and archive to cloud storage
-async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string) {
+async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string, processingMode?: string) {
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -703,7 +749,8 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     }
 
     // Batch mode: defer AI analysis for 50% cost savings
-    if (bedrockBatchService.isAvailable && aiProvider.isAvailable && transcriptResponse.text) {
+    // Checks: env var enabled, time-of-day schedule, and per-upload override
+    if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && transcriptResponse.text) {
       const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate);
       const pendingItem: PendingBatchItem = {
         callId,
@@ -2172,8 +2219,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
       const activeJobs = await s3Client.listAndDownloadJson<BatchJob>("batch-inference/active-jobs/");
 
+      const scheduleStart = process.env.BATCH_SCHEDULE_START || null;
+      const scheduleEnd = process.env.BATCH_SCHEDULE_END || null;
+
       res.json({
         enabled: true,
+        currentMode: shouldUseBatchMode() ? "batch" : "immediate",
+        schedule: scheduleStart && scheduleEnd
+          ? { start: scheduleStart, end: scheduleEnd, description: `Batch from ${scheduleStart} to ${scheduleEnd}, immediate otherwise` }
+          : { description: "Always batch (no schedule set — set BATCH_SCHEDULE_START/END for time-based)" },
         pendingItems: pendingKeys.length,
         activeJobs: activeJobs.map((j: BatchJob) => ({
           jobId: j.jobId,
@@ -2183,6 +2237,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
         })),
         batchIntervalMinutes: parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10),
         costSavings: "50% on Bedrock inference",
+        perUploadOverride: "Uploads can include processingMode='immediate' or 'batch' to override schedule",
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to get batch status" });
@@ -2407,9 +2462,9 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     // Job handler: dispatches to the correct processor based on job type
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {
-        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy } = job.payload as {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode } = job.payload as {
           callId: string; filePath: string; originalName: string;
-          mimeType: string; callCategory?: string; uploadedBy?: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string;
         };
 
         // Re-read audio from S3 (it was archived before enqueueing)
@@ -2428,7 +2483,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           }
         }
 
-        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy);
+        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode);
       } else {
         console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
       }
