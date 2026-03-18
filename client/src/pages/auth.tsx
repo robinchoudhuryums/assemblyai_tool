@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings } from "lucide-react";
+import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings, KeyRound } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,6 +21,11 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
+  // MFA state
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+
   // Request access form state
   const [requestName, setRequestName] = useState("");
   const [requestEmail, setRequestEmail] = useState("");
@@ -33,7 +38,17 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     setIsLoading(true);
 
     try {
-      await apiRequest("POST", "/api/auth/login", { username, password });
+      const response = await apiRequest("POST", "/api/auth/login", { username, password });
+      const data = await response.json();
+
+      if (data.mfaRequired) {
+        // MFA step needed
+        setMfaRequired(true);
+        setMfaToken(data.mfaToken);
+        setIsLoading(false);
+        return;
+      }
+
       onLogin();
     } catch (error: any) {
       const message = error.message?.includes(":")
@@ -44,6 +59,33 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         description: message,
         variant: "destructive",
       });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      await apiRequest("POST", "/api/auth/login", { mfaToken, totpCode });
+      onLogin();
+    } catch (error: any) {
+      const message = error.message?.includes(":")
+        ? error.message.split(": ").slice(1).join(": ")
+        : error.message;
+      toast({
+        title: "Verification Failed",
+        description: message,
+        variant: "destructive",
+      });
+      // If session expired, go back to login
+      if (message?.includes("expired")) {
+        setMfaRequired(false);
+        setMfaToken("");
+        setTotpCode("");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -94,38 +136,91 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             </div>
             <CardTitle className="text-2xl">CallAnalyzer</CardTitle>
             <CardDescription>
-              {view === "login"
-                ? "Sign in to access the call analysis dashboard"
-                : requestSubmitted
-                  ? "Your request has been submitted"
-                  : "Request access to the platform"}
+              {mfaRequired
+                ? "Enter the verification code from your authenticator app"
+                : view === "login"
+                  ? "Sign in to access the call analysis dashboard"
+                  : requestSubmitted
+                    ? "Your request has been submitted"
+                    : "Request access to the platform"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Tab switcher */}
-            <div className="flex rounded-lg bg-muted p-1 mb-6">
-              <button
-                className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-                  view === "login" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setView("login")}
-              >
-                <LogIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-                Sign In
-              </button>
-              <button
-                className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-                  view === "request-access" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setView("request-access")}
-              >
-                <UserPlus className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-                Request Access
-              </button>
-            </div>
+            {/* MFA VERIFICATION FORM */}
+            {mfaRequired && (
+              <form onSubmit={handleMfaVerify} className="space-y-4">
+                <div className="flex justify-center mb-2">
+                  <div className="w-14 h-14 bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900/30 dark:to-amber-900/10 rounded-full flex items-center justify-center">
+                    <KeyRound className="w-7 h-7 text-amber-600" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground" htmlFor="totp-code">
+                    Verification Code
+                  </label>
+                  <Input
+                    id="totp-code"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                    required
+                    autoComplete="one-time-code"
+                    autoFocus
+                    className="text-center text-2xl tracking-[0.5em] font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Open your authenticator app and enter the 6-digit code
+                  </p>
+                </div>
+                <Button type="submit" className="w-full" disabled={isLoading || totpCode.length !== 6}>
+                  {isLoading ? (
+                    <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <KeyRound className="w-4 h-4 mr-2" />
+                  )}
+                  Verify
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => { setMfaRequired(false); setMfaToken(""); setTotpCode(""); }}
+                >
+                  Back to Sign In
+                </Button>
+              </form>
+            )}
+
+            {/* Tab switcher (hidden during MFA) */}
+            {!mfaRequired && (
+              <div className="flex rounded-lg bg-muted p-1 mb-6">
+                <button
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    view === "login" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setView("login")}
+                >
+                  <LogIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
+                  Sign In
+                </button>
+                <button
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    view === "request-access" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setView("request-access")}
+                >
+                  <UserPlus className="w-4 h-4 inline mr-1.5 -mt-0.5" />
+                  Request Access
+                </button>
+              </div>
+            )}
 
             {/* LOGIN FORM */}
-            {view === "login" && (
+            {view === "login" && !mfaRequired && (
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-foreground" htmlFor="username">
@@ -167,7 +262,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             )}
 
             {/* REQUEST ACCESS FORM */}
-            {view === "request-access" && !requestSubmitted && (
+            {view === "request-access" && !requestSubmitted && !mfaRequired && (
               <form onSubmit={handleRequestAccess} className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-foreground" htmlFor="req-name">
@@ -233,7 +328,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
             )}
 
             {/* REQUEST SUBMITTED CONFIRMATION */}
-            {view === "request-access" && requestSubmitted && (
+            {view === "request-access" && requestSubmitted && !mfaRequired && (
               <div className="text-center py-6">
                 <div className="mx-auto w-14 h-14 bg-gradient-to-br from-green-100 to-green-50 dark:from-green-900/30 dark:to-green-900/10 rounded-full flex items-center justify-center mb-4">
                   <UserPlus className="w-7 h-7 text-green-600" />
@@ -250,23 +345,25 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           </CardContent>
         </Card>
 
-        {/* Permission levels info card */}
-        <Card className="bg-muted/50 border-dashed">
-          <CardContent className="pt-6">
-            <h4 className="text-sm font-semibold text-foreground mb-3">Permission Levels</h4>
-            <div className="space-y-3">
-              {USER_ROLES.map((role) => (
-                <div key={role.value} className="flex items-start gap-3">
-                  <div className="mt-0.5">{roleIcons[role.value]}</div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{role.label}</p>
-                    <p className="text-xs text-muted-foreground">{role.description}</p>
+        {/* Permission levels info card (hidden during MFA) */}
+        {!mfaRequired && (
+          <Card className="bg-muted/50 border-dashed">
+            <CardContent className="pt-6">
+              <h4 className="text-sm font-semibold text-foreground mb-3">Permission Levels</h4>
+              <div className="space-y-3">
+                {USER_ROLES.map((role) => (
+                  <div key={role.value} className="flex items-start gap-3">
+                    <div className="mt-0.5">{roleIcons[role.value]}</div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{role.label}</p>
+                      <p className="text-xs text-muted-foreground">{role.description}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

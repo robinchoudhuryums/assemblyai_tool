@@ -29,6 +29,17 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then
+            echo "::error::EC2_HOST secret is not set. Go to repo Settings > Secrets and variables > Actions to configure it."
+            exit 1
+          fi
+          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "::error::EC2_SSH_KEY secret is not set."
+            exit 1
+          fi
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -36,8 +47,9 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          script_stop: true
+          command_timeout: 5m
           script: |
+            set -e
             cd ${{ secrets.EC2_APP_DIR }}
             echo "=== GitHub Actions Deploy ==="
             echo "Commit: ${{ github.sha }}"

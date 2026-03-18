@@ -7,9 +7,30 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
+import { recordFailedLogin } from "./services/security-monitor";
 import { getPool } from "./db/pool";
 
 const scryptAsync = promisify(scrypt);
+
+// HIPAA: Password complexity requirements
+const PASSWORD_MIN_LENGTH = 12;
+const PASSWORD_REQUIREMENTS = [
+  { regex: /[A-Z]/, message: "at least one uppercase letter" },
+  { regex: /[a-z]/, message: "at least one lowercase letter" },
+  { regex: /[0-9]/, message: "at least one number" },
+  { regex: /[^A-Za-z0-9]/, message: "at least one special character" },
+];
+
+export function validatePasswordComplexity(password: string): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    errors.push(`minimum ${PASSWORD_MIN_LENGTH} characters`);
+  }
+  for (const req of PASSWORD_REQUIREMENTS) {
+    if (!req.regex.test(password)) errors.push(req.message);
+  }
+  return { valid: errors.length === 0, errors };
+}
 
 // HIPAA: Login attempt tracking for account lockout
 const MAX_FAILED_ATTEMPTS = 5;
@@ -27,7 +48,7 @@ function isAccountLocked(username: string): boolean {
   return true;
 }
 
-function recordFailedAttempt(username: string): void {
+function recordFailedAttempt(username: string, ip?: string): void {
   const record = loginAttempts.get(username) || { count: 0, lastAttempt: 0 };
   record.count++;
   record.lastAttempt = Date.now();
@@ -36,6 +57,8 @@ function recordFailedAttempt(username: string): void {
     console.warn(`[SECURITY] Account "${username}" locked after ${record.count} failed attempts.`);
   }
   loginAttempts.set(username, record);
+  // Feed into security monitor for pattern detection
+  if (ip) recordFailedLogin(username, ip);
 }
 
 function clearFailedAttempts(username: string): void {
@@ -90,6 +113,12 @@ async function loadUsersFromEnv(): Promise<void> {
 
     const [username, password, role = "viewer", ...nameParts] = parts;
     const displayName = nameParts.length > 0 ? nameParts.join(":") : username;
+
+    // HIPAA: Warn about weak passwords (don't block startup, but log prominently)
+    const complexity = validatePasswordComplexity(password);
+    if (!complexity.valid) {
+      console.warn(`[SECURITY] User "${username}" has a weak password: missing ${complexity.errors.join(", ")}. HIPAA requires strong passwords.`);
+    }
 
     const passwordHash = await hashPassword(password);
     envUsers.push({

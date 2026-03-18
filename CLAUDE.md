@@ -58,7 +58,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor
 server/routes.ts         # All API routes + audio processing pipeline
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
@@ -115,6 +115,15 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/auth/logout` | Logout & clear session |
 | GET | `/api/auth/me` | Get current user |
 
+### MFA (authenticated)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/auth/mfa/status` | authenticated | Check MFA status for current user |
+| POST | `/api/auth/mfa/setup` | authenticated | Generate TOTP secret + otpauth URI |
+| POST | `/api/auth/mfa/enable` | authenticated | Verify TOTP code and enable MFA |
+| POST | `/api/auth/mfa/disable` | authenticated | Disable MFA (admin can disable for others) |
+| GET | `/api/auth/mfa/users` | admin | List all MFA-enabled users |
+
 ### Access Requests
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
@@ -135,6 +144,11 @@ tests/                   # Unit tests (Node test runner)
 | PATCH | `/api/calls/:id/analysis` | manager+ | Edit AI analysis |
 | PATCH | `/api/calls/:id/assign` | manager+ | Assign call to employee |
 | DELETE | `/api/calls/:id` | manager+ | Delete call |
+| GET | `/api/calls/:id/tags` | authenticated | Get tags for a call |
+| POST | `/api/calls/:id/tags` | authenticated | Add a tag to a call |
+| DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
+| GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
+| GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
 
 ### Employees
 | Method | Path | Role | Description |
@@ -171,6 +185,20 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 | GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
 | GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
+| GET | `/api/admin/security-summary` | admin | Security posture summary |
+| GET | `/api/admin/security-alerts` | admin | Recent security alerts |
+| PATCH | `/api/admin/security-alerts/:id` | admin | Acknowledge a security alert |
+| GET | `/api/admin/breach-reports` | admin | List all HIPAA breach reports |
+| POST | `/api/admin/breach-reports` | admin | File a new breach report |
+| PATCH | `/api/admin/breach-reports/:id` | admin | Update breach notification status |
+
+### Team Analytics & Export
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/analytics/teams` | authenticated | Comparative team performance (sub-team aggregates) |
+| GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
+| GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
+| GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -240,6 +268,9 @@ BATCH_SCHEDULE_START            # Time-of-day to START using batch mode (24h for
 BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h format, e.g. "08:00")
                                 # When both set: batch during window, immediate outside. Uploads can override per-call.
 
+# MFA (Two-Factor Authentication)
+REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
+
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
@@ -263,6 +294,11 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
 | **Data retention** | `server/index.ts` | Auto-purges calls older than `RETENTION_DAYS` (default 90) |
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
+| **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); enforced via `REQUIRE_MFA=true` |
+| **Password complexity** | `server/auth.ts` | Warns on weak passwords (12+ chars, uppercase, lowercase, digit, special char) |
+| **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
+| **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
+| **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually

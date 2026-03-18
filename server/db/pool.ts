@@ -73,6 +73,37 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
   const migrations = [
     "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pseudonym VARCHAR(500)",
     "ALTER TABLE employees ADD COLUMN IF NOT EXISTS extension VARCHAR(50)",
+    // MFA secrets table
+    `CREATE TABLE IF NOT EXISTS mfa_secrets (
+      username VARCHAR(255) PRIMARY KEY,
+      secret VARCHAR(255) NOT NULL,
+      enabled BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // Breach reports table (HIPAA §164.408)
+    `CREATE TABLE IF NOT EXISTS breach_reports (
+      id VARCHAR(255) PRIMARY KEY,
+      reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reported_by VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      affected_individuals INTEGER NOT NULL DEFAULT 0,
+      data_types JSONB NOT NULL DEFAULT '[]',
+      discovery_date VARCHAR(100) NOT NULL,
+      containment_actions TEXT,
+      notification_status VARCHAR(50) DEFAULT 'pending',
+      timeline JSONB DEFAULT '[]'
+    )`,
+    // Call tags table
+    `CREATE TABLE IF NOT EXISTS call_tags (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      call_id UUID NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+      tag VARCHAR(100) NOT NULL,
+      created_by VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(call_id, tag)
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id)",
+    "CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag)",
   ];
   for (const sql of migrations) {
     try {
