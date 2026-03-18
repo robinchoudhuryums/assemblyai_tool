@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient, getQueryFn } from "./lib/queryClient";
+import { queryClient, getQueryFn, resetSessionExpired } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -187,6 +187,7 @@ function AuthenticatedApp() {
       <Suspense fallback={<PageLoader />}>
         <AuthPage
           onLogin={() => {
+            resetSessionExpired();
             queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
           }}
         />

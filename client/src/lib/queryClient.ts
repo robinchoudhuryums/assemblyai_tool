@@ -1,11 +1,35 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+/** Sentinel error so components can distinguish session expiry from real errors. */
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Session expired. Please log in again.");
+    this.name = "SessionExpiredError";
+  }
+}
+
+/**
+ * Prevents multiple simultaneous auth invalidations when several
+ * queries fail with 401 at the same time.
+ */
+let sessionExpired = false;
+
+/** Called after successful login to reset the flag. */
+export function resetSessionExpired() {
+  sessionExpired = false;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    // On 401, redirect to login by clearing auth state
+    // On 401, clear auth cache so AuthenticatedApp renders login page.
+    // No full page reload — just invalidate the auth query.
     if (res.status === 401) {
-      window.location.reload();
-      throw new Error("Session expired. Please log in again.");
+      if (!sessionExpired) {
+        sessionExpired = true;
+        queryClient.setQueryData(["/api/auth/me"], null);
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      }
+      throw new SessionExpiredError();
     }
     let text: string;
     try {
@@ -82,7 +106,11 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchOnWindowFocus: true,
       staleTime: 60000, // Data considered fresh for 1 minute
-      retry: 1,
+      retry: (failureCount, error) => {
+        // Never retry on session expiry
+        if (error instanceof SessionExpiredError) return false;
+        return failureCount < 1;
+      },
     },
     mutations: {
       retry: false,
