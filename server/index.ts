@@ -90,8 +90,11 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   // CSP: restrict resource loading to same-origin and trusted CDNs
+  // Note: script-src 'unsafe-inline' is required for the dark-mode flash-prevention script in index.html.
+  // Vite also injects inline scripts during development. A nonce-based approach would be more
+  // secure but requires server-side HTML templating; acceptable trade-off for now.
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
   );
   // Only set no-cache on API routes — static assets need caching for performance
   if (req.path.startsWith("/api")) {

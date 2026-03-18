@@ -10,6 +10,7 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { AudioWaveform } from "lucide-react";
 import { toDisplayString } from "@/lib/display-utils";
+import AudioWaveformDisplay from "./audio-waveform";
 
 interface TranscriptViewerProps {
   callId: string;
@@ -99,6 +100,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     }
     editMutation.mutate({ updates, reason: editReason.trim() });
   };
+
+  // Close edit mode on Escape key (broadcast from App.tsx)
+  useEffect(() => {
+    const onEscape = () => { if (isEditing) setIsEditing(false); };
+    window.addEventListener("app:escape", onEscape);
+    return () => window.removeEventListener("app:escape", onEscape);
+  }, [isEditing]);
 
   // toDisplayString is now imported from @/lib/display-utils
   // Keep a memoized reference to avoid breaking hook ordering
@@ -383,25 +391,37 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       {/* Hidden audio element that streams from S3 via the API */}
       <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="auto" />
 
-      {/* Audio progress bar */}
+      {/* Audio waveform / progress bar */}
       {audioReady && (
         <div className="mb-4">
           <div className="flex items-center space-x-3">
             <span className="text-xs text-muted-foreground w-10 text-right">
               {formatTimestamp(currentTime)}
             </span>
-            <input
-              type="range"
-              className="flex-1 h-1.5 accent-primary cursor-pointer"
-              min={0}
-              max={audioDuration}
-              value={currentTime}
-              onChange={(e) => {
-                const ms = Number(e.target.value);
-                if (audioRef.current) audioRef.current.currentTime = ms / 1000;
-                setCurrentTime(ms);
-              }}
-            />
+            <div className="flex-1">
+              <AudioWaveformDisplay
+                audioRef={audioRef}
+                currentTime={currentTime}
+                duration={audioDuration}
+                onSeek={(ms) => {
+                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
+                  setCurrentTime(ms);
+                }}
+              />
+              {/* Fallback range input (shown briefly while waveform loads) */}
+              <input
+                type="range"
+                className="w-full h-1.5 accent-primary cursor-pointer mt-1"
+                min={0}
+                max={audioDuration}
+                value={currentTime}
+                onChange={(e) => {
+                  const ms = Number(e.target.value);
+                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
+                  setCurrentTime(ms);
+                }}
+              />
+            </div>
             <span className="text-xs text-muted-foreground w-10">
               {formatTimestamp(audioDuration)}
             </span>

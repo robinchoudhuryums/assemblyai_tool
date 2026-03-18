@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -32,6 +32,21 @@ interface AuthUser {
 export default function Sidebar() {
   const [location, navigate] = useLocation();
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [notifications, setNotifications] = useState<string[]>([]);
+
+  // Listen for WebSocket call completion events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.status === "completed" && detail?.callId) {
+        setNotifications(prev => [detail.callId, ...prev].slice(0, 20));
+      }
+    };
+    window.addEventListener("ws:call_update", handler);
+    return () => window.removeEventListener("ws:call_update", handler);
+  }, []);
+
+  const clearNotifications = () => setNotifications([]);
 
   const toggleDarkMode = () => {
     const next = !isDark;
@@ -113,13 +128,27 @@ export default function Sidebar() {
               <p className="text-xs text-muted-foreground">Pro Dashboard</p>
             </div>
           </div>
-          <button
-            onClick={toggleDarkMode}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => { clearNotifications(); navigate("/transcripts"); }}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
+              title={notifications.length > 0 ? `${notifications.length} new call${notifications.length > 1 ? "s" : ""} ready` : "No new notifications"}
+            >
+              <Bell className="w-4 h-4" />
+              {notifications.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[9px] font-bold bg-primary text-primary-foreground">
+                  {notifications.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={toggleDarkMode}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
       </div>
 

@@ -272,6 +272,40 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   };
 
+  // CSV export of performers + trends for spreadsheet analysis
+  const handleDownloadCSV = () => {
+    if (!report) return;
+    const rows: string[][] = [];
+    // Performers sheet
+    rows.push(["Performers"]);
+    rows.push(["Rank", "Name", "Role", "Avg Score", "Total Calls"]);
+    report.performers.forEach((p, i) => {
+      rows.push([(i + 1).toString(), p.name, p.role, p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "", p.totalCalls.toString()]);
+    });
+    rows.push([]);
+    // Monthly trends
+    rows.push(["Monthly Trends"]);
+    rows.push(["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"]);
+    report.trends.forEach(t => {
+      rows.push([t.month, t.calls.toString(), t.avgScore != null ? t.avgScore.toFixed(1) : "", t.positive.toString(), t.neutral.toString(), t.negative.toString()]);
+    });
+    rows.push([]);
+    // Summary
+    rows.push(["Summary"]);
+    rows.push(["Total Calls", report.metrics.totalCalls.toString()]);
+    rows.push(["Avg Performance", report.metrics.avgPerformanceScore.toFixed(1)]);
+    rows.push(["Avg Sentiment", report.metrics.avgSentiment.toFixed(2)]);
+
+    const csvContent = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `report-${reportType}-${dateRange.from}-to-${dateRange.to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Delta helper for comparison
   const delta = (current: number, previous: number | undefined) => {
     if (previous === undefined || previous === 0) return null;
@@ -282,9 +316,36 @@ export default function ReportsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
-        <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+      <div className="min-h-screen">
+        <header className="bg-card border-b border-border px-6 py-4">
+          <div className="h-8 w-56 bg-muted rounded animate-pulse" />
+          <div className="h-4 w-80 bg-muted rounded animate-pulse mt-2" />
+        </header>
+        <div className="p-6 space-y-6">
+          {/* Metrics skeleton */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="bg-card rounded-lg border border-border p-6">
+                <div className="h-4 w-24 bg-muted rounded animate-pulse mb-3" />
+                <div className="h-8 w-16 bg-muted rounded animate-pulse" />
+              </div>
+            ))}
+          </div>
+          {/* Chart skeleton */}
+          <div className="bg-card rounded-lg border border-border p-6">
+            <div className="h-5 w-40 bg-muted rounded animate-pulse mb-4" />
+            <div className="h-64 bg-muted rounded animate-pulse" />
+          </div>
+          {/* Table skeleton */}
+          <div className="bg-card rounded-lg border border-border p-6">
+            <div className="h-5 w-32 bg-muted rounded animate-pulse mb-4" />
+            <div className="space-y-3">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -306,10 +367,16 @@ export default function ReportsPage() {
           <h2 className="text-2xl font-bold text-foreground">Performance Reports</h2>
           <p className="text-muted-foreground">Filter by time period, employee, or department.</p>
         </div>
-        <Button onClick={handleDownloadReport} disabled={!report}>
-          <Download className="w-4 h-4 mr-2" />
-          Download Report
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleDownloadCSV} disabled={!report}>
+            <Download className="w-4 h-4 mr-2" />
+            CSV
+          </Button>
+          <Button onClick={handleDownloadReport} disabled={!report}>
+            <Download className="w-4 h-4 mr-2" />
+            Report
+          </Button>
+        </div>
       </header>
 
       {/* Filters Bar */}

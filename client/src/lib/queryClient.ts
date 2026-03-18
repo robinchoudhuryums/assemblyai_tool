@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { toast } from "@/hooks/use-toast";
 
 /** Sentinel error so components can distinguish session expiry from real errors. */
 export class SessionExpiredError extends Error {
@@ -28,6 +29,11 @@ async function throwIfResNotOk(res: Response) {
         sessionExpired = true;
         queryClient.setQueryData(["/api/auth/me"], null);
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        toast({
+          title: "Session Expired",
+          description: "You've been signed out due to inactivity. Please log in again.",
+          variant: "destructive",
+        });
       }
       throw new SessionExpiredError();
     }

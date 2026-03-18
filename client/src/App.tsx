@@ -103,6 +103,11 @@ function Router() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       switch (e.key) {
+        case "Escape":
+          setShowShortcuts(false);
+          // Broadcast escape to child components (edit modes, panels, etc.)
+          window.dispatchEvent(new CustomEvent("app:escape"));
+          break;
         case "?":
           e.preventDefault();
           setShowShortcuts(prev => !prev);
