@@ -26,6 +26,7 @@ const InsightsPage = lazy(() => import("@/pages/insights"));
 const CoachingPage = lazy(() => import("@/pages/coaching"));
 const ABTestingPage = lazy(() => import("@/pages/ab-testing"));
 const SpendTrackingPage = lazy(() => import("@/pages/spend-tracking"));
+const AgentScorecardPage = lazy(() => import("@/pages/agent-scorecard"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -161,6 +162,7 @@ function Router() {
               <Route path="/admin/templates">{() => <ErrorBoundary><AnimatedPage><PromptTemplatesPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/ab-testing">{() => <ErrorBoundary><AnimatedPage><ABTestingPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/spend">{() => <ErrorBoundary><AnimatedPage><SpendTrackingPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/scorecard/:id">{() => <ErrorBoundary><AnimatedPage><AgentScorecardPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>
           </AnimatePresence>

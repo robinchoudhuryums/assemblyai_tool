@@ -1295,9 +1295,39 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         res.status(400).json({ message: "Search query is required" });
         return;
       }
-      
-      const results = await storage.searchCalls(query);
-      res.json(results);
+      if (query.length > 500) {
+        res.status(400).json({ message: "Search query too long (max 500 characters)" });
+        return;
+      }
+
+      const limit = clampInt(req.query.limit as string | undefined, 50, 1, 200);
+      const results = await storage.searchCalls(query, limit);
+
+      // Apply optional client-side filters for sentiment, score range, date range
+      let filtered = results;
+      const sentimentParam = req.query.sentiment as string;
+      if (sentimentParam && sentimentParam !== "all") {
+        filtered = filtered.filter(c => c.sentiment?.overallSentiment === sentimentParam);
+      }
+      const minScore = parseFloat(req.query.minScore as string);
+      const maxScore = parseFloat(req.query.maxScore as string);
+      if (!isNaN(minScore)) {
+        filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "0") >= minScore);
+      }
+      if (!isNaN(maxScore)) {
+        filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "10") <= maxScore);
+      }
+      const fromDate = parseDate(req.query.from as string);
+      const toDate = parseDate(req.query.to as string);
+      if (fromDate) {
+        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate!);
+      }
+      if (toDate) {
+        toDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate!);
+      }
+
+      res.json(filtered);
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls" });
     }
@@ -1794,11 +1824,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
   // List all coaching sessions (managers and admins)
   app.get("/api/coaching", requireAuth, requireRole("manager", "admin"), async (_req, res) => {
     try {
-      const sessions = await storage.getAllCoachingSessions();
-      // Enrich with employee names
-      const enriched = await Promise.all(sessions.map(async s => {
-        const emp = await storage.getEmployee(s.employeeId);
-        return { ...s, employeeName: emp?.name || "Unknown" };
+      const [sessions, employees] = await Promise.all([
+        storage.getAllCoachingSessions(),
+        storage.getAllEmployees(),
+      ]);
+      // Build employee lookup map to avoid N+1 queries
+      const empMap = new Map(employees.map(e => [e.id, e]));
+      const enriched = sessions.map(s => ({
+        ...s,
+        employeeName: empMap.get(s.employeeId)?.name || "Unknown",
       }));
       res.json(enriched.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
     } catch (error) {
@@ -2248,6 +2282,74 @@ app.get("/api/performance", requireAuth, async (req, res) => {
       }
     } catch (error) {
       res.status(500).json({ message: "Failed to get queue status" });
+    }
+  });
+
+  // ==================== ADMIN: DEAD-LETTER QUEUE ====================
+
+  // List dead-letter jobs (failed after max retries)
+  app.get("/api/admin/dead-jobs", requireRole("admin"), async (_req, res) => {
+    try {
+      if (jobQueue) {
+        const deadJobs = await jobQueue.getDeadJobs();
+        res.json(deadJobs);
+      } else {
+        res.json([]);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get dead-letter jobs" });
+    }
+  });
+
+  // Retry a dead-letter job
+  app.post("/api/admin/dead-jobs/:id/retry", requireRole("admin"), async (req, res) => {
+    try {
+      if (!jobQueue) {
+        res.status(400).json({ message: "Job queue not available (no database configured)" });
+        return;
+      }
+      const retried = await jobQueue.retryJob(req.params.id);
+      if (retried) {
+        res.json({ message: "Job re-queued for processing" });
+      } else {
+        res.status(404).json({ message: "Dead job not found or already retried" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to retry job" });
+    }
+  });
+
+  // ==================== EXPORT: CSV DOWNLOAD ====================
+
+  // Export calls as CSV
+  app.get("/api/export/calls", requireAuth, async (req, res) => {
+    try {
+      const { status, sentiment, employee } = req.query;
+      const calls = await storage.getCallsWithDetails({
+        status: status as string,
+        sentiment: sentiment as string,
+        employee: employee as string,
+      });
+
+      const header = "Date,Employee,Duration (s),Sentiment,Score,Party Type,Status,Flags,Summary\n";
+      const rows = calls.map(c => {
+        const date = c.uploadedAt ? new Date(c.uploadedAt).toISOString() : "";
+        const employee = (c.employee?.name || "Unassigned").replace(/"/g, '""');
+        const duration = c.duration || "";
+        const sentiment = c.sentiment?.overallSentiment || "";
+        const score = c.analysis?.performanceScore || "";
+        const party = c.analysis?.callPartyType || "";
+        const status = c.status || "";
+        const flags = Array.isArray(c.analysis?.flags) ? (c.analysis.flags as string[]).join("; ") : "";
+        const summary = (typeof c.analysis?.summary === "string" ? c.analysis.summary : "").replace(/"/g, '""').replace(/\n/g, " ");
+        return `"${date}","${employee}","${duration}","${sentiment}","${score}","${party}","${status}","${flags}","${summary}"`;
+      }).join("\n");
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="calls-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(header + rows);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export calls" });
     }
   });
 

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare } from "lucide-react";
+import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare, FileText } from "lucide-react";
 import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
@@ -329,6 +329,11 @@ export default function EmployeesPage() {
           <Link href={`/reports?employee=${emp.id}`}>
             <Button size="sm" variant="ghost" title="View Agent Profile">
               <Eye className="w-3.5 h-3.5" />
+            </Button>
+          </Link>
+          <Link href={`/scorecard/${emp.id}`}>
+            <Button size="sm" variant="ghost" title="View Scorecard">
+              <FileText className="w-3.5 h-3.5" />
             </Button>
           </Link>
           <Button

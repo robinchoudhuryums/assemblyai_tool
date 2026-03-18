@@ -176,6 +176,14 @@ app.get("/api/search", rateLimit(60 * 1000, 20)); // 20 searches per minute
 app.post("/api/reports/agent-summary/:employeeId", rateLimit(60 * 1000, 5)); // 5 AI summaries per minute
 app.post("/api/access-requests", rateLimit(15 * 60 * 1000, 3)); // 3 access requests per 15 min
 
+// Rate limiting on mutation routes (prevent spam)
+const mutationRateLimit = rateLimit(60 * 1000, 15); // 15 per minute
+app.post("/api/employees", mutationRateLimit);
+app.patch("/api/employees/:id", mutationRateLimit);
+app.post("/api/coaching", mutationRateLimit);
+app.patch("/api/coaching/:id", mutationRateLimit);
+app.post("/api/employees/import-csv", rateLimit(60 * 1000, 3)); // 3 CSV imports per minute
+
 (async () => {
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();

@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -29,24 +29,59 @@ interface AuthUser {
   role: string;
 }
 
+interface Notification {
+  id: string;
+  callId: string;
+  type: "completed" | "failed" | "flagged";
+  message: string;
+  timestamp: Date;
+  read: boolean;
+}
+
 export default function Sidebar() {
   const [location, navigate] = useLocation();
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
-  const [notifications, setNotifications] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Listen for WebSocket call completion events
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.status === "completed" && detail?.callId) {
-        setNotifications(prev => [detail.callId, ...prev].slice(0, 20));
+      if (detail?.callId) {
+        const type = detail.status === "failed" ? "failed" as const : "completed" as const;
+        const message = detail.status === "failed"
+          ? `Call analysis failed`
+          : detail.label || `Call analysis completed`;
+        setNotifications(prev => [{
+          id: `${detail.callId}-${Date.now()}`,
+          callId: detail.callId,
+          type,
+          message,
+          timestamp: new Date(),
+          read: false,
+        }, ...prev].slice(0, 30));
       }
     };
     window.addEventListener("ws:call_update", handler);
     return () => window.removeEventListener("ws:call_update", handler);
   }, []);
 
+  const unreadCount = notifications.filter(n => !n.read).length;
   const clearNotifications = () => setNotifications([]);
+  const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
 
   const toggleDarkMode = () => {
     const next = !isDark;
@@ -129,18 +164,78 @@ export default function Sidebar() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => { clearNotifications(); navigate("/transcripts"); }}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
-              title={notifications.length > 0 ? `${notifications.length} new call${notifications.length > 1 ? "s" : ""} ready` : "No new notifications"}
-            >
-              <Bell className="w-4 h-4" />
-              {notifications.length > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[9px] font-bold bg-primary text-primary-foreground">
-                  {notifications.length}
-                </span>
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
+                title={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "No new notifications"}
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[9px] font-bold bg-primary text-primary-foreground">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notification Dropdown */}
+              {showNotifications && (
+                <div className="absolute left-0 top-full mt-2 w-80 bg-card border border-border rounded-lg shadow-lg z-50">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                    <h4 className="text-sm font-semibold text-foreground">Notifications</h4>
+                    <div className="flex items-center gap-1">
+                      {unreadCount > 0 && (
+                        <button onClick={markAllRead} className="text-xs text-primary hover:underline">Mark all read</button>
+                      )}
+                      {notifications.length > 0 && (
+                        <button onClick={clearNotifications} className="text-xs text-muted-foreground hover:text-foreground ml-2">Clear</button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="text-center py-8 text-sm text-muted-foreground">
+                        No notifications yet
+                      </div>
+                    ) : (
+                      notifications.map(n => (
+                        <button
+                          key={n.id}
+                          className={cn(
+                            "w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border last:border-0 flex items-start gap-2",
+                            !n.read && "bg-primary/5"
+                          )}
+                          onClick={() => {
+                            setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
+                            setShowNotifications(false);
+                            navigate(`/transcripts/${n.callId}`);
+                          }}
+                        >
+                          {n.type === "completed" ? (
+                            <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
+                          ) : n.type === "failed" ? (
+                            <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 shrink-0" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className={cn("text-xs", !n.read ? "font-medium text-foreground" : "text-muted-foreground")}>
+                              {n.message}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {n.timestamp.toLocaleTimeString()}
+                            </p>
+                          </div>
+                          {!n.read && (
+                            <span className="w-2 h-2 rounded-full bg-primary mt-1 shrink-0" />
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
             <button
               onClick={toggleDarkMode}
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
