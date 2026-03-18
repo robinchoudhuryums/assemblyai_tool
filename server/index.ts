@@ -90,8 +90,11 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   // CSP: restrict resource loading to same-origin and trusted CDNs
+  // Note: script-src 'unsafe-inline' is required for the dark-mode flash-prevention script in index.html.
+  // Vite also injects inline scripts during development. A nonce-based approach would be more
+  // secure but requires server-side HTML templating; acceptable trade-off for now.
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
   );
   // Only set no-cache on API routes — static assets need caching for performance
   if (req.path.startsWith("/api")) {
@@ -172,6 +175,14 @@ app.post("/api/ab-tests/upload", expensiveRateLimit);
 app.get("/api/search", rateLimit(60 * 1000, 20)); // 20 searches per minute
 app.post("/api/reports/agent-summary/:employeeId", rateLimit(60 * 1000, 5)); // 5 AI summaries per minute
 app.post("/api/access-requests", rateLimit(15 * 60 * 1000, 3)); // 3 access requests per 15 min
+
+// Rate limiting on mutation routes (prevent spam)
+const mutationRateLimit = rateLimit(60 * 1000, 15); // 15 per minute
+app.post("/api/employees", mutationRateLimit);
+app.patch("/api/employees/:id", mutationRateLimit);
+app.post("/api/coaching", mutationRateLimit);
+app.patch("/api/coaching/:id", mutationRateLimit);
+app.post("/api/employees/import-csv", rateLimit(60 * 1000, 3)); // 3 CSV imports per minute
 
 (async () => {
   // Initialize database schema if PostgreSQL is configured

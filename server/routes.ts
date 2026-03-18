@@ -13,6 +13,7 @@ import { requireAuth, requireRole } from "./auth";
 import { broadcastCallUpdate } from "./services/websocket";
 import { logPhiAccess, auditContext } from "./services/audit-log";
 import { JobQueue, type Job } from "./services/job-queue";
+import { bedrockBatchService, type PendingBatchItem, type BatchJob } from "./services/bedrock-batch";
 import { getPool } from "./db/pool";
 import { insertEmployeeSchema, insertAccessRequestSchema, insertPromptTemplateSchema, insertCoachingSessionSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { z } from "zod";
@@ -72,9 +73,11 @@ const audioProcessingQueue = new TaskQueue(3);
 // Durable job queue (initialized if PostgreSQL is available)
 let jobQueue: JobQueue | null = null;
 
-/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output). */
+/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output).
+ *  Note: When BEDROCK_BATCH_MODE=true, actual cost is 50% of these rates. Callers
+ *  for batch usage should multiply result by 0.5. */
 function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
-  // Approximate pricing per 1K tokens (input, output) — updated as of 2026
+  // Approximate on-demand pricing per 1K tokens (input, output) — updated as of 2026
   const pricing: Record<string, [number, number]> = {
     "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
     "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
@@ -89,6 +92,48 @@ function estimateBedrockCost(model: string, inputTokens: number, outputTokens: n
 /** Estimate AssemblyAI cost: base $0.15/hr + sentiment $0.02/hr = $0.17/hr = ~$0.0000472/sec */
 function estimateAssemblyAICost(durationSeconds: number): number {
   return durationSeconds * 0.0000472;
+}
+
+/**
+ * Determine if batch processing should be used for a given upload.
+ * Considers: BEDROCK_BATCH_MODE env var, time-of-day schedule, and per-upload override.
+ *
+ * Schedule: BATCH_SCHEDULE_START / BATCH_SCHEDULE_END (24h format, e.g. "18:00" / "08:00")
+ * When set, batch mode is only active during the scheduled window.
+ * Outside the window, on-demand is used even if BEDROCK_BATCH_MODE=true.
+ *
+ * Per-upload override: "immediate" forces on-demand, "batch" forces batch.
+ */
+function shouldUseBatchMode(perUploadOverride?: string): boolean {
+  // Per-upload override takes priority
+  if (perUploadOverride === "immediate") return false;
+  if (perUploadOverride === "batch") return bedrockBatchService.isAvailable;
+
+  // Must have batch mode enabled at all
+  if (!bedrockBatchService.isAvailable) return false;
+
+  // Check time-of-day schedule
+  const scheduleStart = process.env.BATCH_SCHEDULE_START; // e.g. "18:00"
+  const scheduleEnd = process.env.BATCH_SCHEDULE_END;     // e.g. "08:00"
+
+  if (scheduleStart && scheduleEnd) {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const [startH, startM] = scheduleStart.split(":").map(Number);
+    const [endH, endM] = scheduleEnd.split(":").map(Number);
+    const startMinutes = startH * 60 + (startM || 0);
+    const endMinutes = endH * 60 + (endM || 0);
+
+    if (startMinutes <= endMinutes) {
+      // Same-day window (e.g. 09:00 - 17:00)
+      if (currentMinutes < startMinutes || currentMinutes >= endMinutes) return false;
+    } else {
+      // Overnight window (e.g. 18:00 - 08:00)
+      if (currentMinutes < startMinutes && currentMinutes >= endMinutes) return false;
+    }
+  }
+
+  return true;
 }
 
 // Ensure uploads directory exists
@@ -432,6 +477,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const name = (row["Agent Name"] || "").trim();
         const department = (row["Department"] || "").trim();
         const extension = (row["Extension"] || "").trim().replace(/[^\w.-]/g, "");
+        const pseudonym = (row["Pseudonym"] || row["Display Name"] || "").trim();
         const status = (row["Status"] || "Active").trim();
 
         if (!name || name.length > 100) continue;
@@ -450,12 +496,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
           : name.slice(0, 2).toUpperCase();
 
+        const validExtension = extension && extension !== "NA" && extension !== "N/A" && extension !== "a"
+          ? extension : undefined;
+
         try {
           const existing = await storage.getEmployeeByEmail(email);
           if (existing) {
-            results.push({ name, action: "skipped (exists)" });
+            // Update pseudonym/extension if provided and not already set
+            if ((pseudonym || validExtension) && (!existing.pseudonym && !existing.extension)) {
+              await storage.updateEmployee(existing.id, {
+                pseudonym: pseudonym || existing.pseudonym,
+                extension: validExtension || existing.extension,
+              });
+              results.push({ name, action: "updated (pseudonym/extension)" });
+            } else {
+              results.push({ name, action: "skipped (exists)" });
+            }
           } else {
-            await storage.createEmployee({ name, email, role: department, initials, status });
+            await storage.createEmployee({
+              name, email, role: department, initials, status,
+              pseudonym: pseudonym || undefined,
+              extension: validExtension,
+            });
             results.push({ name, action: "created" });
           }
         } catch (err) {
@@ -557,6 +619,9 @@ app.get("/api/calls", requireAuth, async (req, res) => {
       const { employeeId } = req.body;
       const validCategories = CALL_CATEGORIES.map(c => c.value) as string[];
       const callCategory = validCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
+      const processingMode = (req.body.processingMode === "immediate" || req.body.processingMode === "batch")
+        ? req.body.processingMode as "immediate" | "batch"
+        : undefined;
 
       // If employeeId provided, verify employee exists
       if (employeeId) {
@@ -599,9 +664,10 @@ app.get("/api/calls", requireAuth, async (req, res) => {
           mimeType,
           callCategory: callCategory || null,
           uploadedBy: uploadUser,
+          processingMode: processingMode || null,
         });
       } else {
-        audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser))
+        audioProcessingQueue.add(() => processAudioFile(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser, processingMode))
           .catch(async (error) => {
             console.error(`Failed to process call ${call.id}:`, error);
             try {
@@ -633,7 +699,7 @@ app.get("/api/calls", requireAuth, async (req, res) => {
   }
 
 // Process audio file with AssemblyAI and archive to cloud storage
-async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string) {
+async function processAudioFile(callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string, processingMode?: string) {
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -656,10 +722,38 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
       console.log(`[${callId}] Step 1b/7: Audio already archived, skipping.`);
     }
 
-    // Step 2: Start transcription
+    // Step 2: Start transcription (with agent name word boost for correct spelling)
     broadcastCallUpdate(callId, "transcribing", { step: 2, totalSteps: 6, label: "Transcribing audio..." });
     console.log(`[${callId}] Step 2/7: Submitting for transcription...`);
-    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
+
+    // Build word boost list from employee names (helps AssemblyAI spell names correctly)
+    let wordBoost: string[] | undefined;
+    try {
+      const allEmployees = await storage.getAllEmployees();
+      const nameWords = new Set<string>();
+      for (const emp of allEmployees) {
+        // Add each part of the name (first name, last name) and pseudonym parts
+        for (const part of emp.name.split(/\s+/)) {
+          if (part.length >= 3) nameWords.add(part);
+        }
+        if (emp.pseudonym) {
+          // Extract names from pseudonym like "Camila (Cheshta) Bhutani"
+          const cleaned = emp.pseudonym.replace(/[()]/g, " ");
+          for (const part of cleaned.split(/\s+/)) {
+            if (part.length >= 3) nameWords.add(part);
+          }
+        }
+      }
+      // Also add common company-specific terms
+      nameWords.add("UMS");
+      if (nameWords.size > 0) {
+        wordBoost = Array.from(nameWords).slice(0, 100); // AssemblyAI limit: 100 words
+      }
+    } catch (boostErr) {
+      console.warn(`[${callId}] Failed to build word boost list (non-blocking):`, (boostErr as Error).message);
+    }
+
+    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl, wordBoost);
     console.log(`[${callId}] Step 2/7: Transcription submitted. Transcript ID: ${transcriptId}`);
 
     await storage.updateCall(callId, { assemblyAiId: transcriptId });
@@ -676,7 +770,7 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
     }
     console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
 
-    // Step 4: AI analysis (Gemini or Bedrock/Claude — or fall back to defaults)
+    // Step 4: AI analysis (Bedrock/Claude — or fall back to defaults)
     broadcastCallUpdate(callId, "analyzing", { step: 4, totalSteps: 6, label: "Running AI analysis..." });
     let aiAnalysis = null;
 
@@ -696,6 +790,89 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         }
       } catch (tmplError) {
         console.warn(`[${callId}] Failed to load prompt template (using defaults):`, (tmplError as Error).message);
+      }
+    }
+
+    // Batch mode: defer AI analysis for 50% cost savings
+    // Checks: env var enabled, time-of-day schedule, and per-upload override
+    if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && transcriptResponse.text) {
+      const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate);
+      const pendingItem: PendingBatchItem = {
+        callId,
+        prompt,
+        callCategory,
+        uploadedBy,
+        timestamp: new Date().toISOString(),
+      };
+
+      try {
+        // Save pending item and transcript data to S3 for batch processing
+        const s3Client = (storage as any).audioClient || (storage as any).client;
+        if (s3Client) {
+          await s3Client.uploadJson(`batch-inference/pending/${callId}.json`, {
+            ...pendingItem,
+            transcriptResponse: {
+              text: transcriptResponse.text,
+              confidence: transcriptResponse.confidence,
+              words: transcriptResponse.words,
+              sentiment_analysis_results: transcriptResponse.sentiment_analysis_results,
+              status: transcriptResponse.status,
+            },
+          });
+        }
+        console.log(`[${callId}] Step 4/6: Deferred to batch analysis (50% cost savings). Will be processed in next batch cycle.`);
+        broadcastCallUpdate(callId, "awaiting_analysis", { step: 4, totalSteps: 6, label: "Queued for batch analysis..." });
+
+        // Store transcript and sentiment now (analysis will come later from batch)
+        const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
+        await storage.createTranscript(transcript);
+        await storage.createSentimentAnalysis(sentiment);
+        // Store partial analysis with defaults — batch will overwrite when complete
+        analysis.confidenceScore = "0.300";
+        analysis.confidenceFactors = {
+          transcriptConfidence: transcriptResponse.confidence || 0,
+          wordCount: transcriptResponse.words?.length || 0,
+          callDurationSeconds: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+          transcriptLength: transcriptResponse.text.length,
+          aiAnalysisCompleted: false,
+          overallScore: 0.3,
+        };
+        const existingFlags = (analysis.flags as string[]) || [];
+        existingFlags.push("awaiting_batch_analysis");
+        analysis.flags = existingFlags;
+        await storage.createCallAnalysis(analysis);
+
+        await storage.updateCall(callId, {
+          status: "awaiting_analysis",
+          duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+        });
+
+        // Track usage (transcription only — Bedrock cost tracked when batch completes)
+        try {
+          const audioDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+          const assemblyaiCost = estimateAssemblyAICost(audioDuration);
+          const usageRecord: UsageRecord = {
+            id: randomUUID(),
+            callId,
+            type: "call",
+            timestamp: new Date().toISOString(),
+            user: uploadedBy || "unknown",
+            services: {
+              assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
+            },
+            totalEstimatedCost: Math.round(assemblyaiCost * 10000) / 10000,
+          };
+          await storage.createUsageRecord(usageRecord);
+        } catch (usageErr) {
+          console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+        }
+
+        await cleanupFile(filePath);
+        console.log(`[${callId}] Transcription complete, awaiting batch analysis.`);
+        return; // Exit early — batch scheduler handles the rest
+      } catch (batchErr) {
+        console.warn(`[${callId}] Failed to defer to batch (falling back to on-demand):`, (batchErr as Error).message);
+        // Fall through to on-demand analysis
       }
     }
 
@@ -1118,9 +1295,39 @@ async function processAudioFile(callId: string, filePath: string, audioBuffer: B
         res.status(400).json({ message: "Search query is required" });
         return;
       }
-      
-      const results = await storage.searchCalls(query);
-      res.json(results);
+      if (query.length > 500) {
+        res.status(400).json({ message: "Search query too long (max 500 characters)" });
+        return;
+      }
+
+      const limit = clampInt(req.query.limit as string | undefined, 50, 1, 200);
+      const results = await storage.searchCalls(query, limit);
+
+      // Apply optional client-side filters for sentiment, score range, date range
+      let filtered = results;
+      const sentimentParam = req.query.sentiment as string;
+      if (sentimentParam && sentimentParam !== "all") {
+        filtered = filtered.filter(c => c.sentiment?.overallSentiment === sentimentParam);
+      }
+      const minScore = parseFloat(req.query.minScore as string);
+      const maxScore = parseFloat(req.query.maxScore as string);
+      if (!isNaN(minScore)) {
+        filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "0") >= minScore);
+      }
+      if (!isNaN(maxScore)) {
+        filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "10") <= maxScore);
+      }
+      const fromDate = parseDate(req.query.from as string);
+      const toDate = parseDate(req.query.to as string);
+      if (fromDate) {
+        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate!);
+      }
+      if (toDate) {
+        toDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate!);
+      }
+
+      res.json(filtered);
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls" });
     }
@@ -1617,11 +1824,15 @@ app.get("/api/performance", requireAuth, async (req, res) => {
   // List all coaching sessions (managers and admins)
   app.get("/api/coaching", requireAuth, requireRole("manager", "admin"), async (_req, res) => {
     try {
-      const sessions = await storage.getAllCoachingSessions();
-      // Enrich with employee names
-      const enriched = await Promise.all(sessions.map(async s => {
-        const emp = await storage.getEmployee(s.employeeId);
-        return { ...s, employeeName: emp?.name || "Unknown" };
+      const [sessions, employees] = await Promise.all([
+        storage.getAllCoachingSessions(),
+        storage.getAllEmployees(),
+      ]);
+      // Build employee lookup map to avoid N+1 queries
+      const empMap = new Map(employees.map(e => [e.id, e]));
+      const enriched = sessions.map(s => ({
+        ...s,
+        employeeName: empMap.get(s.employeeId)?.name || "Unknown",
       }));
       res.json(enriched.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
     } catch (error) {
@@ -2074,6 +2285,320 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     }
   });
 
+  // ==================== ADMIN: DEAD-LETTER QUEUE ====================
+
+  // List dead-letter jobs (failed after max retries)
+  app.get("/api/admin/dead-jobs", requireRole("admin"), async (_req, res) => {
+    try {
+      if (jobQueue) {
+        const deadJobs = await jobQueue.getDeadJobs();
+        res.json(deadJobs);
+      } else {
+        res.json([]);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get dead-letter jobs" });
+    }
+  });
+
+  // Retry a dead-letter job
+  app.post("/api/admin/dead-jobs/:id/retry", requireRole("admin"), async (req, res) => {
+    try {
+      if (!jobQueue) {
+        res.status(400).json({ message: "Job queue not available (no database configured)" });
+        return;
+      }
+      const retried = await jobQueue.retryJob(req.params.id);
+      if (retried) {
+        res.json({ message: "Job re-queued for processing" });
+      } else {
+        res.status(404).json({ message: "Dead job not found or already retried" });
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to retry job" });
+    }
+  });
+
+  // ==================== EXPORT: CSV DOWNLOAD ====================
+
+  // Export calls as CSV
+  app.get("/api/export/calls", requireAuth, async (req, res) => {
+    try {
+      const { status, sentiment, employee } = req.query;
+      const calls = await storage.getCallsWithDetails({
+        status: status as string,
+        sentiment: sentiment as string,
+        employee: employee as string,
+      });
+
+      const header = "Date,Employee,Duration (s),Sentiment,Score,Party Type,Status,Flags,Summary\n";
+      const rows = calls.map(c => {
+        const date = c.uploadedAt ? new Date(c.uploadedAt).toISOString() : "";
+        const employee = (c.employee?.name || "Unassigned").replace(/"/g, '""');
+        const duration = c.duration || "";
+        const sentiment = c.sentiment?.overallSentiment || "";
+        const score = c.analysis?.performanceScore || "";
+        const party = c.analysis?.callPartyType || "";
+        const status = c.status || "";
+        const flags = Array.isArray(c.analysis?.flags) ? (c.analysis.flags as string[]).join("; ") : "";
+        const summary = (typeof c.analysis?.summary === "string" ? c.analysis.summary : "").replace(/"/g, '""').replace(/\n/g, " ");
+        return `"${date}","${employee}","${duration}","${sentiment}","${score}","${party}","${status}","${flags}","${summary}"`;
+      }).join("\n");
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="calls-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(header + rows);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export calls" });
+    }
+  });
+
+  // ==================== ADMIN: BATCH INFERENCE STATUS ====================
+  app.get("/api/admin/batch-status", requireRole("admin"), async (_req, res) => {
+    try {
+      const s3Client = (storage as any).audioClient || (storage as any).client;
+      if (!s3Client || !bedrockBatchService.isAvailable) {
+        res.json({ enabled: false, message: "Batch mode not enabled. Set BEDROCK_BATCH_MODE=true and BEDROCK_BATCH_ROLE_ARN." });
+        return;
+      }
+
+      // Count pending items
+      const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
+      const activeJobs = await s3Client.listAndDownloadJson<BatchJob>("batch-inference/active-jobs/");
+
+      const scheduleStart = process.env.BATCH_SCHEDULE_START || null;
+      const scheduleEnd = process.env.BATCH_SCHEDULE_END || null;
+
+      res.json({
+        enabled: true,
+        currentMode: shouldUseBatchMode() ? "batch" : "immediate",
+        schedule: scheduleStart && scheduleEnd
+          ? { start: scheduleStart, end: scheduleEnd, description: `Batch from ${scheduleStart} to ${scheduleEnd}, immediate otherwise` }
+          : { description: "Always batch (no schedule set — set BATCH_SCHEDULE_START/END for time-based)" },
+        pendingItems: pendingKeys.length,
+        activeJobs: activeJobs.map((j: BatchJob) => ({
+          jobId: j.jobId,
+          status: j.status,
+          callCount: j.callIds.length,
+          createdAt: j.createdAt,
+        })),
+        batchIntervalMinutes: parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10),
+        costSavings: "50% on Bedrock inference",
+        perUploadOverride: "Uploads can include processingMode='immediate' or 'batch' to override schedule",
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get batch status" });
+    }
+  });
+
+  // ==================== BATCH INFERENCE SCHEDULER ====================
+  if (bedrockBatchService.isAvailable) {
+    const batchIntervalMinutes = parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10);
+    console.log(`[BATCH] Batch inference mode enabled. Scheduling every ${batchIntervalMinutes} minutes.`);
+
+    const runBatchCycle = async () => {
+      try {
+        const s3Client = (storage as any).audioClient || (storage as any).client;
+        if (!s3Client) return;
+
+        // 1. Check active jobs for completion
+        const activeJobKeys = await s3Client.listObjects("batch-inference/active-jobs/");
+        for (const jobKey of activeJobKeys) {
+          try {
+            const job = await s3Client.downloadJson<BatchJob>(jobKey);
+            if (!job) continue;
+
+            const status = await bedrockBatchService.getJobStatus(job.jobArn);
+            console.log(`[BATCH] Job ${job.jobId}: ${status.status}`);
+
+            if (status.status === "Completed") {
+              // Read results and process
+              const results = await bedrockBatchService.readBatchOutput(job.outputS3Uri);
+              console.log(`[BATCH] Job ${job.jobId} completed. Processing ${results.size} results.`);
+
+              for (const [callId, analysis] of results) {
+                try {
+                  // Read the pending data for this call
+                  const pendingData = await s3Client.downloadJson<any>(`batch-inference/pending/${callId}.json`);
+                  const transcriptResponse = pendingData?.transcriptResponse;
+
+                  if (!transcriptResponse) {
+                    console.warn(`[BATCH] No transcript data found for call ${callId}, skipping.`);
+                    continue;
+                  }
+
+                  // Reprocess with the AI analysis
+                  const { transcript: _, sentiment: __, analysis: updatedAnalysis } =
+                    assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId);
+
+                  // Compute confidence
+                  const transcriptConfidence = transcriptResponse.confidence || 0;
+                  const wordCount = transcriptResponse.words?.length || 0;
+                  const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+                  const wordConfidence = Math.min(wordCount / 50, 1);
+                  const durationConfidence = callDuration > 30 ? 1 : callDuration / 30;
+                  const confidenceScore = transcriptConfidence * 0.4 + wordConfidence * 0.2 + durationConfidence * 0.15 + 0.25;
+
+                  updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
+                  updatedAnalysis.confidenceFactors = {
+                    transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
+                    wordCount,
+                    callDurationSeconds: callDuration,
+                    transcriptLength: (transcriptResponse.text || "").length,
+                    aiAnalysisCompleted: true,
+                    overallScore: Math.round(confidenceScore * 100) / 100,
+                  };
+
+                  if (analysis.sub_scores) {
+                    updatedAnalysis.subScores = {
+                      compliance: analysis.sub_scores.compliance ?? 0,
+                      customerExperience: analysis.sub_scores.customer_experience ?? 0,
+                      communication: analysis.sub_scores.communication ?? 0,
+                      resolution: analysis.sub_scores.resolution ?? 0,
+                    };
+                  }
+
+                  if (analysis.detected_agent_name) {
+                    updatedAnalysis.detectedAgentName = analysis.detected_agent_name;
+                  }
+
+                  // Remove the awaiting_batch_analysis flag
+                  if (Array.isArray(updatedAnalysis.flags)) {
+                    updatedAnalysis.flags = (updatedAnalysis.flags as string[]).filter(f => f !== "awaiting_batch_analysis");
+                  }
+
+                  if (confidenceScore < 0.7) {
+                    const flags = (updatedAnalysis.flags as string[]) || [];
+                    flags.push("low_confidence");
+                    updatedAnalysis.flags = flags;
+                  }
+
+                  // Update existing analysis (overwrite the placeholder)
+                  await storage.createCallAnalysis(updatedAnalysis);
+                  await storage.updateCall(callId, { status: "completed" });
+
+                  // Auto-assign employee
+                  if (analysis.detected_agent_name) {
+                    const currentCall = await storage.getCall(callId);
+                    if (currentCall && !currentCall.employeeId) {
+                      const detectedName = analysis.detected_agent_name.toLowerCase().trim();
+                      const allEmployees = await storage.getAllEmployees();
+                      let matchedEmployee = allEmployees.find(emp => emp.name.toLowerCase() === detectedName);
+                      if (!matchedEmployee) {
+                        const firstNameMatches = allEmployees.filter(emp =>
+                          emp.name.toLowerCase().split(" ")[0] === detectedName
+                        );
+                        if (firstNameMatches.length === 1) matchedEmployee = firstNameMatches[0];
+                      }
+                      if (matchedEmployee) {
+                        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
+                        console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
+                      }
+                    }
+                  }
+
+                  // Track Bedrock usage (at batch pricing — 50% off)
+                  try {
+                    const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+                    const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
+                    const estimatedOutputTokens = 800;
+                    const bedrockCost = estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) * 0.5;
+
+                    const usageRecord: UsageRecord = {
+                      id: randomUUID(),
+                      callId,
+                      type: "call",
+                      timestamp: new Date().toISOString(),
+                      user: pendingData?.uploadedBy || "batch",
+                      services: {
+                        bedrock: {
+                          model: bedrockModel,
+                          estimatedInputTokens,
+                          estimatedOutputTokens,
+                          estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+                        },
+                      },
+                      totalEstimatedCost: Math.round(bedrockCost * 10000) / 10000,
+                    };
+                    await storage.createUsageRecord(usageRecord);
+                  } catch {}
+
+                  broadcastCallUpdate(callId, "completed", { label: "Batch analysis complete" });
+
+                  // Clean up pending file
+                  await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+                  console.log(`[BATCH] Call ${callId} analysis stored successfully.`);
+                } catch (callErr) {
+                  console.warn(`[BATCH] Failed to process result for ${callId}:`, (callErr as Error).message);
+                }
+              }
+
+              // Clean up active job record
+              await s3Client.deleteObject(jobKey);
+            } else if (status.status === "Failed" || status.status === "Stopped" || status.status === "Expired") {
+              console.error(`[BATCH] Job ${job.jobId} failed: ${status.message || status.status}`);
+              // Mark calls as failed and clean up
+              for (const callId of job.callIds) {
+                await storage.updateCall(callId, { status: "failed" });
+                broadcastCallUpdate(callId, "failed", { label: "Batch analysis failed" });
+                await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+              }
+              await s3Client.deleteObject(jobKey);
+            }
+            // For InProgress/Submitted/Scheduled/Validating — keep polling next cycle
+          } catch (jobErr) {
+            console.warn(`[BATCH] Error checking job status:`, (jobErr as Error).message);
+          }
+        }
+
+        // 2. Collect pending items and submit new batch if any
+        const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
+        if (pendingKeys.length === 0) return;
+
+        // Minimum batch size to avoid overhead (unless items are > 30 min old)
+        const MIN_BATCH_SIZE = 5;
+        if (pendingKeys.length < MIN_BATCH_SIZE) {
+          // Check if any pending items are old enough to force-batch
+          const oldestItem = await s3Client.downloadJson<PendingBatchItem>(pendingKeys[0]);
+          if (oldestItem) {
+            const age = Date.now() - new Date(oldestItem.timestamp).getTime();
+            if (age < batchIntervalMinutes * 60 * 1000 * 2) {
+              // Not old enough — wait for more items
+              console.log(`[BATCH] ${pendingKeys.length} pending items (below threshold of ${MIN_BATCH_SIZE}). Waiting for more.`);
+              return;
+            }
+          }
+        }
+
+        console.log(`[BATCH] Collecting ${pendingKeys.length} pending items for batch submission.`);
+
+        const items: PendingBatchItem[] = [];
+        for (const key of pendingKeys) {
+          const data = await s3Client.downloadJson<PendingBatchItem & { transcriptResponse: any }>(key);
+          if (data) items.push({ callId: data.callId, prompt: data.prompt, callCategory: data.callCategory, uploadedBy: data.uploadedBy, timestamp: data.timestamp });
+        }
+
+        if (items.length === 0) return;
+
+        // Create and submit batch
+        const { s3Uri, batchId } = await bedrockBatchService.createBatchInput(items);
+        const callIds = items.map(i => i.callId);
+        const batchJob = await bedrockBatchService.createJob(s3Uri, batchId, callIds);
+
+        // Save active job record
+        await s3Client.uploadJson(`batch-inference/active-jobs/${batchJob.jobId}.json`, batchJob);
+        console.log(`[BATCH] Submitted batch job ${batchJob.jobId} with ${items.length} calls.`);
+
+      } catch (batchErr) {
+        console.error(`[BATCH] Batch cycle error:`, (batchErr as Error).message);
+      }
+    };
+
+    // Run batch cycle on interval
+    setTimeout(runBatchCycle, 60_000); // First run after 1 minute
+    setInterval(runBatchCycle, batchIntervalMinutes * 60 * 1000);
+  }
+
   // ==================== JOB QUEUE INITIALIZATION ====================
   const dbPool = getPool();
   if (dbPool) {
@@ -2084,9 +2609,9 @@ app.get("/api/performance", requireAuth, async (req, res) => {
     // Job handler: dispatches to the correct processor based on job type
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {
-        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy } = job.payload as {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode } = job.payload as {
           callId: string; filePath: string; originalName: string;
-          mimeType: string; callCategory?: string; uploadedBy?: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string;
         };
 
         // Re-read audio from S3 (it was archived before enqueueing)
@@ -2105,7 +2630,7 @@ app.get("/api/performance", requireAuth, async (req, res) => {
           }
         }
 
-        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy);
+        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode);
       } else {
         console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
       }

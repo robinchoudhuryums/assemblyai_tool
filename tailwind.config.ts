@@ -84,10 +84,25 @@ export default {
             height: "0",
           },
         },
+        "equalizer": {
+          "0%, 100%": { height: "20%" },
+          "50%": { height: "90%" },
+        },
+        "fade-in-up": {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "shimmer": {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "equalizer": "equalizer 1s ease-in-out infinite",
+        "fade-in-up": "fade-in-up 0.3s ease-out",
+        "shimmer": "shimmer 2s linear infinite",
       },
     },
   },

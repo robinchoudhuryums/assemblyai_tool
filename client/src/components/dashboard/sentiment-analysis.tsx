@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { useLocation } from "wouter";
 import type { SentimentDistribution } from "@shared/schema";
 
 export default function SentimentAnalysis() {
+  const [, navigate] = useLocation();
   const { data: sentimentData, isLoading } = useQuery<SentimentDistribution>({
     queryKey: ["/api/dashboard/sentiment"],
   });
@@ -37,7 +39,7 @@ export default function SentimentAnalysis() {
   const pct = (val: number) => total > 0 ? Math.round((val / total) * 100) : 0;
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="sentiment-analysis">
+    <div className="bg-card rounded-lg border border-border p-6 hover-lift" data-testid="sentiment-analysis">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Sentiment Analysis</h3>
       </div>
@@ -63,19 +65,31 @@ export default function SentimentAnalysis() {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <div className="text-center p-3 sentiment-positive rounded-lg">
+        <div
+          className="text-center p-3 sentiment-positive rounded-lg cursor-pointer hover:ring-2 hover:ring-green-400 transition-all"
+          onClick={() => navigate("/search?sentiment=positive")}
+          role="link"
+        >
           <p className="text-2xl font-bold" data-testid="sentiment-positive">
             {pct(positive)}%
           </p>
           <p className="text-sm font-medium">Positive ({positive})</p>
         </div>
-        <div className="text-center p-3 sentiment-neutral rounded-lg">
+        <div
+          className="text-center p-3 sentiment-neutral rounded-lg cursor-pointer hover:ring-2 hover:ring-yellow-400 transition-all"
+          onClick={() => navigate("/search?sentiment=neutral")}
+          role="link"
+        >
           <p className="text-2xl font-bold" data-testid="sentiment-neutral">
             {pct(neutral)}%
           </p>
           <p className="text-sm font-medium">Neutral ({neutral})</p>
         </div>
-        <div className="text-center p-3 sentiment-negative rounded-lg">
+        <div
+          className="text-center p-3 sentiment-negative rounded-lg cursor-pointer hover:ring-2 hover:ring-red-400 transition-all"
+          onClick={() => navigate("/search?sentiment=negative")}
+          role="link"
+        >
           <p className="text-2xl font-bold" data-testid="sentiment-negative">
             {pct(negative)}%
           </p>

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
 import type { CallWithDetails } from "@shared/schema";
-import { AudioWaveform } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 
 export default function SearchV2Page() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -37,7 +37,7 @@ export default function SearchV2Page() {
             <Input type="text" placeholder="Search by keywords..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
           </div>
           {isLoading ? (
-            <div className="flex items-center justify-center h-48"><AudioWaveform className="w-8 h-8 animate-spin text-primary" /></div>
+            <div className="flex items-center justify-center h-48"><LoadingIndicator text="Searching..." /></div>
           ) : (
             <div className="space-y-2">
               {searchResults && searchResults.map(call => (

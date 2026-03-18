@@ -47,6 +47,8 @@ export async function initializeDatabase(): Promise<void> {
 
     if (result.rows[0].exists) {
       console.log("[DB] Schema already initialized");
+      // Run lightweight migrations for new columns on existing databases
+      await runMigrations(db);
       return;
     }
 
@@ -60,6 +62,27 @@ export async function initializeDatabase(): Promise<void> {
   } catch (error) {
     console.error("[DB] Failed to initialize schema:", (error as Error).message);
     throw error;
+  }
+}
+
+/**
+ * Run lightweight ALTER TABLE migrations for new columns added after initial schema.
+ * Each migration is idempotent (IF NOT EXISTS / catches "already exists" errors).
+ */
+async function runMigrations(db: import("pg").Pool): Promise<void> {
+  const migrations = [
+    "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pseudonym VARCHAR(500)",
+    "ALTER TABLE employees ADD COLUMN IF NOT EXISTS extension VARCHAR(50)",
+  ];
+  for (const sql of migrations) {
+    try {
+      await db.query(sql);
+    } catch (err) {
+      // Ignore "column already exists" errors
+      if (!(err as any)?.message?.includes("already exists")) {
+        console.warn("[DB] Migration warning:", (err as Error).message);
+      }
+    }
   }
 }
 

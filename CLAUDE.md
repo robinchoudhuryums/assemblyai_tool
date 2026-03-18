@@ -84,6 +84,14 @@ tests/                   # Unit tests (Node test runner)
 - Auto-retry with dead-letter pattern (3 max attempts)
 - Stale job reclaim after 10 minutes of inactivity
 
+**Batch Inference Mode** (when `BEDROCK_BATCH_MODE=true`):
+- After transcription, the AI analysis prompt is saved to S3 (`batch-inference/pending/`) instead of calling Bedrock synchronously
+- A scheduler runs every `BATCH_INTERVAL_MINUTES` (default 15), collects pending items, creates a JSONL input file, and submits to Bedrock Batch API
+- Bedrock processes the batch asynchronously at 50% cost vs on-demand pricing (completion within 24 hours)
+- On completion, results are parsed from S3 output, analyses are stored, and calls are moved to "completed" status
+- Requires IAM role with `bedrock:CreateModelInvocationJob` and `bedrock:GetModelInvocationJob` permissions
+- Falls back to on-demand if batch submission fails
+
 **On failure**: Call status set to "failed", WebSocket notifies client. Job queue retries up to 3 times before marking as "dead". Error messages are logged without full stack traces (HIPAA — avoids logging PHI).
 
 ### AI Analysis Data Flow
@@ -162,6 +170,7 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 | GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
+| GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -222,6 +231,14 @@ S3_BUCKET                       # Default: ums-call-archive (audio blobs when DB
 
 # AI Model
 BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)
+
+# Batch Inference (50% cost savings, delayed results)
+BEDROCK_BATCH_MODE              # Set to "true" to enable batch inference (default: disabled)
+BEDROCK_BATCH_ROLE_ARN          # IAM role ARN for Bedrock batch jobs (required if batch mode enabled)
+BATCH_INTERVAL_MINUTES          # How often to submit/check batch jobs (default: 15)
+BATCH_SCHEDULE_START            # Time-of-day to START using batch mode (24h format, e.g. "18:00")
+BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h format, e.g. "08:00")
+                                # When both set: batch during window, immediate outside. Uploads can override per-call.
 
 # Optional
 PORT                            # Default: 5000
@@ -335,3 +352,5 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - Without `DATABASE_URL`, sessions use memorystore (lost on restart) and job queue falls back to in-memory TaskQueue (no retry on crash)
 - PostgreSQL schema auto-initializes on startup (`server/db/pool.ts:initializeDatabase`) — no manual migration step needed
 - AssemblyAI costs: $0.15/hr base + $0.02/hr sentiment = $0.17/hr ($0.0000472/sec)
+- AssemblyAI uses `speech_models: ["universal-3-pro", "universal-2"]` — Universal-3 Pro is the highest accuracy model with fallback to Universal-2 for unsupported languages
+- Bedrock Batch Mode (`BEDROCK_BATCH_MODE=true`) saves 50% on AI analysis costs but results are delayed (up to 24 hours). Calls show as "awaiting_analysis" until batch completes.

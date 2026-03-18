@@ -1,0 +1,45 @@
+# CallAnalyzer — Deploy to EC2
+# Triggers on push to main branch. Connects via SSH and runs deploy.sh.
+#
+# Required GitHub Secrets:
+#   EC2_SSH_KEY        — Private SSH key (PEM) for the EC2 instance
+#   EC2_HOST           — EC2 public IP or hostname
+#   EC2_USER           — SSH username (e.g. "ec2-user" or "ubuntu")
+#   EC2_APP_DIR        — App directory on EC2 (e.g. "/home/ec2-user/assemblyai_tool")
+#
+# HIPAA note: This workflow does NOT handle PHI. It only triggers a
+# code pull + build + restart on the EC2 instance. All sensitive data
+# (credentials, audio files, transcripts) stays on the server.
+
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false  # Don't cancel in-progress deploys
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            cd ${{ secrets.EC2_APP_DIR }}
+            echo "=== GitHub Actions Deploy ==="
+            echo "Commit: ${{ github.sha }}"
+            echo "Branch: ${{ github.ref_name }}"
+            ./deploy.sh ${{ github.ref_name }}

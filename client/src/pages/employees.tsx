@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare } from "lucide-react";
+import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare, FileText } from "lucide-react";
 import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
@@ -157,8 +157,11 @@ export default function EmployeesPage() {
   const [editRole, setEditRole] = useState("");
   const [editSubTeam, setEditSubTeam] = useState("");
   const [editStatus, setEditStatus] = useState("Active");
+  const [editPseudonym, setEditPseudonym] = useState("");
+  const [editExtension, setEditExtension] = useState("");
 
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+  const [showSubTeam, setShowSubTeam] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
 
   const toggleCompare = (id: string) => {
@@ -248,6 +251,8 @@ export default function EmployeesPage() {
     setEditRole(emp.role || "");
     setEditSubTeam(emp.subTeam || "");
     setEditStatus(emp.status || "Active");
+    setEditPseudonym(emp.pseudonym || "");
+    setEditExtension(emp.extension || "");
     setEditOpen(true);
   };
 
@@ -286,6 +291,8 @@ export default function EmployeesPage() {
         role: editRole.trim() || undefined,
         subTeam: editSubTeam && editSubTeam !== "none" ? editSubTeam : undefined,
         status: editStatus,
+        pseudonym: editPseudonym.trim() || undefined,
+        extension: editExtension.trim() || undefined,
       },
     });
   };
@@ -303,10 +310,13 @@ export default function EmployeesPage() {
           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center shrink-0">
             {emp.initials || emp.name?.slice(0, 2).toUpperCase()}
           </span>
-          {emp.name}
+          <div>
+            <span>{emp.pseudonym || emp.name}</span>
+            {emp.extension && <span className="ml-2 text-xs text-muted-foreground">ext. {emp.extension}</span>}
+          </div>
         </div>
       </td>
-      <td className="px-4 py-2.5 text-sm text-muted-foreground">{emp.subTeam || "—"}</td>
+      {showSubTeam && <td className="px-4 py-2.5 text-sm text-muted-foreground">{emp.subTeam || "—"}</td>}
       <td className="px-4 py-2.5 text-sm">
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
           emp.status === "Active" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
@@ -319,6 +329,11 @@ export default function EmployeesPage() {
           <Link href={`/reports?employee=${emp.id}`}>
             <Button size="sm" variant="ghost" title="View Agent Profile">
               <Eye className="w-3.5 h-3.5" />
+            </Button>
+          </Link>
+          <Link href={`/scorecard/${emp.id}`}>
+            <Button size="sm" variant="ghost" title="View Scorecard">
+              <FileText className="w-3.5 h-3.5" />
             </Button>
           </Link>
           <Button
@@ -343,7 +358,7 @@ export default function EmployeesPage() {
       <thead>
         <tr className="border-b border-border">
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Name</th>
-          <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Sub-Team</th>
+          {showSubTeam && <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Sub-Team</th>}
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Status</th>
           <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground w-12"></th>
         </tr>
@@ -403,6 +418,9 @@ export default function EmployeesPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowSubTeam(prev => !prev)} className="text-xs">
+            {showSubTeam ? "Hide Sub-Teams" : "Show Sub-Teams"}
+          </Button>
           <Button variant="outline" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
             <Upload className="w-4 h-4 mr-2" />
             {importMutation.isPending ? "Importing..." : "Import from CSV"}
@@ -455,6 +473,15 @@ export default function EmployeesPage() {
               <div>
                 <Label htmlFor="edit-name">Full Name</Label>
                 <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="edit-pseudonym">Display Name (with pseudonym)</Label>
+                <Input id="edit-pseudonym" value={editPseudonym} onChange={(e) => setEditPseudonym(e.target.value)} placeholder='e.g. Camila (Cheshta) Bhutani' />
+                <p className="text-[10px] text-muted-foreground mt-0.5">How this agent appears in reports/8x8. Leave blank to use the name above.</p>
+              </div>
+              <div>
+                <Label htmlFor="edit-ext">8x8 Extension</Label>
+                <Input id="edit-ext" value={editExtension} onChange={(e) => setEditExtension(e.target.value)} placeholder="e.g. 1234" />
               </div>
               {renderDepartmentField(editRole, setEditRole, "edit-role")}
               {renderSubTeamField(editRole, editSubTeam, setEditSubTeam)}

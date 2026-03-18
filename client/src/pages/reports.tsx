@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRef } from "react";
-import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, AudioWaveform, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { LoadingIndicator, LoadingDots, ShimmerCard } from "@/components/ui/loading";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -272,6 +273,40 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   };
 
+  // CSV export of performers + trends for spreadsheet analysis
+  const handleDownloadCSV = () => {
+    if (!report) return;
+    const rows: string[][] = [];
+    // Performers sheet
+    rows.push(["Performers"]);
+    rows.push(["Rank", "Name", "Role", "Avg Score", "Total Calls"]);
+    report.performers.forEach((p, i) => {
+      rows.push([(i + 1).toString(), p.name, p.role, p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "", p.totalCalls.toString()]);
+    });
+    rows.push([]);
+    // Monthly trends
+    rows.push(["Monthly Trends"]);
+    rows.push(["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"]);
+    report.trends.forEach(t => {
+      rows.push([t.month, t.calls.toString(), t.avgScore != null ? t.avgScore.toFixed(1) : "", t.positive.toString(), t.neutral.toString(), t.negative.toString()]);
+    });
+    rows.push([]);
+    // Summary
+    rows.push(["Summary"]);
+    rows.push(["Total Calls", report.metrics.totalCalls.toString()]);
+    rows.push(["Avg Performance", report.metrics.avgPerformanceScore.toFixed(1)]);
+    rows.push(["Avg Sentiment", report.metrics.avgSentiment.toFixed(2)]);
+
+    const csvContent = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `report-${reportType}-${dateRange.from}-to-${dateRange.to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Delta helper for comparison
   const delta = (current: number, previous: number | undefined) => {
     if (previous === undefined || previous === 0) return null;
@@ -282,9 +317,28 @@ export default function ReportsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
-        <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+      <div className="min-h-screen animate-fade-in-up">
+        <header className="bg-card border-b border-border px-6 py-4">
+          <ShimmerCard className="h-8 w-56" />
+          <ShimmerCard className="h-4 w-80 mt-2" />
+        </header>
+        <div className="p-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="bg-card rounded-lg border border-border p-6">
+                <ShimmerCard className="h-4 w-24 mb-3" />
+                <ShimmerCard className="h-8 w-16" />
+              </div>
+            ))}
+          </div>
+          <div className="bg-card rounded-lg border border-border p-6">
+            <ShimmerCard className="h-5 w-40 mb-4" />
+            <ShimmerCard className="h-64" />
+          </div>
+          <div className="flex items-center justify-center py-8">
+            <LoadingIndicator text="Loading report..." />
+          </div>
+        </div>
       </div>
     );
   }
@@ -306,10 +360,16 @@ export default function ReportsPage() {
           <h2 className="text-2xl font-bold text-foreground">Performance Reports</h2>
           <p className="text-muted-foreground">Filter by time period, employee, or department.</p>
         </div>
-        <Button onClick={handleDownloadReport} disabled={!report}>
-          <Download className="w-4 h-4 mr-2" />
-          Download Report
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleDownloadCSV} disabled={!report}>
+            <Download className="w-4 h-4 mr-2" />
+            CSV
+          </Button>
+          <Button onClick={handleDownloadReport} disabled={!report}>
+            <Download className="w-4 h-4 mr-2" />
+            Report
+          </Button>
+        </div>
       </header>
 
       {/* Filters Bar */}
@@ -483,8 +543,7 @@ export default function ReportsPage() {
             />
             {compareEnabled && isCompareLoading && (
               <div className="col-span-3 text-center text-sm text-muted-foreground">
-                <AudioWaveform className="w-4 h-4 animate-spin inline mr-2" />
-                Loading comparison data...
+                <LoadingDots /> Loading comparison data...
               </div>
             )}
           </div>

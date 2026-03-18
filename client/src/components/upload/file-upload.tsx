@@ -30,8 +30,11 @@ const PROCESSING_STEPS = [
   { key: "completed", label: "Complete" },
 ];
 
+type ProcessingMode = "" | "immediate" | "batch";
+
 export default function FileUpload() {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -49,7 +52,8 @@ export default function FileUpload() {
               processingStep: data.label || data.status,
               processingProgress: progress || 0,
               status: data.status === "completed" ? "completed" as const :
-                      data.status === "failed" ? "error" as const : "processing" as const,
+                      data.status === "failed" ? "error" as const :
+                      data.status === "awaiting_analysis" ? "completed" as const : "processing" as const,
               error: data.status === "failed" ? "Processing failed" : undefined,
             };
           }
@@ -66,11 +70,12 @@ export default function FileUpload() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, employeeId, callCategory }: { file: File; employeeId?: string; callCategory?: string }) => {
+    mutationFn: async ({ file, employeeId, callCategory, processingMode: mode }: { file: File; employeeId?: string; callCategory?: string; processingMode?: string }) => {
       const formData = new FormData();
       formData.append('audioFile', file);
       if (employeeId) formData.append('employeeId', employeeId);
       if (callCategory) formData.append('callCategory', callCategory);
+      if (mode) formData.append('processingMode', mode);
 
       const response = await fetch('/api/calls/upload', {
         method: 'POST',
@@ -136,6 +141,7 @@ export default function FileUpload() {
         file: fileData.file,
         employeeId: fileData.employeeId || undefined,
         callCategory: fileData.callCategory || undefined,
+        processingMode: processingMode || undefined,
       });
       // The API returns the call ID — track it for WebSocket updates
       const callId = result?.id || result?.callId;
@@ -207,7 +213,7 @@ export default function FileUpload() {
           {uploadFiles.filter(f => f.status === 'pending').length > 1 && (
             <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
               <p className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">Apply to all pending files:</p>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <Select onValueChange={(value) => {
                   const cat = value;
                   setUploadFiles(prev => prev.map(f =>
@@ -235,6 +241,16 @@ export default function FileUpload() {
                     {employees?.map(employee => (
                       <SelectItem key={employee.id} value={employee.id}>{employee.name}</SelectItem>
                     ))}
+                  </SelectContent>
+                </Select>
+                <Select value={processingMode || "default"} onValueChange={(value) => setProcessingMode(value === "default" ? "" : value as ProcessingMode)}>
+                  <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder="Processing mode" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">
+                      <span className="text-muted-foreground italic">Auto (server schedule)</span>
+                    </SelectItem>
+                    <SelectItem value="immediate">Immediate (real-time)</SelectItem>
+                    <SelectItem value="batch">Batch (50% savings)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Phone, Heart, Clock, Star, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLocation } from "wouter";
 import type { DashboardMetrics } from "@shared/schema";
 
 export default function MetricsOverview() {
+  const [, navigate] = useLocation();
   const { data: metrics, isLoading, error } = useQuery<DashboardMetrics>({
     queryKey: ["/api/dashboard/metrics"],
   });
@@ -47,6 +49,7 @@ export default function MetricsOverview() {
       iconBg: "bg-gradient-to-br from-primary/20 to-primary/5",
       iconColor: "text-primary",
       accentBorder: "border-l-4 border-l-primary",
+      href: "/transcripts",
     },
     {
       title: "Avg Sentiment",
@@ -56,6 +59,7 @@ export default function MetricsOverview() {
       iconBg: "bg-gradient-to-br from-green-200 to-green-50 dark:from-green-900/40 dark:to-green-900/10",
       iconColor: "text-green-600",
       accentBorder: "border-l-4 border-l-green-500",
+      href: "/sentiment",
     },
     {
       title: "Transcription Time",
@@ -65,6 +69,7 @@ export default function MetricsOverview() {
       iconBg: "bg-gradient-to-br from-blue-200 to-blue-50 dark:from-blue-900/40 dark:to-blue-900/10",
       iconColor: "text-blue-600",
       accentBorder: "border-l-4 border-l-blue-500",
+      href: "/reports",
     },
     {
       title: "Team Score",
@@ -74,6 +79,7 @@ export default function MetricsOverview() {
       iconBg: "bg-gradient-to-br from-purple-200 to-purple-50 dark:from-purple-900/40 dark:to-purple-900/10",
       iconColor: "text-purple-600",
       accentBorder: "border-l-4 border-l-purple-500",
+      href: "/performance",
     },
   ];
 
@@ -82,7 +88,12 @@ export default function MetricsOverview() {
       {metricCards.map((metric) => {
         const Icon = metric.icon;
         return (
-          <div key={metric.title} className={`metric-card rounded-lg p-6 ${metric.accentBorder}`}>
+          <div
+            key={metric.title}
+            className={`metric-card rounded-lg p-6 ${metric.accentBorder} cursor-pointer hover:shadow-md transition-shadow`}
+            onClick={() => navigate(metric.href)}
+            role="link"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-muted-foreground text-sm">{metric.title}</p>

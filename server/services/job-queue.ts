@@ -128,6 +128,41 @@ export class JobQueue {
   }
 
   /**
+   * Get all dead-letter jobs (failed after max attempts).
+   */
+  async getDeadJobs(limit = 50): Promise<Job[]> {
+    const { rows } = await this.db.query(`
+      SELECT * FROM jobs WHERE status = 'dead'
+      ORDER BY updated_at DESC
+      LIMIT $1
+    `, [limit]);
+    return rows.map((row: any) => ({
+      id: row.id, type: row.type, status: row.status,
+      payload: row.payload, priority: row.priority,
+      attempts: row.attempts, maxAttempts: row.max_attempts,
+      lockedAt: row.locked_at?.toISOString?.() ?? row.locked_at,
+      lockedBy: row.locked_by,
+      completedAt: row.completed_at?.toISOString?.() ?? row.completed_at,
+      failedReason: row.failed_reason,
+      createdAt: row.created_at?.toISOString?.() ?? row.created_at,
+      updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at,
+    }));
+  }
+
+  /**
+   * Retry a dead job by resetting its status to pending.
+   */
+  async retryJob(jobId: string): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      `UPDATE jobs SET status = 'pending', attempts = 0, failed_reason = NULL,
+       locked_at = NULL, locked_by = NULL, updated_at = NOW()
+       WHERE id = $1 AND status = 'dead'`,
+      [jobId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  /**
    * Get queue statistics.
    */
   async getStats(): Promise<QueueStats> {

@@ -1,13 +1,13 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient, getQueryFn } from "./lib/queryClient";
+import { queryClient, getQueryFn, resetSessionExpired } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
-import { AudioWaveform } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -26,13 +26,14 @@ const InsightsPage = lazy(() => import("@/pages/insights"));
 const CoachingPage = lazy(() => import("@/pages/coaching"));
 const ABTestingPage = lazy(() => import("@/pages/ab-testing"));
 const SpendTrackingPage = lazy(() => import("@/pages/spend-tracking"));
+const AgentScorecardPage = lazy(() => import("@/pages/agent-scorecard"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function PageLoader() {
   return (
     <div className="flex items-center justify-center h-64">
-      <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+      <LoadingIndicator />
     </div>
   );
 }
@@ -103,6 +104,11 @@ function Router() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       switch (e.key) {
+        case "Escape":
+          setShowShortcuts(false);
+          // Broadcast escape to child components (edit modes, panels, etc.)
+          window.dispatchEvent(new CustomEvent("app:escape"));
+          break;
         case "?":
           e.preventDefault();
           setShowShortcuts(prev => !prev);
@@ -156,6 +162,7 @@ function Router() {
               <Route path="/admin/templates">{() => <ErrorBoundary><AnimatedPage><PromptTemplatesPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/ab-testing">{() => <ErrorBoundary><AnimatedPage><ABTestingPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/spend">{() => <ErrorBoundary><AnimatedPage><SpendTrackingPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/scorecard/:id">{() => <ErrorBoundary><AnimatedPage><AgentScorecardPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>
           </AnimatePresence>
@@ -177,7 +184,7 @@ function AuthenticatedApp() {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+        <LoadingIndicator size="lg" text="Loading CallAnalyzer..." />
       </div>
     );
   }
@@ -187,6 +194,7 @@ function AuthenticatedApp() {
       <Suspense fallback={<PageLoader />}>
         <AuthPage
           onLogin={() => {
+            resetSessionExpired();
             queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
           }}
         />

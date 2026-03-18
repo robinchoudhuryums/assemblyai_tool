@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS employees (
   initials VARCHAR(2),
   status VARCHAR(50) DEFAULT 'Active',
   sub_team VARCHAR(100),
+  pseudonym VARCHAR(500),
+  extension VARCHAR(50),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_employees_email ON employees (email);

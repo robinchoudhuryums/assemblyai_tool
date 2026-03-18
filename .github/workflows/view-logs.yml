@@ -1,0 +1,58 @@
+# CallAnalyzer — View Production Logs
+# Quick way to check pm2 logs without SSH/Instance Connect.
+#
+# Required GitHub Secrets (same as deploy.yml):
+#   EC2_SSH_KEY, EC2_HOST, EC2_USER, EC2_APP_DIR
+#
+# HIPAA note: Log output appears in GitHub Actions run logs. pm2 logs
+# should NOT contain PHI (error messages are logged without stack traces).
+# However, restrict repository access to authorized personnel only.
+
+name: View Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: 'Number of log lines to retrieve'
+        required: false
+        default: '50'
+      log_type:
+        description: 'Which logs to view'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - errors-only
+          - pm2-status
+
+jobs:
+  view-logs:
+    name: View Logs
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Fetch logs via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            cd ${{ secrets.EC2_APP_DIR }}
+            echo "=== CallAnalyzer Logs ==="
+            echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+
+            if [ "${{ github.event.inputs.log_type }}" = "pm2-status" ]; then
+              pm2 list
+              echo ""
+              pm2 describe callanalyzer 2>/dev/null || echo "Process 'callanalyzer' not found"
+            elif [ "${{ github.event.inputs.log_type }}" = "errors-only" ]; then
+              pm2 logs callanalyzer --err --lines ${{ github.event.inputs.lines }} --nostream
+            else
+              pm2 logs callanalyzer --lines ${{ github.event.inputs.lines }} --nostream
+            fi

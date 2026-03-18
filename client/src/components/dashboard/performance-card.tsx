@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link, useLocation } from "wouter";
 import type { Employee } from "@shared/schema";
-import { AudioWaveform } from "lucide-react";
 
 // Define a more robust type for a performer
 type TopPerformer = Partial<Employee> & {
@@ -10,6 +10,7 @@ type TopPerformer = Partial<Employee> & {
 };
 
 export default function PerformanceCard() {
+  const [, navigate] = useLocation();
   const { data: performers, isLoading } = useQuery<TopPerformer[]>({
     queryKey: ["/api/dashboard/performers"],
   });
@@ -45,18 +46,23 @@ export default function PerformanceCard() {
   };
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="performance-card">
+    <div className="bg-card rounded-lg border border-border p-6 hover-lift" data-testid="performance-card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Top Performers</h3>
-        <button className="text-primary hover:text-primary/80 text-sm font-medium" data-testid="view-all-performers">
+        <Link href="/performance" className="text-primary hover:text-primary/80 text-sm font-medium" data-testid="view-all-performers">
           View All
-        </button>
+        </Link>
       </div>
       
       <div className="space-y-4">
         {/* Add a filter to remove any invalid performer data before rendering */}
         {performers?.filter(p => p && p.id && p.name).map((employee, index) => (
-          <div key={employee.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
+          <div
+            key={employee.id}
+            className="flex items-center justify-between p-3 bg-muted rounded-lg cursor-pointer hover:bg-muted/80 transition-colors"
+            onClick={() => navigate(`/reports?employee=${employee.id}`)}
+            role="link"
+          >
             <div className="flex items-center space-x-3">
               <div className={`w-10 h-10 rounded-full flex items-center justify-center ${getInitialsColor(employee.initials)}`}>
                 <span className="font-semibold text-sm">{employee.initials ?? 'N/A'}</span>

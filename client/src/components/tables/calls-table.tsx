@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion } from "lucide-react";
+import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -269,6 +269,21 @@ export default function CallsTable() {
           </span>
         </div>
         <div className="flex items-center space-x-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (statusFilter !== "all") params.set("status", statusFilter);
+              if (sentimentFilter !== "all") params.set("sentiment", sentimentFilter);
+              if (employeeFilter !== "all") params.set("employee", employeeFilter);
+              window.open(`/api/export/calls?${params.toString()}`, "_blank");
+            }}
+            title="Export as CSV"
+          >
+            <FileDown className="w-4 h-4 mr-1" />
+            Export CSV
+          </Button>
           <Select value={employeeFilter} onValueChange={handleFilterChange(setEmployeeFilter)}>
             <SelectTrigger className="w-40" data-testid="employee-filter">
               <SelectValue placeholder="All Employees" />

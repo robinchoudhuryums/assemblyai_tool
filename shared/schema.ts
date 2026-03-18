@@ -21,6 +21,8 @@ export const insertEmployeeSchema = z.object({
   initials: z.string().max(2).optional(),
   status: z.string().default("Active").optional(),
   subTeam: z.string().optional(),
+  pseudonym: z.string().optional(), // Display name with pseudonym, e.g. "Camila (Cheshta) Bhutani"
+  extension: z.string().optional(), // 8x8 direct extension number
 });
 
 export const employeeSchema = insertEmployeeSchema.extend({
