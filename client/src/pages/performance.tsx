@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import type { Employee, CallWithDetails } from "@shared/schema";
-import { AudioWaveform } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 
 interface Performer extends Employee {
   avgPerformanceScore: number;
@@ -104,8 +104,7 @@ export default function PerformancePage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
-        <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+        <LoadingIndicator text="Analyzing performance..." />
       </div>
     );
   }

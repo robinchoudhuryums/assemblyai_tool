@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DollarSign, TrendingUp, Calendar, Activity, FlaskConical, Phone } from "lucide-react";
+import { DollarSign, TrendingUp, Calendar, FlaskConical, Phone } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 import { type UsageRecord } from "@shared/schema";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, Legend,
@@ -91,7 +92,7 @@ export default function SpendTrackingPage() {
     return (
       <div className="p-6">
         <div className="flex items-center justify-center h-64">
-          <Activity className="w-8 h-8 animate-spin text-primary" />
+          <LoadingIndicator text="Loading spend data..." />
         </div>
       </div>
     );

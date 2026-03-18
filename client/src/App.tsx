@@ -7,7 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
-import { AudioWaveform } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -32,7 +32,7 @@ const NotFound = lazy(() => import("@/pages/not-found"));
 function PageLoader() {
   return (
     <div className="flex items-center justify-center h-64">
-      <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+      <LoadingIndicator />
     </div>
   );
 }
@@ -182,7 +182,7 @@ function AuthenticatedApp() {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
+        <LoadingIndicator size="lg" text="Loading CallAnalyzer..." />
       </div>
     );
   }

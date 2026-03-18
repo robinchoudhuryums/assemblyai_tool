@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
 import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
-import { AudioWaveform } from "lucide-react";
+import { LoadingIndicator } from "@/components/ui/loading";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { CallCard } from "@/components/search/call-card";
 
@@ -105,7 +105,7 @@ export default function SearchPage() {
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <div className="flex items-center justify-center h-64"><AudioWaveform className="w-8 h-8 animate-spin text-primary" /></div>
+              <div className="flex items-center justify-center h-64"><LoadingIndicator text="Searching..." /></div>
             ) : !displayCalls?.length ? (
               <div className="text-center py-16">
                 <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">

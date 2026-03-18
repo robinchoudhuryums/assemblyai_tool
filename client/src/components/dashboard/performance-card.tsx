@@ -45,7 +45,7 @@ export default function PerformanceCard() {
   };
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="performance-card">
+    <div className="bg-card rounded-lg border border-border p-6 hover-lift" data-testid="performance-card">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Top Performers</h3>
         <button className="text-primary hover:text-primary/80 text-sm font-medium" data-testid="view-all-performers">

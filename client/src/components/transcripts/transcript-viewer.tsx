@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
-import { AudioWaveform } from "lucide-react";
 import { toDisplayString } from "@/lib/display-utils";
+import { LoadingIndicator } from "@/components/ui/loading";
 import AudioWaveformDisplay from "./audio-waveform";
 
 interface TranscriptViewerProps {
@@ -172,8 +172,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <AudioWaveform className="w-8 h-8 animate-spin text-primary" />
-        <p className="ml-2 text-muted-foreground">Analyzing performance...</p>
+        <LoadingIndicator text="Loading call analysis..." />
       </div>
     );
   }

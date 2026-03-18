@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRef } from "react";
-import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, AudioWaveform, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, ChevronUp, ChevronDown, Sparkles, Phone, AlertTriangle, Award, Play, Pause, Eye, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { LoadingIndicator, LoadingDots, ShimmerCard } from "@/components/ui/loading";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -316,34 +317,26 @@ export default function ReportsPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen">
+      <div className="min-h-screen animate-fade-in-up">
         <header className="bg-card border-b border-border px-6 py-4">
-          <div className="h-8 w-56 bg-muted rounded animate-pulse" />
-          <div className="h-4 w-80 bg-muted rounded animate-pulse mt-2" />
+          <ShimmerCard className="h-8 w-56" />
+          <ShimmerCard className="h-4 w-80 mt-2" />
         </header>
         <div className="p-6 space-y-6">
-          {/* Metrics skeleton */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {[...Array(3)].map((_, i) => (
               <div key={i} className="bg-card rounded-lg border border-border p-6">
-                <div className="h-4 w-24 bg-muted rounded animate-pulse mb-3" />
-                <div className="h-8 w-16 bg-muted rounded animate-pulse" />
+                <ShimmerCard className="h-4 w-24 mb-3" />
+                <ShimmerCard className="h-8 w-16" />
               </div>
             ))}
           </div>
-          {/* Chart skeleton */}
           <div className="bg-card rounded-lg border border-border p-6">
-            <div className="h-5 w-40 bg-muted rounded animate-pulse mb-4" />
-            <div className="h-64 bg-muted rounded animate-pulse" />
+            <ShimmerCard className="h-5 w-40 mb-4" />
+            <ShimmerCard className="h-64" />
           </div>
-          {/* Table skeleton */}
-          <div className="bg-card rounded-lg border border-border p-6">
-            <div className="h-5 w-32 bg-muted rounded animate-pulse mb-4" />
-            <div className="space-y-3">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
-              ))}
-            </div>
+          <div className="flex items-center justify-center py-8">
+            <LoadingIndicator text="Loading report..." />
           </div>
         </div>
       </div>
@@ -550,8 +543,7 @@ export default function ReportsPage() {
             />
             {compareEnabled && isCompareLoading && (
               <div className="col-span-3 text-center text-sm text-muted-foreground">
-                <AudioWaveform className="w-4 h-4 animate-spin inline mr-2" />
-                Loading comparison data...
+                <LoadingDots /> Loading comparison data...
               </div>
             )}
           </div>
