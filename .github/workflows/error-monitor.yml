@@ -1,0 +1,142 @@
+# CallAnalyzer — Error Monitor
+# Checks pm2 error logs on a schedule and sends a GitHub notification
+# (email) if new errors are detected since the last check.
+#
+# How notifications work:
+#   - Uses GitHub Issues to alert on errors (GitHub sends email notifications
+#     for new issues automatically based on your notification settings)
+#   - Creates one issue per check with the error details
+#   - Only creates an issue if errors are found — no noise
+#
+# Required GitHub Secrets (same as deploy.yml):
+#   EC2_SSH_KEY, EC2_HOST, EC2_USER, EC2_APP_DIR
+#
+# To adjust frequency: change the cron schedule below.
+# To get email alerts: ensure GitHub notification settings have
+#   "Issues" enabled for this repository (Settings > Notifications).
+#
+# HIPAA note: Error logs should NOT contain PHI (the app logs error
+# messages only, no stack traces). However, keep this repo private.
+
+name: Error Monitor
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # Every 4 hours
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  check-errors:
+    name: Check for errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Check pm2 status and recent errors
+        id: check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            cd ${{ secrets.EC2_APP_DIR }}
+
+            # Check if pm2 process is running
+            PM2_STATUS=$(pm2 jlist 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 || echo "unknown")
+            echo "PM2_STATUS=$PM2_STATUS"
+
+            if echo "$PM2_STATUS" | grep -q "errored\|stopped"; then
+              echo "::PROCESS_DOWN::"
+              pm2 list
+            fi
+
+            # Check for recent errors (last 4 hours = 240 minutes)
+            ERROR_LOG="$HOME/.pm2/logs/callanalyzer-error.log"
+            if [ -f "$ERROR_LOG" ]; then
+              # Get errors from the last 4 hours
+              RECENT_ERRORS=$(find "$ERROR_LOG" -mmin -240 -exec tail -100 {} \; 2>/dev/null)
+              if [ -n "$RECENT_ERRORS" ]; then
+                echo "::ERRORS_FOUND::"
+                echo "$RECENT_ERRORS"
+              else
+                echo "::NO_RECENT_ERRORS::"
+              fi
+            else
+              echo "::NO_ERROR_LOG::"
+            fi
+
+            # Quick health check
+            HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${PORT:-5000}/api/health 2>/dev/null || echo "000")
+            echo "HEALTH_STATUS=$HEALTH"
+            if [ "$HEALTH" != "200" ]; then
+              echo "::HEALTH_FAILED::"
+            fi
+
+      - name: Create alert issue if errors found
+        if: contains(steps.check.outputs.response, '::ERRORS_FOUND::') || contains(steps.check.outputs.response, '::PROCESS_DOWN::') || contains(steps.check.outputs.response, '::HEALTH_FAILED::')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `${{ steps.check.outputs.response }}`.substring(0, 3000);
+            const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+            let title = `[Alert] Production errors detected — ${now} UTC`;
+            let labels = ['alert', 'production'];
+
+            if (output.includes('::PROCESS_DOWN::')) {
+              title = `[CRITICAL] pm2 process down — ${now} UTC`;
+              labels.push('critical');
+            }
+            if (output.includes('::HEALTH_FAILED::')) {
+              title = `[CRITICAL] Health check failed — ${now} UTC`;
+              labels.push('critical');
+            }
+
+            // Ensure labels exist
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label
+                });
+              } catch {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: label === 'critical' ? 'FF0000' : label === 'alert' ? 'FFA500' : '0E8A16'
+                });
+              }
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              labels: labels,
+              body: [
+                '## Automated Error Alert',
+                '',
+                `**Time:** ${now} UTC`,
+                `**Workflow run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                '',
+                '### Log Output',
+                '```',
+                output,
+                '```',
+                '',
+                '---',
+                '*This issue was created automatically by the Error Monitor workflow.*',
+                '*Close this issue once resolved. To adjust frequency, edit `.github/workflows/error-monitor.yml`.*'
+              ].join('\n')
+            });
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Error Monitor Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the step output above for details." >> $GITHUB_STEP_SUMMARY
