@@ -204,6 +204,46 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs (status, priority DESC, created_at);
 
 -- ============================================================
+-- MFA Secrets (TOTP two-factor authentication)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mfa_secrets (
+  username VARCHAR(255) PRIMARY KEY,
+  secret VARCHAR(255) NOT NULL,
+  enabled BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- Breach Reports (HIPAA §164.408 Breach Notification)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS breach_reports (
+  id VARCHAR(255) PRIMARY KEY,
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reported_by VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL,
+  affected_individuals INTEGER NOT NULL DEFAULT 0,
+  data_types JSONB NOT NULL DEFAULT '[]',
+  discovery_date VARCHAR(100) NOT NULL,
+  containment_actions TEXT,
+  notification_status VARCHAR(50) DEFAULT 'pending',
+  timeline JSONB DEFAULT '[]'
+);
+
+-- ============================================================
+-- Call Tags (user-defined labels for calls)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS call_tags (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  call_id UUID NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+  tag VARCHAR(100) NOT NULL,
+  created_by VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(call_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id);
+CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag);
+
+-- ============================================================
 -- HIPAA Audit Log (durable, never purged — 6-year retention)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS audit_log (

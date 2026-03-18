@@ -184,6 +184,16 @@ app.post("/api/coaching", mutationRateLimit);
 app.patch("/api/coaching/:id", mutationRateLimit);
 app.post("/api/employees/import-csv", rateLimit(60 * 1000, 3)); // 3 CSV imports per minute
 
+// HIPAA: Rate limiting on read endpoints (prevent bulk data exfiltration)
+const readRateLimit = rateLimit(60 * 1000, 60); // 60 per minute
+app.get("/api/calls", readRateLimit);
+app.get("/api/calls/:id", readRateLimit);
+app.get("/api/calls/:id/transcript", readRateLimit);
+app.get("/api/calls/:id/audio", readRateLimit);
+app.get("/api/calls/:id/analysis", readRateLimit);
+app.get("/api/export/calls", rateLimit(60 * 1000, 5)); // 5 exports per minute
+app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
+
 (async () => {
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();
