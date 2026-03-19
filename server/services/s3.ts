@@ -9,8 +9,8 @@
  *
  * HIPAA: S3 is HIPAA-eligible under the AWS BAA.
  */
-import { createHmac, createHash } from "crypto";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
+import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, generatePresignedUrl } from "./sigv4.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
 
@@ -208,59 +208,13 @@ export class S3Client {
    */
   async getPresignedUrl(objectName: string, expiresInSeconds = 3600): Promise<string> {
     const creds = await this.ensureCredentials();
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const dateStamp = amzDate.slice(0, 8);
-
-    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
-    const credential = `${creds.accessKeyId}/${credentialScope}`;
-
-    const canonicalUri = `/${objectName}`
-      .split("/")
-      .map((seg) => encodeURIComponent(seg))
-      .join("/");
-
-    // Query parameters for pre-signed URL (must be alphabetically sorted for signing)
-    const queryParams = new URLSearchParams({
-      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-      "X-Amz-Credential": credential,
-      "X-Amz-Date": amzDate,
-      "X-Amz-Expires": String(expiresInSeconds),
-      "X-Amz-SignedHeaders": "host",
+    return generatePresignedUrl({
+      host: this.host,
+      objectName,
+      region: this.region,
+      creds,
+      expiresInSeconds,
     });
-    if (creds.sessionToken) {
-      queryParams.set("X-Amz-Security-Token", creds.sessionToken);
-    }
-
-    // Sort params alphabetically (required for canonical query string)
-    const sortedParams = [...queryParams.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    const canonicalQueryString = sortedParams
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join("&");
-
-    const canonicalHeaders = `host:${this.host}\n`;
-    const signedHeaders = "host";
-
-    const canonicalRequest = [
-      "GET",
-      canonicalUri,
-      canonicalQueryString,
-      canonicalHeaders,
-      signedHeaders,
-      "UNSIGNED-PAYLOAD",
-    ].join("\n");
-
-    const stringToSign = [
-      "AWS4-HMAC-SHA256",
-      amzDate,
-      credentialScope,
-      createHash("sha256").update(canonicalRequest, "utf8").digest("hex"),
-    ].join("\n");
-
-    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, this.region, "s3");
-    const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex");
-
-    return `https://${this.host}${canonicalUri}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
   }
 
   private async putObject(objectName: string, body: Buffer, contentType: string): Promise<void> {
@@ -310,7 +264,7 @@ export class S3Client {
     }
   }
 
-  // --- AWS Signature V4 ---
+  // --- AWS Signature V4 (delegated to shared sigv4.ts) ---
 
   private sign(
     method: string,
@@ -321,90 +275,31 @@ export class S3Client {
     creds?: AwsCredentials,
   ): Record<string, string> {
     if (!creds) creds = this.credentials!;
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const dateStamp = amzDate.slice(0, 8);
 
     // S3 requires x-amz-content-sha256 header
-    const payloadHash = body
-      ? createHash("sha256").update(body).digest("hex")
-      : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // sha256 of empty string
+    const payloadHash = body ? sha256Buffer(body) : EMPTY_PAYLOAD_HASH;
 
-    // Canonical URI: URI-encode each path segment
-    const canonicalUri = rawPath
-      .split("/")
-      .map((seg) => encodeURIComponent(seg))
-      .join("/");
-
-    // Build headers (must be sorted alphabetically)
-    const headerEntries: [string, string][] = [
-      ["host", this.host],
+    const extraHeaders: [string, string][] = [
       ["x-amz-content-sha256", payloadHash],
-      ["x-amz-date", amzDate],
     ];
     if (contentType) {
-      headerEntries.push(["content-type", contentType]);
-    }
-    if (creds.sessionToken) {
-      headerEntries.push(["x-amz-security-token", creds.sessionToken]);
+      extraHeaders.push(["content-type", contentType]);
     }
     // HIPAA: Enforce server-side encryption at rest for all uploaded objects
     if (method === "PUT") {
-      headerEntries.push(["x-amz-server-side-encryption", "AES256"]);
+      extraHeaders.push(["x-amz-server-side-encryption", "AES256"]);
     }
-    headerEntries.sort((a, b) => a[0].localeCompare(b[0]));
 
-    const canonicalHeaders = headerEntries.map(([k, v]) => `${k}:${v}\n`).join("");
-    const signedHeaders = headerEntries.map(([k]) => k).join(";");
-
-    const canonicalRequest = [
+    return signRequest({
       method,
-      canonicalUri,
+      host: this.host,
+      rawPath,
       queryString,
-      canonicalHeaders,
-      signedHeaders,
+      service: "s3",
+      region: this.region,
+      creds,
       payloadHash,
-    ].join("\n");
-
-    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
-    const stringToSign = [
-      "AWS4-HMAC-SHA256",
-      amzDate,
-      credentialScope,
-      createHash("sha256").update(canonicalRequest, "utf8").digest("hex"),
-    ].join("\n");
-
-    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, this.region, "s3");
-    const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex");
-
-    const authHeader =
-      `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${credentialScope}, ` +
-      `SignedHeaders=${signedHeaders}, ` +
-      `Signature=${signature}`;
-
-    const result: Record<string, string> = {
-      "Host": this.host,
-      "X-Amz-Content-Sha256": payloadHash,
-      "X-Amz-Date": amzDate,
-      "Authorization": authHeader,
-    };
-    if (contentType) result["Content-Type"] = contentType;
-    if (creds.sessionToken) result["X-Amz-Security-Token"] = creds.sessionToken;
-    if (method === "PUT") result["X-Amz-Server-Side-Encryption"] = "AES256";
-
-    return result;
+      extraHeaders,
+    });
   }
-}
-
-// --- Crypto helpers ---
-
-function hmac(key: Buffer | string, data: string): Buffer {
-  return createHmac("sha256", key).update(data, "utf8").digest();
-}
-
-function getSignatureKey(key: string, dateStamp: string, region: string, service: string): Buffer {
-  const kDate = hmac(`AWS4${key}`, dateStamp);
-  const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, service);
-  return hmac(kService, "aws4_request");
 }

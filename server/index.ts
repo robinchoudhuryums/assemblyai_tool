@@ -14,6 +14,8 @@ import crypto from "crypto";
 const app = express();
 
 // HIPAA: Simple rate limiter for sensitive endpoints (login, search)
+// Bounded to prevent memory exhaustion under distributed attacks.
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 function rateLimit(windowMs: number, maxRequests: number) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -21,6 +23,12 @@ function rateLimit(windowMs: number, maxRequests: number) {
     const now = Date.now();
     const entry = rateLimitMap.get(key);
     if (!entry || now > entry.resetTime) {
+      // Evict oldest entries if map is at capacity
+      if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
+        // Delete the first (oldest-inserted) entry — Map preserves insertion order
+        const firstKey = rateLimitMap.keys().next().value;
+        if (firstKey) rateLimitMap.delete(firstKey);
+      }
       rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
       return next();
     }
@@ -39,11 +47,27 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-// Trust reverse proxy (Render, Heroku, etc.) so secure cookies and
-// x-forwarded-proto work correctly behind their load balancer.
+// Trust reverse proxy (Caddy on EC2, or Render/Heroku load balancers).
+// "trust proxy" = 1 means trust only the first hop — prevents attackers
+// from spoofing X-Forwarded-For with arbitrary IPs to bypass rate limits.
 if (process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE) {
   app.set("trust proxy", 1);
 }
+// SECURITY: Validate X-Forwarded-For when present — strip invalid entries
+app.use((req, _res, next) => {
+  // Only validate in production where trust proxy is set
+  if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-for"]) {
+    const forwarded = (req.headers["x-forwarded-for"] as string).split(",").map(s => s.trim());
+    // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6)
+    const ipPattern = /^[\da-fA-F.:]+$/;
+    const validIPs = forwarded.filter(ip => ipPattern.test(ip) && ip.length <= 45);
+    if (validIPs.length !== forwarded.length) {
+      // Sanitize the header to only contain valid IPs
+      req.headers["x-forwarded-for"] = validIPs.join(", ");
+    }
+  }
+  next();
+});
 
 // HIPAA: Enforce HTTPS in production (redirect HTTP → HTTPS)
 app.use((req, res, next) => {
@@ -107,13 +131,13 @@ app.use((req, res, next) => {
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  // CSP: restrict resource loading to same-origin and trusted CDNs
-  // Note: script-src 'unsafe-inline' is required for the dark-mode flash-prevention script in index.html.
-  // Vite also injects inline scripts during development. A nonce-based approach would be more
-  // secure but requires server-side HTML templating; acceptable trade-off for now.
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
-  );
+  // CSP for HTML pages is set per-request with nonce in vite.ts (injectCspNonce).
+  // For API responses that don't go through vite.ts, set a restrictive fallback CSP.
+  if (req.path.startsWith("/api")) {
+    res.setHeader('Content-Security-Policy',
+      "default-src 'none'; frame-ancestors 'none';"
+    );
+  }
   // Only set no-cache on API routes — static assets need caching for performance
   if (req.path.startsWith("/api")) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
