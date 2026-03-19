@@ -1,12 +1,18 @@
 import { Router } from "express";
 import passport from "passport";
 import { z } from "zod";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { insertAccessRequestSchema } from "@shared/schema";
+
+/** Set session fingerprint on login to bind session to user-agent */
+function bindSessionFingerprint(req: import("express").Request): void {
+  const ua = req.headers["user-agent"] || "";
+  (req.session as any).fingerprint = createHash("sha256").update(ua).digest("hex").slice(0, 16);
+}
 
 export function registerAuthRoutes(router: Router) {
 
@@ -40,6 +46,7 @@ export function registerAuthRoutes(router: Router) {
           mfaPendingTokens.delete(mfaToken);
           req.login(pending.user, (loginErr) => {
             if (loginErr) return next(loginErr);
+            bindSessionFingerprint(req);
             res.json({ id: pending.user.id, username: pending.user.username, name: pending.user.name, role: pending.user.role });
           });
         } catch (err) {
@@ -71,6 +78,7 @@ export function registerAuthRoutes(router: Router) {
           // Let them in but flag that MFA setup is needed
           req.login(user, (loginErr) => {
             if (loginErr) return next(loginErr);
+            bindSessionFingerprint(req);
             res.json({ id: user.id, username: user.username, name: user.name, role: user.role, mfaSetupRequired: true });
           });
           return;
@@ -79,6 +87,7 @@ export function registerAuthRoutes(router: Router) {
         // No MFA — standard login
         req.login(user, (loginErr) => {
           if (loginErr) return next(loginErr);
+          bindSessionFingerprint(req);
           res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
         });
       } catch (mfaErr) {

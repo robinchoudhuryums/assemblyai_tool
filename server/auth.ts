@@ -3,7 +3,7 @@ import { Strategy as LocalStrategy } from "passport-local";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import connectPgSimple from "connect-pg-simple";
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
+import { scrypt, randomBytes, timingSafeEqual, createHash } from "crypto";
 import { promisify } from "util";
 import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
@@ -120,10 +120,16 @@ async function loadUsersFromEnv(): Promise<void> {
     const [username, password, role = "viewer", ...nameParts] = parts;
     const displayName = nameParts.length > 0 ? nameParts.join(":") : username;
 
-    // HIPAA: Warn about weak passwords (don't block startup, but log prominently)
+    // HIPAA: Enforce password complexity — reject weak passwords
     const complexity = validatePasswordComplexity(password);
     if (!complexity.valid) {
-      console.warn(`[SECURITY] User "${username}" has a weak password: missing ${complexity.errors.join(", ")}. HIPAA requires strong passwords.`);
+      const msg = `[SECURITY] Rejecting AUTH_USERS entry "${username}": weak password (missing ${complexity.errors.join(", ")}). HIPAA requires strong passwords.`;
+      if (process.env.NODE_ENV === "production") {
+        console.error(msg);
+        continue; // Skip this user entirely in production
+      } else {
+        console.warn(msg + " (allowed in development only)");
+      }
     }
 
     const passwordHash = await hashPassword(password);
@@ -361,11 +367,38 @@ export async function setupAuth(app: Express) {
 }
 
 // Middleware to require authentication on API routes
+/**
+ * HIPAA: Session fingerprinting — bind sessions to user-agent to detect hijacking.
+ * If the user-agent changes mid-session, destroy the session and force re-login.
+ */
+function getSessionFingerprint(req: import("express").Request): string {
+  const ua = req.headers["user-agent"] || "";
+  return createHash("sha256").update(ua).digest("hex").slice(0, 16);
+}
+
 export const requireAuth: RequestHandler = (req, res, next) => {
-  if (req.isAuthenticated()) {
-    return next();
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: "Authentication required" });
   }
-  res.status(401).json({ message: "Authentication required" });
+
+  // Validate session fingerprint
+  const currentFp = getSessionFingerprint(req);
+  const sessionFp = (req.session as any)?.fingerprint;
+  if (sessionFp && sessionFp !== currentFp) {
+    // User-agent changed mid-session — possible session hijacking
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "session_fingerprint_mismatch",
+      username: req.user?.username || "unknown",
+      resourceType: "auth",
+      detail: "Session destroyed: user-agent fingerprint mismatch",
+    });
+    req.logout(() => {});
+    req.session.destroy(() => {});
+    return res.status(401).json({ message: "Session expired. Please log in again." });
+  }
+
+  next();
 };
 
 // HIPAA: Role-based access control middleware

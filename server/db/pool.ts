@@ -19,8 +19,15 @@ export function getPool(): pg.Pool | null {
     max: 20,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
-    // Use SSL in production (RDS requires it)
-    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
+    // HIPAA: SSL with certificate verification for production.
+    // RDS uses Amazon-issued certificates; rejectUnauthorized: true ensures
+    // the server certificate is validated, preventing MITM attacks.
+    // Set DB_SSL_REJECT_UNAUTHORIZED=false only if using self-signed certs in staging.
+    ssl: process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" }
+      : process.env.DATABASE_URL?.includes("sslmode=require")
+        ? { rejectUnauthorized: false } // Local dev with SSL
+        : undefined,
   });
 
   pool.on("error", (err) => {
