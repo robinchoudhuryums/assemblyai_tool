@@ -83,6 +83,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     shouldUseBatchMode,
   });
 
+  // Start scheduled report generation
+  import("./services/scheduled-reports").then(m => m.startReportScheduler()).catch(() => {});
+
   // Mount all routes on the app
   app.use(router);
 

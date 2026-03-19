@@ -119,6 +119,16 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_employees_name_lower ON employees (lower(name))",
     // Embedding vector for call clustering (JSONB array of floats)
     "ALTER TABLE call_analyses ADD COLUMN IF NOT EXISTS embedding JSONB",
+    // Transcript annotations (timestamped manager comments)
+    `CREATE TABLE IF NOT EXISTS annotations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      call_id UUID NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+      timestamp_ms INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      author VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_annotations_call_id ON annotations (call_id)",
   ];
   for (const sql of migrations) {
     try {

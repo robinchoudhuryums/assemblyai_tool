@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown } from "lucide-react";
+import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown, Bookmark, BookmarkPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
 import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/constants";
 import { useTranslation } from "@/lib/i18n";
+import { loadSavedFilters, saveSavedFilter, deleteSavedFilter, type SavedFilter } from "@/lib/saved-filters";
+import { Input } from "@/components/ui/input";
 
 type SortField = "date" | "duration" | "score" | "sentiment";
 type SortDir = "asc" | "desc";
@@ -23,6 +25,35 @@ export default function CallsTable() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
+
+  // Saved filters
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [newFilterName, setNewFilterName] = useState("");
+
+  const handleSaveFilter = () => {
+    if (!newFilterName.trim()) return;
+    const saved = saveSavedFilter({
+      name: newFilterName.trim(),
+      status: statusFilter,
+      sentiment: sentimentFilter,
+      employee: employeeFilter,
+    });
+    setSavedFilters(prev => [...prev, saved]);
+    setNewFilterName("");
+    setShowSaveDialog(false);
+  };
+
+  const handleLoadFilter = (filter: SavedFilter) => {
+    setStatusFilter(filter.status);
+    setSentimentFilter(filter.sentiment);
+    setEmployeeFilter(filter.employee);
+  };
+
+  const handleDeleteFilter = (id: string) => {
+    deleteSavedFilter(id);
+    setSavedFilters(prev => prev.filter(f => f.id !== id));
+  };
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -381,6 +412,50 @@ export default function CallsTable() {
               <SelectItem value="negative">Negative</SelectItem>
             </SelectContent>
           </Select>
+          {/* Saved filters */}
+          {savedFilters.length > 0 && (
+            <Select onValueChange={(id) => {
+              const filter = savedFilters.find(f => f.id === id);
+              if (filter) handleLoadFilter(filter);
+            }}>
+              <SelectTrigger className="w-40">
+                <Bookmark className="w-3.5 h-3.5 mr-1.5" />
+                <SelectValue placeholder="Saved Filters" />
+              </SelectTrigger>
+              <SelectContent>
+                {savedFilters.map(f => (
+                  <SelectItem key={f.id} value={f.id}>
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <span>{f.name}</span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {showSaveDialog ? (
+            <div className="flex items-center gap-1">
+              <Input
+                className="w-32 h-9 text-xs"
+                placeholder="Filter name..."
+                value={newFilterName}
+                onChange={(e) => setNewFilterName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSaveFilter()}
+                autoFocus
+              />
+              <Button size="sm" variant="default" className="h-9 px-2" onClick={handleSaveFilter} disabled={!newFilterName.trim()}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" className="h-9 px-2" onClick={() => setShowSaveDialog(false)}>
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="h-9" onClick={() => setShowSaveDialog(true)} title="Save current filters">
+              <BookmarkPlus className="w-3.5 h-3.5 mr-1" />
+              Save
+            </Button>
+          )}
         </div>
       </div>
 

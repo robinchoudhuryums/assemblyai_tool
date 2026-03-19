@@ -705,4 +705,73 @@ export function registerCallRoutes(
       res.status(500).json({ message: "Failed to start bulk re-analysis" });
     }
   });
+
+  // ==================== ANNOTATIONS ====================
+
+  // Get annotations for a call
+  router.get("/api/calls/:id/annotations", requireAuth, async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.json([]);
+        return;
+      }
+      const { rows } = await pool.query(
+        "SELECT * FROM annotations WHERE call_id = $1 ORDER BY timestamp_ms ASC",
+        [req.params.id]
+      );
+      res.json(rows.map(r => ({
+        id: r.id,
+        callId: r.call_id,
+        timestampMs: r.timestamp_ms,
+        text: r.text,
+        author: r.author,
+        createdAt: r.created_at?.toISOString?.() ?? r.created_at,
+      })));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get annotations" });
+    }
+  });
+
+  // Create annotation
+  router.post("/api/calls/:id/annotations", requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.status(503).json({ message: "Annotations require PostgreSQL" });
+        return;
+      }
+      const { timestampMs, text } = req.body;
+      if (typeof timestampMs !== "number" || !text?.trim()) {
+        res.status(400).json({ message: "timestampMs (number) and text (string) are required" });
+        return;
+      }
+      const { rows } = await pool.query(
+        `INSERT INTO annotations (call_id, timestamp_ms, text, author) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [req.params.id, timestampMs, text.trim(), req.user?.name || req.user?.username || "unknown"]
+      );
+      const r = rows[0];
+      res.json({
+        id: r.id, callId: r.call_id, timestampMs: r.timestamp_ms,
+        text: r.text, author: r.author, createdAt: r.created_at?.toISOString?.() ?? r.created_at,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create annotation" });
+    }
+  });
+
+  // Delete annotation
+  router.delete("/api/calls/:id/annotations/:annotationId", requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.status(503).json({ message: "Annotations require PostgreSQL" });
+        return;
+      }
+      await pool.query("DELETE FROM annotations WHERE id = $1 AND call_id = $2", [req.params.annotationId, req.params.id]);
+      res.json({ message: "Annotation deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete annotation" });
+    }
+  });
 }

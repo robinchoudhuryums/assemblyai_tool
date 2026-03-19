@@ -472,6 +472,15 @@ export type PerformerSummary = {
   totalCalls: number;
 };
 
+export interface Annotation {
+  id: string;
+  callId: string;
+  timestampMs: number;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
 export type PaginatedCalls = {
   calls: CallWithDetails[];
   pagination: { page: number; limit: number; total: number; totalPages: number };

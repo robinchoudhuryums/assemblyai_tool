@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck, Search, ChevronUp, ChevronDown } from "lucide-react";
+import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck, Search, ChevronUp, ChevronDown, SkipForward, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -355,6 +355,32 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     setCurrentTime(timeMs);
   };
 
+  // Skip to next segment (skips silence gaps between speakers)
+  const skipToNextSegment = () => {
+    const nextIdx = activeSegmentIndex + 1;
+    if (nextIdx < transcriptSegments.length) {
+      jumpToTime(transcriptSegments[nextIdx].start);
+    }
+  };
+
+  // Jump to next flagged/negative sentiment segment
+  const jumpToFlagged = () => {
+    const startIdx = activeSegmentIndex >= 0 ? activeSegmentIndex + 1 : 0;
+    for (let i = startIdx; i < transcriptSegments.length; i++) {
+      if (transcriptSegments[i].sentiment === "negative") {
+        jumpToTime(transcriptSegments[i].start);
+        return;
+      }
+    }
+    // Wrap around from beginning
+    for (let i = 0; i < startIdx; i++) {
+      if (transcriptSegments[i].sentiment === "negative") {
+        jumpToTime(transcriptSegments[i].start);
+        return;
+      }
+    }
+  };
+
   const togglePlayPause = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -495,6 +521,12 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
             {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
             {isPlaying ? "Pause" : "Play Audio"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={skipToNextSegment} aria-label="Skip to next segment" title="Skip silence / next speaker">
+            <SkipForward className="w-4 h-4" />
+          </Button>
+          <Button size="sm" variant="outline" onClick={jumpToFlagged} aria-label="Jump to next negative sentiment" title="Jump to next flagged moment">
+            <Flag className="w-4 h-4" />
           </Button>
           <Button
             size="sm"
@@ -970,7 +1002,105 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               </div>
             );
           })()}
+
+          {/* Transcript Annotations */}
+          <AnnotationsPanel callId={callId} currentTime={currentTime} onJump={jumpToTime} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Annotations panel — timestamped comments from managers */
+function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; currentTime: number; onJump: (ms: number) => void }) {
+  const [newText, setNewText] = React.useState("");
+  const queryClient = useQueryClient();
+
+  const { data: annotations } = useQuery<import("@shared/schema").Annotation[]>({
+    queryKey: ["/api/calls", callId, "annotations"],
+    queryFn: async () => {
+      const res = await fetch(`/api/calls/${callId}/annotations`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async (payload: { timestampMs: number; text: string }) => {
+      const res = await fetch(`/api/calls/${callId}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to add annotation");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] });
+      setNewText("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include" });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
+  });
+
+  const formatTime = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="bg-muted rounded-lg p-4">
+      <h4 className="font-semibold text-foreground mb-3 flex items-center gap-1.5">
+        <ClipboardCheck className="w-4 h-4" /> Annotations
+      </h4>
+      {(annotations || []).length > 0 && (
+        <div className="space-y-2 mb-3">
+          {(annotations || []).map(a => (
+            <div key={a.id} className="text-xs border-l-2 border-primary/30 pl-2 group">
+              <button
+                className="text-primary font-mono hover:underline"
+                onClick={() => onJump(a.timestampMs)}
+              >
+                {formatTime(a.timestampMs)}
+              </button>
+              <span className="text-muted-foreground ml-1">— {a.author}</span>
+              <p className="text-foreground mt-0.5">{a.text}</p>
+              <button
+                className="text-destructive/50 hover:text-destructive text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => deleteMutation.mutate(a.id)}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <Input
+          className="h-7 text-xs flex-1"
+          placeholder={`Note at ${formatTime(currentTime)}...`}
+          value={newText}
+          onChange={e => setNewText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && newText.trim()) {
+              addMutation.mutate({ timestampMs: Math.round(currentTime), text: newText.trim() });
+            }
+          }}
+        />
+        <Button
+          size="sm"
+          className="h-7 text-xs px-2"
+          disabled={!newText.trim() || addMutation.isPending}
+          onClick={() => addMutation.mutate({ timestampMs: Math.round(currentTime), text: newText.trim() })}
+        >
+          Add
+        </Button>
       </div>
     </div>
   );
