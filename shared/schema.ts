@@ -120,9 +120,24 @@ export const callSchema = insertCallSchema.extend({
 // --- Reusable schemas for AI data that may be strings or objects ---
 // Bedrock may return objects where strings are expected.
 // Accept both forms here; normalizeStringArray() coerces objects to strings at the storage layer.
-const aiDataField = z.unknown().optional();
 const aiStringOrObject = z.union([z.string(), z.record(z.unknown())]);
 const aiStringArray = z.array(aiStringOrObject).optional();
+
+// LeMUR response: structured AI response object with known top-level fields.
+// Accepts null (not used), string (raw response), or an object with common LeMUR fields.
+const lemurResponseSchema = z.union([
+  z.null(),
+  z.string(),
+  z.object({
+    response: z.string().optional(),
+    request_id: z.string().optional(),
+    model: z.string().optional(),
+    usage: z.object({
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
+    }).passthrough().optional(),
+  }).passthrough(),
+]).optional();
 
 // --- TRANSCRIPT SCHEMAS ---
 export const insertTranscriptSchema = z.object({
@@ -177,7 +192,7 @@ export const insertCallAnalysisSchema = z.object({
     strengths: aiStringArray,
     suggestions: aiStringArray,
   }).optional(),
-  lemurResponse: aiDataField,
+  lemurResponse: lemurResponseSchema,
   callPartyType: z.string().optional(),
   flags: z.array(z.string()).optional(),
   manualEdits: z.array(z.object({
@@ -195,7 +210,14 @@ export const insertCallAnalysisSchema = z.object({
     transcriptLength: z.number().optional(),
     aiAnalysisCompleted: z.boolean().optional(),
     overallScore: z.number().optional(),
-  }).passthrough().optional(),
+    agentSpeakerLabel: z.string().optional(),
+    utteranceMetrics: z.object({
+      interruptionCount: z.number().optional(),
+      avgResponseLatencyMs: z.number().optional(),
+      monologueSegments: z.number().optional(),
+      questionCount: z.number().optional(),
+    }).optional(),
+  }).optional(),
   subScores: z.object({
     compliance: z.number().min(0).max(10).optional(),
     customerExperience: z.number().min(0).max(10).optional(),
@@ -287,8 +309,8 @@ export const analysisEditSchema = z.object({
     topics: z.array(z.string()).optional(),
     actionItems: z.array(z.string()).optional(),
     feedback: z.object({
-      strengths: z.array(z.unknown()).optional(),
-      suggestions: z.array(z.unknown()).optional(),
+      strengths: z.array(aiStringOrObject).optional(),
+      suggestions: z.array(aiStringOrObject).optional(),
     }).optional(),
     flags: z.array(z.string()).optional(),
     sentiment: z.string().optional(),
