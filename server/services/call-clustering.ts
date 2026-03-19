@@ -183,7 +183,7 @@ function getClusterTopTerms(docs: TermFrequency[], limit = 5): string[] {
 /**
  * Determine trend by comparing recent vs older call counts
  */
-function determineTrend(docs: TermFrequency[]): "rising" | "stable" | "declining" {
+function determineTrend(docs: { uploadedAt: string }[]): "rising" | "stable" | "declining" {
   const now = Date.now();
   const sevenDaysAgo = now - 7 * 86400000;
   const fourteenDaysAgo = now - 14 * 86400000;
@@ -200,7 +200,64 @@ function determineTrend(docs: TermFrequency[]): "rising" | "stable" | "declining
 }
 
 /**
- * Main clustering function — returns topic clusters for calls
+ * Cosine similarity between two embedding vectors
+ */
+function embeddingCosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const mag = Math.sqrt(magA) * Math.sqrt(magB);
+  return mag > 0 ? dot / mag : 0;
+}
+
+/**
+ * Cluster using Bedrock Titan embeddings (higher accuracy).
+ * Threshold is higher than TF-IDF since embeddings capture semantic similarity.
+ */
+function clusterByEmbeddings(
+  callsWithEmbeddings: { callId: string; embedding: number[]; uploadedAt: string }[],
+  similarityThreshold = 0.6,
+): Map<number, { callId: string; uploadedAt: string }[]> {
+  const assignments = new Array(callsWithEmbeddings.length).fill(-1);
+  let nextCluster = 0;
+
+  for (let i = 0; i < callsWithEmbeddings.length; i++) {
+    if (assignments[i] !== -1) continue;
+    assignments[i] = nextCluster;
+
+    for (let j = i + 1; j < callsWithEmbeddings.length; j++) {
+      if (assignments[j] !== -1) continue;
+      const sim = embeddingCosineSimilarity(
+        callsWithEmbeddings[i].embedding,
+        callsWithEmbeddings[j].embedding
+      );
+      if (sim >= similarityThreshold) {
+        assignments[j] = nextCluster;
+      }
+    }
+    nextCluster++;
+  }
+
+  const clusters = new Map<number, { callId: string; uploadedAt: string }[]>();
+  for (let i = 0; i < assignments.length; i++) {
+    const cid = assignments[i];
+    if (!clusters.has(cid)) clusters.set(cid, []);
+    clusters.get(cid)!.push({
+      callId: callsWithEmbeddings[i].callId,
+      uploadedAt: callsWithEmbeddings[i].uploadedAt,
+    });
+  }
+  return clusters;
+}
+
+/**
+ * Main clustering function — returns topic clusters for calls.
+ * Uses Bedrock Titan embeddings when available (higher accuracy),
+ * falls back to TF-IDF cosine similarity otherwise.
  */
 export async function getCallClusters(options: {
   days?: number;
@@ -228,23 +285,54 @@ export async function getCallClusters(options: {
   // Build call lookup for enrichment
   const callMap = new Map(calls.map(c => [c.id, c]));
 
-  // Build TF-IDF and cluster
-  const docTerms = buildTfIdf(calls);
-  const clusters = clusterCalls(docTerms);
+  // Check how many calls have embeddings
+  const callsWithEmbeddings = calls
+    .filter(c => (c.analysis as any)?.embedding && Array.isArray((c.analysis as any).embedding))
+    .map(c => ({
+      callId: c.id,
+      embedding: (c.analysis as any).embedding as number[],
+      uploadedAt: c.uploadedAt || "",
+    }));
+
+  const embeddingCoverage = callsWithEmbeddings.length / calls.length;
+  const useEmbeddings = embeddingCoverage >= 0.5; // Use embeddings if 50%+ coverage
+
+  let clusters: Map<number, { callId: string; uploadedAt: string }[]>;
+  let docTermsForLabels: TermFrequency[] | null = null;
+
+  if (useEmbeddings) {
+    console.log(`[Clustering] Using embedding-based clustering (${callsWithEmbeddings.length}/${calls.length} calls have embeddings)`);
+    clusters = clusterByEmbeddings(callsWithEmbeddings);
+    // Still build TF-IDF for labels (but only for calls in clusters)
+    docTermsForLabels = buildTfIdf(calls);
+  } else {
+    console.log(`[Clustering] Using TF-IDF clustering (${callsWithEmbeddings.length}/${calls.length} embeddings available)`);
+    const docTerms = buildTfIdf(calls);
+    const tfIdfClusters = clusterCalls(docTerms);
+    docTermsForLabels = docTerms;
+    // Convert to same format
+    clusters = new Map();
+    for (const [cid, docs] of tfIdfClusters) {
+      clusters.set(cid, docs.map(d => ({ callId: d.callId, uploadedAt: d.uploadedAt })));
+    }
+  }
 
   // Convert to TopicCluster format
   const results: TopicCluster[] = [];
   for (const [clusterId, docs] of clusters) {
     if (docs.length < minSize) continue;
 
-    const topTerms = getClusterTopTerms(docs);
-    const clusterCalls = docs.map(d => callMap.get(d.callId)).filter(Boolean) as CallWithDetails[];
+    // Get TF-IDF terms for this cluster's calls (for labeling)
+    const clusterCallIds = new Set(docs.map(d => d.callId));
+    const clusterDocTerms = (docTermsForLabels || []).filter(dt => clusterCallIds.has(dt.callId));
+    const topTerms = getClusterTopTerms(clusterDocTerms);
+    const matchedCalls = docs.map(d => callMap.get(d.callId)).filter(Boolean) as CallWithDetails[];
 
     // Compute aggregates
     let totalScore = 0, scoredCount = 0;
     const sentiment = { positive: 0, neutral: 0, negative: 0 };
 
-    for (const call of clusterCalls) {
+    for (const call of matchedCalls) {
       if (call.analysis?.performanceScore != null) {
         totalScore += Number(call.analysis.performanceScore);
         scoredCount++;

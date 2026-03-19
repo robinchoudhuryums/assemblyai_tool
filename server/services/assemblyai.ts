@@ -74,18 +74,21 @@ export class AssemblyAIService {
   }
 
   async transcribeAudio(audioUrl: string, wordBoost?: string[], language?: string): Promise<string> {
+    // Cost optimization: skip AssemblyAI sentiment for non-English (saves $0.02/hr)
+    // AI analysis provides sentiment anyway; AssemblyAI sentiment is less accurate for non-English
+    const isNonEnglish = language && language !== "en";
+
     const body: Record<string, unknown> = {
       audio_url: audioUrl,
       speech_models: ["universal-3-pro", "universal-2"],
       speaker_labels: true,
       punctuate: true,
       format_text: true,
-      sentiment_analysis: true,
+      sentiment_analysis: !isNonEnglish, // Skip for non-English (12% cost savings)
       auto_chapters: true,
     };
 
-    // If a specific language is requested, set language_code (disables auto-detection)
-    if (language && language !== "en") {
+    if (isNonEnglish) {
       body.language_code = language;
     }
 

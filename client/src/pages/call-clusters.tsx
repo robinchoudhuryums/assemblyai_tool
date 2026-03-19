@@ -116,13 +116,13 @@ export default function CallClusters() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {clusters.map(cluster => {
+            {clusters.map((cluster, i) => {
               const total = cluster.avgSentiment.positive + cluster.avgSentiment.neutral + cluster.avgSentiment.negative;
               const positivePct = total > 0 ? Math.round((cluster.avgSentiment.positive / total) * 100) : 0;
               const negativePct = total > 0 ? Math.round((cluster.avgSentiment.negative / total) * 100) : 0;
 
               return (
-                <Card key={cluster.id} className={cluster.trend === "rising" ? "border-red-300 dark:border-red-800" : ""}>
+                <Card key={cluster.id} className={`card-interactive animate-stagger ${cluster.trend === "rising" ? "border-red-300 dark:border-red-800" : ""}`} style={{ "--stagger": i } as React.CSSProperties}>
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between">
                       <CardTitle className="text-sm font-semibold capitalize leading-tight">

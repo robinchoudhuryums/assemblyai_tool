@@ -17,6 +17,7 @@ import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
+const DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 const DEFAULT_REGION = "us-east-1";
 const BEDROCK_TIMEOUT_MS = 120_000; // 2 minutes — prevents indefinite hangs
 
@@ -161,6 +162,51 @@ export class BedrockProvider implements AIAnalysisProvider {
     const analysis = parseJsonResponse(responseText, callId, callDurationSeconds);
     console.log(`[${callId}] Bedrock analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);
     return analysis;
+  }
+
+  /**
+   * Generate a text embedding using Amazon Titan Embed v2.
+   * Returns a 1024-dimensional float32 vector. Cost: $0.00002/1K tokens.
+   * Used for call clustering — compute once per call, store in DB.
+   */
+  async generateEmbedding(text: string): Promise<number[] | null> {
+    try {
+      const creds = await this.ensureCredentials();
+      const region = creds.region;
+      const host = `bedrock-runtime.${region}.amazonaws.com`;
+      const embeddingModel = process.env.BEDROCK_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+      const rawPath = `/model/${embeddingModel}/invoke`;
+      const url = `https://${host}${rawPath}`;
+
+      // Titan Embed v2 accepts up to 8192 tokens; truncate to ~6000 chars to stay safe
+      const truncated = text.length > 6000 ? text.slice(0, 3000) + "\n...\n" + text.slice(-3000) : text;
+
+      const body = JSON.stringify({
+        inputText: truncated,
+        dimensions: 256, // 256-dim is cheaper and sufficient for clustering
+        normalize: true,
+      });
+
+      const headers = this.signRequest("POST", host, rawPath, body, region, creds);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout for embeddings
+      try {
+        const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.warn(`Embedding API error (${response.status}): ${errorText.substring(0, 200)}`);
+          return null;
+        }
+        const result = await response.json();
+        return result.embedding || null;
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (error) {
+      // Non-critical — clustering falls back to TF-IDF
+      console.warn("Embedding generation failed (non-critical):", (error as Error).message);
+      return null;
+    }
   }
 
   // --- AWS Signature V4 ---

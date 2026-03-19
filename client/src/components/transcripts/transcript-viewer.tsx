@@ -11,6 +11,7 @@ import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScoreRing } from "@/components/ui/animated-number";
 import AudioWaveformDisplay from "./audio-waveform";
 
 interface TranscriptViewerProps {
@@ -718,7 +719,14 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     {call.sentiment.overallSentiment.charAt(0).toUpperCase() + call.sentiment.overallSentiment.slice(1)}
                   </Badge>
                 ) : 'Unknown'}</p>
-                <p><strong>Performance Score:</strong> {call.analysis?.performanceScore ? Number(call.analysis.performanceScore).toFixed(1) : 'N/A'}/10</p>
+                <div className="flex items-center gap-2">
+                  <strong className="text-sm">Performance:</strong>
+                  {call.analysis?.performanceScore ? (
+                    <ScoreRing score={Number(call.analysis.performanceScore)} size={40} strokeWidth={3} />
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
                 {call.analysis?.subScores && (
                   <div className="mt-2 pt-2 border-t border-border space-y-1.5">
                     {[
@@ -736,7 +744,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                             <span className={`font-semibold ${dim.color}`}>{Number(val).toFixed(1)}</span>
                           </div>
                           <div className="w-full h-1.5 bg-muted-foreground/20 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar}`} style={{ width: `${Number(val) * 10}%` }} />
+                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar} score-bar-fill`} style={{ width: `${Number(val) * 10}%` }} />
                           </div>
                         </div>
                       );

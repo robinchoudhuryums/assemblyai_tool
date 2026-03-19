@@ -560,6 +560,35 @@ export class PostgresStorage implements IStorage {
     return mapAnalysis(rows[0]);
   }
 
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    // Build dynamic SET clause from provided fields
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    if (updates.embedding !== undefined) {
+      fields.push(`embedding = $${idx++}`);
+      values.push(JSON.stringify(updates.embedding));
+    }
+    if (updates.manualEdits !== undefined) {
+      fields.push(`manual_edits = $${idx++}`);
+      values.push(JSON.stringify(updates.manualEdits));
+    }
+    if (updates.performanceScore !== undefined) {
+      fields.push(`performance_score = $${idx++}`);
+      values.push(updates.performanceScore);
+    }
+    if (updates.summary !== undefined) {
+      fields.push(`summary = $${idx++}`);
+      values.push(updates.summary);
+    }
+    if (fields.length === 0) return;
+    values.push(callId);
+    await this.db.query(
+      `UPDATE call_analyses SET ${fields.join(", ")} WHERE call_id = $${idx}`,
+      values
+    );
+  }
+
   // ── Audio (delegated to S3 client) ────────────────────────
   async uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void> {
     if (!this.audioClient) throw new Error("No audio storage configured");

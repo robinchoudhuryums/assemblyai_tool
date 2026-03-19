@@ -167,7 +167,7 @@ export default function AgentComparePage() {
             {/* Summary cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
               {comparison.map((agent, i) => (
-                <Card key={agent.id} style={{ borderTop: `3px solid ${COLORS[i]}` }}>
+                <Card key={agent.id} className="card-interactive animate-stagger" style={{ borderTop: `3px solid ${COLORS[i]}`, "--stagger": i } as React.CSSProperties}>
                   <CardContent className="pt-4">
                     <h3 className="font-semibold text-foreground mb-1 truncate">{agent.name}</h3>
                     {agent.subTeam && <p className="text-xs text-muted-foreground mb-3">{agent.subTeam}</p>}

@@ -110,6 +110,8 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_transcripts_text_fts ON transcripts USING gin (to_tsvector('english', coalesce(text, '')))",
     // Index for employee name lookups (auto-assign)
     "CREATE INDEX IF NOT EXISTS idx_employees_name_lower ON employees (lower(name))",
+    // Embedding vector for call clustering (JSONB array of floats)
+    "ALTER TABLE call_analyses ADD COLUMN IF NOT EXISTS embedding JSONB",
   ];
   for (const sql of migrations) {
     try {

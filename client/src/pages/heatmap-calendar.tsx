@@ -127,25 +127,25 @@ export default function HeatmapCalendar() {
 
         {/* Summary stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
+          <Card className="animate-stagger" style={{ "--stagger": 0 } as React.CSSProperties}>
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground">Total Calls</p>
               <p className="text-2xl font-bold">{totalCalls}</p>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="animate-stagger" style={{ "--stagger": 1 } as React.CSSProperties}>
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground">Avg Score</p>
               <p className="text-2xl font-bold">{overallAvgScore?.toFixed(1) ?? "N/A"}</p>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="animate-stagger" style={{ "--stagger": 2 } as React.CSSProperties}>
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground">Peak Day</p>
               <p className="text-2xl font-bold">{peakHour.count > 0 ? DAY_LABELS[peakHour.dow] : "—"}</p>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="animate-stagger" style={{ "--stagger": 3 } as React.CSSProperties}>
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground">Peak Hour</p>
               <p className="text-2xl font-bold">{peakHour.count > 0 ? HOUR_LABELS[peakHour.hour] : "—"}</p>
@@ -199,7 +199,7 @@ export default function HeatmapCalendar() {
                           return (
                             <td key={hour} className="p-0.5">
                               <div
-                                className={`w-full aspect-square rounded-sm ${colorClass} min-w-[16px] min-h-[16px] transition-colors hover:ring-1 hover:ring-foreground/30`}
+                                className={`w-full aspect-square rounded-sm ${colorClass} min-w-[16px] min-h-[16px] heatmap-cell`}
                                 title={tooltip}
                               />
                             </td>

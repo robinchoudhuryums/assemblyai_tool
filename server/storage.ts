@@ -98,6 +98,7 @@ export interface IStorage {
   // Call analysis operations
   getCallAnalysis(callId: string): Promise<CallAnalysis | undefined>;
   createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis>;
+  updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void>;
 
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
@@ -329,6 +330,11 @@ export class MemStorage implements IStorage {
     const newAnalysis: CallAnalysis = { ...analysis, id, createdAt: new Date().toISOString() };
     this.analyses.set(analysis.callId, newAnalysis);
     return newAnalysis;
+  }
+
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    const existing = this.analyses.get(callId);
+    if (existing) this.analyses.set(callId, { ...existing, ...updates });
   }
 
   async uploadAudio(callId: string, fileName: string, buffer: Buffer, _contentType: string): Promise<void> {
@@ -785,6 +791,13 @@ export class CloudStorage implements IStorage {
     };
     await this.client.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
     return newAnalysis;
+  }
+
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    const existing = await this.getCallAnalysis(callId);
+    if (existing) {
+      await this.client.uploadJson(`analyses/${callId}.json`, { ...existing, ...updates });
+    }
   }
 
   // --- Audio File Methods ---

@@ -217,4 +217,38 @@
   .dark .recharts-tooltip-item {
     color: hsl(220, 15%, 85%) !important;
   }
+
+  /* Animated card entrance — staggered via style="--stagger: N" */
+  .animate-stagger {
+    animation: fade-in-up 0.35s ease-out both;
+    animation-delay: calc(var(--stagger, 0) * 60ms);
+  }
+
+  /* Interactive hover glow for heatmap cells */
+  .heatmap-cell {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .heatmap-cell:hover {
+    transform: scale(1.3);
+    box-shadow: 0 0 8px var(--primary);
+    z-index: 10;
+    position: relative;
+  }
+
+  /* Smooth score bar fill animation */
+  .score-bar-fill {
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Card hover lift with subtle scale */
+  .card-interactive {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .card-interactive:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  }
+  .dark .card-interactive:hover {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  }
 }

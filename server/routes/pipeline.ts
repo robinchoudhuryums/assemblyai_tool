@@ -283,7 +283,12 @@ export async function processAudioFile(
       }
     }
 
-    if (aiProvider.isAvailable && speakerLabeledText) {
+    // Skip AI for very short calls (< 15 seconds) — likely noise, voicemail, or misdials
+    const tooShortForAI = callDurationSeconds < 15;
+
+    if (tooShortForAI) {
+      console.log(`[${callId}] Step 4/6: Skipping AI analysis (call too short: ${callDurationSeconds}s). Saves ~$0.05.`);
+    } else if (aiProvider.isAvailable && speakerLabeledText) {
       try {
         const transcriptCharCount = speakerLabeledText.length;
         const estimatedTokens = Math.ceil(transcriptCharCount / 4);
@@ -293,7 +298,22 @@ export async function processAudioFile(
           console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
         }
 
-        aiAnalysis = await aiProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
+        // Cost optimization: use Haiku for short routine calls (< 3min, no flags, no custom template)
+        // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call
+        const isRoutineShort = callDurationSeconds < 180 && !promptTemplate && estimatedTokens < 3000;
+        let analysisProvider = aiProvider;
+        if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
+          try {
+            const { BedrockProvider } = await import("../services/bedrock");
+            const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
+            analysisProvider = BedrockProvider.createWithModel(haikuModel);
+            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s, ~${estimatedTokens} tokens) — 67% cost savings`);
+          } catch {
+            // Fall back to default provider
+          }
+        }
+
+        aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);
@@ -409,6 +429,21 @@ export async function processAudioFile(
     await storage.createTranscript(transcript);
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
+
+    // Generate embedding for clustering (non-blocking, fires in background)
+    if (aiProvider.isAvailable && speakerLabeledText) {
+      const embeddingText = [
+        aiAnalysis?.summary || "",
+        ...(aiAnalysis?.topics || []).map((t: any) => typeof t === "string" ? t : t?.text || ""),
+        ...(aiAnalysis?.action_items || []).slice(0, 3).map((a: any) => typeof a === "string" ? a : a?.text || ""),
+      ].filter(Boolean).join(". ");
+
+      if (embeddingText.length > 20) {
+        generateCallEmbedding(callId, embeddingText).catch(err =>
+          console.warn(`[${callId}] Embedding generation failed (non-blocking):`, err.message)
+        );
+      }
+    }
 
     // Auto-assign to employee based on detected agent name
     const currentCall = await storage.getCall(callId);
@@ -539,5 +574,22 @@ export async function processAudioFile(
     }).catch(() => {});
 
     await cleanupFile(filePath);
+  }
+}
+
+/**
+ * Generate and store a Bedrock Titan embedding for a call.
+ * Non-blocking — failures don't affect the main pipeline.
+ */
+async function generateCallEmbedding(callId: string, text: string): Promise<void> {
+  const { BedrockProvider } = await import("../services/bedrock");
+  const provider = new BedrockProvider();
+  const embedding = await provider.generateEmbedding(text);
+  if (embedding && embedding.length > 0) {
+    const existing = await storage.getCallAnalysis(callId);
+    if (existing) {
+      await storage.updateCallAnalysis(callId, { embedding } as any);
+      console.log(`[${callId}] Embedding stored (${embedding.length}-dim)`);
+    }
   }
 }
