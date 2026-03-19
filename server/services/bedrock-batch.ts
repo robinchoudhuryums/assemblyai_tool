@@ -57,9 +57,9 @@ export class BedrockBatchService {
 
     if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
       this.credentials = {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        sessionToken: process.env.AWS_SESSION_TOKEN,
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID.trim(),
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY.trim(),
+        sessionToken: process.env.AWS_SESSION_TOKEN?.trim(),
         region: process.env.AWS_REGION || "us-east-1",
       };
     }
