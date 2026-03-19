@@ -102,6 +102,60 @@ const translations: Record<Locale, Record<string, string>> = {
     "dashboard.positiveSentiment": "Positive Sentiment",
     "dashboard.callsProcessed": "Calls Processed",
 
+    // Metrics
+    "metrics.totalCalls": "Total Calls",
+    "metrics.avgSentiment": "Avg Sentiment",
+    "metrics.transcriptionTime": "Transcription Time",
+    "metrics.teamScore": "Team Score",
+    "metrics.analyzed": "analyzed",
+    "metrics.avgAcrossCalls": "Avg across calls",
+    "metrics.avgPerCall": "Avg per call",
+    "metrics.avgPerformance": "Avg performance",
+    "metrics.failedToLoad": "Failed to load metrics",
+
+    // Sentiment
+    "sentiment.title": "Sentiment Analysis",
+    "sentiment.positive": "Positive",
+    "sentiment.neutral": "Neutral",
+    "sentiment.negative": "Negative",
+
+    // Transcript viewer
+    "transcript.callTranscript": "Call Transcript",
+    "transcript.export": "Export",
+    "transcript.download": "Download",
+    "transcript.playAudio": "Play Audio",
+    "transcript.pause": "Pause",
+    "transcript.callSummary": "Call Summary",
+    "transcript.keyPoints": "Key Points",
+    "transcript.keyTopics": "Key Topics",
+    "transcript.actionItems": "Action Items",
+    "transcript.aiFeedback": "AI Feedback",
+    "transcript.strengths": "Strengths",
+    "transcript.suggestions": "Suggestions",
+    "transcript.flags": "Flags",
+    "transcript.callParty": "Call Party",
+    "transcript.aiConfidence": "AI Confidence",
+    "transcript.needsReview": "Needs Review",
+    "transcript.manuallyEdited": "Manually Edited",
+    "transcript.processing": "Transcript is being processed...",
+    "transcript.notAvailable": "Transcript not available",
+    "transcript.callNotFound": "Call not found",
+
+    // Calls table
+    "table.date": "Date",
+    "table.duration": "Duration",
+    "table.score": "Score",
+    "table.agent": "Agent",
+    "table.status": "Status",
+    "table.actions": "Actions",
+
+    // Coaching
+    "coaching.title": "Coaching & Action Plans",
+
+    // Reports
+    "reports.overallReport": "Overall Report",
+    "reports.employeeReport": "Employee Report",
+
     // Misc
     "misc.notifications": "Notifications",
     "misc.noNotifications": "No notifications yet",
@@ -204,6 +258,60 @@ const translations: Record<Locale, Record<string, string>> = {
     "dashboard.avgScore": "Puntuacion Promedio",
     "dashboard.positiveSentiment": "Sentimiento Positivo",
     "dashboard.callsProcessed": "Llamadas Procesadas",
+
+    // Metrics
+    "metrics.totalCalls": "Total de Llamadas",
+    "metrics.avgSentiment": "Sentimiento Promedio",
+    "metrics.transcriptionTime": "Tiempo de Transcripcion",
+    "metrics.teamScore": "Puntuacion del Equipo",
+    "metrics.analyzed": "analizadas",
+    "metrics.avgAcrossCalls": "Promedio entre llamadas",
+    "metrics.avgPerCall": "Promedio por llamada",
+    "metrics.avgPerformance": "Rendimiento promedio",
+    "metrics.failedToLoad": "Error al cargar metricas",
+
+    // Sentiment
+    "sentiment.title": "Analisis de Sentimiento",
+    "sentiment.positive": "Positivo",
+    "sentiment.neutral": "Neutral",
+    "sentiment.negative": "Negativo",
+
+    // Transcript viewer
+    "transcript.callTranscript": "Transcripcion de Llamada",
+    "transcript.export": "Exportar",
+    "transcript.download": "Descargar",
+    "transcript.playAudio": "Reproducir Audio",
+    "transcript.pause": "Pausar",
+    "transcript.callSummary": "Resumen de Llamada",
+    "transcript.keyPoints": "Puntos Clave",
+    "transcript.keyTopics": "Temas Clave",
+    "transcript.actionItems": "Elementos de Accion",
+    "transcript.aiFeedback": "Retroalimentacion de IA",
+    "transcript.strengths": "Fortalezas",
+    "transcript.suggestions": "Sugerencias",
+    "transcript.flags": "Alertas",
+    "transcript.callParty": "Parte de la Llamada",
+    "transcript.aiConfidence": "Confianza de IA",
+    "transcript.needsReview": "Necesita Revision",
+    "transcript.manuallyEdited": "Editado Manualmente",
+    "transcript.processing": "La transcripcion esta siendo procesada...",
+    "transcript.notAvailable": "Transcripcion no disponible",
+    "transcript.callNotFound": "Llamada no encontrada",
+
+    // Calls table
+    "table.date": "Fecha",
+    "table.duration": "Duracion",
+    "table.score": "Puntuacion",
+    "table.agent": "Agente",
+    "table.status": "Estado",
+    "table.actions": "Acciones",
+
+    // Coaching
+    "coaching.title": "Coaching y Planes de Accion",
+
+    // Reports
+    "reports.overallReport": "Informe General",
+    "reports.employeeReport": "Informe de Empleado",
 
     // Misc
     "misc.notifications": "Notificaciones",

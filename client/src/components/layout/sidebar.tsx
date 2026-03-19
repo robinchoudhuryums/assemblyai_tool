@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
 import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -9,7 +9,7 @@ import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@
 import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
 
-type NavItem = { nameKey: string; href: string; icon: any; sectionKey?: string; requireRole?: string[] };
+type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
 
 const navigation: NavItem[] = [
   { nameKey: "nav.dashboard", href: "/", icon: BarChart3 },
@@ -174,6 +174,7 @@ export default function Sidebar() {
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
                 title={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "No new notifications"}
+                aria-label={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "Notifications"}
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
@@ -245,6 +246,7 @@ export default function Sidebar() {
               onClick={toggleDarkMode}
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
             >
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -418,6 +420,7 @@ export default function Sidebar() {
             className="text-muted-foreground hover:text-foreground"
             onClick={handleLogout}
             title="Sign out"
+            aria-label="Sign out"
             data-testid="logout-button"
           >
             <LogOut className="w-4 h-4" />

@@ -88,11 +88,12 @@ export default function MetricsOverview() {
       {metricCards.map((metric) => {
         const Icon = metric.icon;
         return (
-          <div
+          <button
             key={metric.title}
-            className={`metric-card rounded-lg p-6 ${metric.accentBorder} cursor-pointer hover:shadow-md transition-shadow`}
+            type="button"
+            className={`metric-card rounded-lg p-6 ${metric.accentBorder} cursor-pointer hover:shadow-md transition-shadow text-left w-full`}
             onClick={() => navigate(metric.href)}
-            role="link"
+            aria-label={`View ${metric.title}: ${metric.value}`}
           >
             <div className="flex items-center justify-between">
               <div>
@@ -108,7 +109,7 @@ export default function MetricsOverview() {
                 <Icon className={`${metric.iconColor} w-5 h-5`} />
               </div>
             </div>
-          </div>
+          </button>
         );
       })}
     </div>

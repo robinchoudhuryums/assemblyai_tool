@@ -34,6 +34,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const queryClient = useQueryClient();
 
   const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  /** Milliseconds of silence before splitting into a new transcript segment */
+  const SEGMENT_GAP_MS = 2000;
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate(prev => {
@@ -58,7 +60,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   });
 
   const editMutation = useMutation({
-    mutationFn: async (payload: { updates: Record<string, any>; reason: string }) => {
+    mutationFn: async (payload: { updates: Record<string, string | number>; reason: string }) => {
       const res = await fetch(`/api/calls/${callId}/analysis`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -87,7 +89,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   const handleSaveEdit = () => {
     if (!editReason.trim()) return;
-    const updates: Record<string, any> = {};
+    const updates: Record<string, string | number> = {};
     if (editScore !== (call?.analysis?.performanceScore?.toString() || "")) {
       updates.performanceScore = editScore;
     }
@@ -108,11 +110,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return () => window.removeEventListener("app:escape", onEscape);
   }, [isEditing]);
 
-  // toDisplayString is now imported from @/lib/display-utils
-  // Keep a memoized reference to avoid breaking hook ordering
-  const _toDisplayString = useCallback((val: unknown): string => {
-    return toDisplayString(val);
-  }, []);
+  // toDisplayString is a pure function imported from @/lib/display-utils — no memoization needed
 
   // Build keyword set from detected topics for highlighting
   // MUST be called before any early returns to respect Rules of Hooks
@@ -210,8 +208,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return [];
   }, [call.transcript?.words]);
 
+  interface TranscriptSegment {
+    start: number;
+    end: number;
+    text: string;
+    speaker: string;
+    sentiment: "neutral" | "positive" | "negative";
+  }
+
   function generateSegmentsFromWords(words: TranscriptWord[]) {
-    const segments: any[] = [];
+    const segments: TranscriptSegment[] = [];
     if (!words || !Array.isArray(words) || words.length === 0) return segments;
 
     const first = words[0];
@@ -229,7 +235,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       const timeGap = word.start - currentSegment.end;
       const speakerChange = word.speaker && word.speaker !== currentSegment.speaker;
 
-      if (timeGap > 2000 || speakerChange) {
+      if (timeGap > SEGMENT_GAP_MS || speakerChange) {
         segments.push({ ...currentSegment });
         currentSegment = {
           start: word.start,
@@ -362,15 +368,15 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={handleExportTranscript} data-testid="export-transcript">
+          <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
             <FileText className="w-4 h-4 mr-1" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} data-testid="download-audio">
+          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
             <Download className="w-4 h-4 mr-1" />
             Download
           </Button>
-          <Button size="sm" onClick={togglePlayPause} data-testid="play-audio">
+          <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
             {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
             {isPlaying ? "Pause" : "Play Audio"}
           </Button>
@@ -479,17 +485,17 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
         <div className="space-y-4">
           {/* Manual Edit Indicator */}
-          {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as any[]).length > 0 && (
+          {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as unknown[]).length > 0 && (
             <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 border border-amber-200 dark:border-amber-900">
               <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 text-xs font-medium mb-1">
                 <History className="w-3.5 h-3.5" />
-                Manually Edited ({(call.analysis.manualEdits as any[]).length} edit{(call.analysis.manualEdits as any[]).length > 1 ? "s" : ""})
+                Manually Edited ({(call.analysis.manualEdits as unknown[]).length} edit{(call.analysis.manualEdits as unknown[]).length > 1 ? "s" : ""})
               </div>
-              {(call.analysis.manualEdits as any[]).map((edit: any, i: number) => (
+              {(call.analysis.manualEdits as Array<{ editedBy?: string; reason?: string; editedAt?: string }>).map((edit, i: number) => (
                 <div key={i} className="text-xs text-muted-foreground mt-1 pl-5">
                   <span className="font-medium">{edit.editedBy}</span> — {edit.reason}
                   <span className="text-muted-foreground/60 ml-1">
-                    ({new Date(edit.editedAt).toLocaleDateString()} {new Date(edit.editedAt).toLocaleTimeString()})
+                    ({new Date(edit.editedAt || "").toLocaleDateString()} {new Date(edit.editedAt || "").toLocaleTimeString()})
                   </span>
                 </div>
               ))}
@@ -568,7 +574,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                       { label: "Communication", key: "communication", color: "text-purple-600", bar: "from-purple-500 to-violet-400" },
                       { label: "Resolution", key: "resolution", color: "text-amber-600", bar: "from-amber-500 to-yellow-400" },
                     ].map(dim => {
-                      const val = (call.analysis!.subScores as any)?.[dim.key];
+                      const val = (call.analysis!.subScores as Record<string, number | undefined>)?.[dim.key];
                       if (val == null) return null;
                       return (
                         <div key={dim.key}>
@@ -631,17 +637,19 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             </div>
           )}
 
-          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (
+          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (() => {
+            const feedback = call.analysis.feedback as { strengths?: unknown[]; suggestions?: unknown[] };
+            return (
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">AI Feedback</h4>
               <div className="space-y-2 text-sm">
-                {Array.isArray((call.analysis.feedback as any).strengths) && (call.analysis.feedback as any).strengths.length > 0 && (
+                {Array.isArray(feedback.strengths) && feedback.strengths.length > 0 && (
                   <div>
                     <p className="font-medium text-green-600">Strengths:</p>
                     <ul className="space-y-1.5 text-muted-foreground">
-                      {(call.analysis.feedback as any).strengths.map((item: unknown, index: number) => {
+                      {feedback.strengths.map((item: unknown, index: number) => {
                         const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as any).timestamp : null;
+                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
                         return (
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-green-500 mt-0.5 shrink-0">+</span>
@@ -664,13 +672,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     </ul>
                   </div>
                 )}
-                {Array.isArray((call.analysis.feedback as any).suggestions) && (call.analysis.feedback as any).suggestions.length > 0 && (
+                {Array.isArray(feedback.suggestions) && feedback.suggestions.length > 0 && (
                   <div>
                     <p className="font-medium text-primary">Suggestions:</p>
                     <ul className="space-y-1.5 text-muted-foreground">
-                      {(call.analysis.feedback as any).suggestions.map((item: unknown, index: number) => {
+                      {feedback.suggestions.map((item: unknown, index: number) => {
                         const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as any).timestamp : null;
+                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
                         return (
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-amber-500 mt-0.5 shrink-0">!</span>
@@ -695,7 +703,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 )}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Call Flags */}
           {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as unknown[]).length > 0 && (() => {

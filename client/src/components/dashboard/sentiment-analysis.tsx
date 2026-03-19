@@ -65,36 +65,39 @@ export default function SentimentAnalysis() {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <div
+        <button
+          type="button"
           className="text-center p-3 sentiment-positive rounded-lg cursor-pointer hover:ring-2 hover:ring-green-400 transition-all"
           onClick={() => navigate("/search?sentiment=positive")}
-          role="link"
+          aria-label={`View positive calls: ${pct(positive)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-positive">
             {pct(positive)}%
           </p>
           <p className="text-sm font-medium">Positive ({positive})</p>
-        </div>
-        <div
+        </button>
+        <button
+          type="button"
           className="text-center p-3 sentiment-neutral rounded-lg cursor-pointer hover:ring-2 hover:ring-yellow-400 transition-all"
           onClick={() => navigate("/search?sentiment=neutral")}
-          role="link"
+          aria-label={`View neutral calls: ${pct(neutral)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-neutral">
             {pct(neutral)}%
           </p>
           <p className="text-sm font-medium">Neutral ({neutral})</p>
-        </div>
-        <div
+        </button>
+        <button
+          type="button"
           className="text-center p-3 sentiment-negative rounded-lg cursor-pointer hover:ring-2 hover:ring-red-400 transition-all"
           onClick={() => navigate("/search?sentiment=negative")}
-          role="link"
+          aria-label={`View negative calls: ${pct(negative)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-negative">
             {pct(negative)}%
           </p>
           <p className="text-sm font-medium">Negative ({negative})</p>
-        </div>
+        </button>
       </div>
     </div>
   );
