@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert, GitCompareArrows } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -22,6 +22,7 @@ const navigation: NavItem[] = [
   { nameKey: "nav.reports", href: "/reports", icon: TrendingUp },
   { nameKey: "nav.insights", href: "/insights", icon: Building2 },
   { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: Users2 },
+  { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitCompareArrows },
   { nameKey: "nav.employees", href: "/employees", icon: UserPlus, sectionKey: "section.management" },
   { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardCheck, requireRole: ["manager", "admin"] },
 ];

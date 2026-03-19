@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -154,6 +154,19 @@ export default function CallsTable() {
     });
   };
 
+  // Auto-refetch when WebSocket notifies of call completion (for re-analysis progress)
+  useEffect(() => {
+    const handler = () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+    };
+    window.addEventListener("ws:call_update", handler);
+    return () => window.removeEventListener("ws:call_update", handler);
+  }, [queryClient]);
+
+  const processingCount = useMemo(() =>
+    (calls || []).filter(c => c.status === "processing").length,
+  [calls]);
+
   const reanalyzeMutation = useMutation({
     mutationFn: async (callIds: string[]) => {
       const res = await apiRequest("POST", "/api/calls/bulk-reanalyze", { callIds });
@@ -289,6 +302,12 @@ export default function CallsTable() {
           <span className="text-xs text-muted-foreground">
             {sortedCalls.length} total
           </span>
+          {processingCount > 0 && (
+            <Badge variant="secondary" className="animate-pulse text-xs">
+              <AudioWaveform className="w-3 h-3 mr-1" />
+              {processingCount} processing
+            </Badge>
+          )}
         </div>
         <div className="flex items-center space-x-2">
           <Button

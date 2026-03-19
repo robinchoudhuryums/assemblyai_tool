@@ -10,6 +10,7 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { LoadingIndicator } from "@/components/ui/loading";
+import { Skeleton } from "@/components/ui/skeleton";
 import AudioWaveformDisplay from "./audio-waveform";
 
 interface TranscriptViewerProps {
@@ -169,8 +170,44 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <LoadingIndicator text="Loading call analysis..." />
+      <div className="bg-card rounded-lg border border-border p-6 space-y-6">
+        {/* Header skeleton */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-20" />
+            <Skeleton className="h-9 w-24" />
+            <Skeleton className="h-9 w-28" />
+          </div>
+        </div>
+        {/* Audio waveform skeleton */}
+        <Skeleton className="h-16 w-full rounded-lg" />
+        {/* Call details skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex gap-3">
+                <Skeleton className="h-8 w-8 rounded-full shrink-0" />
+                <div className="space-y-1 flex-1">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-24 w-full rounded-lg" />
+            <Skeleton className="h-24 w-full rounded-lg" />
+          </div>
+        </div>
       </div>
     );
   }
