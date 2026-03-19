@@ -169,13 +169,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   await storage.createCallAnalysis(updatedAnalysis);
                   await storage.updateCall(callId, { status: "completed" });
 
-                  // Auto-assign employee
+                  // Auto-assign employee (atomic — only if not already assigned)
                   if (analysis.detected_agent_name) {
-                    const currentCall = await storage.getCall(callId);
-                    if (currentCall && !currentCall.employeeId) {
-                      const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
-                      if (matchedEmployee) {
-                        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
+                    const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
+                    if (matchedEmployee) {
+                      const assigned = await storage.atomicAssignEmployee(callId, matchedEmployee.id);
+                      if (assigned) {
                         console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
                       }
                     }
@@ -270,6 +269,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     setTimeout(runBatchCycle, 60_000);
     setInterval(runBatchCycle, batchIntervalMinutes * 60 * 1000);
+
+    // Orphan recovery: detect calls stuck in "awaiting_analysis" with no matching pending batch item.
+    // Runs every 30 minutes. If a call has been awaiting_analysis for >2 hours with no pending
+    // batch-inference item, mark it as failed so it's visible to admins.
+    const ORPHAN_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+    const ORPHAN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+    const recoverOrphans = async () => {
+      try {
+        const s3Client: S3ClientType | undefined = (storage as any).audioClient || (storage as any).client;
+        if (!s3Client) return;
+
+        const allCalls = await storage.getAllCalls();
+        const awaitingCalls = allCalls.filter(c => c.status === "awaiting_analysis");
+        if (awaitingCalls.length === 0) return;
+
+        const pendingKeys = new Set(
+          (await s3Client.listObjects("batch-inference/pending/"))
+            .map(k => k.replace("batch-inference/pending/", "").replace(".json", ""))
+        );
+
+        let recovered = 0;
+        for (const call of awaitingCalls) {
+          const age = Date.now() - new Date(call.uploadedAt || Date.now()).getTime();
+          if (age > ORPHAN_THRESHOLD_MS && !pendingKeys.has(call.id)) {
+            await storage.updateCall(call.id, { status: "failed" });
+            broadcastCallUpdate(call.id, "failed", { label: "Orphaned: batch analysis never completed" });
+            recovered++;
+          }
+        }
+        if (recovered > 0) {
+          console.warn(`[BATCH] Recovered ${recovered} orphaned call(s) stuck in awaiting_analysis.`);
+        }
+      } catch (err) {
+        console.warn("[BATCH] Orphan recovery error:", (err as Error).message);
+      }
+    };
+    setTimeout(recoverOrphans, 5 * 60 * 1000); // First run after 5 minutes
+    setInterval(recoverOrphans, ORPHAN_CHECK_INTERVAL_MS);
   }
 
   // ==================== JOB QUEUE INITIALIZATION ====================

@@ -44,6 +44,7 @@ function mapCall(row: any): Call {
     id: row.id, employeeId: row.employee_id, fileName: row.file_name,
     filePath: row.file_path, status: row.status, duration: row.duration,
     assemblyAiId: row.assembly_ai_id, callCategory: row.call_category,
+    contentHash: row.content_hash,
     uploadedAt: row.uploaded_at?.toISOString?.() ?? row.uploaded_at,
   };
 }
@@ -276,9 +277,9 @@ export class PostgresStorage implements IStorage {
   async createCall(call: InsertCall): Promise<Call> {
     const id = randomUUID();
     const { rows } = await this.db.query(
-      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory],
+      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category, content_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory, call.contentHash],
     );
     return mapCall(rows[0]);
   }
@@ -295,6 +296,15 @@ export class PostgresStorage implements IStorage {
        merged.duration, merged.assemblyAiId, merged.callCategory, merged.uploadedAt],
     );
     return rows[0] ? mapCall(rows[0]) : undefined;
+  }
+
+  async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
+    // Atomic conditional update — only assigns if employee_id IS NULL
+    const { rowCount } = await this.db.query(
+      `UPDATE calls SET employee_id = $2 WHERE id = $1 AND employee_id IS NULL`,
+      [callId, employeeId],
+    );
+    return (rowCount ?? 0) > 0;
   }
 
   async deleteCall(id: string): Promise<void> {
@@ -422,16 +432,22 @@ export class PostgresStorage implements IStorage {
     const { rows: countRows } = await this.db.query(countQuery, params);
     const total = parseInt(countRows[0]?.cnt || "0", 10);
 
-    // Apply cursor
+    // Apply cursor (with format validation to prevent malformed queries)
     const dataParams = [...params];
     let cursorClause = "";
     if (options.cursor) {
       const sepIdx = options.cursor.indexOf("|");
-      const cursorDate = options.cursor.substring(0, sepIdx);
-      const cursorId = options.cursor.substring(sepIdx + 1);
-      cursorClause = ` AND (c.uploaded_at < $${idx} OR (c.uploaded_at = $${idx} AND c.id < $${idx + 1}))`;
-      idx += 2;
-      dataParams.push(cursorDate, cursorId);
+      if (sepIdx > 0 && sepIdx < options.cursor.length - 1) {
+        const cursorDate = options.cursor.substring(0, sepIdx);
+        const cursorId = options.cursor.substring(sepIdx + 1);
+        // Validate cursor date is ISO-like and cursorId is non-empty
+        if (/^\d{4}-\d{2}-\d{2}/.test(cursorDate) && cursorId.length > 0 && cursorId.length <= 36) {
+          cursorClause = ` AND (c.uploaded_at < $${idx} OR (c.uploaded_at = $${idx} AND c.id < $${idx + 1}))`;
+          idx += 2;
+          dataParams.push(cursorDate, cursorId);
+        }
+      }
+      // If cursor is malformed, silently ignore it (returns first page)
     }
 
     const dataQuery = `
@@ -926,14 +942,16 @@ export class PostgresStorage implements IStorage {
 
     const callIds = rows.map((r: any) => r.id);
 
-    // Delete audio from S3 for each expired call (HIPAA: PHI must not persist beyond retention)
+    // Delete audio and batch-inference artifacts from S3 (HIPAA: PHI must not persist beyond retention)
     if (this.audioClient) {
       await Promise.allSettled(
-        callIds.map((id: string) =>
+        callIds.flatMap((id: string) => [
           this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
             console.error(`[RETENTION] Failed to delete S3 audio for call ${id}:`, err.message)
-          )
-        )
+          ),
+          // Clean up any stale batch-inference pending items for this call
+          this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch(() => {}),
+        ])
       );
     }
 
@@ -942,6 +960,31 @@ export class PostgresStorage implements IStorage {
       "DELETE FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",
       [retentionDays],
     );
+
+    // Also clean up S3 audio for calls marked as "failed" older than 7 days
+    // (shorter retention for failed calls — they have no analysis value)
+    try {
+      const { rows: failedRows } = await this.db.query(
+        "SELECT id FROM calls WHERE status = 'failed' AND uploaded_at < NOW() - INTERVAL '7 days'"
+      );
+      if (failedRows.length > 0 && this.audioClient) {
+        await Promise.allSettled(
+          failedRows.map((r: any) =>
+            this.audioClient!.deleteByPrefix(`audio/${r.id}/`).catch(() => {})
+          )
+        );
+        // Delete the failed call records themselves
+        await this.db.query(
+          "DELETE FROM calls WHERE status = 'failed' AND uploaded_at < NOW() - INTERVAL '7 days'"
+        );
+        if (failedRows.length > 0) {
+          console.log(`[RETENTION] Purged ${failedRows.length} failed call(s) older than 7 days.`);
+        }
+      }
+    } catch (err) {
+      console.warn("[RETENTION] Failed call cleanup error:", (err as Error).message);
+    }
+
     return rowCount ?? 0;
   }
 }

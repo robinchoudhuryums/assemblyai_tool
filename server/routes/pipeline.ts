@@ -446,16 +446,21 @@ export async function processAudioFile(
     }
 
     // Auto-assign to employee based on detected agent name
-    const currentCall = await storage.getCall(callId);
+    // Uses atomicAssignEmployee for race-safe conditional update (only if not already assigned)
     let autoAssigned = false;
-    if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
+    if (aiAnalysis?.detected_agent_name) {
       const detectedName = aiAnalysis.detected_agent_name.trim();
       const matchedEmployee = await storage.findEmployeeByName(detectedName);
 
       if (matchedEmployee) {
-        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
-        autoAssigned = true;
-        console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
+        // Atomic: only assign if employee_id is still NULL (prevents race with concurrent workers)
+        const assigned = await storage.atomicAssignEmployee(callId, matchedEmployee.id);
+        if (assigned) {
+          autoAssigned = true;
+          console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
+        } else {
+          console.log(`[${callId}] Call already assigned, skipping auto-assign.`);
+        }
       } else {
         console.log(`[${callId}] Detected agent name "${detectedName}" but no matching employee found.`);
       }
@@ -470,8 +475,8 @@ export async function processAudioFile(
     // Auto-generate coaching alerts for low/high scores (non-blocking)
     try {
       const performanceScore = parseFloat(analysis.performanceScore || "0");
-      const finalCall = autoAssigned ? await storage.getCall(callId) : currentCall;
-      const finalEmployeeId = finalCall?.employeeId;
+      const completedCall = await storage.getCall(callId);
+      const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
       checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
@@ -483,7 +488,7 @@ export async function processAudioFile(
     // Trigger webhooks (non-blocking)
     try {
       const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
-      const finalCallForWebhook = autoAssigned ? await storage.getCall(callId) : currentCall;
+      const finalCallForWebhook = await storage.getCall(callId);
       const employeeId = finalCallForWebhook?.employeeId;
       let employeeName: string | undefined;
       if (employeeId) {

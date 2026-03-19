@@ -2,6 +2,7 @@ import type { Router } from "express";
 import path from "path";
 import fs from "fs";
 import { z } from "zod";
+import { createHash } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
@@ -170,6 +171,27 @@ export function registerCallRoutes(
         }
       }
 
+      // Read file buffer early for idempotency check and API upload
+      const audioBuffer = await fs.promises.readFile(req.file.path);
+
+      // Idempotency: hash audio content to detect duplicate uploads.
+      // If the same file was already uploaded and is processing/completed, return the existing call.
+      const contentHash = createHash("sha256").update(audioBuffer).digest("hex");
+      const allCalls = await storage.getAllCalls();
+      const duplicate = allCalls.find(c =>
+        c.contentHash === contentHash &&
+        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis")
+      );
+      if (duplicate) {
+        await cleanupFile(req.file.path);
+        res.status(409).json({
+          message: "This audio file has already been uploaded.",
+          existingCallId: duplicate.id,
+          existingStatus: duplicate.status,
+        });
+        return;
+      }
+
       // Create call record (employeeId is optional — can be assigned later)
       const call = await storage.createCall({
         employeeId: employeeId || undefined,
@@ -177,10 +199,8 @@ export function registerCallRoutes(
         filePath: req.file.path,
         status: "processing",
         callCategory: callCategory || undefined,
+        contentHash,
       });
-
-      // Read file buffer for API upload, then start async processing
-      const audioBuffer = await fs.promises.readFile(req.file.path);
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
       const uploadUser = (req.user as any)?.username || "unknown";

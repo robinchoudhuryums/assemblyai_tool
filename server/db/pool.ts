@@ -129,6 +129,11 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     "CREATE INDEX IF NOT EXISTS idx_annotations_call_id ON annotations (call_id)",
+    // Content hash for upload idempotency (deduplication)
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+    "CREATE INDEX IF NOT EXISTS idx_calls_content_hash ON calls (content_hash)",
+    // Missing index for call_category filtering
+    "CREATE INDEX IF NOT EXISTS idx_calls_call_category ON calls (call_category)",
   ];
   for (const sql of migrations) {
     try {

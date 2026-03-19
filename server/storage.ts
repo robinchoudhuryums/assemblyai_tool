@@ -78,6 +78,8 @@ export interface IStorage {
   getCall(id: string): Promise<Call | undefined>;
   createCall(call: InsertCall): Promise<Call>;
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
+  /** Atomically assign employee only if not already assigned. Returns true if assignment was made. */
+  atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
@@ -234,6 +236,13 @@ export class MemStorage implements IStorage {
     const updated = { ...call, ...updates };
     this.calls.set(id, updated);
     return updated;
+  }
+  async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
+    const call = this.calls.get(callId);
+    if (!call || call.employeeId) return false;
+    call.employeeId = employeeId;
+    this.calls.set(callId, call);
+    return true;
   }
   async deleteCall(id: string): Promise<void> {
     this.calls.delete(id);
@@ -639,6 +648,13 @@ export class CloudStorage implements IStorage {
     const updated = { ...call, ...updates };
     await this.client.uploadJson(`calls/${id}.json`, updated);
     return updated;
+  }
+  async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
+    // S3 has no atomic conditional update, so do read-check-write (best effort)
+    const call = await this.getCall(callId);
+    if (!call || call.employeeId) return false;
+    await this.client.uploadJson(`calls/${callId}.json`, { ...call, employeeId });
+    return true;
   }
 
   async deleteCall(id: string): Promise<void> {

@@ -72,7 +72,7 @@ export class JobQueue {
         updated_at = NOW()
       WHERE id = (
         SELECT id FROM jobs
-        WHERE status = 'pending'
+        WHERE (status = 'pending' AND (locked_at IS NULL OR locked_at <= NOW()))
           OR (status = 'running' AND locked_at < NOW() - INTERVAL '10 minutes')
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
@@ -109,7 +109,8 @@ export class JobQueue {
   }
 
   /**
-   * Mark a job as failed. Re-queues if under max attempts.
+   * Mark a job as failed. Re-queues with exponential backoff if under max attempts.
+   * Backoff: attempt 1 → 10s, attempt 2 → 30s, attempt 3+ → 60s
    */
   async failJob(jobId: string, reason: string): Promise<void> {
     // Check current attempt count
@@ -117,18 +118,28 @@ export class JobQueue {
     if (rows.length === 0) return;
 
     const { attempts, max_attempts } = rows[0];
-    const newStatus = attempts >= max_attempts ? "dead" : "pending";
+    const isDead = attempts >= max_attempts;
 
-    await this.db.query(
-      `UPDATE jobs SET status = $2, failed_reason = $3, locked_at = NULL, locked_by = NULL, updated_at = NOW()
-       WHERE id = $1`,
-      [jobId, newStatus, reason],
-    );
-
-    if (newStatus === "dead") {
+    if (isDead) {
+      await this.db.query(
+        `UPDATE jobs SET status = 'dead', failed_reason = $2, locked_at = NULL, locked_by = NULL, updated_at = NOW()
+         WHERE id = $1`,
+        [jobId, reason],
+      );
       console.error(`[JOB_QUEUE] Job ${jobId} moved to dead letter after ${attempts} attempts: ${reason}`);
-      // Emit dead-letter event for monitoring
       this.onDeadLetter?.(jobId, reason, attempts);
+    } else {
+      // Exponential backoff: 10s, 30s, 60s (capped)
+      const backoffSeconds = Math.min(10 * Math.pow(3, attempts - 1), 60);
+      // Use locked_at as a "not before" timestamp — claimJob skips jobs with future locked_at
+      await this.db.query(
+        `UPDATE jobs SET status = 'pending', failed_reason = $2,
+         locked_at = NOW() + ($3 || ' seconds')::interval,
+         locked_by = NULL, updated_at = NOW()
+         WHERE id = $1`,
+        [jobId, reason, String(backoffSeconds)],
+      );
+      console.log(`[JOB_QUEUE] Job ${jobId} failed (attempt ${attempts}/${max_attempts}), retrying in ${backoffSeconds}s`);
     }
   }
 
@@ -156,11 +167,13 @@ export class JobQueue {
 
   /**
    * Retry a dead job by resetting its status to pending.
+   * Increments max_attempts instead of resetting attempts to 0,
+   * preventing infinite retry loops while preserving attempt history.
    */
   async retryJob(jobId: string): Promise<boolean> {
     const { rowCount } = await this.db.query(
-      `UPDATE jobs SET status = 'pending', attempts = 0, failed_reason = NULL,
-       locked_at = NULL, locked_by = NULL, updated_at = NOW()
+      `UPDATE jobs SET status = 'pending', max_attempts = max_attempts + 1,
+       failed_reason = NULL, locked_at = NULL, locked_by = NULL, updated_at = NOW()
        WHERE id = $1 AND status = 'dead'`,
       [jobId],
     );
