@@ -96,7 +96,12 @@ const translations: Record<Locale, Record<string, string>> = {
     "mode.batch": "Batch (50% savings)",
 
     // Dashboard
-    "dashboard.title": "Dashboard",
+    "dashboard.title": "Call Analysis Dashboard",
+    "dashboard.subtitle": "Monitor performance and sentiment across all customer interactions",
+    "dashboard.searchCalls": "Search calls...",
+    "dashboard.uploadCall": "Upload Call",
+    "dashboard.needAttention": "Need Attention",
+    "dashboard.exceptionalCalls": "Exceptional Calls",
     "dashboard.totalCalls": "Total Calls",
     "dashboard.avgScore": "Average Score",
     "dashboard.positiveSentiment": "Positive Sentiment",
@@ -253,7 +258,12 @@ const translations: Record<Locale, Record<string, string>> = {
     "mode.batch": "Lote (50% ahorro)",
 
     // Dashboard
-    "dashboard.title": "Panel",
+    "dashboard.title": "Panel de Analisis de Llamadas",
+    "dashboard.subtitle": "Monitorear rendimiento y sentimiento en todas las interacciones con clientes",
+    "dashboard.searchCalls": "Buscar llamadas...",
+    "dashboard.uploadCall": "Subir Llamada",
+    "dashboard.needAttention": "Necesitan Atencion",
+    "dashboard.exceptionalCalls": "Llamadas Excepcionales",
     "dashboard.totalCalls": "Total de Llamadas",
     "dashboard.avgScore": "Puntuacion Promedio",
     "dashboard.positiveSentiment": "Sentimiento Positivo",

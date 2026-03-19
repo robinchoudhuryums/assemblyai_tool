@@ -152,6 +152,26 @@ export default function CallsTable() {
     });
   };
 
+  const reanalyzeMutation = useMutation({
+    mutationFn: async (callIds: string[]) => {
+      const res = await apiRequest("POST", "/api/calls/bulk-reanalyze", { callIds });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Re-analysis Started", description: data.message });
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+    },
+    onError: (error) => {
+      toast({ title: "Re-analysis Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleBulkReanalyze = () => {
+    if (selectedIds.size === 0) return;
+    reanalyzeMutation.mutate(Array.from(selectedIds));
+  };
+
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
     setDeleteConfirm({ open: true, bulk: true });
@@ -325,6 +345,9 @@ export default function CallsTable() {
               ))}
             </SelectContent>
           </Select>
+          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleBulkReanalyze} disabled={reanalyzeMutation.isPending}>
+            <AudioWaveform className="w-3 h-3 mr-1" /> Re-analyze
+          </Button>
           <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={handleBulkDelete}>
             <Trash2 className="w-3 h-3 mr-1" /> Delete Selected
           </Button>

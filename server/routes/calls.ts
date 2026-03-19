@@ -8,7 +8,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { recordDataAccess } from "../services/security-monitor";
 import { broadcastCallUpdate } from "../services/websocket";
 import { getPool } from "../db/pool";
-import { CALL_CATEGORIES } from "@shared/schema";
+import { CALL_CATEGORIES, analysisEditSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
 import { cleanupFile } from "./utils";
 import { TaskQueue } from "./utils";
@@ -379,62 +379,10 @@ export function registerCallRoutes(
         detail: `reason: ${reason}; fields: ${updates ? Object.keys(updates).join(",") : "none"}`,
       });
 
-      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
-        res.status(400).json({ message: "A reason for the manual edit is required." });
-        return;
-      }
-
-      if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
-        res.status(400).json({ message: "Updates must be a non-empty object." });
-        return;
-      }
-
-      // Whitelist allowed fields to prevent arbitrary overwrites
-      const ALLOWED_FIELDS = new Set([
-        "summary", "performanceScore", "topics", "actionItems",
-        "feedback", "flags", "sentiment", "sentimentScore",
-      ]);
-      const disallowed = Object.keys(updates).filter(k => !ALLOWED_FIELDS.has(k));
-      if (disallowed.length > 0) {
-        res.status(400).json({ message: `Cannot edit fields: ${disallowed.join(", ")}` });
-        return;
-      }
-
-      // Validate field value types and ranges
-      const validationErrors: string[] = [];
-      if (updates.summary !== undefined && typeof updates.summary !== "string") {
-        validationErrors.push("summary must be a string");
-      }
-      if (updates.performanceScore !== undefined) {
-        const score = typeof updates.performanceScore === "string"
-          ? parseFloat(updates.performanceScore) : Number(updates.performanceScore);
-        if (isNaN(score) || score < 0 || score > 10) {
-          validationErrors.push("performanceScore must be a number between 0 and 10");
-        }
-      }
-      if (updates.topics !== undefined && !Array.isArray(updates.topics)) {
-        validationErrors.push("topics must be an array");
-      }
-      if (updates.actionItems !== undefined && !Array.isArray(updates.actionItems)) {
-        validationErrors.push("actionItems must be an array");
-      }
-      if (updates.feedback !== undefined) {
-        if (typeof updates.feedback !== "object" || Array.isArray(updates.feedback) || updates.feedback === null) {
-          validationErrors.push("feedback must be an object with strengths and suggestions arrays");
-        }
-      }
-      if (updates.flags !== undefined && !Array.isArray(updates.flags)) {
-        validationErrors.push("flags must be an array");
-      }
-      if (updates.sentimentScore !== undefined) {
-        const score = typeof updates.sentimentScore === "string"
-          ? parseFloat(updates.sentimentScore) : Number(updates.sentimentScore);
-        if (isNaN(score) || score < 0 || score > 10) {
-          validationErrors.push("sentimentScore must be a number between 0 and 10");
-        }
-      }
-      if (validationErrors.length > 0) {
-        res.status(400).json({ message: "Invalid field values", errors: validationErrors });
+      // Validate using shared Zod schema (type checks + range validation + whitelist)
+      const parsed = analysisEditSchema.safeParse({ updates, reason });
+      if (!parsed.success) {
+        res.status(400).json({ message: "Invalid edit data", errors: parsed.error.flatten() });
         return;
       }
 
@@ -652,6 +600,93 @@ export function registerCallRoutes(
       })));
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls by tag" });
+    }
+  });
+
+  // ==================== BULK RE-ANALYSIS (admin only) ====================
+  router.post("/api/calls/bulk-reanalyze", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { callIds } = req.body;
+      if (!Array.isArray(callIds) || callIds.length === 0) {
+        res.status(400).json({ message: "callIds must be a non-empty array" });
+        return;
+      }
+      if (callIds.length > 50) {
+        res.status(400).json({ message: "Maximum 50 calls can be re-analyzed at once" });
+        return;
+      }
+
+      const jobQueue = getJobQueue();
+      const results: { callId: string; status: string }[] = [];
+
+      for (const callId of callIds) {
+        const call = await storage.getCall(callId);
+        if (!call) {
+          results.push({ callId, status: "not_found" });
+          continue;
+        }
+        if (call.status === "processing") {
+          results.push({ callId, status: "already_processing" });
+          continue;
+        }
+
+        // Get audio from storage
+        const audioFiles = await storage.getAudioFiles(callId);
+        if (audioFiles.length === 0) {
+          results.push({ callId, status: "no_audio" });
+          continue;
+        }
+
+        // Reset call status to processing
+        await storage.updateCall(callId, { status: "processing" });
+
+        const uploadUser = (req as any).user?.username || "admin";
+
+        if (jobQueue) {
+          await jobQueue.enqueue("process_audio", {
+            callId,
+            filePath: "",
+            originalName: call.fileName || "reanalysis",
+            mimeType: "audio/mpeg",
+            callCategory: call.callCategory || null,
+            uploadedBy: uploadUser,
+            processingMode: null,
+            language: null,
+          });
+        } else {
+          // Fallback: use in-memory queue
+          const audioBuffer = await storage.downloadAudio(audioFiles[0]);
+          if (audioBuffer) {
+            const audioQueue = new TaskQueue(3);
+            audioQueue.add(() => processAudioFn(
+              callId, "", audioBuffer, call.fileName || "reanalysis",
+              "audio/mpeg", call.callCategory, uploadUser,
+            )).catch(async (error) => {
+              console.error(`Failed to re-analyze call ${callId}:`, error);
+              await storage.updateCall(callId, { status: "failed" });
+            });
+          }
+        }
+
+        results.push({ callId, status: "queued" });
+      }
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "bulk_reanalyze",
+        resourceType: "calls",
+        resourceId: callIds.join(","),
+        detail: `Bulk re-analysis of ${callIds.length} calls`,
+      });
+
+      res.json({
+        message: `${results.filter(r => r.status === "queued").length} of ${callIds.length} calls queued for re-analysis`,
+        results,
+      });
+    } catch (error) {
+      console.error("Bulk re-analysis failed:", (error as Error).message);
+      res.status(500).json({ message: "Failed to start bulk re-analysis" });
     }
   });
 }

@@ -3,6 +3,7 @@ import fs from "fs";
 import { storage } from "../storage";
 import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetrics } from "../services/assemblyai";
 import { aiProvider } from "../services/ai-factory";
+import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
 import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
@@ -323,11 +324,13 @@ export async function processAudioFile(
     analysis.confidenceFactors = confidenceFactors;
 
     if (aiAnalysis?.sub_scores) {
+      const calConfig = getCalibrationConfig();
+      const calibrated = calibrateSubScores(aiAnalysis.sub_scores, calConfig);
       analysis.subScores = {
-        compliance: aiAnalysis.sub_scores.compliance ?? 0,
-        customerExperience: aiAnalysis.sub_scores.customer_experience ?? 0,
-        communication: aiAnalysis.sub_scores.communication ?? 0,
-        resolution: aiAnalysis.sub_scores.resolution ?? 0,
+        compliance: calibrated.compliance,
+        customerExperience: calibrated.customer_experience,
+        communication: calibrated.communication,
+        resolution: calibrated.resolution,
       };
     }
 

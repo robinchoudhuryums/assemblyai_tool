@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Search, Plus, AlertTriangle, Award, TrendingUp } from "lucide-react";
+import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
@@ -14,6 +15,7 @@ import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
 
 export default function Dashboard() {
   const [, navigate] = useLocation();
+  const { t } = useTranslation();
 
   // Fetch recent calls to extract flagged ones for the dashboard alert panel
   const { data: callsResponse } = useQuery<PaginatedCalls>({
@@ -90,8 +92,8 @@ export default function Dashboard() {
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-foreground">Call Analysis Dashboard</h2>
-            <p className="text-muted-foreground">Monitor performance and sentiment across all customer interactions</p>
+            <h2 className="text-2xl font-bold text-foreground">{t("dashboard.title")}</h2>
+            <p className="text-muted-foreground">{t("dashboard.subtitle")}</p>
           </div>
           <div className="flex items-center space-x-4">
             <Button
@@ -101,12 +103,12 @@ export default function Dashboard() {
               data-testid="search-input"
             >
               <Search className="w-4 h-4 mr-2" />
-              Search calls...
+              {t("dashboard.searchCalls")}
             </Button>
             <Link href="/upload">
               <Button data-testid="upload-call-button">
                 <Plus className="w-4 h-4 mr-2" />
-                Upload Call
+                {t("dashboard.uploadCall")}
               </Button>
             </Link>
           </div>

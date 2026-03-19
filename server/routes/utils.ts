@@ -1,4 +1,18 @@
 import fs from "fs";
+import type { Request, Response, NextFunction, RequestHandler } from "express";
+
+/**
+ * Wrap an async route handler so unhandled promise rejections are forwarded
+ * to Express error middleware. Express 4 doesn't do this natively.
+ * Usage: router.get("/api/foo", asyncHandler(async (req, res) => { ... }));
+ */
+export function asyncHandler(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+): RequestHandler {
+  return (req, res, next) => {
+    fn(req, res, next).catch(next);
+  };
+}
 
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
 export function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {

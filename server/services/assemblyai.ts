@@ -1,6 +1,8 @@
 import { InsertTranscript, InsertSentimentAnalysis, InsertCallAnalysis } from "@shared/schema";
 import type { CallAnalysis } from "./ai-provider";
 
+import { calibrateScore, calibrateSubScores, getScoreFlags, getCalibrationConfig } from "./scoring-calibration.js";
+
 export interface AssemblyAIConfig {
   apiKey: string;
   baseUrl: string;
@@ -205,7 +207,12 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
     };
 
     // Build analysis record
-    const performanceScore = aiAnalysis?.performance_score ?? 5.0;
+    const rawScore = aiAnalysis?.performance_score ?? 5.0;
+    const calConfig = getCalibrationConfig();
+    const performanceScore = calibrateScore(rawScore, calConfig);
+    const calibratedSubScores = aiAnalysis?.sub_scores
+      ? calibrateSubScores(aiAnalysis.sub_scores, calConfig)
+      : undefined;
     const words = transcriptResponse.words || [];
 
     // Calculate talk time ratio (if speaker labels exist)
@@ -220,13 +227,11 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       }
     }
 
-    // Determine flags
+    // Determine flags (using calibrated score thresholds)
     const flags: string[] = aiAnalysis?.flags || [];
-    if (performanceScore <= 2.0 && !flags.includes("low_score")) {
-      flags.push("low_score");
-    }
-    if (performanceScore >= 9.0 && !flags.includes("exceptional_call")) {
-      flags.push("exceptional_call");
+    const scoreFlags = getScoreFlags(performanceScore, calConfig);
+    for (const flag of scoreFlags) {
+      if (!flags.includes(flag)) flags.push(flag);
     }
 
     // Normalize array fields from AI — coerce any objects to strings
