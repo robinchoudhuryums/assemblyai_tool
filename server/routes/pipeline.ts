@@ -55,6 +55,7 @@ export async function processAudioFile(
   callCategory?: string,
   uploadedBy?: string,
   processingMode?: string,
+  language?: string,
 ) {
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
@@ -106,7 +107,7 @@ export async function processAudioFile(
       console.warn(`[${callId}] Failed to build word boost list (non-blocking):`, (boostErr as Error).message);
     }
 
-    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl, wordBoost);
+    const transcriptId = await assemblyAIService.transcribeAudio(audioUrl, wordBoost, language);
     console.log(`[${callId}] Step 2/7: Transcription submitted. Transcript ID: ${transcriptId}`);
 
     await storage.updateCall(callId, { assemblyAiId: transcriptId });
@@ -146,7 +147,7 @@ export async function processAudioFile(
 
     // Batch mode: defer AI analysis for 50% cost savings
     if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && transcriptResponse.text) {
-      const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate);
+      const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate, language);
       const pendingItem: PendingBatchItem = {
         callId,
         prompt,
@@ -233,7 +234,7 @@ export async function processAudioFile(
           console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
         }
 
-        aiAnalysis = await aiProvider.analyzeCallTranscript(transcriptText, callId, callCategory, promptTemplate);
+        aiAnalysis = await aiProvider.analyzeCallTranscript(transcriptText, callId, callCategory, promptTemplate, language);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);

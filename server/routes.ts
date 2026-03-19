@@ -25,6 +25,7 @@ import { registerReportRoutes } from "./routes/reports";
 import { register as registerAnalyticsRoutes } from "./routes/analytics";
 import { register as registerCoachingRoutes } from "./routes/coaching";
 import { register as registerInsightRoutes } from "./routes/insights";
+import { registerUserRoutes } from "./routes/users";
 
 // Pipeline
 import { processAudioFile, shouldUseBatchMode, audioProcessingQueue } from "./routes/pipeline";
@@ -73,6 +74,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerAnalyticsRoutes(router);
   registerCoachingRoutes(router);
   registerInsightRoutes(router);
+  registerUserRoutes(router);
   registerAdminRoutes(router, upload.single('audioFile'), {
     getJobQueue: () => jobQueue,
     shouldUseBatchMode,
@@ -281,9 +283,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {
-        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode } = job.payload as {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
           callId: string; filePath: string; originalName: string;
-          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string;
         };
 
         const audioFiles = await storage.getAudioFiles(callId);
@@ -300,7 +302,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode);
+        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode, language);
       } else {
         console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
       }

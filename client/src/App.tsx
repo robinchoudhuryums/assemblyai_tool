@@ -4,6 +4,7 @@ import { queryClient, getQueryFn, resetSessionExpired } from "./lib/queryClient"
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import I18nProvider from "@/components/i18n-provider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
@@ -216,10 +217,12 @@ function AuthenticatedApp() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <AuthenticatedApp />
-      </TooltipProvider>
+      <I18nProvider>
+        <TooltipProvider>
+          <Toaster />
+          <AuthenticatedApp />
+        </TooltipProvider>
+      </I18nProvider>
     </QueryClientProvider>
   );
 }

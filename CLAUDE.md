@@ -361,6 +361,9 @@ pm2 logs --lines 20         # Verify startup — look for:
                             #   NOT: "S3 authentication not configured"
 ```
 
+### VPC Endpoints (Recommended)
+S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
+
 ### GitHub Actions CI/CD
 Pushes to `main` automatically trigger the Deploy workflow (`.github/workflows/deploy.yml`), which SSHs into EC2 and runs `deploy.sh`. Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`. Can also be triggered manually via `workflow_dispatch`.
 

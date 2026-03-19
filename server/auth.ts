@@ -10,6 +10,7 @@ import { logPhiAccess } from "./services/audit-log";
 import { recordFailedLogin } from "./services/security-monitor";
 import { getPool } from "./db/pool";
 import { getMFASecret, isMFARoleRequired } from "./services/totp";
+import { storage } from "./storage";
 
 const scryptAsync = promisify(scrypt);
 
@@ -95,6 +96,10 @@ async function comparePasswords(supplied: string, stored: string): Promise<boole
   const suppliedPasswordBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
   return timingSafeEqual(hashedPasswordBuf, suppliedPasswordBuf);
 }
+
+/** Exposed for user management routes (server/routes/users.ts) */
+export const hashPasswordForDb = hashPassword;
+export const comparePasswordsRaw = comparePasswords;
 
 async function loadUsersFromEnv(): Promise<void> {
   const authUsersRaw = process.env.AUTH_USERS;
@@ -207,7 +212,7 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  // Local strategy: authenticate against env-var-defined users
+  // Local strategy: authenticate against PostgreSQL users FIRST, then fall back to env-var users
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
@@ -223,6 +228,56 @@ export async function setupAuth(app: Express) {
           return done(null, false, { message: "Account temporarily locked. Try again later." });
         }
 
+        // --- Step 1: Check PostgreSQL users table first ---
+        try {
+          const dbUser = await storage.getDbUserByUsername(username);
+          if (dbUser) {
+            // Found in DB — check if active
+            if (!dbUser.active) {
+              logPhiAccess({
+                timestamp: new Date().toISOString(),
+                event: "login_failed",
+                username,
+                resourceType: "auth",
+                detail: "Account is deactivated",
+              });
+              return done(null, false, { message: "Account is deactivated. Contact an administrator." });
+            }
+
+            const isValid = await comparePasswords(password, dbUser.passwordHash);
+            if (!isValid) {
+              recordFailedAttempt(username);
+              logPhiAccess({
+                timestamp: new Date().toISOString(),
+                event: "login_failed",
+                username,
+                resourceType: "auth",
+              });
+              return done(null, false, { message: "Invalid username or password" });
+            }
+            clearFailedAttempts(username);
+            logPhiAccess({
+              timestamp: new Date().toISOString(),
+              event: "login_success",
+              userId: dbUser.id,
+              username: dbUser.username,
+              role: dbUser.role,
+              resourceType: "auth",
+              detail: "Authenticated via PostgreSQL users table",
+            });
+            return done(null, {
+              id: dbUser.id,
+              username: dbUser.username,
+              name: dbUser.displayName,
+              role: dbUser.role,
+            });
+          }
+        } catch (dbErr) {
+          // DB lookup failed (e.g., no DATABASE_URL) — fall through to env users
+          console.warn("[AUTH] DB user lookup failed, falling back to env users:", (dbErr as Error).message);
+        }
+
+        // --- Step 2: Fall back to AUTH_USERS env var ---
         const user = envUsers.find((u) => u.username === username);
         if (!user) {
           recordFailedAttempt(username);
@@ -271,8 +326,27 @@ export async function setupAuth(app: Express) {
     done(null, user.id);
   });
 
-  // Deserialize user from session
+  // Deserialize user from session — check PostgreSQL first, then env users
   passport.deserializeUser(async (id: string, done) => {
+    // Try DB users first
+    try {
+      const dbUser = await storage.getDbUser(id);
+      if (dbUser) {
+        if (!dbUser.active) {
+          return done(null, false);
+        }
+        return done(null, {
+          id: dbUser.id,
+          username: dbUser.username,
+          name: dbUser.displayName,
+          role: dbUser.role,
+        });
+      }
+    } catch {
+      // DB lookup failed — fall through to env users
+    }
+
+    // Fall back to env users
     const user = envUsers.find((u) => u.id === id);
     if (!user) {
       return done(null, false);

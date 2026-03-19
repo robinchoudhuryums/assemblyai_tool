@@ -23,6 +23,7 @@ export type ProcessAudioFn = (
   callCategory?: string,
   uploadedBy?: string,
   processingMode?: string,
+  language?: string,
 ) => Promise<void>;
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
@@ -134,6 +135,8 @@ export function registerCallRoutes(
       const processingMode = (req.body.processingMode === "immediate" || req.body.processingMode === "batch")
         ? req.body.processingMode as "immediate" | "batch"
         : undefined;
+      const validLanguages = ["en", "es", "fr", "pt", "de"];
+      const language = validLanguages.includes(req.body.language) ? req.body.language : undefined;
 
       // If employeeId provided, verify employee exists
       if (employeeId) {
@@ -178,9 +181,10 @@ export function registerCallRoutes(
           callCategory: callCategory || null,
           uploadedBy: uploadUser,
           processingMode: processingMode || null,
+          language: language || null,
         });
       } else {
-        audioProcessingQueue.add(() => processAudioFn(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser, processingMode))
+        audioProcessingQueue.add(() => processAudioFn(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser, processingMode, language))
           .catch(async (error) => {
             console.error(`Failed to process call ${call.id}:`, error);
             try {

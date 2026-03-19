@@ -28,7 +28,7 @@ export interface CallAnalysis {
 export interface AIAnalysisProvider {
   readonly name: string;
   readonly isAvailable: boolean;
-  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig): Promise<CallAnalysis>;
+  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string): Promise<CallAnalysis>;
   generateText?(prompt: string): Promise<string>;
 }
 
@@ -123,7 +123,7 @@ function smartTruncate(text: string, maxChars = 80000): string {
   ].join("");
 }
 
-export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig): string {
+export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig, language?: string): string {
   const processedTranscript = smartTruncate(transcriptText);
 
   const categoryContext = callCategory && CATEGORY_CONTEXT[callCategory]
@@ -168,7 +168,15 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
     additionalSection = `\n- ADDITIONAL INSTRUCTIONS:\n${template.additionalInstructions}`;
   }
 
-  return `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.
+  // Language instruction for non-English analysis
+  let languageInstruction = "";
+  if (language && language !== "en") {
+    const languageNames: Record<string, string> = { es: "Spanish", fr: "French", pt: "Portuguese", de: "German" };
+    const langName = languageNames[language] || language;
+    languageInstruction = `\n\nIMPORTANT: The transcript is in ${langName}. Analyze the call in ${langName} and write ALL response content (summary, topics, action_items, feedback strengths/suggestions) in ${langName}. Keep JSON field names in English but all values should be in ${langName}.`;
+  }
+
+  return `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.${languageInstruction}
 ${categoryContext}
 TRANSCRIPT:
 ${processedTranscript}

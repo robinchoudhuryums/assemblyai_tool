@@ -204,6 +204,23 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs (status, priority DESC, created_at);
 
 -- ============================================================
+-- Users (PostgreSQL-backed user management)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username VARCHAR(255) NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+  display_name VARCHAR(255) NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  mfa_secret VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+CREATE INDEX IF NOT EXISTS idx_users_active ON users (active);
+
+-- ============================================================
 -- MFA Secrets (TOTP two-factor authentication)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS mfa_secrets (

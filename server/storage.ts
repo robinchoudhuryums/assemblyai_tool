@@ -1,6 +1,7 @@
 import {
   type User,
   type InsertUser,
+  type DbUser,
   type Employee,
   type InsertEmployee,
   type Call,
@@ -51,10 +52,18 @@ export interface ObjectStorageClient {
 }
 
 export interface IStorage {
-  // User operations (env-var-based)
+  // User operations (env-var-based, legacy)
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+
+  // DB User operations (PostgreSQL-backed user management)
+  getDbUser(id: string): Promise<DbUser | undefined>;
+  getDbUserByUsername(username: string): Promise<DbUser | undefined>;
+  getAllDbUsers(): Promise<DbUser[]>;
+  createDbUser(user: { username: string; passwordHash: string; role: string; displayName: string }): Promise<DbUser>;
+  updateDbUser(id: string, updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined>;
+  updateDbUserPassword(id: string, passwordHash: string): Promise<boolean>;
 
   // Employee operations
   getEmployee(id: string): Promise<Employee | undefined>;
@@ -153,6 +162,20 @@ export class MemStorage implements IStorage {
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
   async createUser(_user: InsertUser): Promise<User> {
     throw new Error("Users are managed via AUTH_USERS environment variable");
+  }
+
+  // DB User operations — not supported in memory mode
+  async getDbUser(_id: string): Promise<DbUser | undefined> { return undefined; }
+  async getDbUserByUsername(_username: string): Promise<DbUser | undefined> { return undefined; }
+  async getAllDbUsers(): Promise<DbUser[]> { return []; }
+  async createDbUser(_user: { username: string; passwordHash: string; role: string; displayName: string }): Promise<DbUser> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUser(_id: string, _updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUserPassword(_id: string, _passwordHash: string): Promise<boolean> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
 
   async getEmployee(id: string): Promise<Employee | undefined> {
@@ -475,6 +498,20 @@ export class CloudStorage implements IStorage {
   }
   async createUser(_user: InsertUser): Promise<User> {
     throw new Error("Users are managed via AUTH_USERS environment variable");
+  }
+
+  // --- DB User Methods (not supported in S3-only mode) ---
+  async getDbUser(_id: string): Promise<DbUser | undefined> { return undefined; }
+  async getDbUserByUsername(_username: string): Promise<DbUser | undefined> { return undefined; }
+  async getAllDbUsers(): Promise<DbUser[]> { return []; }
+  async createDbUser(_user: { username: string; passwordHash: string; role: string; displayName: string }): Promise<DbUser> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUser(_id: string, _updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUserPassword(_id: string, _passwordHash: string): Promise<boolean> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
 
   // --- Employee Methods ---

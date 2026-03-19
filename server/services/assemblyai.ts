@@ -71,7 +71,7 @@ export class AssemblyAIService {
     return (await response.json()).upload_url;
   }
 
-  async transcribeAudio(audioUrl: string, wordBoost?: string[]): Promise<string> {
+  async transcribeAudio(audioUrl: string, wordBoost?: string[], language?: string): Promise<string> {
     const body: Record<string, unknown> = {
       audio_url: audioUrl,
       speech_models: ["universal-3-pro", "universal-2"],
@@ -80,6 +80,11 @@ export class AssemblyAIService {
       format_text: true,
       sentiment_analysis: true,
     };
+
+    // If a specific language is requested, set language_code (disables auto-detection)
+    if (language && language !== "en") {
+      body.language_code = language;
+    }
 
     // Word boost: provide correct spellings of agent names and company-specific terms
     // This tells AssemblyAI to prefer these exact spellings when the audio is ambiguous

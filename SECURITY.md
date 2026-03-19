@@ -85,6 +85,7 @@ User (Browser) ──HTTPS/TLS──> Caddy (port 443) ──> Node.js (port 500
 | **Referrer policy** | `strict-origin-when-cross-origin` | `server/index.ts:65` |
 | **Permissions policy** | Camera, microphone, geolocation all disabled | `server/index.ts:66` |
 | **API caching** | `no-store, no-cache` on all `/api` responses | `server/index.ts:72-75` |
+| **VPC endpoints** | (Recommended) S3 Gateway + Bedrock PrivateLink endpoints route AWS API traffic through private network, avoiding public internet for PHI | See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) |
 
 ---
 
@@ -163,7 +164,7 @@ pm2 logs callanalyzer --lines 100 | grep HIPAA_AUDIT
 | **IAM user** | Shared across 3 projects with long-lived access keys | Consider separate IAM users per project, or use IAM roles with EC2 instance profiles |
 | **Auth backend** | Environment-variable-based users (`AUTH_USERS`) | Works for small teams; for larger orgs, consider an IdP (Cognito, Okta) with MFA |
 | **WAF** | Not configured | Consider AWS WAF for additional protection against web attacks |
-| **VPC endpoints** | S3/Bedrock accessed over public internet | Consider VPC endpoints for S3 and Bedrock to keep traffic off public internet |
+| **VPC endpoints** | S3/Bedrock accessed over public internet | Configure VPC endpoints for S3 (free Gateway endpoint) and Bedrock (Interface/PrivateLink) to route PHI traffic through AWS private network instead of the public internet. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for step-by-step setup |
 | **Backup** | S3 versioning enabled; no cross-region replication | Consider S3 cross-region replication for disaster recovery |
 | **App MFA** | TOTP MFA implemented (`server/services/totp.ts`) but optional by default | Set `REQUIRE_MFA=true` to enforce for all users; consider enforcing for admin accounts at minimum |
 | **IAM MFA** | Not enforced on the shared IAM user | Enable MFA on the IAM user via AWS Console |
