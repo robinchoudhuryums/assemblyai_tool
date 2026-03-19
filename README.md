@@ -122,13 +122,19 @@ CallAnalyzer has three user roles with increasing permissions:
 
 ### Admin (everything a manager can do, plus)
 - Approve or deny access requests from new users
+- Manage users (create, update roles, deactivate, reset passwords)
 - Bulk import employees via CSV upload
 - Create, edit, and delete custom prompt templates (per call category)
 - A/B model testing — compare different Bedrock models on the same call
 - Spend tracking — monitor estimated API costs by period, service, and user
+- Bulk re-analysis of calls
+- Security dashboard: WAF stats, vulnerability scans, incident response, breach reporting
+- Webhook management with HMAC signing
+- Job queue monitoring and dead-letter retry
+- Performance snapshot generation (batch all employees/teams/company)
 - System configuration
 
-Users are defined via the `AUTH_USERS` environment variable (format: `username:password:role:displayName`). New users can submit an access request through the login page, which an admin must approve.
+Users are primarily stored in the PostgreSQL `users` table (when `DATABASE_URL` is set). The `AUTH_USERS` environment variable (format: `username:password:role:displayName`) serves as a fallback when no database users exist. Admins can manage users through the UI. New users can also submit an access request through the login page, which an admin must approve.
 
 ---
 
@@ -150,9 +156,14 @@ The app has a sidebar navigation that adapts based on user role:
 | **Employees** | `/employees` | Employee directory with add/edit. Sub-team assignment for Power Mobility teams |
 | **Coaching** | `/coaching` | Coaching session management with action plans, linked to specific calls |
 | **Administration** | `/admin` | Access request management (admin only) |
+| **Agent Compare** | `/agent-compare` | Side-by-side agent comparison |
+| **Heatmap Calendar** | `/heatmap` | Heatmap calendar view of call volume/scores |
+| **Call Clusters** | `/call-clusters` | Call clustering visualization (Bedrock embeddings) |
+| **My Performance** | `/my-performance` | Current user's own performance metrics |
 | **Prompt Templates** | `/admin/templates` | Custom AI prompt configuration per call category (admin only) |
 | **Model Testing** | `/admin/ab-testing` | A/B model comparison tool (admin only) |
 | **Spend Tracking** | `/admin/spend` | Estimated API cost tracking with charts (admin only) |
+| **Security** | `/admin/security` | Security dashboard: WAF, incidents, breach reports (admin only) |
 
 Keyboard shortcuts: `D` (Dashboard), `K` (Search), `N` (Upload), `R` (Reports), `?` (Help)
 
@@ -204,7 +215,7 @@ Transcript, sentiment analysis, and call analysis are stored as separate JSON fi
 If no employee was specified at upload and the AI detected an agent name, the system tries to match it against the employee directory (by first name, last name, or full name) and auto-assigns.
 
 ### On Failure
-The call is marked as "failed", the WebSocket notifies the client, and the uploaded file is cleaned up. Error messages are logged without full stack traces (HIPAA — avoids logging PHI). There is no automatic retry — users re-upload manually.
+The call is marked as "failed" and the WebSocket notifies the client. Error messages are logged without full stack traces (HIPAA — avoids logging PHI). When using the PostgreSQL job queue, failed jobs are automatically retried up to 3 times before being moved to the dead-letter queue (visible in admin UI). Without PostgreSQL, there is no automatic retry — users re-upload manually.
 
 ---
 
@@ -378,10 +389,10 @@ CallAnalyzer handles Protected Health Information (PHI) in audio recordings and 
 
 ### Known Limitations
 - Auth users stored in environment variable (works for small teams; larger orgs should use an IdP like Cognito)
-- Same IAM user shared across 3 projects (consider separate IAM users or EC2 instance profiles)
+- Same IAM user shared across 3 projects (consider separate IAM users or EC2 instance profiles — EC2 IMDSv2 is now supported)
 - MFA (TOTP) is available but optional by default — set `REQUIRE_MFA=true` to enforce for all users
-- No WAF configured (consider AWS WAF for additional protection)
-- S3/Bedrock accessed over public internet (consider VPC endpoints)
+- Application-level WAF (`server/middleware/waf.ts`) is in place; consider adding AWS WAF for additional edge protection
+- S3/Bedrock accessed over public internet by default (VPC endpoints supported — see `docs/vpc-endpoints.md`)
 
 See `SECURITY.md` for the full HIPAA security summary with code location references and verification commands.
 
@@ -422,10 +433,12 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `DELETE` | `/api/calls/:id/tags/:tagId` | Remove a tag from a call |
 | `GET` | `/api/tags` | Get all unique tags (for autocomplete) |
 | `GET` | `/api/calls/by-tag/:tag` | Search calls by tag |
+| `GET` | `/api/calls/:id/annotations` | Get call annotations |
 | `GET` | `/api/employees` | List all employees |
 | `GET` | `/api/dashboard/metrics` | Aggregate metrics (total calls, avg scores) |
 | `GET` | `/api/dashboard/sentiment` | Sentiment distribution (positive/neutral/negative counts) |
 | `GET` | `/api/dashboard/performers` | Top performers by average score |
+| `GET` | `/api/my-performance` | Current user's own performance metrics |
 | `GET` | `/api/search` | Full-text transcript search |
 | `GET` | `/api/performance` | Performance metrics per employee |
 | `GET` | `/api/reports/summary` | Summary report |
@@ -436,6 +449,11 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/insights` | Aggregate insights and trends |
 | `GET` | `/api/analytics/teams` | Comparative team performance (sub-team aggregates) |
 | `GET` | `/api/analytics/team/:teamName` | Individual employee metrics within a team |
+| `GET` | `/api/analytics/trends` | Week-over-week/month-over-month trends |
+| `GET` | `/api/analytics/trends/agent/:employeeId` | Agent-specific performance trends |
+| `GET` | `/api/analytics/compare` | Agent comparison (side-by-side metrics) |
+| `GET` | `/api/analytics/clusters` | Call clustering analysis |
+| `GET` | `/api/analytics/heatmap` | Heatmap calendar data |
 
 ### Manager+ (manager or admin)
 | Method | Path | Description |
@@ -443,6 +461,8 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `PATCH` | `/api/calls/:id/analysis` | Edit AI analysis (requires reason for audit trail) |
 | `PATCH` | `/api/calls/:id/assign` | Assign/reassign call to employee |
 | `DELETE` | `/api/calls/:id` | Delete call and all associated data |
+| `POST` | `/api/calls/:id/annotations` | Create annotation on a call |
+| `DELETE` | `/api/calls/:id/annotations/:annotationId` | Delete annotation |
 | `POST` | `/api/employees` | Create employee |
 | `PATCH` | `/api/employees/:id` | Update employee |
 | `GET` | `/api/coaching` | List all coaching sessions |
@@ -476,6 +496,52 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/admin/breach-reports` | List HIPAA breach reports |
 | `POST` | `/api/admin/breach-reports` | File a new breach report |
 | `PATCH` | `/api/admin/breach-reports/:id` | Update breach notification status |
+| `GET` | `/api/admin/waf-stats` | WAF statistics and blocked IPs |
+| `POST` | `/api/admin/waf/block-ip` | Manually block an IP address |
+| `POST` | `/api/admin/waf/unblock-ip` | Unblock an IP address |
+| `GET` | `/api/admin/vuln-scan/latest` | Latest vulnerability scan report |
+| `GET` | `/api/admin/vuln-scan/history` | All scan history |
+| `POST` | `/api/admin/vuln-scan/run` | Trigger manual vulnerability scan |
+| `POST` | `/api/admin/vuln-scan/accept/:findingId` | Accept a finding as risk |
+| `GET` | `/api/admin/incidents` | List all security incidents |
+| `GET` | `/api/admin/incidents/:id` | Get incident details |
+| `POST` | `/api/admin/incidents` | Declare a new security incident |
+| `POST` | `/api/admin/incidents/:id/advance` | Advance incident to next phase |
+| `POST` | `/api/admin/incidents/:id/timeline` | Add timeline entry to incident |
+| `PATCH` | `/api/admin/incidents/:id` | Update incident details |
+| `POST` | `/api/admin/incidents/:id/action-items` | Add action item to incident |
+| `PATCH` | `/api/admin/incidents/:incidentId/action-items/:itemId` | Update action item status |
+| `GET` | `/api/admin/incident-response-plan` | Get escalation contacts and response procedures |
+| `GET` | `/api/admin/webhooks` | List all webhook configurations |
+| `POST` | `/api/admin/webhooks` | Create webhook (URL, events, secret for HMAC) |
+| `PATCH` | `/api/admin/webhooks/:id` | Update webhook |
+| `DELETE` | `/api/admin/webhooks/:id` | Delete webhook |
+| `POST` | `/api/admin/webhooks/:id/test` | Test webhook delivery |
+| `POST` | `/api/calls/bulk-reanalyze` | Bulk re-analysis of calls |
+| `GET` | `/api/admin/reports` | List scheduled reports (manager+) |
+| `GET` | `/api/admin/reports/:id` | Get scheduled report details (manager+) |
+| `POST` | `/api/admin/reports/generate` | Generate a report (manager+) |
+| `GET` | `/api/users` | List all users |
+| `POST` | `/api/users` | Create user |
+| `PATCH` | `/api/users/:id` | Update user (role, display name, active) |
+| `DELETE` | `/api/users/:id` | Deactivate user (soft delete) |
+| `POST` | `/api/users/:id/reset-password` | Admin reset user password |
+| `PATCH` | `/api/users/me/password` | Self-service password change (authenticated) |
+
+### Performance Snapshots (manager+)
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/snapshots/employee/:id` | Generate employee performance snapshot |
+| `POST` | `/api/snapshots/team` | Generate team performance snapshot |
+| `POST` | `/api/snapshots/department` | Generate department performance snapshot |
+| `POST` | `/api/snapshots/company` | Generate company-wide performance snapshot |
+| `POST` | `/api/snapshots/batch` | Batch generate all snapshots (admin) |
+| `GET` | `/api/snapshots/employee/:id` | Get employee snapshot history |
+| `GET` | `/api/snapshots/team/:teamName` | Get team snapshot history |
+| `GET` | `/api/snapshots/department/:dept` | Get department snapshot history |
+| `GET` | `/api/snapshots/company` | Get company-wide snapshot history |
+| `GET` | `/api/snapshots/all/:level` | Get all snapshots for a level |
+| `DELETE` | `/api/snapshots/:level/:targetId/reset` | AI Context Reset — clear snapshots (admin) |
 
 ---
 
@@ -485,7 +551,7 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 assemblyai_tool/
 ├── client/                         # Frontend (React + TypeScript)
 │   └── src/
-│       ├── pages/                  # Route pages
+│       ├── pages/                  # Route pages (25 pages)
 │       │   ├── dashboard.tsx       # Main dashboard with metrics and charts
 │       │   ├── upload.tsx          # Audio file upload
 │       │   ├── transcripts.tsx     # Call list + transcript viewer
@@ -493,9 +559,13 @@ assemblyai_tool/
 │       │   ├── search-v2.tsx       # Alternative search implementation
 │       │   ├── sentiment.tsx       # Sentiment analysis dashboard
 │       │   ├── performance.tsx     # Performance metrics
+│       │   ├── my-performance.tsx  # Current user's own performance
 │       │   ├── reports.tsx         # Filterable reports + agent profiles
 │       │   ├── agent-scorecard.tsx # Agent performance scorecard
+│       │   ├── agent-compare.tsx   # Side-by-side agent comparison
 │       │   ├── team-analytics.tsx  # Comparative team performance
+│       │   ├── heatmap-calendar.tsx # Heatmap calendar view
+│       │   ├── call-clusters.tsx   # Call clustering visualization
 │       │   ├── insights.tsx        # Aggregate insights and trends
 │       │   ├── employees.tsx       # Employee management
 │       │   ├── coaching.tsx        # Coaching session management
@@ -505,22 +575,27 @@ assemblyai_tool/
 │       │   ├── spend-tracking.tsx  # API cost tracking dashboard
 │       │   ├── security.tsx        # Security/breach reporting dashboard
 │       │   ├── auth.tsx            # Login + access request form
+│       │   ├── auth.test.tsx       # Auth testing page
 │       │   └── not-found.tsx       # 404 page
 │       ├── components/
 │       │   ├── ui/                 # shadcn/ui components (card, dialog, table, etc.)
-│       │   ├── layout/sidebar.tsx  # Sidebar navigation
+│       │   ├── layout/             # Sidebar navigation
+│       │   ├── ab-testing/         # A/B testing sub-components
 │       │   ├── upload/             # File upload component
 │       │   ├── tables/             # Data table components
 │       │   ├── transcripts/        # Transcript viewer + audio waveform
 │       │   ├── dashboard/          # Dashboard sub-components
+│       │   ├── reports/            # Report sub-components
 │       │   ├── search/             # Search components (call card, employee filter)
-│       │   └── lib/                # Utility components (confirm dialog, error boundary)
+│       │   ├── lib/                # Utility components (confirm dialog, error boundary)
+│       │   ├── i18n-provider.tsx   # Internationalization context provider
+│       │   └── language-selector.tsx # Language switcher component
 │       ├── hooks/                  # Custom React hooks (WebSocket, toast)
-│       ├── lib/                    # Utilities (queryClient, helpers)
+│       ├── lib/                    # Utilities (queryClient, helpers, i18n)
 │       └── App.tsx                 # Root component with routing
 ├── server/                         # Backend (Express + TypeScript)
-│   ├── index.ts                    # Server entry point (middleware, security headers, retention)
-│   ├── routes.ts                   # All API routes + audio processing pipeline
+│   ├── index.ts                    # Server entry point (imports dotenv/config, middleware, security headers, retention)
+│   ├── routes.ts                   # Route coordinator + batch scheduler + job queue init
 │   ├── storage.ts                  # Storage abstraction (MemStorage + CloudStorage)
 │   ├── storage-postgres.ts         # PostgreSQL IStorage implementation (~30 methods)
 │   ├── auth.ts                     # Authentication (passport, sessions, role middleware)
@@ -528,18 +603,44 @@ assemblyai_tool/
 │   ├── db/
 │   │   ├── schema.sql              # PostgreSQL schema definition
 │   │   └── pool.ts                 # Database connection pool + auto-init
-│   └── services/
+│   ├── middleware/
+│   │   ├── rate-limit.ts           # Per-user rate limiting
+│   │   └── waf.ts                  # Application-level WAF (SQL injection, XSS, path traversal)
+│   ├── routes/                     # Modular route files
+│   │   ├── admin.ts                # Admin routes (security, WAF, incidents, templates, A/B tests, webhooks, usage)
+│   │   ├── analytics.ts            # Team analytics, trends, compare, clusters, heatmap, exports
+│   │   ├── auth.ts                 # Login, logout, MFA, access requests
+│   │   ├── calls.ts                # Call CRUD, tags, annotations, bulk re-analyze
+│   │   ├── coaching.ts             # Coaching session management
+│   │   ├── dashboard.ts            # Dashboard metrics, sentiment, performers, my-performance
+│   │   ├── employees.ts            # Employee CRUD, CSV import, call assignment
+│   │   ├── insights.ts             # Aggregate insights
+│   │   ├── pipeline.ts             # Audio processing pipeline (transcription → AI analysis)
+│   │   ├── reports.ts              # Search, performance, reports, agent profiles
+│   │   ├── snapshots.ts            # Performance snapshots (employee/team/dept/company)
+│   │   ├── users.ts                # User management (admin only)
+│   │   └── utils.ts                # Shared route utilities (asyncHandler)
+│   └── services/                   # 20 service modules
+│       ├── ai-factory.ts           # AI provider factory/selector
+│       ├── ai-provider.ts          # AI prompt building and response parsing
+│       ├── assemblyai.ts           # AssemblyAI client (upload, transcribe, poll)
+│       ├── audit-log.ts            # HIPAA audit logging (stdout + PostgreSQL)
+│       ├── aws-credentials.ts      # AWS credential provider (env vars → EC2 IMDSv2 fallback)
 │       ├── bedrock.ts              # AWS Bedrock client (SigV4 signing, Converse API)
 │       ├── bedrock-batch.ts        # Bedrock batch inference mode (50% cost savings)
-│       ├── ai-provider.ts          # AI prompt building and response parsing
-│       ├── ai-factory.ts           # AI provider factory/selector
-│       ├── assemblyai.ts           # AssemblyAI client (upload, transcribe, poll)
-│       ├── s3.ts                   # AWS S3 client (SigV4 signing, CRUD operations)
-│       ├── websocket.ts            # WebSocket server for real-time updates
-│       ├── audit-log.ts            # HIPAA audit logging (stdout + PostgreSQL)
+│       ├── call-clustering.ts      # Call clustering via Bedrock embeddings
+│       ├── coaching-alerts.ts      # Auto-generate coaching for low/high scoring calls
+│       ├── incident-response.ts    # Formal IRP with severity, phases, escalation
 │       ├── job-queue.ts            # PostgreSQL-backed durable job queue
+│       ├── performance-snapshots.ts # Periodic performance snapshot generation
+│       ├── s3.ts                   # AWS S3 client (SigV4 signing, CRUD operations)
+│       ├── scheduled-reports.ts    # Scheduled report generation (weekly/monthly)
+│       ├── scoring-calibration.ts  # Score calibration to normalize AI scoring distribution
+│       ├── security-monitor.ts     # Security event tracking, breach reporting, anomaly detection
 │       ├── totp.ts                 # TOTP two-factor authentication (RFC 6238)
-│       └── security-monitor.ts     # Security event tracking and breach reporting
+│       ├── vulnerability-scanner.ts # Automated security scans (env, deps, DB, auth)
+│       ├── webhooks.ts             # Webhook dispatch with HMAC signing
+│       └── websocket.ts            # WebSocket server for real-time pipeline updates
 ├── shared/
 │   └── schema.ts                   # Zod schemas shared between client and server
 ├── tests/
@@ -549,6 +650,9 @@ assemblyai_tool/
 │   ├── storage.test.ts             # Storage abstraction CRUD tests
 │   ├── postgres-storage.test.ts    # PostgreSQL integration tests (requires DATABASE_URL)
 │   └── job-queue.test.ts           # Job queue integration tests (requires DATABASE_URL)
+├── docs/
+│   ├── disaster-recovery.md        # DR plan: S3 CRR, RDS replica, AMI snapshots
+│   └── vpc-endpoints.md            # VPC endpoint setup for S3/Bedrock
 ├── deploy/
 │   └── ec2/                        # EC2 deployment configs (Caddyfile, systemd, user-data)
 ├── .github/
@@ -558,6 +662,7 @@ assemblyai_tool/
 │       └── view-logs.yml           # Log viewing workflow
 ├── deploy.sh                       # EC2 deploy script (pull, build, restart)
 ├── deploy-rollback.sh              # Rollback to previous build
+├── seed.ts                         # Database seeding script
 ├── CLAUDE.md                       # Development reference (for AI assistants)
 ├── SECURITY.md                     # HIPAA security summary
 └── package.json                    # Dependencies and scripts
@@ -603,11 +708,24 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP batch mode (24h format, e.
 # === MFA (Two-Factor Authentication) ===
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
 
+# === Scoring Calibration (optional) ===
+SCORE_CALIBRATION_ENABLED       # Set to "true" to normalize AI scoring distribution
+SCORE_CALIBRATION_CENTER        # Desired mean score (default: 5.5)
+SCORE_CALIBRATION_SPREAD        # Distribution width (default: 1.2)
+SCORE_AI_MODEL_MEAN             # AI model baseline mean (default: 7.0)
+SCORE_LOW_THRESHOLD             # Low score threshold for coaching alerts (default: 4.0)
+SCORE_HIGH_THRESHOLD            # High score threshold for recognition (default: 9.0)
+
+# === Embeddings ===
+BEDROCK_EMBEDDING_MODEL         # Bedrock embedding model ID (for call clustering)
+
 # === Optional ===
 PORT                            # Server port (default: 5000)
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
 JOB_CONCURRENCY                 # Max parallel audio processing jobs (default: 5, requires DATABASE_URL)
 JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000, requires DATABASE_URL)
+DB_SSL_REJECT_UNAUTHORIZED      # Set to "false" to disable SSL cert verification for PostgreSQL
+DISABLE_SECURE_COOKIE           # Set to "true" to disable secure cookies (non-HTTPS dev)
 ```
 
 ---
@@ -637,10 +755,12 @@ npm run dev    # Starts on http://localhost:5000 with Vite HMR
 ### Commands
 ```bash
 npm run dev          # Dev server with hot reload (tsx watch + Vite HMR)
-npm run build        # Production build (Vite frontend → dist/client/, esbuild backend → dist/index.js)
+npm run build        # Production build (Vite frontend → dist/client/, esbuild backend → dist/index.js, copies schema.sql)
 npm run start        # Production server (NODE_ENV=production)
 npm run check        # TypeScript type check
 npm run test         # Run unit tests (Node.js test runner via tsx)
+npm run test:client  # Run client-side tests (vitest)
+npm run seed         # Seed database with sample data
 ```
 
 ---
@@ -703,11 +823,12 @@ Render.com was previously used for testing. All hosting is now on EC2 with RDS P
 ### Updating Environment Variables on EC2
 ```bash
 nano .env                   # Edit the variable
-pm2 restart all             # Restart to pick up changes
+pm2 restart all             # Restart to pick up changes (dotenv/config reloads .env on startup)
 pm2 logs --lines 20         # Verify — look for:
                             #   [STORAGE] Using S3 (bucket: ums-call-archive)
                             #   Bedrock provider initialized (region: us-east-1, model: ...)
 ```
+If env vars aren't updating after `pm2 restart`, use: `pm2 delete all && pm2 start dist/index.js --name callanalyzer && pm2 save`
 
 ### Changing the AI Model
 To switch the production AI model (e.g., from Sonnet to Haiku for cost savings):
@@ -717,6 +838,9 @@ To switch the production AI model (e.g., from Sonnet to Haiku for cost savings):
 
 ### Troubleshooting
 - **"S3 authentication not configured"** in logs → Check `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env`
+- **`SignatureDoesNotMatch` errors** → Trailing whitespace in AWS credentials. The app auto-trims, but check `.env` for extra spaces
+- **`InvalidAccessKeyId` errors** → AWS key was rotated/deactivated. Update `.env` with new key and `pm2 restart all`
 - **Calls stuck in "processing"** → Check `pm2 logs --err` for AssemblyAI or Bedrock errors
 - **Login not working** → Verify `AUTH_USERS` format: `user:pass:role:name`
 - **Empty dashboard** → Verify S3 bucket has data; in-memory storage loses data on restart
+- **React error #310 on transcript page** → Usually a rendering issue with objects where strings are expected; dismiss and retry. Ensure `toDisplayString()` is used in all frontend data rendering

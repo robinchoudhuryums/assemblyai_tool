@@ -34,10 +34,12 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 ## Commands
 ```bash
 npm run dev          # Dev server (tsx watch)
-npm run build        # Vite frontend + esbuild backend → dist/
+npm run build        # Vite frontend + esbuild backend → dist/ (also copies schema.sql)
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
 npm run test         # Run tests (tsx --test tests/*.test.ts)
+npm run test:client  # Run client-side tests (vitest)
+npm run seed         # Seed database with sample data (tsx seed.ts)
 npx vite build       # Frontend-only build (useful for quick verification)
 ```
 
@@ -55,20 +57,47 @@ npx vite build       # Frontend-only build (useful for quick verification)
 
 ### Key Directories
 ```
-client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
-client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
+client/src/pages/        # Route pages (25 pages — see Pages section in README)
+client/src/components/   # UI components (ui/ = shadcn, ab-testing/, dashboard/, layout/, lib/, reports/, search/, tables/, transcripts/, upload/)
+client/src/components/   # Also: i18n-provider.tsx, language-selector.tsx
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, AWS credentials
-server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
+server/services/         # 20 service modules (see Services section below)
+server/routes/           # Modular route files: admin, analytics, auth, calls, coaching, dashboard, employees, insights, pipeline, reports, snapshots, users, utils
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
-server/middleware/       # Per-user rate limiting, application-level WAF
+server/middleware/       # rate-limit.ts (per-user rate limiting), waf.ts (application-level WAF)
 client/src/lib/i18n.ts   # i18n system (English + Spanish)
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
 server/auth.ts           # Authentication middleware + session management (PostgreSQL or memory store)
 shared/schema.ts         # Zod schemas shared between client/server
 tests/                   # Unit tests (Node test runner)
+docs/                    # disaster-recovery.md, vpc-endpoints.md
+deploy/ec2/              # EC2 deployment configs (Caddyfile, systemd, user-data)
 ```
+
+### Services (server/services/)
+| File | Purpose |
+|------|---------|
+| `ai-factory.ts` | AI provider factory/selector |
+| `ai-provider.ts` | AI prompt building and response parsing |
+| `assemblyai.ts` | AssemblyAI client (upload, transcribe, poll) |
+| `audit-log.ts` | HIPAA audit logging (stdout + PostgreSQL) |
+| `aws-credentials.ts` | AWS credential provider (env vars → EC2 IMDSv2 fallback, auto-refresh) |
+| `bedrock.ts` | AWS Bedrock client (SigV4 signing, Converse API) |
+| `bedrock-batch.ts` | Bedrock batch inference mode (50% cost savings) |
+| `call-clustering.ts` | Call clustering via Bedrock embeddings |
+| `coaching-alerts.ts` | Auto-generate coaching sessions for low/high scoring calls |
+| `incident-response.ts` | Formal IRP with severity, phases, escalation, action items |
+| `job-queue.ts` | PostgreSQL-backed durable job queue |
+| `performance-snapshots.ts` | Periodic performance snapshot generation (employee/team/company) |
+| `s3.ts` | AWS S3 client (SigV4 signing, CRUD operations) |
+| `scheduled-reports.ts` | Scheduled report generation (weekly/monthly) |
+| `scoring-calibration.ts` | Score calibration to normalize AI scoring distribution |
+| `security-monitor.ts` | Security event tracking, breach reporting, anomaly detection |
+| `totp.ts` | TOTP two-factor authentication (RFC 6238) |
+| `vulnerability-scanner.ts` | Automated security scans (env, deps, DB, auth) |
+| `webhooks.ts` | Webhook dispatch with HMAC signing |
+| `websocket.ts` | WebSocket server for real-time pipeline updates |
 
 ### Audio Processing Pipeline (server/routes.ts → processAudioFile)
 1. Archive audio to S3 immediately on upload (before queuing)
@@ -154,6 +183,10 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
 | GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
 | GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
+| POST | `/api/calls/bulk-reanalyze` | admin | Bulk re-analysis of calls |
+| GET | `/api/calls/:id/annotations` | authenticated | Get call annotations |
+| POST | `/api/calls/:id/annotations` | manager+ | Create annotation on a call |
+| DELETE | `/api/calls/:id/annotations/:annotationId` | manager+ | Delete annotation |
 
 ### Employees
 | Method | Path | Role | Description |
@@ -169,6 +202,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/dashboard/metrics` | authenticated | Call metrics & performance |
 | GET | `/api/dashboard/sentiment` | authenticated | Sentiment summaries |
 | GET | `/api/dashboard/performers` | authenticated | Top performers |
+| GET | `/api/my-performance` | authenticated | Current user's own performance metrics |
 | GET | `/api/search` | authenticated | Full-text search |
 | GET | `/api/performance` | authenticated | Performance metrics |
 | GET | `/api/reports/summary` | authenticated | Summary report |
@@ -232,6 +266,9 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
 | GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
 | GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
+| GET | `/api/analytics/compare` | authenticated | Agent comparison (side-by-side metrics) |
+| GET | `/api/analytics/clusters` | authenticated | Call clustering analysis (Bedrock embeddings) |
+| GET | `/api/analytics/heatmap` | authenticated | Heatmap calendar data (call volume/scores by day) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
@@ -253,10 +290,18 @@ tests/                   # Unit tests (Node test runner)
 ### Webhooks (admin only)
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
-| GET | `/api/webhooks` | admin | List all webhook configurations |
-| POST | `/api/webhooks` | admin | Create webhook (URL, events, secret for HMAC) |
-| PATCH | `/api/webhooks/:id` | admin | Update webhook |
-| DELETE | `/api/webhooks/:id` | admin | Delete webhook |
+| GET | `/api/admin/webhooks` | admin | List all webhook configurations |
+| POST | `/api/admin/webhooks` | admin | Create webhook (URL, events, secret for HMAC) |
+| PATCH | `/api/admin/webhooks/:id` | admin | Update webhook |
+| DELETE | `/api/admin/webhooks/:id` | admin | Delete webhook |
+| POST | `/api/admin/webhooks/:id/test` | admin | Test webhook delivery |
+
+### Scheduled Reports (manager+)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/admin/reports` | manager+ | List scheduled reports |
+| GET | `/api/admin/reports/:id` | manager+ | Get scheduled report details |
+| POST | `/api/admin/reports/generate` | manager+ | Generate a report |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -329,11 +374,24 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h form
 # MFA (Two-Factor Authentication)
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
 
+# Scoring Calibration (optional — normalizes AI scoring distribution)
+SCORE_CALIBRATION_ENABLED       # Set to "true" to enable (default: disabled)
+SCORE_CALIBRATION_CENTER        # Desired mean score (default: 5.5)
+SCORE_CALIBRATION_SPREAD        # Distribution width (default: 1.2)
+SCORE_AI_MODEL_MEAN             # AI model baseline mean (default: 7.0)
+SCORE_LOW_THRESHOLD             # Low score threshold for coaching alerts (default: 4.0)
+SCORE_HIGH_THRESHOLD            # High score threshold for recognition (default: 9.0)
+
+# Embeddings (for call clustering)
+BEDROCK_EMBEDDING_MODEL         # Bedrock embedding model ID (for call clustering feature)
+
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
 JOB_CONCURRENCY                 # Max parallel audio processing jobs (default: 5, requires DATABASE_URL)
 JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000, requires DATABASE_URL)
+DB_SSL_REJECT_UNAUTHORIZED      # Set to "false" to disable SSL cert verification for PostgreSQL (not recommended)
+DISABLE_SECURE_COOKIE           # Set to "true" to disable secure cookies (for non-HTTPS dev environments)
 ```
 
 ## HIPAA Compliance
@@ -364,12 +422,16 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
+- **Dotenv**: `server/index.ts` imports `"dotenv/config"` at the top to load `.env` file. This is critical for production (pm2 does not source `.env` natively).
+- **AWS credential resolution**: `aws-credentials.ts` resolves creds in order: (1) env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), (2) EC2 IMDSv2 instance profile. Credentials from env vars are **trimmed** to prevent SigV4 signing failures from trailing whitespace.
 - **Hybrid storage**: PostgreSQL for structured metadata (fast queries, JOINs, transactions) + S3 for audio blobs (cheap, durable). Falls back gracefully without DATABASE_URL.
 - **Durable job queue**: PostgreSQL-backed with `SELECT ... FOR UPDATE SKIP LOCKED` — survives restarts, supports concurrent workers, auto-retry with dead-letter
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
+- **Scoring calibration**: Optional system (`scoring-calibration.ts`) to normalize AI scores that tend to cluster high (around 7.0). Configurable via env vars.
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
 - **A/B test isolation**: Test calls stored under `ab-tests/` S3 prefix, completely separate from production `calls/`, `analyses/`, etc. — no risk of contaminating metrics
+- **Modular routes**: All routes split into `server/routes/` modules (admin, analytics, auth, calls, coaching, dashboard, employees, insights, pipeline, reports, snapshots, users) — `server/routes.ts` is the coordinator that registers them all
 
 ## Deployment
 
@@ -415,11 +477,12 @@ pm2 restart all
 #### Updating Environment Variables
 ```bash
 nano .env                   # Edit the file
-pm2 restart all             # Restart to pick up changes
+pm2 restart all             # Restart to pick up changes (dotenv/config reloads .env on startup)
 pm2 logs --lines 20         # Verify startup — look for:
                             #   [STORAGE] Using S3 (bucket: ums-call-archive)
                             #   NOT: "S3 authentication not configured"
 ```
+**Note**: The app loads `.env` via `dotenv/config` import at startup, so `pm2 restart all` will pick up `.env` changes. If for some reason env vars aren't updating, use `pm2 delete all && pm2 start dist/index.js --name callanalyzer && pm2 save`.
 
 ### VPC Endpoints (Recommended)
 S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
@@ -436,9 +499,12 @@ A `deploy-rollback.sh` script is available for reverting to a previous build.
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):
 1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env`
-2. `pm2 restart all`
-3. Verify with `pm2 logs --lines 20` — confirm S3 and Bedrock initialize without errors
-4. **Remember**: Update credentials on ALL services using this IAM user
+2. **Ensure no trailing whitespace** in credential values (the app trims them, but best practice)
+3. `pm2 restart all`
+4. Verify with `pm2 logs --lines 20` — confirm S3 and Bedrock initialize without errors
+5. **Remember**: Update credentials on ALL services using this IAM user
+
+**Alternative**: Attach an IAM instance profile to the EC2 instance to avoid managing keys entirely. The app auto-detects EC2 IMDSv2 credentials via `aws-credentials.ts` and refreshes them before expiry.
 
 ## Documentation Maintenance
 
@@ -454,8 +520,11 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - **AI model** defaults change → update Environment Variables and Common Gotchas
 
 ## Common Gotchas
+- **AWS credential whitespace**: Trailing spaces/newlines in `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` cause `SignatureDoesNotMatch` errors. The app trims them automatically via `aws-credentials.ts`, but keep `.env` clean.
+- **dotenv is required**: `server/index.ts` imports `"dotenv/config"` — without it, `.env` vars aren't loaded and AWS/DB connections fail
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data
 - The same IAM user is shared across 3 projects (CallAnalyzer, RAG Tool, PMD Questionnaire) — IAM policy covers S3, Bedrock, and Textract
+- **EC2 IMDSv2**: If using an EC2 instance profile instead of env var keys, `aws-credentials.ts` handles token refresh automatically (5 min before expiry)
 - Recharts uses inline styles that override CSS; dark mode fixes use `!important`
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
@@ -464,3 +533,5 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - AssemblyAI costs: $0.15/hr base + $0.02/hr sentiment = $0.17/hr ($0.0000472/sec)
 - AssemblyAI uses `speech_models: ["universal-3-pro", "universal-2"]` — Universal-3 Pro is the highest accuracy model with fallback to Universal-2 for unsupported languages
 - Bedrock Batch Mode (`BEDROCK_BATCH_MODE=true`) saves 50% on AI analysis costs but results are delayed (up to 24 hours). Calls show as "awaiting_analysis" until batch completes.
+- **Scoring calibration**: AI models tend to score calls around 7.0. Enable `SCORE_CALIBRATION_ENABLED=true` to normalize the distribution.
+- **Coaching alerts**: Calls scoring ≤4 or ≥9 automatically trigger coaching session creation via `coaching-alerts.ts`
