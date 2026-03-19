@@ -49,6 +49,7 @@ export interface ObjectStorageClient {
   listAndDownloadJson<T>(prefix: string): Promise<T[]>;
   deleteObject(objectName: string): Promise<void>;
   deleteByPrefix(prefix: string): Promise<void>;
+  getPresignedUrl?(objectName: string, expiresInSeconds?: number): Promise<string>;
 }
 
 export interface IStorage {
@@ -105,6 +106,8 @@ export interface IStorage {
   uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
   getAudioFiles(callId: string): Promise<string[]>;
   downloadAudio(objectName: string): Promise<Buffer | undefined>;
+  /** Get a pre-signed S3 URL for direct audio access (avoids buffering). Returns undefined if not supported. */
+  getAudioPresignedUrl?(objectName: string): Promise<string | undefined>;
 
   // Access request operations
   createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest>;

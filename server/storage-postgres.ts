@@ -461,6 +461,11 @@ export class PostgresStorage implements IStorage {
     return this.audioClient.downloadFile(objectName);
   }
 
+  async getAudioPresignedUrl(objectName: string): Promise<string | undefined> {
+    if (!this.audioClient) return undefined;
+    return this.audioClient.getPresignedUrl?.(objectName, 3600);
+  }
+
   // ── Dashboard Metrics ─────────────────────────────────────
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     const { rows } = await this.db.query(`

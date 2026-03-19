@@ -201,6 +201,68 @@ export class S3Client {
 
   // --- Core S3 operations ---
 
+  /**
+   * Generate a pre-signed GET URL for an S3 object.
+   * This allows external services (e.g. AssemblyAI) to fetch the file directly
+   * from S3 without needing AWS credentials, avoiding double-buffering.
+   */
+  async getPresignedUrl(objectName: string, expiresInSeconds = 3600): Promise<string> {
+    const creds = await this.ensureCredentials();
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const dateStamp = amzDate.slice(0, 8);
+
+    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
+    const credential = `${creds.accessKeyId}/${credentialScope}`;
+
+    const canonicalUri = `/${objectName}`
+      .split("/")
+      .map((seg) => encodeURIComponent(seg))
+      .join("/");
+
+    // Query parameters for pre-signed URL (must be alphabetically sorted for signing)
+    const queryParams = new URLSearchParams({
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Credential": credential,
+      "X-Amz-Date": amzDate,
+      "X-Amz-Expires": String(expiresInSeconds),
+      "X-Amz-SignedHeaders": "host",
+    });
+    if (creds.sessionToken) {
+      queryParams.set("X-Amz-Security-Token", creds.sessionToken);
+    }
+
+    // Sort params alphabetically (required for canonical query string)
+    const sortedParams = [...queryParams.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const canonicalQueryString = sortedParams
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+
+    const canonicalHeaders = `host:${this.host}\n`;
+    const signedHeaders = "host";
+
+    const canonicalRequest = [
+      "GET",
+      canonicalUri,
+      canonicalQueryString,
+      canonicalHeaders,
+      signedHeaders,
+      "UNSIGNED-PAYLOAD",
+    ].join("\n");
+
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      createHash("sha256").update(canonicalRequest, "utf8").digest("hex"),
+    ].join("\n");
+
+    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, this.region, "s3");
+    const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex");
+
+    return `https://${this.host}${canonicalUri}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+  }
+
   private async putObject(objectName: string, body: Buffer, contentType: string): Promise<void> {
     const response = await this.request("PUT", `/${objectName}`, undefined, body, contentType);
     if (!response.ok) {

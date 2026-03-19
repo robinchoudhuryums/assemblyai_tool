@@ -61,10 +61,24 @@ export async function processAudioFile(
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
-    // Step 1a: Upload to AssemblyAI
-    console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
-    const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
-    console.log(`[${callId}] Step 1/7: Upload to AssemblyAI successful.`);
+    // Step 1a: Get audio URL for AssemblyAI
+    // Prefer pre-signed S3 URL (avoids re-uploading audio buffer to AssemblyAI)
+    let audioUrl: string;
+    const existingAudioFiles = await storage.getAudioFiles(callId);
+    if (existingAudioFiles.length > 0 && storage.getAudioPresignedUrl) {
+      const presigned = await storage.getAudioPresignedUrl(existingAudioFiles[0]);
+      if (presigned) {
+        audioUrl = presigned;
+        console.log(`[${callId}] Step 1/7: Using pre-signed S3 URL for AssemblyAI (skipping upload).`);
+      } else {
+        console.log(`[${callId}] Step 1/7: Pre-signed URL unavailable, uploading to AssemblyAI...`);
+        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      }
+    } else {
+      console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
+      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+    }
+    console.log(`[${callId}] Step 1/7: Audio URL ready.`);
 
     // Step 1b: Archive audio to cloud storage (skip if already archived by job queue)
     const existingAudio = await storage.getAudioFiles(callId);

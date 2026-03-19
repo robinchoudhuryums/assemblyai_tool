@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
+import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from "@/lib/constants";
 
 type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
 
@@ -76,7 +77,7 @@ export default function Sidebar() {
           message,
           timestamp: new Date(),
           read: false,
-        }, ...prev].slice(0, 30));
+        }, ...prev].slice(0, MAX_NOTIFICATIONS));
       }
     };
     window.addEventListener("ws:call_update", handler);
@@ -115,14 +116,14 @@ export default function Sidebar() {
   // Fetch calls for flagged count badge
   const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
-    staleTime: 30000,
+    staleTime: CALLS_STALE_TIME_MS,
   });
   const calls = callsResponse?.calls;
 
   // Fetch employees for quick-switch
   const { data: employees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
-    staleTime: 60000,
+    staleTime: EMPLOYEES_STALE_TIME_MS,
   });
 
   // Fetch access requests for admin badge count
