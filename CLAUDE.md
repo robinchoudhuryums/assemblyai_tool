@@ -58,8 +58,11 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor
-server/routes.ts         # All API routes + audio processing pipeline
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, AWS credentials
+server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
+server/routes.ts         # Route coordinator + batch scheduler + job queue init
+server/middleware/       # Per-user rate limiting, application-level WAF
+client/src/lib/i18n.ts   # i18n system (English + Spanish)
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
 server/auth.ts           # Authentication middleware + session management (PostgreSQL or memory store)
@@ -76,6 +79,8 @@ tests/                   # Unit tests (Node test runner)
 6. Process results: normalize data, compute confidence scores, detect agent name, set flags
 7. Store transcript, sentiment, and analysis to storage (PostgreSQL or S3)
 8. Auto-assign call to employee if agent name detected
+9. Auto-categorize call if AI returns a category and none was provided at upload
+10. Trigger coaching alerts for low-score (<=4) or high-score (>=9) calls
 
 **Job Queue** (when PostgreSQL is configured):
 - Durable: jobs survive server restarts
@@ -184,6 +189,8 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 | GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
+| GET | `/api/admin/dead-jobs` | admin | List dead-letter jobs (failed after max retries) |
+| POST | `/api/admin/dead-jobs/:id/retry` | admin | Retry a dead-letter job |
 | GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
 | GET | `/api/admin/security-summary` | admin | Security posture summary |
 | GET | `/api/admin/security-alerts` | admin | Recent security alerts |
@@ -191,14 +198,65 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/admin/breach-reports` | admin | List all HIPAA breach reports |
 | POST | `/api/admin/breach-reports` | admin | File a new breach report |
 | PATCH | `/api/admin/breach-reports/:id` | admin | Update breach notification status |
+| GET | `/api/admin/waf-stats` | admin | WAF statistics and blocked IPs |
+| POST | `/api/admin/waf/block-ip` | admin | Manually block an IP address |
+| POST | `/api/admin/waf/unblock-ip` | admin | Unblock an IP address |
+| GET | `/api/admin/vuln-scan/latest` | admin | Latest vulnerability scan report |
+| GET | `/api/admin/vuln-scan/history` | admin | All scan history |
+| POST | `/api/admin/vuln-scan/run` | admin | Trigger manual vulnerability scan |
+| POST | `/api/admin/vuln-scan/accept/:findingId` | admin | Accept a finding as risk |
+| GET | `/api/admin/incidents` | admin | List all security incidents |
+| GET | `/api/admin/incidents/:id` | admin | Get incident details |
+| POST | `/api/admin/incidents` | admin | Declare a new security incident |
+| POST | `/api/admin/incidents/:id/advance` | admin | Advance incident to next phase |
+| POST | `/api/admin/incidents/:id/timeline` | admin | Add timeline entry to incident |
+| PATCH | `/api/admin/incidents/:id` | admin | Update incident details |
+| POST | `/api/admin/incidents/:id/action-items` | admin | Add action item to incident |
+| PATCH | `/api/admin/incidents/:incidentId/action-items/:itemId` | admin | Update action item status |
+| GET | `/api/admin/incident-response-plan` | admin | Get escalation contacts and response procedures |
+
+### User Management (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/users` | admin | List all users |
+| POST | `/api/users` | admin | Create user |
+| PATCH | `/api/users/:id` | admin | Update user (role, display name, active) |
+| DELETE | `/api/users/:id` | admin | Deactivate user (soft delete) |
+| POST | `/api/users/:id/reset-password` | admin | Admin reset user password |
+| PATCH | `/api/users/me/password` | authenticated | Self-service password change |
 
 ### Team Analytics & Export
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
 | GET | `/api/analytics/teams` | authenticated | Comparative team performance (sub-team aggregates) |
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
+| GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
+| GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
+
+### Performance Snapshots (periodic reviews)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| POST | `/api/snapshots/employee/:id` | manager+ | Generate employee performance snapshot |
+| POST | `/api/snapshots/team` | manager+ | Generate team performance snapshot |
+| POST | `/api/snapshots/department` | manager+ | Generate department performance snapshot |
+| POST | `/api/snapshots/company` | manager+ | Generate company-wide performance snapshot |
+| POST | `/api/snapshots/batch` | admin | Batch generate all employee + team + company snapshots |
+| GET | `/api/snapshots/employee/:id` | authenticated | Get employee snapshot history |
+| GET | `/api/snapshots/team/:teamName` | authenticated | Get team snapshot history |
+| GET | `/api/snapshots/department/:dept` | authenticated | Get department snapshot history |
+| GET | `/api/snapshots/company` | authenticated | Get company-wide snapshot history |
+| GET | `/api/snapshots/all/:level` | manager+ | Get all snapshots for a level |
+| DELETE | `/api/snapshots/:level/:targetId/reset` | admin | AI Context Reset — clear all snapshots for a target |
+
+### Webhooks (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/webhooks` | admin | List all webhook configurations |
+| POST | `/api/webhooks` | admin | Create webhook (URL, events, secret for HMAC) |
+| PATCH | `/api/webhooks/:id` | admin | Update webhook |
+| DELETE | `/api/webhooks/:id` | admin | Delete webhook |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -241,8 +299,8 @@ Access requests can request "viewer" or "manager" roles (not admin).
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
 
-# Authentication
-AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2
+# Authentication (PostgreSQL users table is primary; AUTH_USERS env var is fallback)
+AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2 (fallback if no DB users)
 
 # AWS (for Bedrock AI + S3 storage)
 AWS_ACCESS_KEY_ID
@@ -299,6 +357,10 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
+| **WAF** | `server/middleware/waf.ts` | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking |
+| **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
+| **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
+| **Disaster recovery** | `docs/disaster-recovery.md` | DR plan: S3 CRR, RDS cross-region replica, AMI snapshots, Route 53 DNS failover |
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
@@ -358,6 +420,18 @@ pm2 logs --lines 20         # Verify startup — look for:
                             #   [STORAGE] Using S3 (bucket: ums-call-archive)
                             #   NOT: "S3 authentication not configured"
 ```
+
+### VPC Endpoints (Recommended)
+S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
+
+### GitHub Actions CI/CD
+Pushes to `main` automatically trigger the Deploy workflow (`.github/workflows/deploy.yml`), which SSHs into EC2 and runs `deploy.sh`. Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`. Can also be triggered manually via `workflow_dispatch`.
+
+Additional workflows:
+- `.github/workflows/error-monitor.yml` — Error monitoring
+- `.github/workflows/view-logs.yml` — Log viewing
+
+A `deploy-rollback.sh` script is available for reverting to a previous build.
 
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):

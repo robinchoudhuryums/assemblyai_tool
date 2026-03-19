@@ -204,6 +204,23 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs (status, priority DESC, created_at);
 
 -- ============================================================
+-- Users (PostgreSQL-backed user management)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username VARCHAR(255) NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+  display_name VARCHAR(255) NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  mfa_secret VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+CREATE INDEX IF NOT EXISTS idx_users_active ON users (active);
+
+-- ============================================================
 -- MFA Secrets (TOTP two-factor authentication)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS mfa_secrets (
@@ -242,6 +259,54 @@ CREATE TABLE IF NOT EXISTS call_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id);
 CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag);
+
+-- ============================================================
+-- Performance Snapshots (periodic reviews for employees, teams, company)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS performance_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  level VARCHAR(50) NOT NULL,                 -- employee | team | department | company
+  target_id VARCHAR(255) NOT NULL,            -- employee UUID, team name, or "company"
+  target_name VARCHAR(255) NOT NULL,          -- display name
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  metrics JSONB NOT NULL,                     -- PerformanceMetrics object
+  ai_summary TEXT,                            -- AI-generated narrative (nullable if AI unavailable)
+  prior_snapshot_ids JSONB DEFAULT '[]',      -- IDs of prior snapshots used as context
+  generated_by VARCHAR(255) NOT NULL,         -- username or "system" for scheduled
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_level_target ON performance_snapshots (level, target_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_period ON performance_snapshots (period_end DESC);
+
+-- ============================================================
+-- Incidents (Formal Incident Response — HIPAA §164.308(a)(6))
+-- ============================================================
+CREATE TABLE IF NOT EXISTS incidents (
+  id VARCHAR(255) PRIMARY KEY,
+  title VARCHAR(500) NOT NULL,
+  description TEXT NOT NULL,
+  severity VARCHAR(50) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  current_phase VARCHAR(50) NOT NULL DEFAULT 'detection',
+  declared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  declared_by VARCHAR(255) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMPTZ,
+  affected_systems JSONB DEFAULT '[]',
+  affected_users INTEGER DEFAULT 0,
+  containment_actions JSONB DEFAULT '[]',
+  eradication_actions JSONB DEFAULT '[]',
+  recovery_actions JSONB DEFAULT '[]',
+  lessons_learned TEXT,
+  timeline JSONB DEFAULT '[]',
+  action_items JSONB DEFAULT '[]',
+  linked_breach_id VARCHAR(255),
+  phi_involved BOOLEAN DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents (severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_phase ON incidents (current_phase);
+CREATE INDEX IF NOT EXISTS idx_incidents_declared_at ON incidents (declared_at DESC);
 
 -- ============================================================
 -- HIPAA Audit Log (durable, never purged — 6-year retention)

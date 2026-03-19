@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { CALL_CATEGORIES } from "@shared/schema";
 import type { Employee } from "@shared/schema";
+import { useTranslation } from "@/lib/i18n";
 
 interface UploadFile {
   file: File;
@@ -31,11 +32,20 @@ const PROCESSING_STEPS = [
 ];
 
 type ProcessingMode = "" | "immediate" | "batch";
+type AudioLanguage = "" | "en" | "es";
+
+const AUDIO_LANGUAGES = [
+  { value: "", labelKey: "lang.auto" },
+  { value: "en", labelKey: "lang.en" },
+  { value: "es", labelKey: "lang.es" },
+];
 
 export default function FileUpload() {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("");
+  const [audioLanguage, setAudioLanguage] = useState<AudioLanguage>("");
   const { toast } = useToast();
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
 
   // Listen for WebSocket call updates via the shared connection (dispatched by useWebSocket hook)
@@ -70,12 +80,13 @@ export default function FileUpload() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, employeeId, callCategory, processingMode: mode }: { file: File; employeeId?: string; callCategory?: string; processingMode?: string }) => {
+    mutationFn: async ({ file, employeeId, callCategory, processingMode: mode, language }: { file: File; employeeId?: string; callCategory?: string; processingMode?: string; language?: string }) => {
       const formData = new FormData();
       formData.append('audioFile', file);
       if (employeeId) formData.append('employeeId', employeeId);
       if (callCategory) formData.append('callCategory', callCategory);
       if (mode) formData.append('processingMode', mode);
+      if (language) formData.append('language', language);
 
       const response = await fetch('/api/calls/upload', {
         method: 'POST',
@@ -142,6 +153,7 @@ export default function FileUpload() {
         employeeId: fileData.employeeId || undefined,
         callCategory: fileData.callCategory || undefined,
         processingMode: processingMode || undefined,
+        language: audioLanguage || undefined,
       });
       // The API returns the call ID — track it for WebSocket updates
       const callId = result?.id || result?.callId;
@@ -244,13 +256,23 @@ export default function FileUpload() {
                   </SelectContent>
                 </Select>
                 <Select value={processingMode || "default"} onValueChange={(value) => setProcessingMode(value === "default" ? "" : value as ProcessingMode)}>
-                  <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder="Processing mode" /></SelectTrigger>
+                  <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder={t("form.processingMode")} /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="default">
-                      <span className="text-muted-foreground italic">Auto (server schedule)</span>
+                      <span className="text-muted-foreground italic">{t("mode.auto")}</span>
                     </SelectItem>
-                    <SelectItem value="immediate">Immediate (real-time)</SelectItem>
-                    <SelectItem value="batch">Batch (50% savings)</SelectItem>
+                    <SelectItem value="immediate">{t("mode.immediate")}</SelectItem>
+                    <SelectItem value="batch">{t("mode.batch")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={audioLanguage || "auto"} onValueChange={(value) => setAudioLanguage(value === "auto" ? "" : value as AudioLanguage)}>
+                  <SelectTrigger className="w-40 h-8 text-xs"><SelectValue placeholder={t("form.language")} /></SelectTrigger>
+                  <SelectContent>
+                    {AUDIO_LANGUAGES.map(lang => (
+                      <SelectItem key={lang.value || "auto"} value={lang.value || "auto"}>
+                        {lang.value === "" ? <span className="text-muted-foreground italic">{t(lang.labelKey)}</span> : t(lang.labelKey)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

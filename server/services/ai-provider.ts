@@ -1,6 +1,7 @@
 /**
  * AI Analysis Provider — shared interface for AWS Bedrock (Claude).
  */
+import { z } from "zod";
 
 export interface CallAnalysis {
   summary: string;
@@ -20,6 +21,7 @@ export interface CallAnalysis {
     suggestions: Array<string | { text: string; timestamp?: string }>;
   };
   call_party_type: string;
+  call_category: string | null;
   flags: string[];
   detected_agent_name: string | null;
 }
@@ -27,7 +29,7 @@ export interface CallAnalysis {
 export interface AIAnalysisProvider {
   readonly name: string;
   readonly isAvailable: boolean;
-  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig): Promise<CallAnalysis>;
+  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean): Promise<CallAnalysis>;
   generateText?(prompt: string): Promise<string>;
 }
 
@@ -122,7 +124,7 @@ function smartTruncate(text: string, maxChars = 80000): string {
   ].join("");
 }
 
-export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig): string {
+export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig, language?: string): string {
   const processedTranscript = smartTruncate(transcriptText);
 
   const categoryContext = callCategory && CATEGORY_CONTEXT[callCategory]
@@ -167,13 +169,21 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
     additionalSection = `\n- ADDITIONAL INSTRUCTIONS:\n${template.additionalInstructions}`;
   }
 
-  return `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.
+  // Language instruction for non-English analysis
+  let languageInstruction = "";
+  if (language && language !== "en") {
+    const languageNames: Record<string, string> = { es: "Spanish", fr: "French", pt: "Portuguese", de: "German" };
+    const langName = languageNames[language] || language;
+    languageInstruction = `\n\nIMPORTANT: The transcript is in ${langName}. Analyze the call in ${langName} and write ALL response content (summary, topics, action_items, feedback strengths/suggestions) in ${langName}. Keep JSON field names in English but all values should be in ${langName}.`;
+  }
+
+  return `You are analyzing a call transcript for a medical supply company. Analyze the ENTIRE transcript from beginning to end — reference moments from the beginning, middle, AND end. Do not skip or summarize sections.${languageInstruction}
 ${categoryContext}
 TRANSCRIPT:
 ${processedTranscript}
 
 Respond with ONLY valid JSON (no markdown, no code fences):
-{"summary":"...","topics":["..."],"sentiment":"positive|neutral|negative","sentiment_score":0.0,"performance_score":0.0,"sub_scores":{"compliance":0.0,"customer_experience":0.0,"communication":0.0,"resolution":0.0},"action_items":["..."],"feedback":{"strengths":[{"text":"...","timestamp":"MM:SS"}],"suggestions":[{"text":"...","timestamp":"MM:SS"}]},"call_party_type":"customer|insurance|medical_facility|medicare|vendor|internal|other","flags":[],"detected_agent_name":null}
+{"summary":"...","topics":["..."],"sentiment":"positive|neutral|negative","sentiment_score":0.0,"performance_score":0.0,"sub_scores":{"compliance":0.0,"customer_experience":0.0,"communication":0.0,"resolution":0.0},"action_items":["..."],"feedback":{"strengths":[{"text":"...","timestamp":"MM:SS"}],"suggestions":[{"text":"...","timestamp":"MM:SS"}]},"call_party_type":"customer|insurance|medical_facility|medicare|vendor|internal|other","call_category":"inbound|outbound|internal|vendor","flags":[],"detected_agent_name":null}
 
 Guidelines:
 - sentiment_score: 0.0-1.0 (1.0 = most positive)
@@ -184,24 +194,97 @@ ${evaluationCriteria}${scoringSection}${phrasesSection}${additionalSection}
 - 2-4 concrete, actionable action items
 - Topics: specific (e.g. "order tracking", "billing dispute"), not generic
 - call_party_type: "customer" (patients), "insurance" (reps), "medical_facility" (clinics/hospitals), "medicare" (1-800-MEDICARE), "vendor", "internal" (coworkers), "other"
+- call_category: Classify this call as one of: "inbound" (customer/patient called in), "outbound" (employee called out), "internal" (between coworkers/departments), "vendor" (with external vendor/partner). Base this on conversation context, topic, and participants.
 - detected_agent_name: Agent's name if clearly stated (e.g. "Hi, my name is Sarah"). Return null if uncertain. Only the agent's name, not the customer's.
 - flags: "medicare_call" ONLY if the caller is from 1-800-MEDICARE or CMS (Centers for Medicare & Medicaid Services) — do NOT flag calls where Medicare is merely mentioned as an insurance type (e.g. "Aetna Medicare", "United Healthcare Medicare Advantage" are NOT medicare_call flags). "low_score" if performance ≤2.0, "exceptional_call" if ≥9.0 with outstanding service, "agent_misconduct:<description>" for serious misconduct (abusive language, hanging up, HIPAA violations, etc.)`;
 }
 
+/** Zod schema for validating AI analysis output. */
+const FeedbackItemSchema = z.union([
+  z.string(),
+  z.object({ text: z.string(), timestamp: z.string().optional() }),
+]);
+
+const CallAnalysisSchema = z.object({
+  summary: z.string().min(1),
+  topics: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])),
+  sentiment: z.enum(["positive", "neutral", "negative"]).catch("neutral"),
+  sentiment_score: z.number().min(0).max(1).catch(0.5),
+  performance_score: z.number().min(0).max(10).catch(5.0),
+  sub_scores: z.object({
+    compliance: z.number().min(0).max(10).catch(5.0),
+    customer_experience: z.number().min(0).max(10).catch(5.0),
+    communication: z.number().min(0).max(10).catch(5.0),
+    resolution: z.number().min(0).max(10).catch(5.0),
+  }).catch({ compliance: 5.0, customer_experience: 5.0, communication: 5.0, resolution: 5.0 }),
+  action_items: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])).catch([]),
+  feedback: z.object({
+    strengths: z.array(FeedbackItemSchema).catch([]),
+    suggestions: z.array(FeedbackItemSchema).catch([]),
+  }).catch({ strengths: [], suggestions: [] }),
+  call_party_type: z.string().catch("other"),
+  call_category: z.string().nullable().catch(null),
+  flags: z.array(z.string()).catch([]),
+  detected_agent_name: z.string().nullable().catch(null),
+});
+
+/**
+ * Validate that feedback timestamps (MM:SS) don't exceed call duration.
+ * Strips invalid timestamps rather than rejecting the entire analysis.
+ */
+function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number): CallAnalysis {
+  if (!callDurationSeconds || callDurationSeconds <= 0) return analysis;
+
+  const validateItem = (item: string | { text: string; timestamp?: string }) => {
+    if (typeof item === "string") return item;
+    if (item.timestamp) {
+      const match = item.timestamp.match(/^(\d+):(\d{2})$/);
+      if (match) {
+        const totalSeconds = parseInt(match[1]) * 60 + parseInt(match[2]);
+        if (totalSeconds > callDurationSeconds) {
+          return { text: item.text }; // Strip invalid timestamp
+        }
+      }
+    }
+    return item;
+  };
+
+  return {
+    ...analysis,
+    feedback: {
+      strengths: analysis.feedback.strengths.map(validateItem),
+      suggestions: analysis.feedback.suggestions.map(validateItem),
+    },
+  };
+}
+
 /**
  * Parse a JSON object from model output, handling markdown fences and extra text.
+ * Validates with Zod schema and clamps out-of-range values.
  */
-export function parseJsonResponse(text: string, callId: string): CallAnalysis {
+export function parseJsonResponse(text: string, callId: string, callDurationSeconds?: number): CallAnalysis {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     console.warn(`[${callId}] AI response was not parseable JSON:`, text.slice(0, 200));
     throw new Error("AI response did not contain valid JSON");
   }
 
+  let raw: unknown;
   try {
-    return JSON.parse(jsonMatch[0]) as CallAnalysis;
+    raw = JSON.parse(jsonMatch[0]);
   } catch (parseError) {
     console.warn(`[${callId}] JSON parse failed:`, (parseError as Error).message, text.slice(0, 300));
     throw new Error("AI response contained malformed JSON");
   }
+
+  const result = CallAnalysisSchema.safeParse(raw);
+  if (!result.success) {
+    console.warn(`[${callId}] AI response failed Zod validation:`, result.error.issues.slice(0, 5));
+    // Fall back to raw parse — the .catch() defaults in the schema handle most cases
+    // but if the top-level structure is completely wrong, we cast with defaults
+    throw new Error("AI response failed schema validation");
+  }
+
+  const analysis = result.data as CallAnalysis;
+  return validateTimestamps(analysis, callDurationSeconds);
 }

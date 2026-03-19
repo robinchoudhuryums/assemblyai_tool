@@ -71,7 +71,7 @@ export class AssemblyAIService {
     return (await response.json()).upload_url;
   }
 
-  async transcribeAudio(audioUrl: string, wordBoost?: string[]): Promise<string> {
+  async transcribeAudio(audioUrl: string, wordBoost?: string[], language?: string): Promise<string> {
     const body: Record<string, unknown> = {
       audio_url: audioUrl,
       speech_models: ["universal-3-pro", "universal-2"],
@@ -79,7 +79,13 @@ export class AssemblyAIService {
       punctuate: true,
       format_text: true,
       sentiment_analysis: true,
+      auto_chapters: true,
     };
+
+    // If a specific language is requested, set language_code (disables auto-detection)
+    if (language && language !== "en") {
+      body.language_code = language;
+    }
 
     // Word boost: provide correct spellings of agent names and company-specific terms
     // This tells AssemblyAI to prefer these exact spellings when the audio is ambiguous
@@ -256,6 +262,126 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
 
     return { transcript, sentiment, analysis };
   }
+}
+
+/**
+ * Build a speaker-labeled transcript from word-level data.
+ * Groups consecutive words by the same speaker into utterances.
+ * Returns formatted text like "Speaker A: Hello, how can I help?\nSpeaker B: Hi, I need..."
+ */
+export function buildSpeakerLabeledTranscript(words: TranscriptWord[]): string {
+  if (!words || words.length === 0) return "";
+
+  const lines: string[] = [];
+  let currentSpeaker = words[0].speaker || "?";
+  let currentWords: string[] = [words[0].text];
+
+  for (let i = 1; i < words.length; i++) {
+    const speaker = words[i].speaker || "?";
+    if (speaker !== currentSpeaker) {
+      lines.push(`Speaker ${currentSpeaker}: ${currentWords.join(" ")}`);
+      currentSpeaker = speaker;
+      currentWords = [words[i].text];
+    } else {
+      currentWords.push(words[i].text);
+    }
+  }
+  lines.push(`Speaker ${currentSpeaker}: ${currentWords.join(" ")}`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Utterance-level metrics computed from word-level speaker/timing data.
+ */
+export interface UtteranceMetrics {
+  interruptionCount: number;
+  avgResponseLatencyMs: number;
+  monologueSegments: number; // segments > 60s by one speaker
+  questionCount: number;
+  speakerATalkTimeMs: number;
+  speakerBTalkTimeMs: number;
+}
+
+/**
+ * Compute utterance-level metrics from word-level data.
+ * - Interruption: speaker changes while previous speaker's word gap < 200ms
+ * - Response latency: gap between last word of speaker A and first word of speaker B
+ * - Monologue: continuous speech by one speaker > 60 seconds
+ * - Question density: count of sentences ending with "?"
+ */
+export function computeUtteranceMetrics(words: TranscriptWord[]): UtteranceMetrics {
+  if (!words || words.length < 2) {
+    return { interruptionCount: 0, avgResponseLatencyMs: 0, monologueSegments: 0, questionCount: 0, speakerATalkTimeMs: 0, speakerBTalkTimeMs: 0 };
+  }
+
+  let interruptionCount = 0;
+  const responseTimes: number[] = [];
+  let monologueSegments = 0;
+  let questionCount = 0;
+
+  // Track speaker talk time
+  let speakerATalkTimeMs = 0;
+  let speakerBTalkTimeMs = 0;
+
+  // Track current speaker segment
+  let segmentStart = words[0].start;
+  let segmentSpeaker = words[0].speaker || "?";
+  let lastWordEnd = words[0].end;
+
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    const speaker = word.speaker || "?";
+
+    if (speaker !== segmentSpeaker) {
+      // Speaker changed — compute segment duration
+      const segmentDuration = lastWordEnd - segmentStart;
+      if (segmentSpeaker === "A") speakerATalkTimeMs += segmentDuration;
+      else speakerBTalkTimeMs += segmentDuration;
+
+      if (segmentDuration > 60000) monologueSegments++;
+
+      // Check for interruption: overlap or very short gap (< 200ms)
+      const gap = word.start - lastWordEnd;
+      if (gap < 200) {
+        interruptionCount++;
+      }
+
+      // Response latency (only count positive gaps)
+      if (gap > 0) {
+        responseTimes.push(gap);
+      }
+
+      segmentStart = word.start;
+      segmentSpeaker = speaker;
+    }
+
+    lastWordEnd = word.end;
+
+    // Count questions
+    if (word.text.endsWith("?")) {
+      questionCount++;
+    }
+  }
+
+  // Final segment
+  const finalDuration = lastWordEnd - segmentStart;
+  if (segmentSpeaker === "A") speakerATalkTimeMs += finalDuration;
+  else speakerBTalkTimeMs += finalDuration;
+  if (finalDuration > 60000) monologueSegments++;
+
+  const avgResponseLatencyMs = responseTimes.length > 0
+    ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+    : 0;
+
+  return {
+    interruptionCount,
+    avgResponseLatencyMs,
+    monologueSegments,
+    questionCount,
+    speakerATalkTimeMs,
+    speakerBTalkTimeMs,
+  };
 }
 
 export const assemblyAIService = new AssemblyAIService();

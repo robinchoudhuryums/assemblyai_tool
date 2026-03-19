@@ -13,6 +13,53 @@ export const userSchema = insertUserSchema.extend({
   createdAt: z.string().optional(),
 });
 
+// --- DB USER SCHEMAS (PostgreSQL-backed user management) ---
+export const dbUserSchema = z.object({
+  id: z.string().uuid(),
+  username: z.string().min(1),
+  passwordHash: z.string(),
+  role: z.enum(["viewer", "manager", "admin"]).default("viewer"),
+  displayName: z.string().min(1),
+  active: z.boolean().default(true),
+  mfaSecret: z.string().nullable().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+/** User object without password_hash — safe for API responses */
+export const dbUserResponseSchema = dbUserSchema.omit({ passwordHash: true, mfaSecret: true });
+
+/** Schema for POST /api/users (admin creating a new user) */
+export const createDbUserSchema = z.object({
+  username: z.string().min(1).max(255),
+  password: z.string().min(12),
+  role: z.enum(["viewer", "manager", "admin"]).default("viewer"),
+  displayName: z.string().min(1).max(255),
+});
+
+/** Schema for PATCH /api/users/:id (admin updating a user) */
+export const updateDbUserSchema = z.object({
+  role: z.enum(["viewer", "manager", "admin"]).optional(),
+  displayName: z.string().min(1).max(255).optional(),
+  active: z.boolean().optional(),
+});
+
+/** Schema for POST /api/users/:id/reset-password (admin resetting password) */
+export const resetPasswordSchema = z.object({
+  newPassword: z.string().min(12),
+});
+
+/** Schema for PATCH /api/users/me/password (self-service password change) */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(12),
+});
+
+export type DbUser = z.infer<typeof dbUserSchema>;
+export type DbUserResponse = z.infer<typeof dbUserResponseSchema>;
+export type CreateDbUser = z.infer<typeof createDbUserSchema>;
+export type UpdateDbUser = z.infer<typeof updateDbUserSchema>;
+
 // --- EMPLOYEE SCHEMAS ---
 export const insertEmployeeSchema = z.object({
   name: z.string(),
@@ -310,6 +357,22 @@ export const abTestSchema = insertABTestSchema.extend({
 
 export type InsertABTest = z.infer<typeof insertABTestSchema>;
 export type ABTest = z.infer<typeof abTestSchema>;
+
+// --- WEBHOOK CONFIG SCHEMAS ---
+export const webhookConfigSchema = z.object({
+  id: z.string(),
+  url: z.string().url(),
+  events: z.array(z.string()).min(1),
+  secret: z.string().min(1),
+  active: z.boolean().default(true),
+  createdBy: z.string(),
+  createdAt: z.string(),
+});
+
+export const insertWebhookConfigSchema = webhookConfigSchema.omit({ id: true, createdAt: true });
+
+export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
+export type InsertWebhookConfig = z.infer<typeof insertWebhookConfigSchema>;
 
 // --- USAGE TRACKING SCHEMAS ---
 export const usageRecordSchema = z.object({

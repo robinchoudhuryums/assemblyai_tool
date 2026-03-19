@@ -6,21 +6,23 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
+import LanguageSelector from "@/components/language-selector";
+import { useTranslation } from "@/lib/i18n";
 
-type NavItem = { name: string; href: string; icon: any; section?: string; requireRole?: string[] };
+type NavItem = { nameKey: string; href: string; icon: any; sectionKey?: string; requireRole?: string[] };
 
 const navigation: NavItem[] = [
-  { name: "Dashboard", href: "/", icon: BarChart3 },
-  { name: "Upload Calls", href: "/upload", icon: Upload },
-  { name: "Transcripts", href: "/transcripts", icon: FileText },
-  { name: "Search", href: "/search", icon: Search },
-  { name: "Sentiment", href: "/sentiment", icon: Heart, section: "Analytics" },
-  { name: "Performance", href: "/performance", icon: Users },
-  { name: "Reports", href: "/reports", icon: TrendingUp },
-  { name: "Insights", href: "/insights", icon: Building2 },
-  { name: "Team Analytics", href: "/analytics/teams", icon: Users2 },
-  { name: "Employees", href: "/employees", icon: UserPlus, section: "Management" },
-  { name: "Coaching", href: "/coaching", icon: ClipboardCheck, requireRole: ["manager", "admin"] },
+  { nameKey: "nav.dashboard", href: "/", icon: BarChart3 },
+  { nameKey: "nav.uploadCalls", href: "/upload", icon: Upload },
+  { nameKey: "nav.transcripts", href: "/transcripts", icon: FileText },
+  { nameKey: "nav.search", href: "/search", icon: Search },
+  { nameKey: "nav.sentiment", href: "/sentiment", icon: Heart, sectionKey: "section.analytics" },
+  { nameKey: "nav.performance", href: "/performance", icon: Users },
+  { nameKey: "nav.reports", href: "/reports", icon: TrendingUp },
+  { nameKey: "nav.insights", href: "/insights", icon: Building2 },
+  { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: Users2 },
+  { nameKey: "nav.employees", href: "/employees", icon: UserPlus, sectionKey: "section.management" },
+  { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardCheck, requireRole: ["manager", "admin"] },
 ];
 
 interface AuthUser {
@@ -45,6 +47,7 @@ export default function Sidebar() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -133,7 +136,7 @@ export default function Sidebar() {
 
   const flaggedCount = (calls || []).filter(c => {
     const flags = c.analysis?.flags;
-    return Array.isArray(flags) && flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
+    return Array.isArray(flags) && flags.some(f => typeof f === "string" && (f === "low_score" || f.startsWith("agent_misconduct")));
   }).length;
 
   const handleLogout = async () => {
@@ -165,6 +168,7 @@ export default function Sidebar() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <LanguageSelector />
             <div className="relative" ref={notifRef}>
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
@@ -255,13 +259,14 @@ export default function Sidebar() {
 
           const Icon = item.icon;
           const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
-          const showBadge = item.name === "Dashboard" && flaggedCount > 0;
+          const showBadge = item.nameKey === "nav.dashboard" && flaggedCount > 0;
+          const name = t(item.nameKey);
 
           return (
-            <div key={item.name}>
-              {item.section && (
+            <div key={item.nameKey}>
+              {item.sectionKey && (
                 <div className="pt-3 pb-1 px-1">
-                  <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{item.section}</p>
+                  <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{t(item.sectionKey)}</p>
                 </div>
               )}
               <Link
@@ -272,10 +277,10 @@ export default function Sidebar() {
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
-                data-testid={`nav-link-${item.name.toLowerCase().replace(/\s+/g, '-')}`}
+                data-testid={`nav-link-${item.nameKey}`}
               >
                 <Icon className="w-5 h-5" />
-                <span>{item.name}</span>
+                <span>{name}</span>
                 {showBadge && (
                   <span className={cn(
                     "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
@@ -295,7 +300,7 @@ export default function Sidebar() {
         {user?.role === "admin" && (
           <>
             <div className="pt-2 pb-1 px-1">
-              <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Admin</p>
+              <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{t("section.admin")}</p>
             </div>
             <Link
               href="/admin"
@@ -308,7 +313,7 @@ export default function Sidebar() {
               data-testid="nav-link-admin"
             >
               <Shield className="w-5 h-5" />
-              <span>Administration</span>
+              <span>{t("nav.admin")}</span>
               {pendingRequestCount > 0 && (
                 <span className={cn(
                   "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
@@ -331,7 +336,7 @@ export default function Sidebar() {
               data-testid="nav-link-templates"
             >
               <SlidersHorizontal className="w-5 h-5" />
-              <span>Prompt Templates</span>
+              <span>{t("nav.promptTemplates")}</span>
             </Link>
             <Link
               href="/admin/ab-testing"
@@ -344,7 +349,7 @@ export default function Sidebar() {
               data-testid="nav-link-ab-testing"
             >
               <FlaskConical className="w-5 h-5" />
-              <span>Model Testing</span>
+              <span>{t("nav.modelTesting")}</span>
             </Link>
             <Link
               href="/admin/spend"
@@ -357,7 +362,7 @@ export default function Sidebar() {
               data-testid="nav-link-spend"
             >
               <DollarSign className="w-5 h-5" />
-              <span>Spend Tracking</span>
+              <span>{t("nav.spendTracking")}</span>
             </Link>
             <Link
               href="/admin/security"
@@ -370,7 +375,7 @@ export default function Sidebar() {
               data-testid="nav-link-security"
             >
               <ShieldAlert className="w-5 h-5" />
-              <span>Security</span>
+              <span>{t("nav.security")}</span>
             </Link>
           </>
         )}
@@ -379,10 +384,10 @@ export default function Sidebar() {
       {/* Quick-switch Employee Selector */}
       {employees && employees.length > 0 && (
         <div className="px-4 pb-3">
-          <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1.5 px-1">Quick View Agent</p>
+          <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1.5 px-1">{t("misc.quickViewAgent")}</p>
           <Select onValueChange={handleQuickSwitch}>
             <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Jump to agent profile..." />
+              <SelectValue placeholder={t("misc.jumpToAgentProfile")} />
             </SelectTrigger>
             <SelectContent>
               {employees.filter(e => e.status === "Active").map(emp => (

@@ -7,7 +7,7 @@
 import type pg from "pg";
 import { randomUUID } from "crypto";
 import type {
-  User, InsertUser, Employee, InsertEmployee,
+  User, InsertUser, DbUser, Employee, InsertEmployee,
   Call, InsertCall, Transcript, InsertTranscript,
   SentimentAnalysis, InsertSentimentAnalysis,
   CallAnalysis, InsertCallAnalysis,
@@ -133,17 +133,78 @@ function mapUsageRecord(row: any): UsageRecord {
   };
 }
 
+function mapDbUser(row: any): DbUser {
+  return {
+    id: row.id,
+    username: row.username,
+    passwordHash: row.password_hash,
+    role: row.role,
+    displayName: row.display_name,
+    active: row.active,
+    mfaSecret: row.mfa_secret ?? null,
+    createdAt: row.created_at?.toISOString?.() ?? row.created_at,
+    updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at,
+  };
+}
+
 export class PostgresStorage implements IStorage {
   constructor(
     private db: pg.Pool,
     private audioClient?: ObjectStorageClient,
   ) {}
 
-  // ── Users (env-var based, not in DB) ──────────────────────
+  // ── Users (legacy env-var based — kept for IStorage interface) ──
   async getUser(_id: string): Promise<User | undefined> { return undefined; }
   async getUserByUsername(_username: string): Promise<User | undefined> { return undefined; }
   async createUser(_user: InsertUser): Promise<User> {
     throw new Error("Users are managed via AUTH_USERS environment variable");
+  }
+
+  // ── DB Users (PostgreSQL-backed user management) ──────────
+  async getDbUser(id: string): Promise<DbUser | undefined> {
+    const { rows } = await this.db.query("SELECT * FROM users WHERE id = $1", [id]);
+    return rows[0] ? mapDbUser(rows[0]) : undefined;
+  }
+
+  async getDbUserByUsername(username: string): Promise<DbUser | undefined> {
+    const { rows } = await this.db.query("SELECT * FROM users WHERE username = $1", [username]);
+    return rows[0] ? mapDbUser(rows[0]) : undefined;
+  }
+
+  async getAllDbUsers(): Promise<DbUser[]> {
+    const { rows } = await this.db.query("SELECT * FROM users ORDER BY created_at DESC");
+    return rows.map(mapDbUser);
+  }
+
+  async createDbUser(user: { username: string; passwordHash: string; role: string; displayName: string }): Promise<DbUser> {
+    const { rows } = await this.db.query(
+      `INSERT INTO users (username, password_hash, role, display_name)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [user.username, user.passwordHash, user.role, user.displayName],
+    );
+    return mapDbUser(rows[0]);
+  }
+
+  async updateDbUser(id: string, updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined> {
+    const current = await this.getDbUser(id);
+    if (!current) return undefined;
+    const role = updates.role ?? current.role;
+    const displayName = updates.displayName ?? current.displayName;
+    const active = updates.active ?? current.active;
+    const { rows } = await this.db.query(
+      `UPDATE users SET role = $2, display_name = $3, active = $4, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [id, role, displayName, active],
+    );
+    return rows[0] ? mapDbUser(rows[0]) : undefined;
+  }
+
+  async updateDbUserPassword(id: string, passwordHash: string): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      `UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`,
+      [id, passwordHash],
+    );
+    return (rowCount ?? 0) > 0;
   }
 
   // ── Employees ─────────────────────────────────────────────
