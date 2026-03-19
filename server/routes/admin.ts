@@ -380,7 +380,7 @@ export function registerAdminRoutes(
   });
 
   // Upload audio for A/B model comparison
-  router.post("/api/ab-tests/upload", requireAuth, requireRole("admin"), uploadMiddleware.single('audioFile'), async (req, res) => {
+  router.post("/api/ab-tests/upload", requireAuth, requireRole("admin"), uploadMiddleware, async (req, res) => {
     try {
       if (!req.file) {
         res.status(400).json({ message: "No audio file provided" });
