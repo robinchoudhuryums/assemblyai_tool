@@ -10,10 +10,9 @@ import { JobQueue, type Job } from "./services/job-queue";
 import { bedrockBatchService, type PendingBatchItem, type BatchJob } from "./services/bedrock-batch";
 import { assemblyAIService } from "./services/assemblyai";
 import { broadcastCallUpdate } from "./services/websocket";
-import { estimateBedrockCost } from "./routes/utils";
+import { estimateBedrockCost, computeConfidenceScore, autoAssignEmployee } from "./routes/utils";
 import type { UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
-import type { S3Client as S3ClientType } from "./services/s3";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -96,7 +95,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const runBatchCycle = async () => {
       try {
-        const s3Client: S3ClientType | undefined = (storage as any).audioClient || (storage as any).client;
+        const s3Client = storage.getObjectStorageClient();
         if (!s3Client) return;
 
         // 1. Check active jobs for completion
@@ -126,22 +125,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   const { transcript: _, sentiment: __, analysis: updatedAnalysis } =
                     assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId);
 
-                  const transcriptConfidence = transcriptResponse.confidence || 0;
-                  const wordCount = transcriptResponse.words?.length || 0;
                   const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
-                  const wordConfidence = Math.min(wordCount / 50, 1);
-                  const durationConfidence = callDuration > 30 ? 1 : callDuration / 30;
-                  const confidenceScore = transcriptConfidence * 0.4 + wordConfidence * 0.2 + durationConfidence * 0.15 + 0.25;
+                  const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore(
+                    {
+                      transcriptConfidence: transcriptResponse.confidence || 0,
+                      wordCount: transcriptResponse.words?.length || 0,
+                      callDurationSeconds: callDuration,
+                      hasAiAnalysis: true, // Batch always has AI analysis
+                    },
+                    (transcriptResponse.text || "").length,
+                  );
 
                   updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
-                  updatedAnalysis.confidenceFactors = {
-                    transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
-                    wordCount,
-                    callDurationSeconds: callDuration,
-                    transcriptLength: (transcriptResponse.text || "").length,
-                    aiAnalysisCompleted: true,
-                    overallScore: Math.round(confidenceScore * 100) / 100,
-                  };
+                  updatedAnalysis.confidenceFactors = confidenceFactors;
 
                   if (analysis.sub_scores) {
                     updatedAnalysis.subScores = {
@@ -169,15 +165,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   await storage.createCallAnalysis(updatedAnalysis);
                   await storage.updateCall(callId, { status: "completed" });
 
-                  // Auto-assign employee (atomic — only if not already assigned)
+                  // Auto-assign employee (shared logic from utils.ts)
                   if (analysis.detected_agent_name) {
-                    const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
-                    if (matchedEmployee) {
-                      const assigned = await storage.atomicAssignEmployee(callId, matchedEmployee.id);
-                      if (assigned) {
-                        console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
-                      }
-                    }
+                    await autoAssignEmployee(callId, analysis.detected_agent_name, storage, `[BATCH] `);
                   }
 
                   // Track Bedrock usage (at batch pricing — 50% off)
@@ -277,7 +267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const ORPHAN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
     const recoverOrphans = async () => {
       try {
-        const s3Client: S3ClientType | undefined = (storage as any).audioClient || (storage as any).client;
+        const s3Client = storage.getObjectStorageClient();
         if (!s3Client) return;
 
         const allCalls = await storage.getAllCalls();

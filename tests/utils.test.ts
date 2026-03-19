@@ -13,6 +13,8 @@ import {
   safeFloat,
   safeJsonParse,
   TaskQueue,
+  computeConfidenceScore,
+  autoAssignEmployee,
 } from "../server/routes/utils.js";
 
 describe("estimateBedrockCost", () => {
@@ -203,5 +205,70 @@ describe("TaskQueue", () => {
       queue.add(async () => { throw new Error("task failed"); }),
       /task failed/
     );
+  });
+});
+
+describe("computeConfidenceScore (shared utility)", () => {
+  it("returns score and factors object", () => {
+    const result = computeConfidenceScore(
+      { transcriptConfidence: 0.95, wordCount: 200, callDurationSeconds: 180, hasAiAnalysis: true },
+      3000,
+    );
+    assert.equal(typeof result.score, "number");
+    assert.ok(result.score > 0.9);
+    assert.equal(result.factors.transcriptConfidence, 0.95);
+    assert.equal(result.factors.wordCount, 200);
+    assert.equal(result.factors.callDurationSeconds, 180);
+    assert.equal(result.factors.transcriptLength, 3000);
+    assert.equal(result.factors.aiAnalysisCompleted, true);
+  });
+
+  it("factors.overallScore matches score rounded to 2 decimal places", () => {
+    const result = computeConfidenceScore(
+      { transcriptConfidence: 0.8, wordCount: 30, callDurationSeconds: 20, hasAiAnalysis: false },
+      500,
+    );
+    assert.equal(result.factors.overallScore, Math.round(result.score * 100) / 100);
+  });
+});
+
+describe("autoAssignEmployee (shared utility)", () => {
+  it("assigns when employee found and not already assigned", async () => {
+    const mockStorage = {
+      findEmployeeByName: async (name: string) => ({ id: "emp-1", name }),
+      atomicAssignEmployee: async () => true,
+    };
+    const result = await autoAssignEmployee("call-1", "Sarah", mockStorage);
+    assert.equal(result.assigned, true);
+    assert.equal(result.employeeName, "Sarah");
+  });
+
+  it("returns false when employee not found", async () => {
+    const mockStorage = {
+      findEmployeeByName: async () => undefined,
+      atomicAssignEmployee: async () => true,
+    };
+    const result = await autoAssignEmployee("call-1", "Unknown", mockStorage);
+    assert.equal(result.assigned, false);
+    assert.equal(result.employeeName, undefined);
+  });
+
+  it("returns false when call already assigned", async () => {
+    const mockStorage = {
+      findEmployeeByName: async (name: string) => ({ id: "emp-1", name }),
+      atomicAssignEmployee: async () => false, // Already assigned
+    };
+    const result = await autoAssignEmployee("call-1", "Sarah", mockStorage);
+    assert.equal(result.assigned, false);
+  });
+
+  it("trims whitespace from agent name", async () => {
+    let searchedName = "";
+    const mockStorage = {
+      findEmployeeByName: async (name: string) => { searchedName = name; return { id: "emp-1", name }; },
+      atomicAssignEmployee: async () => true,
+    };
+    await autoAssignEmployee("call-1", "  Sarah  ", mockStorage);
+    assert.equal(searchedName, "Sarah");
   });
 });

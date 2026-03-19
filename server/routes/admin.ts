@@ -18,7 +18,6 @@ import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { broadcastCallUpdate } from "../services/websocket";
 import { insertPromptTemplateSchema, insertWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
-import type { S3Client as S3ClientType } from "../services/s3";
 import {
   getAllWebhookConfigs,
   getWebhookConfig,
@@ -536,7 +535,7 @@ export function registerAdminRoutes(
   // ==================== ADMIN: BATCH INFERENCE STATUS ====================
   router.get("/api/admin/batch-status", requireRole("admin"), async (_req, res) => {
     try {
-      const s3Client: S3ClientType | undefined = (storage as any).audioClient || (storage as any).client;
+      const s3Client = storage.getObjectStorageClient();
       if (!s3Client || !bedrockBatchService.isAvailable) {
         res.json({ enabled: false, message: "Batch mode not enabled. Set BEDROCK_BATCH_MODE=true and BEDROCK_BATCH_ROLE_ARN." });
         return;

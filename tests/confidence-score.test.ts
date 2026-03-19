@@ -5,25 +5,16 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { computeConfidenceScore as computeConfidence } from "../server/routes/utils.js";
 
-// Replicate the confidence score formula from pipeline.ts (lines 330-345)
+// Wrapper that returns just the score (matching test expectations)
 function computeConfidenceScore(params: {
   transcriptConfidence: number;
   wordCount: number;
   callDurationSeconds: number;
   hasAiAnalysis: boolean;
 }): number {
-  const { transcriptConfidence, wordCount, callDurationSeconds, hasAiAnalysis } = params;
-  const wordConfidence = Math.min(wordCount / 50, 1);
-  const durationConfidence = callDurationSeconds > 30 ? 1 : callDurationSeconds / 30;
-  const aiConfidence = hasAiAnalysis ? 1 : 0.3;
-
-  return (
-    transcriptConfidence * 0.4 +
-    wordConfidence * 0.2 +
-    durationConfidence * 0.15 +
-    aiConfidence * 0.25
-  );
+  return computeConfidence(params, 0).score;
 }
 
 describe("confidence score formula", () => {

@@ -987,4 +987,8 @@ export class PostgresStorage implements IStorage {
 
     return rowCount ?? 0;
   }
+
+  getObjectStorageClient(): ObjectStorageClient | undefined {
+    return this.audioClient;
+  }
 }

@@ -151,6 +151,10 @@ export interface IStorage {
 
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
+
+  // Object storage access (for batch inference, webhooks, admin operations)
+  // Returns the underlying S3 client, or undefined if not configured.
+  getObjectStorageClient(): ObjectStorageClient | undefined;
 }
 
 /**
@@ -542,6 +546,10 @@ export class MemStorage implements IStorage {
       }
     }
     return purged;
+  }
+
+  getObjectStorageClient(): ObjectStorageClient | undefined {
+    return undefined; // MemStorage has no S3 client
   }
 }
 
@@ -1078,6 +1086,10 @@ export class CloudStorage implements IStorage {
 
     return purged;
   }
+
+  getObjectStorageClient(): ObjectStorageClient | undefined {
+    return this.client;
+  }
 }
 
 function createStorage(): IStorage {
@@ -1107,4 +1119,4 @@ export const storage = createStorage();
 
 // Initialize webhook service with S3 client from the storage backend
 import { initWebhooks } from "./services/webhooks";
-initWebhooks(() => (storage as any).audioClient || (storage as any).client || null);
+initWebhooks(() => storage.getObjectStorageClient() || null);
