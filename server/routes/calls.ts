@@ -129,6 +129,12 @@ export function registerCallRoutes(
         return;
       }
 
+      // Sanitize file name to prevent path traversal
+      const sanitizedName = path.basename(req.file.originalname);
+      if (sanitizedName !== req.file.originalname) {
+        req.file.originalname = sanitizedName;
+      }
+
       const { employeeId } = req.body;
       const validCategories = CALL_CATEGORIES.map(c => c.value) as string[];
       const callCategory = validCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
@@ -391,6 +397,44 @@ export function registerCallRoutes(
       const disallowed = Object.keys(updates).filter(k => !ALLOWED_FIELDS.has(k));
       if (disallowed.length > 0) {
         res.status(400).json({ message: `Cannot edit fields: ${disallowed.join(", ")}` });
+        return;
+      }
+
+      // Validate field value types and ranges
+      const validationErrors: string[] = [];
+      if (updates.summary !== undefined && typeof updates.summary !== "string") {
+        validationErrors.push("summary must be a string");
+      }
+      if (updates.performanceScore !== undefined) {
+        const score = typeof updates.performanceScore === "string"
+          ? parseFloat(updates.performanceScore) : Number(updates.performanceScore);
+        if (isNaN(score) || score < 0 || score > 10) {
+          validationErrors.push("performanceScore must be a number between 0 and 10");
+        }
+      }
+      if (updates.topics !== undefined && !Array.isArray(updates.topics)) {
+        validationErrors.push("topics must be an array");
+      }
+      if (updates.actionItems !== undefined && !Array.isArray(updates.actionItems)) {
+        validationErrors.push("actionItems must be an array");
+      }
+      if (updates.feedback !== undefined) {
+        if (typeof updates.feedback !== "object" || Array.isArray(updates.feedback) || updates.feedback === null) {
+          validationErrors.push("feedback must be an object with strengths and suggestions arrays");
+        }
+      }
+      if (updates.flags !== undefined && !Array.isArray(updates.flags)) {
+        validationErrors.push("flags must be an array");
+      }
+      if (updates.sentimentScore !== undefined) {
+        const score = typeof updates.sentimentScore === "string"
+          ? parseFloat(updates.sentimentScore) : Number(updates.sentimentScore);
+        if (isNaN(score) || score < 0 || score > 10) {
+          validationErrors.push("sentimentScore must be a number between 0 and 10");
+        }
+      }
+      if (validationErrors.length > 0) {
+        res.status(400).json({ message: "Invalid field values", errors: validationErrors });
         return;
       }
 

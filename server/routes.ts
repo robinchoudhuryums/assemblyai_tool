@@ -44,18 +44,18 @@ const upload = multer({
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg'];
+    const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg', '.webm'];
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
       'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/flac', 'audio/x-flac',
-      'audio/ogg', 'audio/vorbis', 'video/mp4',
+      'audio/ogg', 'audio/vorbis', 'video/mp4', 'audio/webm', 'video/webm',
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     const mimeOk = allowedMimeTypes.includes(file.mimetype);
     if (allowedTypes.includes(ext) && mimeOk) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only audio files (MP3, WAV, M4A, MP4, FLAC, OGG) are allowed.'), false);
+      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`), false);
     }
   }
 });
@@ -169,15 +169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   if (analysis.detected_agent_name) {
                     const currentCall = await storage.getCall(callId);
                     if (currentCall && !currentCall.employeeId) {
-                      const detectedName = analysis.detected_agent_name.toLowerCase().trim();
-                      const allEmployees = await storage.getAllEmployees();
-                      let matchedEmployee = allEmployees.find(emp => emp.name.toLowerCase() === detectedName);
-                      if (!matchedEmployee) {
-                        const firstNameMatches = allEmployees.filter(emp =>
-                          emp.name.toLowerCase().split(" ")[0] === detectedName
-                        );
-                        if (firstNameMatches.length === 1) matchedEmployee = firstNameMatches[0];
-                      }
+                      const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
                       if (matchedEmployee) {
                         await storage.updateCall(callId, { employeeId: matchedEmployee.id });
                         console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);

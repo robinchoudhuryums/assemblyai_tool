@@ -397,23 +397,8 @@ export async function processAudioFile(
     const currentCall = await storage.getCall(callId);
     let autoAssigned = false;
     if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
-      const detectedName = aiAnalysis.detected_agent_name.toLowerCase().trim();
-      const allEmployees = await storage.getAllEmployees();
-
-      let matchedEmployee = allEmployees.find(emp =>
-        emp.name.toLowerCase() === detectedName
-      );
-
-      if (!matchedEmployee) {
-        const firstNameMatches = allEmployees.filter(emp =>
-          emp.name.toLowerCase().split(" ")[0] === detectedName
-        );
-        if (firstNameMatches.length === 1) {
-          matchedEmployee = firstNameMatches[0];
-        } else if (firstNameMatches.length > 1) {
-          console.log(`[${callId}] Detected agent "${detectedName}" matches ${firstNameMatches.length} employees — skipping ambiguous auto-assign.`);
-        }
-      }
+      const detectedName = aiAnalysis.detected_agent_name.trim();
+      const matchedEmployee = await storage.findEmployeeByName(detectedName);
 
       if (matchedEmployee) {
         await storage.updateCall(callId, { employeeId: matchedEmployee.id });

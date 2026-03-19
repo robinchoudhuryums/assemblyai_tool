@@ -104,6 +104,12 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     )`,
     "CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id)",
     "CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag)",
+    // Full-text search indexes on transcript content
+    "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+    "CREATE INDEX IF NOT EXISTS idx_transcripts_text_trgm ON transcripts USING gin (text gin_trgm_ops)",
+    "CREATE INDEX IF NOT EXISTS idx_transcripts_text_fts ON transcripts USING gin (to_tsvector('english', coalesce(text, '')))",
+    // Index for employee name lookups (auto-assign)
+    "CREATE INDEX IF NOT EXISTS idx_employees_name_lower ON employees (lower(name))",
   ];
   for (const sql of migrations) {
     try {

@@ -71,6 +71,7 @@ export interface IStorage {
   createEmployee(employee: InsertEmployee): Promise<Employee>;
   updateEmployee(id: string, updates: Partial<Employee>): Promise<Employee | undefined>;
   getAllEmployees(): Promise<Employee[]>;
+  findEmployeeByName(name: string): Promise<Employee | undefined>;
 
   // Call operations
   getCall(id: string): Promise<Call | undefined>;
@@ -199,6 +200,14 @@ export class MemStorage implements IStorage {
   }
   async getAllEmployees(): Promise<Employee[]> {
     return [...this.employees.values()];
+  }
+  async findEmployeeByName(name: string): Promise<Employee | undefined> {
+    const normalized = name.toLowerCase().trim();
+    const all = [...this.employees.values()];
+    const exact = all.find(e => e.name.toLowerCase() === normalized);
+    if (exact) return exact;
+    const firstNameMatches = all.filter(e => e.name.toLowerCase().split(" ")[0] === normalized);
+    return firstNameMatches.length === 1 ? firstNameMatches[0] : undefined;
   }
 
   async getCall(id: string): Promise<Call | undefined> {
@@ -553,6 +562,14 @@ export class CloudStorage implements IStorage {
       console.error("Error fetching employees:", error);
       return [];
     }
+  }
+  async findEmployeeByName(name: string): Promise<Employee | undefined> {
+    const normalized = name.toLowerCase().trim();
+    const all = await this.getAllEmployees();
+    const exact = all.find(e => e.name.toLowerCase() === normalized);
+    if (exact) return exact;
+    const firstNameMatches = all.filter(e => e.name.toLowerCase().split(" ")[0] === normalized);
+    return firstNameMatches.length === 1 ? firstNameMatches[0] : undefined;
   }
 
   // --- Call Methods ---
