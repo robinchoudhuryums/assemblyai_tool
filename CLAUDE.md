@@ -58,8 +58,11 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, batch inference
-server/routes.ts         # All API routes + audio processing pipeline
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, batch inference, webhooks, coaching alerts, AWS credentials
+server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
+server/routes.ts         # Route coordinator + batch scheduler + job queue init
+server/middleware/       # Per-user rate limiting
+client/src/lib/i18n.ts   # i18n system (English + Spanish)
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
 server/auth.ts           # Authentication middleware + session management (PostgreSQL or memory store)
@@ -76,6 +79,8 @@ tests/                   # Unit tests (Node test runner)
 6. Process results: normalize data, compute confidence scores, detect agent name, set flags
 7. Store transcript, sentiment, and analysis to storage (PostgreSQL or S3)
 8. Auto-assign call to employee if agent name detected
+9. Auto-categorize call if AI returns a category and none was provided at upload
+10. Trigger coaching alerts for low-score (<=4) or high-score (>=9) calls
 
 **Job Queue** (when PostgreSQL is configured):
 - Durable: jobs survive server restarts
@@ -194,13 +199,33 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/admin/breach-reports` | admin | File a new breach report |
 | PATCH | `/api/admin/breach-reports/:id` | admin | Update breach notification status |
 
+### User Management (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/users` | admin | List all users |
+| POST | `/api/users` | admin | Create user |
+| PATCH | `/api/users/:id` | admin | Update user (role, display name, active) |
+| DELETE | `/api/users/:id` | admin | Deactivate user (soft delete) |
+| POST | `/api/users/:id/reset-password` | admin | Admin reset user password |
+| PATCH | `/api/users/me/password` | authenticated | Self-service password change |
+
 ### Team Analytics & Export
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
 | GET | `/api/analytics/teams` | authenticated | Comparative team performance (sub-team aggregates) |
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
+| GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
+| GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
+
+### Webhooks (admin only)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/webhooks` | admin | List all webhook configurations |
+| POST | `/api/webhooks` | admin | Create webhook (URL, events, secret for HMAC) |
+| PATCH | `/api/webhooks/:id` | admin | Update webhook |
+| DELETE | `/api/webhooks/:id` | admin | Delete webhook |
 
 ### A/B Model Testing (admin only)
 | Method | Path | Role | Description |
@@ -243,8 +268,8 @@ Access requests can request "viewer" or "manager" roles (not admin).
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
 
-# Authentication
-AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2
+# Authentication (PostgreSQL users table is primary; AUTH_USERS env var is fallback)
+AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2 (fallback if no DB users)
 
 # AWS (for Bedrock AI + S3 storage)
 AWS_ACCESS_KEY_ID
