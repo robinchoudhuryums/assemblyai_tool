@@ -311,6 +311,22 @@ export const abTestSchema = insertABTestSchema.extend({
 export type InsertABTest = z.infer<typeof insertABTestSchema>;
 export type ABTest = z.infer<typeof abTestSchema>;
 
+// --- WEBHOOK CONFIG SCHEMAS ---
+export const webhookConfigSchema = z.object({
+  id: z.string(),
+  url: z.string().url(),
+  events: z.array(z.string()).min(1),
+  secret: z.string().min(1),
+  active: z.boolean().default(true),
+  createdBy: z.string(),
+  createdAt: z.string(),
+});
+
+export const insertWebhookConfigSchema = webhookConfigSchema.omit({ id: true, createdAt: true });
+
+export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
+export type InsertWebhookConfig = z.infer<typeof insertWebhookConfigSchema>;
+
 // --- USAGE TRACKING SCHEMAS ---
 export const usageRecordSchema = z.object({
   id: z.string(),

@@ -9,6 +9,8 @@ import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-
 import { type UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
+import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
+import { triggerWebhook } from "../services/webhooks";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -288,6 +290,19 @@ export async function processAudioFile(
       analysis.detectedAgentName = aiAnalysis.detected_agent_name;
     }
 
+    // Auto-categorize if no category was provided at upload and AI returned one
+    if (!callCategory && aiAnalysis?.call_category) {
+      const validCategories = ["inbound", "outbound", "internal", "vendor"];
+      if (validCategories.includes(aiAnalysis.call_category)) {
+        try {
+          await storage.updateCall(callId, { callCategory: aiAnalysis.call_category });
+          console.log(`[${callId}] Auto-categorized as: ${aiAnalysis.call_category}`);
+        } catch (catErr) {
+          console.warn(`[${callId}] Failed to auto-categorize (non-blocking):`, (catErr as Error).message);
+        }
+      }
+    }
+
     if (confidenceScore < 0.7) {
       const existingFlags = (analysis.flags as string[]) || [];
       existingFlags.push("low_confidence");
@@ -340,6 +355,65 @@ export async function processAudioFile(
     });
     console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
 
+    // Auto-generate coaching alerts for low/high scores (non-blocking)
+    try {
+      const performanceScore = parseFloat(analysis.performanceScore || "0");
+      const finalCall = autoAssigned ? await storage.getCall(callId) : currentCall;
+      const finalEmployeeId = finalCall?.employeeId;
+      const callSummary = (analysis.summary as string) || "";
+      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
+        console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
+      });
+    } catch (alertErr) {
+      console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);
+    }
+
+    // Trigger webhooks (non-blocking)
+    try {
+      const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
+      const finalCallForWebhook = autoAssigned ? await storage.getCall(callId) : currentCall;
+      const employeeId = finalCallForWebhook?.employeeId;
+      let employeeName: string | undefined;
+      if (employeeId) {
+        try {
+          const emp = await storage.getEmployee(employeeId);
+          employeeName = emp?.name;
+        } catch {}
+      }
+
+      // call.completed
+      triggerWebhook("call.completed", {
+        callId,
+        score: performanceScoreNum,
+        sentiment: sentiment.overallSentiment,
+        duration: callDuration,
+        employee: employeeName || undefined,
+        fileName: originalName,
+      }).catch(() => {});
+
+      // score.low (score <= 4)
+      if (performanceScoreNum > 0 && performanceScoreNum <= 4) {
+        triggerWebhook("score.low", {
+          callId,
+          score: performanceScoreNum,
+          employee: employeeName || undefined,
+          fileName: originalName,
+        }).catch(() => {});
+      }
+
+      // score.exceptional (score >= 9)
+      if (performanceScoreNum >= 9) {
+        triggerWebhook("score.exceptional", {
+          callId,
+          score: performanceScoreNum,
+          employee: employeeName || undefined,
+          fileName: originalName,
+        }).catch(() => {});
+      }
+    } catch (webhookErr) {
+      console.warn(`[${callId}] Webhook trigger failed (non-blocking):`, (webhookErr as Error).message);
+    }
+
     // Track usage/cost
     try {
       const audioDuration = callDuration || 0;
@@ -379,6 +453,14 @@ export async function processAudioFile(
     console.error(`[${callId}] A critical error occurred during audio processing:`, (error as Error).message);
     await storage.updateCall(callId, { status: "failed" });
     broadcastCallUpdate(callId, "failed", { label: "Processing failed" });
+
+    // Trigger call.failed webhook (non-blocking)
+    triggerWebhook("call.failed", {
+      callId,
+      error: (error as Error).message,
+      fileName: originalName,
+    }).catch(() => {});
+
     await cleanupFile(filePath);
   }
 }

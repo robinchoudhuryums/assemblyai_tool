@@ -958,3 +958,7 @@ function createStorage(): IStorage {
 }
 
 export const storage = createStorage();
+
+// Initialize webhook service with S3 client from the storage backend
+import { initWebhooks } from "./services/webhooks";
+initWebhooks(() => (storage as any).audioClient || (storage as any).client || null);

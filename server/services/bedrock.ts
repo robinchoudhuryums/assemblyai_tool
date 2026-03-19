@@ -1,8 +1,9 @@
 /**
  * AWS Bedrock + Claude provider for call analysis.
  *
- * Authentication — uses AWS Signature V4 via standard env vars:
- *   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+ * Authentication (in priority order):
+ *   1. AWS env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+ *   2. EC2 instance profile via IMDSv2 (automatic on EC2)
  *   (Optional: AWS_SESSION_TOKEN for temporary credentials / IAM roles)
  *
  * HIPAA: Bedrock is HIPAA-eligible under the AWS BAA.
@@ -13,26 +14,22 @@
 import { createHmac, createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
+import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_REGION = "us-east-1";
 const BEDROCK_TIMEOUT_MS = 120_000; // 2 minutes — prevents indefinite hangs
 
-interface AwsCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-  region: string;
-}
-
 export class BedrockProvider implements AIAnalysisProvider {
   readonly name = "bedrock";
   private credentials: AwsCredentials | null = null;
   private model: string;
+  private initialized = false;
 
   constructor(modelOverride?: string) {
     this.model = modelOverride || process.env.BEDROCK_MODEL || DEFAULT_MODEL;
 
+    // Synchronous check for env vars (fast path)
     if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
       this.credentials = {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -40,12 +37,27 @@ export class BedrockProvider implements AIAnalysisProvider {
         sessionToken: process.env.AWS_SESSION_TOKEN,
         region: process.env.AWS_REGION || DEFAULT_REGION,
       };
+      this.initialized = true;
       if (!modelOverride) {
         console.log(`Bedrock provider initialized (region: ${this.credentials.region}, model: ${this.model})`);
       }
     } else {
-      console.warn("Bedrock provider: AWS credentials not found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.");
+      if (!modelOverride) {
+        console.log("Bedrock provider: env vars not set, will try IMDS on first request");
+      }
     }
+  }
+
+  /** Ensure credentials are loaded (env vars or IMDS). */
+  private async ensureCredentials(): Promise<AwsCredentials> {
+    // Re-fetch to pick up refreshed IMDS credentials
+    const creds = await getAwsCredentials();
+    if (creds) {
+      this.credentials = creds;
+      this.initialized = true;
+      return creds;
+    }
+    throw new Error("Bedrock provider not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
   }
 
   /** Create a provider instance targeting a specific Bedrock model (for A/B testing). */
@@ -58,15 +70,14 @@ export class BedrockProvider implements AIAnalysisProvider {
   }
 
   get isAvailable(): boolean {
-    return this.credentials !== null;
+    // Synchronous check: env vars set OR IMDS credentials already cached
+    return this.credentials !== null || (!process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_SECRET_ACCESS_KEY && !this.initialized);
   }
 
   async generateText(prompt: string): Promise<string> {
-    if (!this.credentials) {
-      throw new Error("Bedrock provider not configured");
-    }
+    const creds = await this.ensureCredentials();
 
-    const region = this.credentials.region;
+    const region = creds.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
     const rawPath = `/model/${this.model}/converse`;
     const url = `https://${host}${rawPath}`;
@@ -76,7 +87,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       inferenceConfig: { temperature: 0.4, maxTokens: 2048 },
     });
 
-    const headers = this.signRequest("POST", host, rawPath, body, region);
+    const headers = this.signRequest("POST", host, rawPath, body, region, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
     try {
@@ -96,12 +107,10 @@ export class BedrockProvider implements AIAnalysisProvider {
   }
 
   async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any): Promise<CallAnalysis> {
-    if (!this.credentials) {
-      throw new Error("Bedrock provider not configured");
-    }
+    const creds = await this.ensureCredentials();
 
     const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate);
-    const region = this.credentials.region;
+    const region = creds.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
     // Raw path for the HTTP request (no encoding — colons in model IDs are fine)
     const rawPath = `/model/${this.model}/converse`;
@@ -119,7 +128,7 @@ export class BedrockProvider implements AIAnalysisProvider {
 
     console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
 
-    const headers = this.signRequest("POST", host, rawPath, body, region);
+    const headers = this.signRequest("POST", host, rawPath, body, region, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
     let result: any;
@@ -159,8 +168,9 @@ export class BedrockProvider implements AIAnalysisProvider {
     rawPath: string,
     body: string,
     region: string,
+    creds?: AwsCredentials,
   ): Record<string, string> {
-    const creds = this.credentials!;
+    if (!creds) creds = this.credentials!;
     const service = "bedrock";
     const now = new Date();
     const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");

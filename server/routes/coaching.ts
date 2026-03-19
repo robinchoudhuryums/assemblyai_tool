@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
+import { triggerWebhook } from "../services/webhooks";
 
 export function register(router: Router) {
   // ==================== COACHING ROUTES ====================
@@ -48,6 +49,21 @@ export function register(router: Router) {
         return;
       }
       const session = await storage.createCoachingSession(parsed.data);
+
+      // Trigger coaching.created webhook (non-blocking)
+      try {
+        const employee = await storage.getEmployee(session.employeeId);
+        triggerWebhook("coaching.created", {
+          sessionId: session.id,
+          employeeId: session.employeeId,
+          employeeName: employee?.name,
+          title: session.title,
+          category: session.category,
+          assignedBy: session.assignedBy,
+          callId: session.callId || undefined,
+        }).catch(() => {});
+      } catch {}
+
       res.status(201).json(session);
     } catch (error) {
       res.status(500).json({ message: "Failed to create coaching session" });

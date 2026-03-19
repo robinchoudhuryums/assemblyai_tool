@@ -4,7 +4,7 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
-import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, listMFAUsers } from "../services/totp";
+import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { insertAccessRequestSchema } from "@shared/schema";
 
@@ -66,8 +66,8 @@ export function registerAuthRoutes(router: Router) {
           return res.json({ mfaRequired: true, mfaToken: token });
         }
 
-        // Check if MFA is globally required but not set up
-        if (isMFARequired() && !mfaRecord?.enabled) {
+        // Check if MFA is required (globally or by role) but not set up
+        if ((isMFARequired() || isMFARoleRequired(user.role)) && !mfaRecord?.enabled) {
           // Let them in but flag that MFA setup is needed
           req.login(user, (loginErr) => {
             if (loginErr) return next(loginErr);
@@ -115,7 +115,7 @@ export function registerAuthRoutes(router: Router) {
       const mfaRecord = await getMFASecret(req.user!.username);
       res.json({
         enabled: mfaRecord?.enabled ?? false,
-        required: isMFARequired(),
+        required: isMFARequired() || isMFARoleRequired(req.user!.role),
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to check MFA status" });

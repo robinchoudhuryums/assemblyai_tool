@@ -20,6 +20,7 @@ export interface CallAnalysis {
     suggestions: Array<string | { text: string; timestamp?: string }>;
   };
   call_party_type: string;
+  call_category: string | null;
   flags: string[];
   detected_agent_name: string | null;
 }
@@ -173,7 +174,7 @@ TRANSCRIPT:
 ${processedTranscript}
 
 Respond with ONLY valid JSON (no markdown, no code fences):
-{"summary":"...","topics":["..."],"sentiment":"positive|neutral|negative","sentiment_score":0.0,"performance_score":0.0,"sub_scores":{"compliance":0.0,"customer_experience":0.0,"communication":0.0,"resolution":0.0},"action_items":["..."],"feedback":{"strengths":[{"text":"...","timestamp":"MM:SS"}],"suggestions":[{"text":"...","timestamp":"MM:SS"}]},"call_party_type":"customer|insurance|medical_facility|medicare|vendor|internal|other","flags":[],"detected_agent_name":null}
+{"summary":"...","topics":["..."],"sentiment":"positive|neutral|negative","sentiment_score":0.0,"performance_score":0.0,"sub_scores":{"compliance":0.0,"customer_experience":0.0,"communication":0.0,"resolution":0.0},"action_items":["..."],"feedback":{"strengths":[{"text":"...","timestamp":"MM:SS"}],"suggestions":[{"text":"...","timestamp":"MM:SS"}]},"call_party_type":"customer|insurance|medical_facility|medicare|vendor|internal|other","call_category":"inbound|outbound|internal|vendor","flags":[],"detected_agent_name":null}
 
 Guidelines:
 - sentiment_score: 0.0-1.0 (1.0 = most positive)
@@ -184,6 +185,7 @@ ${evaluationCriteria}${scoringSection}${phrasesSection}${additionalSection}
 - 2-4 concrete, actionable action items
 - Topics: specific (e.g. "order tracking", "billing dispute"), not generic
 - call_party_type: "customer" (patients), "insurance" (reps), "medical_facility" (clinics/hospitals), "medicare" (1-800-MEDICARE), "vendor", "internal" (coworkers), "other"
+- call_category: Classify this call as one of: "inbound" (customer/patient called in), "outbound" (employee called out), "internal" (between coworkers/departments), "vendor" (with external vendor/partner). Base this on conversation context, topic, and participants.
 - detected_agent_name: Agent's name if clearly stated (e.g. "Hi, my name is Sarah"). Return null if uncertain. Only the agent's name, not the customer's.
 - flags: "medicare_call" ONLY if the caller is from 1-800-MEDICARE or CMS (Centers for Medicare & Medicaid Services) — do NOT flag calls where Medicare is merely mentioned as an insurance type (e.g. "Aetna Medicare", "United Healthcare Medicare Advantage" are NOT medicare_call flags). "low_score" if performance ≤2.0, "exceptional_call" if ≥9.0 with outstanding service, "agent_misconduct:<description>" for serious misconduct (abusive language, hanging up, HIPAA violations, etc.)`;
 }

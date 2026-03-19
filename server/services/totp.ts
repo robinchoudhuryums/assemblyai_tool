@@ -169,3 +169,11 @@ export async function listMFAUsers(): Promise<MFARecord[]> {
 export function isMFARequired(): boolean {
   return process.env.REQUIRE_MFA === "true";
 }
+
+/**
+ * Check if MFA is required for a specific role.
+ * Admin and manager roles always require MFA, regardless of REQUIRE_MFA env var.
+ */
+export function isMFARoleRequired(role: string): boolean {
+  return role === "admin" || role === "manager";
+}

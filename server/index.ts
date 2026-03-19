@@ -5,6 +5,7 @@ import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
 import { getPool, initializeDatabase } from "./db/pool";
+import { userRateLimit } from "./middleware/rate-limit";
 import crypto from "crypto";
 
 const app = express();
@@ -200,6 +201,12 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
+
+  // Per-user rate limiting (applied AFTER auth so req.user is available)
+  // General: 120 req/min for all authenticated API access
+  app.use("/api", userRateLimit(120, 60_000));
+  // Stricter: 10 req/min on export endpoints (prevent bulk data exfiltration)
+  app.use("/api/export", userRateLimit(10, 60_000));
 
   const server = await registerRoutes(app);
 

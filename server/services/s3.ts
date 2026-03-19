@@ -2,44 +2,54 @@
  * Lightweight AWS S3 client using REST API + SigV4 signing.
  * No SDK dependency — matches the GcsClient interface for drop-in swap.
  *
- * Authentication via standard AWS env vars:
- *   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+ * Authentication (in priority order):
+ *   1. AWS env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+ *   2. EC2 instance profile via IMDSv2 (automatic on EC2)
  *   (Optional: AWS_SESSION_TOKEN for temporary credentials)
  *
  * HIPAA: S3 is HIPAA-eligible under the AWS BAA.
  */
 import { createHmac, createHash } from "crypto";
+import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
 
-interface AwsCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-  region: string;
-}
-
 export class S3Client {
-  private credentials: AwsCredentials;
+  private credentials: AwsCredentials | null = null;
   private bucketName: string;
   private region: string;
   private host: string;
+  private initialized = false;
 
   constructor(bucketName: string) {
     this.bucketName = bucketName;
     this.region = process.env.AWS_REGION || "us-east-1";
     this.host = `${bucketName}.s3.${this.region}.amazonaws.com`;
+  }
 
-    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-      throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.");
+  /** Initialize credentials from env vars or IMDS. Called lazily on first operation. */
+  private async ensureCredentials(): Promise<AwsCredentials> {
+    if (this.credentials && this.initialized) {
+      // Re-fetch to pick up refreshed IMDS credentials
+      const creds = await getAwsCredentials();
+      if (creds) {
+        this.credentials = creds;
+        return creds;
+      }
     }
-
-    this.credentials = {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: process.env.AWS_SESSION_TOKEN,
-      region: this.region,
-    };
+    if (!this.initialized) {
+      this.initialized = true;
+      const creds = await getAwsCredentials();
+      if (creds) {
+        this.credentials = creds;
+        return creds;
+      }
+      throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
+    }
+    if (!this.credentials) {
+      throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
+    }
+    return this.credentials;
   }
 
   /** Upload a JSON object */
@@ -218,11 +228,12 @@ export class S3Client {
     body?: Buffer,
     contentType?: string,
   ): Promise<Response> {
+    const creds = await this.ensureCredentials();
     const url = queryString
       ? `https://${this.host}${path}?${queryString}`
       : `https://${this.host}${path}`;
 
-    const headers = this.sign(method, path, queryString || "", body, contentType);
+    const headers = this.sign(method, path, queryString || "", body, contentType, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), S3_TIMEOUT_MS);
     try {
@@ -245,8 +256,9 @@ export class S3Client {
     queryString: string,
     body?: Buffer,
     contentType?: string,
+    creds?: AwsCredentials,
   ): Record<string, string> {
-    const creds = this.credentials;
+    if (!creds) creds = this.credentials!;
     const now = new Date();
     const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
     const dateStamp = amzDate.slice(0, 8);

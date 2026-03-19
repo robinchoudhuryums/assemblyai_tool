@@ -9,6 +9,7 @@ import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
 import { recordFailedLogin } from "./services/security-monitor";
 import { getPool } from "./db/pool";
+import { getMFASecret, isMFARoleRequired } from "./services/totp";
 
 const scryptAsync = promisify(scrypt);
 
@@ -315,3 +316,27 @@ export function requireRole(...allowedRoles: string[]): RequestHandler {
     return res.status(403).json({ message: "Insufficient permissions" });
   };
 }
+
+/**
+ * Middleware to enforce MFA setup for roles that require it (admin, manager).
+ * Returns 403 if the user's role requires MFA but they haven't set it up yet.
+ * Use on sensitive admin/manager routes to block access until MFA is configured.
+ */
+export const requireMFASetup: RequestHandler = async (req, res, next) => {
+  if (!req.isAuthenticated() || !req.user) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  const userRole = req.user.role || "viewer";
+  if (!isMFARoleRequired(userRole)) {
+    return next();
+  }
+  try {
+    const mfaRecord = await getMFASecret(req.user.username);
+    if (mfaRecord?.enabled) {
+      return next();
+    }
+    return res.status(403).json({ message: "MFA setup required for your role" });
+  } catch {
+    return res.status(500).json({ message: "Failed to verify MFA status" });
+  }
+};

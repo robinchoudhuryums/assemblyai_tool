@@ -9,9 +9,19 @@ import { BedrockProvider } from "../services/bedrock";
 import { getRecentAlerts, acknowledgeAlert, getSecuritySummary, createBreachReport, updateBreachStatus, getAllBreachReports } from "../services/security-monitor";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { broadcastCallUpdate } from "../services/websocket";
-import { insertPromptTemplateSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
+import { insertPromptTemplateSchema, insertWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
 import type { S3Client as S3ClientType } from "../services/s3";
+import {
+  getAllWebhookConfigs,
+  getWebhookConfig,
+  createWebhookConfig,
+  updateWebhookConfig,
+  deleteWebhookConfig,
+  triggerWebhook,
+  WEBHOOK_EVENTS,
+  type WebhookConfig,
+} from "../services/webhooks";
 
 const audioProcessingQueue = new TaskQueue(3);
 
@@ -377,6 +387,95 @@ export function registerAdminRoutes(
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to get batch status" });
+    }
+  });
+
+  // ==================== WEBHOOK MANAGEMENT ROUTES (admin only) ====================
+
+  // List all webhook configs
+  router.get("/api/admin/webhooks", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const configs = await getAllWebhookConfigs();
+      res.json(configs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch webhook configs" });
+    }
+  });
+
+  // Create a webhook config
+  router.post("/api/admin/webhooks", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const parsed = insertWebhookConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ message: "Invalid webhook config", errors: parsed.error.flatten() });
+        return;
+      }
+      // Validate events
+      const invalidEvents = parsed.data.events.filter(e => !WEBHOOK_EVENTS.includes(e as any));
+      if (invalidEvents.length > 0) {
+        res.status(400).json({ message: `Invalid events: ${invalidEvents.join(", ")}. Valid events: ${WEBHOOK_EVENTS.join(", ")}` });
+        return;
+      }
+      const config: WebhookConfig = {
+        ...parsed.data,
+        id: randomUUID(),
+        createdBy: req.user?.username || "admin",
+        createdAt: new Date().toISOString(),
+      };
+      await createWebhookConfig(config);
+      res.status(201).json(config);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create webhook config" });
+    }
+  });
+
+  // Update a webhook config
+  router.patch("/api/admin/webhooks/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const updated = await updateWebhookConfig(req.params.id, req.body);
+      if (!updated) {
+        res.status(404).json({ message: "Webhook config not found" });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update webhook config" });
+    }
+  });
+
+  // Delete a webhook config
+  router.delete("/api/admin/webhooks/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const existing = await getWebhookConfig(req.params.id);
+      if (!existing) {
+        res.status(404).json({ message: "Webhook config not found" });
+        return;
+      }
+      await deleteWebhookConfig(req.params.id);
+      res.json({ message: "Webhook config deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete webhook config" });
+    }
+  });
+
+  // Send a test event to a specific webhook
+  router.post("/api/admin/webhooks/:id/test", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const config = await getWebhookConfig(req.params.id);
+      if (!config) {
+        res.status(404).json({ message: "Webhook config not found" });
+        return;
+      }
+      // Send a test payload to all events the webhook is subscribed to (using first event)
+      const testEvent = config.events[0] || "call.completed";
+      await triggerWebhook(testEvent, {
+        test: true,
+        message: "This is a test webhook from CallAnalyzer",
+        triggeredBy: req.user?.username,
+      });
+      res.json({ message: `Test event "${testEvent}" sent to ${config.url}` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to send test webhook" });
     }
   });
 
