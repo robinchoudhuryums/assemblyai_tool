@@ -182,19 +182,18 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
         isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
       )} data-testid="sidebar">
       <div className="p-6 border-b border-border">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-              <Mic className="text-primary-foreground w-4 h-4" />
-            </div>
-            <div>
-              <h1 className="font-bold text-lg text-foreground">CallAnalyzer</h1>
-              <p className="text-xs text-muted-foreground">Pro Dashboard</p>
-            </div>
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+            <Mic className="text-primary-foreground w-4 h-4" />
           </div>
-          <div className="flex items-center gap-1">
-            <LanguageSelector />
-            <div className="relative" ref={notifRef}>
+          <div>
+            <h1 className="font-bold text-lg text-foreground">CallAnalyzer</h1>
+            <p className="text-xs text-muted-foreground">Pro Dashboard</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-1 mt-3">
+          <LanguageSelector />
+          <div className="relative" ref={notifRef}>
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
@@ -275,7 +274,6 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
             >
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
-          </div>
         </div>
       </div>
 
