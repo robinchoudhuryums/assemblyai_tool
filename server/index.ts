@@ -59,16 +59,27 @@ app.use((req, res, next) => {
 
 // HIPAA: Explicit CORS policy — restrict to same-origin only
 app.use((req, res, next) => {
-  // No Access-Control-Allow-Origin header = same-origin only
-  // Block all cross-origin requests explicitly
   const origin = req.headers.origin;
   if (origin) {
-    // In production, reject cross-origin requests
-    if (process.env.NODE_ENV === "production") {
-      res.status(403).json({ message: "Cross-origin requests are not allowed" });
-      return;
+    // Allow same-origin requests (browsers send Origin on fetch() even for same-origin)
+    const requestHost = req.hostname;
+    let originHost: string | null = null;
+    try {
+      originHost = new URL(origin).hostname;
+    } catch {
+      // Malformed Origin header — block it
     }
-    // In development, allow same-host (Vite proxy)
+
+    if (originHost && originHost === requestHost) {
+      // Same-origin: allow through without CORS headers (not needed)
+      return next();
+    }
+
+    // Cross-origin request
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ message: "Cross-origin requests are not allowed" });
+    }
+    // In development, allow cross-origin (Vite proxy)
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE");
