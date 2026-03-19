@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { storage } from "../storage";
-import { assemblyAIService } from "../services/assemblyai";
+import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetrics } from "../services/assemblyai";
 import { aiProvider } from "../services/ai-factory";
 import { buildAnalysisPrompt } from "../services/ai-provider";
 import { broadcastCallUpdate } from "../services/websocket";
@@ -122,6 +122,51 @@ export async function processAudioFile(
     }
     console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
 
+    // Compute call duration from word-level data
+    const callDurationSeconds = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+
+    // Quality gate: skip AI analysis for very low-confidence transcripts (#3)
+    const transcriptConfidenceValue = transcriptResponse.confidence || 0;
+    if (transcriptConfidenceValue < 0.6 && transcriptConfidenceValue > 0) {
+      console.warn(`[${callId}] Low transcript confidence (${(transcriptConfidenceValue * 100).toFixed(0)}%) — skipping AI analysis to avoid unreliable scoring.`);
+
+      const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
+      analysis.confidenceScore = transcriptConfidenceValue.toFixed(3);
+      analysis.confidenceFactors = {
+        transcriptConfidence: Math.round(transcriptConfidenceValue * 100) / 100,
+        wordCount: transcriptResponse.words?.length || 0,
+        callDurationSeconds,
+        transcriptLength: (transcriptResponse.text || "").length,
+        aiAnalysisCompleted: false,
+        overallScore: transcriptConfidenceValue * 0.4,
+      };
+      const lowQualityFlags = (analysis.flags as string[]) || [];
+      lowQualityFlags.push("low_transcript_quality");
+      analysis.flags = lowQualityFlags;
+
+      await storage.createTranscript(transcript);
+      await storage.createSentimentAnalysis(sentiment);
+      await storage.createCallAnalysis(analysis);
+      await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
+      await cleanupFile(filePath);
+      broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (low quality transcript)" });
+      console.log(`[${callId}] Completed with low_transcript_quality flag. AI analysis skipped.`);
+      return;
+    }
+
+    // Build speaker-labeled transcript for AI analysis (#1)
+    let speakerLabeledText = transcriptResponse.text || "";
+    if (transcriptResponse.words && transcriptResponse.words.length > 0) {
+      const labeled = buildSpeakerLabeledTranscript(transcriptResponse.words);
+      if (labeled) {
+        speakerLabeledText = labeled;
+        console.log(`[${callId}] Built speaker-labeled transcript (${speakerLabeledText.length} chars)`);
+      }
+    }
+
+    // Compute utterance-level metrics (#5)
+    const utteranceMetrics = computeUtteranceMetrics(transcriptResponse.words || []);
+
     // Step 4: AI analysis (Bedrock/Claude — or fall back to defaults)
     broadcastCallUpdate(callId, "analyzing", { step: 4, totalSteps: 6, label: "Running AI analysis..." });
     let aiAnalysis = null;
@@ -146,8 +191,8 @@ export async function processAudioFile(
     }
 
     // Batch mode: defer AI analysis for 50% cost savings
-    if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && transcriptResponse.text) {
-      const prompt = buildAnalysisPrompt(transcriptResponse.text, callCategory, promptTemplate, language);
+    if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && speakerLabeledText) {
+      const prompt = buildAnalysisPrompt(speakerLabeledText, callCategory, promptTemplate, language);
       const pendingItem: PendingBatchItem = {
         callId,
         prompt,
@@ -181,7 +226,7 @@ export async function processAudioFile(
           transcriptConfidence: transcriptResponse.confidence || 0,
           wordCount: transcriptResponse.words?.length || 0,
           callDurationSeconds: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
-          transcriptLength: transcriptResponse.text.length,
+          transcriptLength: (transcriptResponse.text || "").length,
           aiAnalysisCompleted: false,
           overallScore: 0.3,
         };
@@ -223,10 +268,9 @@ export async function processAudioFile(
       }
     }
 
-    if (aiProvider.isAvailable && transcriptResponse.text) {
+    if (aiProvider.isAvailable && speakerLabeledText) {
       try {
-        const transcriptText = transcriptResponse.text;
-        const transcriptCharCount = transcriptText.length;
+        const transcriptCharCount = speakerLabeledText.length;
         const estimatedTokens = Math.ceil(transcriptCharCount / 4);
         console.log(`[${callId}] Step 4/6: Running AI analysis (${aiProvider.name}). Transcript: ${transcriptCharCount} chars (~${estimatedTokens} tokens)`);
 
@@ -234,7 +278,7 @@ export async function processAudioFile(
           console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
         }
 
-        aiAnalysis = await aiProvider.analyzeCallTranscript(transcriptText, callId, callCategory, promptTemplate, language);
+        aiAnalysis = await aiProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);
@@ -251,7 +295,7 @@ export async function processAudioFile(
     // Compute confidence score
     const transcriptConfidence = transcriptResponse.confidence || 0;
     const wordCount = transcriptResponse.words?.length || 0;
-    const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+    const callDuration = callDurationSeconds;
     const hasAiAnalysis = aiAnalysis !== null;
 
     const wordConfidence = Math.min(wordCount / 50, 1);
@@ -289,6 +333,36 @@ export async function processAudioFile(
 
     if (aiAnalysis?.detected_agent_name) {
       analysis.detectedAgentName = aiAnalysis.detected_agent_name;
+
+      // Named speaker identification (#6): determine which speaker (A/B) is the agent
+      if (transcriptResponse.words && transcriptResponse.words.length > 0) {
+        const detectedName = aiAnalysis.detected_agent_name.toLowerCase();
+        // Look for the agent's name in the first 50 words to identify their speaker label
+        const earlyWords = transcriptResponse.words.slice(0, 50);
+        for (let i = 0; i < earlyWords.length; i++) {
+          const w = earlyWords[i];
+          if (w.text.toLowerCase().includes(detectedName) ||
+              (i > 0 && `${earlyWords[i - 1].text} ${w.text}`.toLowerCase().includes(detectedName))) {
+            const agentSpeaker = w.speaker || "?";
+            console.log(`[${callId}] Agent "${aiAnalysis.detected_agent_name}" identified as Speaker ${agentSpeaker}`);
+            // Store agent speaker label in analysis for downstream use
+            if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
+            (analysis.confidenceFactors as Record<string, unknown>).agentSpeakerLabel = agentSpeaker;
+            break;
+          }
+        }
+      }
+    }
+
+    // Store utterance metrics (#5)
+    if (utteranceMetrics) {
+      if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
+      (analysis.confidenceFactors as Record<string, unknown>).utteranceMetrics = {
+        interruptionCount: utteranceMetrics.interruptionCount,
+        avgResponseLatencyMs: utteranceMetrics.avgResponseLatencyMs,
+        monologueSegments: utteranceMetrics.monologueSegments,
+        questionCount: utteranceMetrics.questionCount,
+      };
     }
 
     // Auto-categorize if no category was provided at upload and AI returned one

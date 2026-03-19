@@ -106,7 +106,7 @@ export class BedrockProvider implements AIAnalysisProvider {
     }
   }
 
-  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string): Promise<CallAnalysis> {
+  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string, callDurationSeconds?: number, hasFlags?: boolean): Promise<CallAnalysis> {
     const creds = await this.ensureCredentials();
 
     const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate, language);
@@ -116,13 +116,16 @@ export class BedrockProvider implements AIAnalysisProvider {
     const rawPath = `/model/${this.model}/converse`;
     const url = `https://${host}${rawPath}`;
 
+    // Conditional token limit: 4096 for long (>10min) or flagged calls, 2048 for routine
+    const maxTokens = ((callDurationSeconds && callDurationSeconds > 600) || hasFlags) ? 4096 : 2048;
+
     const body = JSON.stringify({
       messages: [
         { role: "user", content: [{ text: prompt }] },
       ],
       inferenceConfig: {
         temperature: 0.3,
-        maxTokens: 2048,
+        maxTokens,
       },
     });
 
@@ -155,7 +158,7 @@ export class BedrockProvider implements AIAnalysisProvider {
     // { output: { message: { role: "assistant", content: [{ text: "..." }] } } }
     const responseText = result.output?.message?.content?.[0]?.text || "";
 
-    const analysis = parseJsonResponse(responseText, callId);
+    const analysis = parseJsonResponse(responseText, callId, callDurationSeconds);
     console.log(`[${callId}] Bedrock analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);
     return analysis;
   }
