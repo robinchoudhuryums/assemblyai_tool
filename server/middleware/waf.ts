@@ -274,8 +274,10 @@ export function wafMiddleware() {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    // 2. Suspicious User-Agent check (skip for API health checks)
-    if (req.path !== "/api/health") {
+    // 2. Suspicious User-Agent check (skip for static assets and health checks)
+    //    Service workers fetch static assets without User-Agent headers,
+    //    so only enforce UA checks on API routes.
+    if (req.path.startsWith("/api") && req.path !== "/api/health") {
       const ua = req.headers["user-agent"] || "";
       if (SUSPICIOUS_USER_AGENTS.some((p) => p.test(ua))) {
         stats.totalBlocked++;
