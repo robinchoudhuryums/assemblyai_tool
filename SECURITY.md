@@ -86,6 +86,24 @@ User (Browser) ──HTTPS/TLS──> Caddy (port 443) ──> Node.js (port 500
 | **Permissions policy** | Camera, microphone, geolocation all disabled | `server/index.ts:66` |
 | **API caching** | `no-store, no-cache` on all `/api` responses | `server/index.ts:72-75` |
 | **VPC endpoints** | (Recommended) S3 Gateway + Bedrock PrivateLink endpoints route AWS API traffic through private network, avoiding public internet for PHI | See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) |
+| **WAF** | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking | `server/middleware/waf.ts` |
+| **Vulnerability scanning** | Automated daily scans: environment config, dependencies (npm audit), database security, auth config, security headers | `server/services/vulnerability-scanner.ts` |
+
+---
+
+## 5b. Incident Response
+
+| Safeguard | Implementation | Code Location |
+|-----------|---------------|---------------|
+| **Formal IRP** | Structured incident lifecycle: detection → triage → containment → eradication → recovery → post-incident → closed | `server/services/incident-response.ts` |
+| **Incident classification** | 4-tier severity (P1-critical through P4-low) with 10 category types | `server/services/incident-response.ts` |
+| **Escalation procedures** | Configurable escalation contacts with severity-based notification rules | `GET /api/admin/incident-response-plan` |
+| **Response procedures** | Step-by-step playbook for each incident phase with time targets | `RESPONSE_PROCEDURES` in incident-response.ts |
+| **Timeline tracking** | Every action logged with timestamp, actor, phase, and automated flag | `Incident.timeline` array |
+| **Action items** | Post-incident review action items with assignee, due date, and status tracking | `Incident.actionItems` array |
+| **PHI tracking** | Each incident tracks whether PHI was involved and links to breach reports | `Incident.phiInvolved`, `Incident.linkedBreachId` |
+| **Database persistence** | Incidents persisted to PostgreSQL `incidents` table (falls back to in-memory) | `server/db/schema.sql` |
+| **Disaster recovery** | Documented DR plan with S3 CRR, RDS cross-region replica, AMI snapshots, DNS failover | [`docs/disaster-recovery.md`](docs/disaster-recovery.md) |
 
 ---
 
@@ -163,8 +181,8 @@ pm2 logs callanalyzer --lines 100 | grep HIPAA_AUDIT
 |------|--------------|----------------|
 | **IAM user** | Shared across 3 projects with long-lived access keys | Consider separate IAM users per project, or use IAM roles with EC2 instance profiles |
 | **Auth backend** | Environment-variable-based users (`AUTH_USERS`) | Works for small teams; for larger orgs, consider an IdP (Cognito, Okta) with MFA |
-| **WAF** | Not configured | Consider AWS WAF for additional protection against web attacks |
+| **WAF** | Application-level WAF implemented (IP blocking, SQLi/XSS/path traversal detection, anomaly scoring); consider adding AWS WAF at edge (CloudFront/ALB) for defense-in-depth | Optionally add AWS WAF rules for DDoS protection at the edge |
 | **VPC endpoints** | S3/Bedrock accessed over public internet | Configure VPC endpoints for S3 (free Gateway endpoint) and Bedrock (Interface/PrivateLink) to route PHI traffic through AWS private network instead of the public internet. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for step-by-step setup |
-| **Backup** | S3 versioning enabled; no cross-region replication | Consider S3 cross-region replication for disaster recovery |
+| **Backup** | S3 versioning enabled; DR plan documented with CRR, RDS replica, and AMI snapshots | Follow [`docs/disaster-recovery.md`](docs/disaster-recovery.md) to implement cross-region replication |
 | **App MFA** | TOTP MFA implemented (`server/services/totp.ts`) but optional by default | Set `REQUIRE_MFA=true` to enforce for all users; consider enforcing for admin accounts at minimum |
 | **IAM MFA** | Not enforced on the shared IAM user | Enable MFA on the IAM user via AWS Console |

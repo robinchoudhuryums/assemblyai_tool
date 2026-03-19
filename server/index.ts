@@ -6,6 +6,8 @@ import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
 import { getPool, initializeDatabase } from "./db/pool";
 import { userRateLimit } from "./middleware/rate-limit";
+import { wafMiddleware } from "./middleware/waf";
+import { startScheduledScans } from "./services/vulnerability-scanner";
 import crypto from "crypto";
 
 const app = express();
@@ -81,6 +83,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// WAF: Application-level web application firewall (IP blocking, SQLi/XSS/path traversal detection)
+app.use(wafMiddleware());
 
 // HIPAA: Security headers including Content-Security-Policy
 app.use((req, res, next) => {
@@ -243,6 +248,9 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
     // WebSocket: real-time call processing notifications
     setupWebSocket(server);
+
+    // SECURITY: Start automated vulnerability scanning (runs daily, first scan after 60s)
+    startScheduledScans();
 
     // HIPAA: Data retention — purge calls older than configured days
     // Default 90 days, configurable via RETENTION_DAYS env var

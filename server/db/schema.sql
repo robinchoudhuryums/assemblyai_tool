@@ -261,6 +261,35 @@ CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id);
 CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag);
 
 -- ============================================================
+-- Incidents (Formal Incident Response — HIPAA §164.308(a)(6))
+-- ============================================================
+CREATE TABLE IF NOT EXISTS incidents (
+  id VARCHAR(255) PRIMARY KEY,
+  title VARCHAR(500) NOT NULL,
+  description TEXT NOT NULL,
+  severity VARCHAR(50) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  current_phase VARCHAR(50) NOT NULL DEFAULT 'detection',
+  declared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  declared_by VARCHAR(255) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMPTZ,
+  affected_systems JSONB DEFAULT '[]',
+  affected_users INTEGER DEFAULT 0,
+  containment_actions JSONB DEFAULT '[]',
+  eradication_actions JSONB DEFAULT '[]',
+  recovery_actions JSONB DEFAULT '[]',
+  lessons_learned TEXT,
+  timeline JSONB DEFAULT '[]',
+  action_items JSONB DEFAULT '[]',
+  linked_breach_id VARCHAR(255),
+  phi_involved BOOLEAN DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents (severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_phase ON incidents (current_phase);
+CREATE INDEX IF NOT EXISTS idx_incidents_declared_at ON incidents (declared_at DESC);
+
+-- ============================================================
 -- HIPAA Audit Log (durable, never purged — 6-year retention)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS audit_log (

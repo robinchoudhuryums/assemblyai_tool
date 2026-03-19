@@ -58,10 +58,10 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, batch inference, webhooks, coaching alerts, AWS credentials
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, AWS credentials
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
-server/middleware/       # Per-user rate limiting
+server/middleware/       # Per-user rate limiting, application-level WAF
 client/src/lib/i18n.ts   # i18n system (English + Spanish)
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
@@ -198,6 +198,22 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/admin/breach-reports` | admin | List all HIPAA breach reports |
 | POST | `/api/admin/breach-reports` | admin | File a new breach report |
 | PATCH | `/api/admin/breach-reports/:id` | admin | Update breach notification status |
+| GET | `/api/admin/waf-stats` | admin | WAF statistics and blocked IPs |
+| POST | `/api/admin/waf/block-ip` | admin | Manually block an IP address |
+| POST | `/api/admin/waf/unblock-ip` | admin | Unblock an IP address |
+| GET | `/api/admin/vuln-scan/latest` | admin | Latest vulnerability scan report |
+| GET | `/api/admin/vuln-scan/history` | admin | All scan history |
+| POST | `/api/admin/vuln-scan/run` | admin | Trigger manual vulnerability scan |
+| POST | `/api/admin/vuln-scan/accept/:findingId` | admin | Accept a finding as risk |
+| GET | `/api/admin/incidents` | admin | List all security incidents |
+| GET | `/api/admin/incidents/:id` | admin | Get incident details |
+| POST | `/api/admin/incidents` | admin | Declare a new security incident |
+| POST | `/api/admin/incidents/:id/advance` | admin | Advance incident to next phase |
+| POST | `/api/admin/incidents/:id/timeline` | admin | Add timeline entry to incident |
+| PATCH | `/api/admin/incidents/:id` | admin | Update incident details |
+| POST | `/api/admin/incidents/:id/action-items` | admin | Add action item to incident |
+| PATCH | `/api/admin/incidents/:incidentId/action-items/:itemId` | admin | Update action item status |
+| GET | `/api/admin/incident-response-plan` | admin | Get escalation contacts and response procedures |
 
 ### User Management (admin only)
 | Method | Path | Role | Description |
@@ -326,6 +342,10 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
+| **WAF** | `server/middleware/waf.ts` | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking |
+| **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
+| **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
+| **Disaster recovery** | `docs/disaster-recovery.md` | DR plan: S3 CRR, RDS cross-region replica, AMI snapshots, Route 53 DNS failover |
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually

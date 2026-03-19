@@ -136,7 +136,7 @@ export default function Sidebar() {
 
   const flaggedCount = (calls || []).filter(c => {
     const flags = c.analysis?.flags;
-    return Array.isArray(flags) && flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
+    return Array.isArray(flags) && flags.some(f => typeof f === "string" && (f === "low_score" || f.startsWith("agent_misconduct")));
   }).length;
 
   const handleLogout = async () => {
