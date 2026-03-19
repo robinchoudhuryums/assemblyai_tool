@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
+import { getSnapshots } from "../services/performance-snapshots";
 import { clampInt, parseDate, safeFloat, safeJsonParse } from "./utils";
 
 export function registerReportRoutes(router: Router) {
@@ -481,6 +482,21 @@ router.get("/api/performance", requireAuth, async (req, res) => {
 
       const dateRange = `${from || "all time"} to ${to || "present"}`;
 
+      // Fetch prior performance snapshots for longitudinal context
+      const priorSnapshots = await getSnapshots("employee", employeeId, 6);
+      let priorContext = "";
+      if (priorSnapshots.length > 0) {
+        priorContext = "\n\nPRIOR PERFORMANCE REVIEW HISTORY (use this to identify trends, improvements, and regressions):\n";
+        for (const snap of priorSnapshots) {
+          priorContext += `\n--- ${snap.periodStart} to ${snap.periodEnd} ---\n`;
+          priorContext += `Calls: ${snap.metrics.totalCalls}, Avg Score: ${snap.metrics.avgScore?.toFixed(1) ?? "N/A"}/10\n`;
+          if (snap.aiSummary) {
+            const condensed = snap.aiSummary.length > 400 ? snap.aiSummary.slice(0, 400) + "..." : snap.aiSummary;
+            priorContext += `Prior Assessment: ${condensed}\n`;
+          }
+        }
+      }
+
       const prompt = buildAgentSummaryPrompt({
         name: employee.name,
         role: employee.role,
@@ -493,11 +509,11 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         topSuggestions: countFreq(allSuggestions),
         commonTopics: countFreq(allTopics),
         dateRange,
-      });
+      }) + priorContext;
 
-      console.log(`[${req.params.id}] Generating AI summary (${filtered.length} calls)...`);
+      console.log(`[${employeeId}] Generating AI summary (${filtered.length} calls, ${priorSnapshots.length} prior snapshots)...`);
       const summary = await aiProvider.generateText(prompt);
-      console.log(`[${req.params.id}] AI summary generated.`);
+      console.log(`[${employeeId}] AI summary generated.`);
 
       res.json({ summary });
     } catch (error) {

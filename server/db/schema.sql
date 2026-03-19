@@ -261,6 +261,25 @@ CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id);
 CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag);
 
 -- ============================================================
+-- Performance Snapshots (periodic reviews for employees, teams, company)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS performance_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  level VARCHAR(50) NOT NULL,                 -- employee | team | department | company
+  target_id VARCHAR(255) NOT NULL,            -- employee UUID, team name, or "company"
+  target_name VARCHAR(255) NOT NULL,          -- display name
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  metrics JSONB NOT NULL,                     -- PerformanceMetrics object
+  ai_summary TEXT,                            -- AI-generated narrative (nullable if AI unavailable)
+  prior_snapshot_ids JSONB DEFAULT '[]',      -- IDs of prior snapshots used as context
+  generated_by VARCHAR(255) NOT NULL,         -- username or "system" for scheduled
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_level_target ON performance_snapshots (level, target_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_period ON performance_snapshots (period_end DESC);
+
+-- ============================================================
 -- Incidents (Formal Incident Response — HIPAA §164.308(a)(6))
 -- ============================================================
 CREATE TABLE IF NOT EXISTS incidents (

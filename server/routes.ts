@@ -26,6 +26,7 @@ import { register as registerAnalyticsRoutes } from "./routes/analytics";
 import { register as registerCoachingRoutes } from "./routes/coaching";
 import { register as registerInsightRoutes } from "./routes/insights";
 import { registerUserRoutes } from "./routes/users";
+import { registerSnapshotRoutes } from "./routes/snapshots";
 
 // Pipeline
 import { processAudioFile, shouldUseBatchMode, audioProcessingQueue } from "./routes/pipeline";
@@ -75,6 +76,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerCoachingRoutes(router);
   registerInsightRoutes(router);
   registerUserRoutes(router);
+  registerSnapshotRoutes(router);
   registerAdminRoutes(router, upload.single('audioFile'), {
     getJobQueue: () => jobQueue,
     shouldUseBatchMode,

@@ -235,6 +235,21 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
+### Performance Snapshots (periodic reviews)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| POST | `/api/snapshots/employee/:id` | manager+ | Generate employee performance snapshot |
+| POST | `/api/snapshots/team` | manager+ | Generate team performance snapshot |
+| POST | `/api/snapshots/department` | manager+ | Generate department performance snapshot |
+| POST | `/api/snapshots/company` | manager+ | Generate company-wide performance snapshot |
+| POST | `/api/snapshots/batch` | admin | Batch generate all employee + team + company snapshots |
+| GET | `/api/snapshots/employee/:id` | authenticated | Get employee snapshot history |
+| GET | `/api/snapshots/team/:teamName` | authenticated | Get team snapshot history |
+| GET | `/api/snapshots/department/:dept` | authenticated | Get department snapshot history |
+| GET | `/api/snapshots/company` | authenticated | Get company-wide snapshot history |
+| GET | `/api/snapshots/all/:level` | manager+ | Get all snapshots for a level |
+| DELETE | `/api/snapshots/:level/:targetId/reset` | admin | AI Context Reset — clear all snapshots for a target |
+
 ### Webhooks (admin only)
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
