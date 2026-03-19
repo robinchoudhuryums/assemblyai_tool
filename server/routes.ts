@@ -275,6 +275,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
     jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
 
+    // Alert when a job exhausts all retries (dead letter)
+    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
+      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
+      // Broadcast via WebSocket so admin UI can display alert
+      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
+    };
+
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {
         const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {

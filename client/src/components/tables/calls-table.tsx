@@ -11,20 +11,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
+import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/constants";
+import { useTranslation } from "@/lib/i18n";
 
 type SortField = "date" | "duration" | "score" | "sentiment";
 type SortDir = "asc" | "desc";
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50];
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
 export default function CallsTable() {
+  const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
 
   // Pagination
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>("date");
@@ -244,7 +246,7 @@ export default function CallsTable() {
 
   const getSentimentBadge = (sentiment?: string) => {
     if (!sentiment) return <Badge variant="secondary">Unknown</Badge>;
-    const variants: Record<string, any> = {
+    const variants: Record<string, BadgeVariant> = {
       positive: "default", neutral: "secondary", negative: "destructive",
     };
     return (
@@ -368,28 +370,28 @@ export default function CallsTable() {
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("date")}>
-                  Date <SortIcon field="date" />
+                  {t("table.date")} <SortIcon field="date" />
                 </button>
               </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Employee</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.agent")}</th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("duration")}>
-                  Duration <SortIcon field="duration" />
+                  {t("table.duration")} <SortIcon field="duration" />
                 </button>
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("sentiment")}>
-                  Sentiment <SortIcon field="sentiment" />
+                  {t("sentiment.title")} <SortIcon field="sentiment" />
                 </button>
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("score")}>
-                  Score <SortIcon field="score" />
+                  {t("table.score")} <SortIcon field="score" />
                 </button>
               </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Party</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Status</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Actions</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("transcript.callParty")}</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.status")}</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.actions")}</th>
             </tr>
           </thead>
           <tbody>

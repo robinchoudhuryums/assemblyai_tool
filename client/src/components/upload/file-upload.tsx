@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { CALL_CATEGORIES } from "@shared/schema";
 import type { Employee } from "@shared/schema";
 import { useTranslation } from "@/lib/i18n";
+import { MAX_BATCH_SIZE, MAX_FILE_SIZE, MAX_CONCURRENT_UPLOADS } from "@/lib/constants";
 
 interface UploadFile {
   file: File;
@@ -116,8 +117,7 @@ export default function FileUpload() {
     setUploadFiles(prev => [...prev, ...newFiles]);
   }, []);
 
-  const MAX_BATCH_SIZE = 20;
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB — matches server limit
+  // MAX_BATCH_SIZE & MAX_FILE_SIZE imported from @/lib/constants
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (accepted, rejected) => {
@@ -170,7 +170,7 @@ export default function FileUpload() {
     }
   };
 
-  const MAX_CONCURRENT = 3;
+  const MAX_CONCURRENT = MAX_CONCURRENT_UPLOADS;
 
   const uploadAll = async () => {
     const pendingIndices = uploadFiles

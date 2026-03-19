@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { CallCard } from "@/components/search/call-card";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/constants";
 
 export default function SearchPage() {
   const searchParams = useSearch();
@@ -34,7 +35,7 @@ export default function SearchPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedQuery(searchQuery);
-    }, 500);
+    }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 

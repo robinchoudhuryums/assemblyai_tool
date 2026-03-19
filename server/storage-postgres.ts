@@ -536,10 +536,12 @@ export class PostgresStorage implements IStorage {
       LEFT JOIN employees e ON c.employee_id = e.id
       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
-      WHERE t.text ILIKE $1
-      ORDER BY c.uploaded_at DESC
-      LIMIT $2
-    `, [`%${query}%`, limit]);
+      WHERE to_tsvector('english', coalesce(t.text, '')) @@ plainto_tsquery('english', $1)
+         OR t.text ILIKE $2
+      ORDER BY ts_rank(to_tsvector('english', coalesce(t.text, '')), plainto_tsquery('english', $1)) DESC,
+               c.uploaded_at DESC
+      LIMIT $3
+    `, [query, `%${query}%`, limit]);
 
     if (rows.length === 0) return [];
 

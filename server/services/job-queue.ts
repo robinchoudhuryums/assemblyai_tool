@@ -37,6 +37,9 @@ export class JobQueue {
   private activeJobs = 0;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Optional callback invoked when a job moves to the dead-letter queue. */
+  onDeadLetter?: (jobId: string, reason: string, attempts: number) => void;
+
   constructor(
     private db: pg.Pool,
     private concurrency: number = 5,
@@ -124,6 +127,8 @@ export class JobQueue {
 
     if (newStatus === "dead") {
       console.error(`[JOB_QUEUE] Job ${jobId} moved to dead letter after ${attempts} attempts: ${reason}`);
+      // Emit dead-letter event for monitoring
+      this.onDeadLetter?.(jobId, reason, attempts);
     }
   }
 

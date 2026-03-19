@@ -42,7 +42,7 @@ interface Notification {
   read: boolean;
 }
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void } = {}) {
   const [location, navigate] = useLocation();
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -95,7 +95,7 @@ export default function Sidebar() {
     localStorage.setItem("theme", next ? "dark" : "light");
   };
 
-  // Initialize dark mode from localStorage on mount
+  // Initialize dark mode from localStorage or OS preference on mount
   useEffect(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "dark") {
@@ -104,6 +104,10 @@ export default function Sidebar() {
     } else if (saved === "light") {
       document.documentElement.classList.remove("dark");
       setIsDark(false);
+    } else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+      // No saved preference — respect OS dark mode
+      document.documentElement.classList.add("dark");
+      setIsDark(true);
     }
   }, []);
 
@@ -155,8 +159,24 @@ export default function Sidebar() {
     navigate(`/reports?employee=${employeeId}`);
   };
 
+  // Close sidebar on navigation (mobile)
+  useEffect(() => {
+    if (onClose) onClose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+
   return (
-    <aside className="w-64 bg-card border-r border-border flex flex-col" data-testid="sidebar">
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />
+      )}
+      <aside className={cn(
+        "w-64 bg-card border-r border-border flex flex-col z-50",
+        "lg:relative lg:translate-x-0",
+        "fixed inset-y-0 left-0 transition-transform duration-200",
+        isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+      )} data-testid="sidebar">
       <div className="p-6 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -429,5 +449,6 @@ export default function Sidebar() {
         </div>
       </div>
     </aside>
+    </>
   );
 }
