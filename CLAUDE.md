@@ -58,7 +58,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, batch inference
 server/routes.ts         # All API routes + audio processing pipeline
 server/storage.ts        # Storage abstraction (PostgreSQL, S3, or in-memory backends)
 server/storage-postgres.ts # PostgreSQL IStorage implementation (~30 methods)
@@ -184,6 +184,8 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
 | GET | `/api/insights` | authenticated | Aggregate insights & trends |
 | GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
+| GET | `/api/admin/dead-jobs` | admin | List dead-letter jobs (failed after max retries) |
+| POST | `/api/admin/dead-jobs/:id/retry` | admin | Retry a dead-letter job |
 | GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
 | GET | `/api/admin/security-summary` | admin | Security posture summary |
 | GET | `/api/admin/security-alerts` | admin | Recent security alerts |
@@ -358,6 +360,15 @@ pm2 logs --lines 20         # Verify startup — look for:
                             #   [STORAGE] Using S3 (bucket: ums-call-archive)
                             #   NOT: "S3 authentication not configured"
 ```
+
+### GitHub Actions CI/CD
+Pushes to `main` automatically trigger the Deploy workflow (`.github/workflows/deploy.yml`), which SSHs into EC2 and runs `deploy.sh`. Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`. Can also be triggered manually via `workflow_dispatch`.
+
+Additional workflows:
+- `.github/workflows/error-monitor.yml` — Error monitoring
+- `.github/workflows/view-logs.yml` — Log viewing
+
+A `deploy-rollback.sh` script is available for reverting to a previous build.
 
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):

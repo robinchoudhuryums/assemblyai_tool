@@ -379,7 +379,7 @@ CallAnalyzer handles Protected Health Information (PHI) in audio recordings and 
 ### Known Limitations
 - Auth users stored in environment variable (works for small teams; larger orgs should use an IdP like Cognito)
 - Same IAM user shared across 3 projects (consider separate IAM users or EC2 instance profiles)
-- No MFA enforcement (recommended for admin accounts)
+- MFA (TOTP) is available but optional by default — set `REQUIRE_MFA=true` to enforce for all users
 - No WAF configured (consider AWS WAF for additional protection)
 - S3/Bedrock accessed over public internet (consider VPC endpoints)
 
@@ -393,10 +393,19 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Health check — returns `{ status: "ok", timestamp }` |
-| `POST` | `/api/auth/login` | Login with username/password (rate limited) |
+| `POST` | `/api/auth/login` | Login with username/password (rate limited, supports MFA) |
 | `POST` | `/api/auth/logout` | Logout and clear session |
 | `GET` | `/api/auth/me` | Get current authenticated user |
 | `POST` | `/api/access-requests` | Submit access request (name, email, role, reason) |
+
+### MFA (authenticated)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/auth/mfa/status` | Check MFA status for current user |
+| `POST` | `/api/auth/mfa/setup` | Generate TOTP secret + otpauth URI |
+| `POST` | `/api/auth/mfa/enable` | Verify TOTP code and enable MFA |
+| `POST` | `/api/auth/mfa/disable` | Disable MFA (admin can disable for others) |
+| `GET` | `/api/auth/mfa/users` | List all MFA-enabled users (admin only) |
 
 ### Authenticated (any role)
 | Method | Path | Description |
@@ -408,6 +417,11 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/calls/:id/transcript` | Get transcript with word-level timing |
 | `GET` | `/api/calls/:id/sentiment` | Get sentiment analysis (overall + segments) |
 | `GET` | `/api/calls/:id/analysis` | Get AI analysis (scores, summary, feedback) |
+| `GET` | `/api/calls/:id/tags` | Get tags for a call |
+| `POST` | `/api/calls/:id/tags` | Add a tag to a call |
+| `DELETE` | `/api/calls/:id/tags/:tagId` | Remove a tag from a call |
+| `GET` | `/api/tags` | Get all unique tags (for autocomplete) |
+| `GET` | `/api/calls/by-tag/:tag` | Search calls by tag |
 | `GET` | `/api/employees` | List all employees |
 | `GET` | `/api/dashboard/metrics` | Aggregate metrics (total calls, avg scores) |
 | `GET` | `/api/dashboard/sentiment` | Sentiment distribution (positive/neutral/negative counts) |
@@ -420,6 +434,8 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `POST` | `/api/reports/agent-summary/:id` | Generate AI narrative summary for an agent |
 | `GET` | `/api/coaching/employee/:id` | Get coaching sessions for an employee |
 | `GET` | `/api/insights` | Aggregate insights and trends |
+| `GET` | `/api/analytics/teams` | Comparative team performance (sub-team aggregates) |
+| `GET` | `/api/analytics/team/:teamName` | Individual employee metrics within a team |
 
 ### Manager+ (manager or admin)
 | Method | Path | Description |
@@ -432,6 +448,8 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/coaching` | List all coaching sessions |
 | `POST` | `/api/coaching` | Create coaching session |
 | `PATCH` | `/api/coaching/:id` | Update coaching session |
+| `GET` | `/api/export/calls` | Export calls as CSV (with date/employee filters) |
+| `GET` | `/api/export/team-analytics` | Export team analytics as CSV |
 
 ### Admin only
 | Method | Path | Description |
@@ -448,6 +466,16 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `POST` | `/api/ab-tests/upload` | Start A/B model comparison |
 | `DELETE` | `/api/ab-tests/:id` | Delete A/B test |
 | `GET` | `/api/usage` | Get all usage/cost records |
+| `GET` | `/api/admin/queue-status` | Job queue stats (pending, running, completed, failed) |
+| `GET` | `/api/admin/dead-jobs` | List dead-letter jobs |
+| `POST` | `/api/admin/dead-jobs/:id/retry` | Retry a dead-letter job |
+| `GET` | `/api/admin/batch-status` | Bedrock batch inference status |
+| `GET` | `/api/admin/security-summary` | Security posture summary |
+| `GET` | `/api/admin/security-alerts` | Recent security alerts |
+| `PATCH` | `/api/admin/security-alerts/:id` | Acknowledge a security alert |
+| `GET` | `/api/admin/breach-reports` | List HIPAA breach reports |
+| `POST` | `/api/admin/breach-reports` | File a new breach report |
+| `PATCH` | `/api/admin/breach-reports/:id` | Update breach notification status |
 
 ---
 
@@ -462,24 +490,31 @@ assemblyai_tool/
 │       │   ├── upload.tsx          # Audio file upload
 │       │   ├── transcripts.tsx     # Call list + transcript viewer
 │       │   ├── search.tsx          # Full-text search
+│       │   ├── search-v2.tsx       # Alternative search implementation
 │       │   ├── sentiment.tsx       # Sentiment analysis dashboard
 │       │   ├── performance.tsx     # Performance metrics
 │       │   ├── reports.tsx         # Filterable reports + agent profiles
+│       │   ├── agent-scorecard.tsx # Agent performance scorecard
+│       │   ├── team-analytics.tsx  # Comparative team performance
 │       │   ├── insights.tsx        # Aggregate insights and trends
 │       │   ├── employees.tsx       # Employee management
 │       │   ├── coaching.tsx        # Coaching session management
 │       │   ├── admin.tsx           # Access request management
 │       │   ├── prompt-templates.tsx # Custom prompt template CRUD
 │       │   ├── ab-testing.tsx      # A/B model comparison tool
-│       │   ├── spend-tracking.tsx # API cost tracking dashboard
-│       │   └── auth.tsx            # Login + access request form
+│       │   ├── spend-tracking.tsx  # API cost tracking dashboard
+│       │   ├── security.tsx        # Security/breach reporting dashboard
+│       │   ├── auth.tsx            # Login + access request form
+│       │   └── not-found.tsx       # 404 page
 │       ├── components/
 │       │   ├── ui/                 # shadcn/ui components (card, dialog, table, etc.)
 │       │   ├── layout/sidebar.tsx  # Sidebar navigation
 │       │   ├── upload/             # File upload component
 │       │   ├── tables/             # Data table components
-│       │   ├── transcripts/        # Transcript viewer component
-│       │   └── dashboard/          # Dashboard sub-components
+│       │   ├── transcripts/        # Transcript viewer + audio waveform
+│       │   ├── dashboard/          # Dashboard sub-components
+│       │   ├── search/             # Search components (call card, employee filter)
+│       │   └── lib/                # Utility components (confirm dialog, error boundary)
 │       ├── hooks/                  # Custom React hooks (WebSocket, toast)
 │       ├── lib/                    # Utilities (queryClient, helpers)
 │       └── App.tsx                 # Root component with routing
@@ -487,21 +522,42 @@ assemblyai_tool/
 │   ├── index.ts                    # Server entry point (middleware, security headers, retention)
 │   ├── routes.ts                   # All API routes + audio processing pipeline
 │   ├── storage.ts                  # Storage abstraction (MemStorage + CloudStorage)
+│   ├── storage-postgres.ts         # PostgreSQL IStorage implementation (~30 methods)
 │   ├── auth.ts                     # Authentication (passport, sessions, role middleware)
+│   ├── vite.ts                     # Vite dev server integration
+│   ├── db/
+│   │   ├── schema.sql              # PostgreSQL schema definition
+│   │   └── pool.ts                 # Database connection pool + auto-init
 │   └── services/
 │       ├── bedrock.ts              # AWS Bedrock client (SigV4 signing, Converse API)
+│       ├── bedrock-batch.ts        # Bedrock batch inference mode (50% cost savings)
 │       ├── ai-provider.ts          # AI prompt building and response parsing
-│       ├── ai-factory.ts           # AI provider factory
+│       ├── ai-factory.ts           # AI provider factory/selector
 │       ├── assemblyai.ts           # AssemblyAI client (upload, transcribe, poll)
 │       ├── s3.ts                   # AWS S3 client (SigV4 signing, CRUD operations)
 │       ├── websocket.ts            # WebSocket server for real-time updates
-│       └── audit-log.ts            # HIPAA audit logging
+│       ├── audit-log.ts            # HIPAA audit logging (stdout + PostgreSQL)
+│       ├── job-queue.ts            # PostgreSQL-backed durable job queue
+│       ├── totp.ts                 # TOTP two-factor authentication (RFC 6238)
+│       └── security-monitor.ts     # Security event tracking and breach reporting
 ├── shared/
 │   └── schema.ts                   # Zod schemas shared between client and server
 ├── tests/
 │   ├── schema.test.ts              # Schema validation tests
-│   └── ai-provider.test.ts         # AI provider utility tests
-├── deploy.sh                       # EC2 deploy script
+│   ├── ai-provider.test.ts         # AI provider utility tests
+│   ├── auth.test.ts                # Authentication + role-based access tests
+│   ├── storage.test.ts             # Storage abstraction CRUD tests
+│   ├── postgres-storage.test.ts    # PostgreSQL integration tests (requires DATABASE_URL)
+│   └── job-queue.test.ts           # Job queue integration tests (requires DATABASE_URL)
+├── deploy/
+│   └── ec2/                        # EC2 deployment configs (Caddyfile, systemd, user-data)
+├── .github/
+│   └── workflows/
+│       ├── deploy.yml              # Auto-deploy to EC2 on push to main
+│       ├── error-monitor.yml       # Error monitoring workflow
+│       └── view-logs.yml           # Log viewing workflow
+├── deploy.sh                       # EC2 deploy script (pull, build, restart)
+├── deploy-rollback.sh              # Rollback to previous build
 ├── CLAUDE.md                       # Development reference (for AI assistants)
 ├── SECURITY.md                     # HIPAA security summary
 └── package.json                    # Dependencies and scripts
@@ -536,6 +592,16 @@ S3_BUCKET                       # S3 bucket name (default: ums-call-archive)
 
 # === AI Model ===
 BEDROCK_MODEL                   # Bedrock model ID (default: us.anthropic.claude-sonnet-4-6)
+
+# === Batch Inference (50% cost savings, delayed results) ===
+BEDROCK_BATCH_MODE              # Set to "true" to enable batch inference (default: disabled)
+BEDROCK_BATCH_ROLE_ARN          # IAM role ARN for Bedrock batch jobs (required if batch mode enabled)
+BATCH_INTERVAL_MINUTES          # How often to submit/check batch jobs (default: 15)
+BATCH_SCHEDULE_START            # Time-of-day to START batch mode (24h format, e.g. "18:00")
+BATCH_SCHEDULE_END              # Time-of-day to STOP batch mode (24h format, e.g. "08:00")
+
+# === MFA (Two-Factor Authentication) ===
+REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
 
 # === Optional ===
 PORT                            # Server port (default: 5000)
@@ -608,6 +674,13 @@ pm2 logs --lines 20  # Verify startup
 Internet → Caddy (port 443, auto-TLS) → Node.js (port 5000) → S3, AssemblyAI, Bedrock
 ```
 Caddy handles TLS termination with Let's Encrypt certificates for `umscallanalyzer.com`.
+
+### GitHub Actions CI/CD
+Pushes to `main` automatically deploy to EC2 via the `.github/workflows/deploy.yml` workflow. It SSHs into EC2 and runs `deploy.sh`. Can also be triggered manually from the GitHub Actions UI.
+
+Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
+
+Additional workflows: `error-monitor.yml` (error monitoring), `view-logs.yml` (log viewing).
 
 ### Render.com (Deprecated)
 Render.com was previously used for testing. All hosting is now on EC2 with RDS PostgreSQL.

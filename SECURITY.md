@@ -2,7 +2,7 @@
 
 **Purpose**: This document maps HIPAA safeguards to specific code and infrastructure controls, enabling IT review and compliance verification.
 
-**Last Updated**: 2026-03-10
+**Last Updated**: 2026-03-19
 
 ---
 
@@ -165,4 +165,5 @@ pm2 logs callanalyzer --lines 100 | grep HIPAA_AUDIT
 | **WAF** | Not configured | Consider AWS WAF for additional protection against web attacks |
 | **VPC endpoints** | S3/Bedrock accessed over public internet | Consider VPC endpoints for S3 and Bedrock to keep traffic off public internet |
 | **Backup** | S3 versioning enabled; no cross-region replication | Consider S3 cross-region replication for disaster recovery |
-| **MFA** | Not enforced for IAM user or app users | Enable MFA on the IAM user; consider app-level MFA for admin accounts |
+| **App MFA** | TOTP MFA implemented (`server/services/totp.ts`) but optional by default | Set `REQUIRE_MFA=true` to enforce for all users; consider enforcing for admin accounts at minimum |
+| **IAM MFA** | Not enforced on the shared IAM user | Enable MFA on the IAM user via AWS Console |
