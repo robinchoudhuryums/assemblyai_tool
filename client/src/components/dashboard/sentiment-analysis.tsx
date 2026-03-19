@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { useLocation } from "wouter";
+import { useTranslation } from "@/lib/i18n";
 import type { SentimentDistribution } from "@shared/schema";
 
 export default function SentimentAnalysis() {
   const [, navigate] = useLocation();
+  const { t } = useTranslation();
   const { data: sentimentData, isLoading } = useQuery<SentimentDistribution>({
     queryKey: ["/api/dashboard/sentiment"],
   });
@@ -41,7 +43,7 @@ export default function SentimentAnalysis() {
   return (
     <div className="bg-card rounded-lg border border-border p-6 hover-lift" data-testid="sentiment-analysis">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-foreground">Sentiment Analysis</h3>
+        <h3 className="text-lg font-semibold text-foreground">{t("sentiment.title")}</h3>
       </div>
 
       <div className="chart-container mb-4">
@@ -65,36 +67,39 @@ export default function SentimentAnalysis() {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <div
+        <button
+          type="button"
           className="text-center p-3 sentiment-positive rounded-lg cursor-pointer hover:ring-2 hover:ring-green-400 transition-all"
           onClick={() => navigate("/search?sentiment=positive")}
-          role="link"
+          aria-label={`View positive calls: ${pct(positive)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-positive">
             {pct(positive)}%
           </p>
-          <p className="text-sm font-medium">Positive ({positive})</p>
-        </div>
-        <div
+          <p className="text-sm font-medium">{t("sentiment.positive")} ({positive})</p>
+        </button>
+        <button
+          type="button"
           className="text-center p-3 sentiment-neutral rounded-lg cursor-pointer hover:ring-2 hover:ring-yellow-400 transition-all"
           onClick={() => navigate("/search?sentiment=neutral")}
-          role="link"
+          aria-label={`View neutral calls: ${pct(neutral)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-neutral">
             {pct(neutral)}%
           </p>
-          <p className="text-sm font-medium">Neutral ({neutral})</p>
-        </div>
-        <div
+          <p className="text-sm font-medium">{t("sentiment.neutral")} ({neutral})</p>
+        </button>
+        <button
+          type="button"
           className="text-center p-3 sentiment-negative rounded-lg cursor-pointer hover:ring-2 hover:ring-red-400 transition-all"
           onClick={() => navigate("/search?sentiment=negative")}
-          role="link"
+          aria-label={`View negative calls: ${pct(negative)}%`}
         >
           <p className="text-2xl font-bold" data-testid="sentiment-negative">
             {pct(negative)}%
           </p>
-          <p className="text-sm font-medium">Negative ({negative})</p>
-        </div>
+          <p className="text-sm font-medium">{t("sentiment.negative")} ({negative})</p>
+        </button>
       </div>
     </div>
   );

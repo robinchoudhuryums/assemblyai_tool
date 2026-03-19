@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck } from "lucide-react";
+import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck, Search, ChevronUp, ChevronDown, SkipForward, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { LoadingIndicator } from "@/components/ui/loading";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ScoreRing } from "@/components/ui/animated-number";
 import AudioWaveformDisplay from "./audio-waveform";
 
 interface TranscriptViewerProps {
@@ -34,6 +36,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const queryClient = useQueryClient();
 
   const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  /** Milliseconds of silence before splitting into a new transcript segment */
+  const SEGMENT_GAP_MS = 2000;
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate(prev => {
@@ -50,6 +54,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
 
+  // Transcript search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+
   // Warn before navigating away with unsaved edits
   useBeforeUnload(isEditing && (editScore !== "" || editSummary !== "" || editReason !== ""));
 
@@ -58,7 +69,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   });
 
   const editMutation = useMutation({
-    mutationFn: async (payload: { updates: Record<string, any>; reason: string }) => {
+    mutationFn: async (payload: { updates: Record<string, string | number>; reason: string }) => {
       const res = await fetch(`/api/calls/${callId}/analysis`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -87,7 +98,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   const handleSaveEdit = () => {
     if (!editReason.trim()) return;
-    const updates: Record<string, any> = {};
+    const updates: Record<string, string | number> = {};
     if (editScore !== (call?.analysis?.performanceScore?.toString() || "")) {
       updates.performanceScore = editScore;
     }
@@ -103,16 +114,31 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   // Close edit mode on Escape key (broadcast from App.tsx)
   useEffect(() => {
-    const onEscape = () => { if (isEditing) setIsEditing(false); };
+    const onEscape = () => {
+      if (searchOpen) { setSearchOpen(false); setSearchQuery(""); return; }
+      if (isEditing) setIsEditing(false);
+    };
     window.addEventListener("app:escape", onEscape);
     return () => window.removeEventListener("app:escape", onEscape);
-  }, [isEditing]);
+  }, [isEditing, searchOpen]);
 
-  // toDisplayString is now imported from @/lib/display-utils
-  // Keep a memoized reference to avoid breaking hook ordering
-  const _toDisplayString = useCallback((val: unknown): string => {
-    return toDisplayString(val);
+  // Ctrl+F / Cmd+F to open transcript search
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        // Only intercept if transcript viewer is visible
+        const el = transcriptContainerRef.current;
+        if (!el) return;
+        e.preventDefault();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // toDisplayString is a pure function imported from @/lib/display-utils — no memoization needed
 
   // Build keyword set from detected topics for highlighting
   // MUST be called before any early returns to respect Rules of Hooks
@@ -171,8 +197,44 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <LoadingIndicator text="Loading call analysis..." />
+      <div className="bg-card rounded-lg border border-border p-6 space-y-6">
+        {/* Header skeleton */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-20" />
+            <Skeleton className="h-9 w-24" />
+            <Skeleton className="h-9 w-28" />
+          </div>
+        </div>
+        {/* Audio waveform skeleton */}
+        <Skeleton className="h-16 w-full rounded-lg" />
+        {/* Call details skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex gap-3">
+                <Skeleton className="h-8 w-8 rounded-full shrink-0" />
+                <div className="space-y-1 flex-1">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-24 w-full rounded-lg" />
+            <Skeleton className="h-24 w-full rounded-lg" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -210,8 +272,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return [];
   }, [call.transcript?.words]);
 
+  interface TranscriptSegment {
+    start: number;
+    end: number;
+    text: string;
+    speaker: string;
+    sentiment: "neutral" | "positive" | "negative";
+  }
+
   function generateSegmentsFromWords(words: TranscriptWord[]) {
-    const segments: any[] = [];
+    const segments: TranscriptSegment[] = [];
     if (!words || !Array.isArray(words) || words.length === 0) return segments;
 
     const first = words[0];
@@ -229,7 +299,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       const timeGap = word.start - currentSegment.end;
       const speakerChange = word.speaker && word.speaker !== currentSegment.speaker;
 
-      if (timeGap > 2000 || speakerChange) {
+      if (timeGap > SEGMENT_GAP_MS || speakerChange) {
         segments.push({ ...currentSegment });
         currentSegment = {
           start: word.start,
@@ -248,6 +318,32 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return segments;
   }
 
+  // Compute search matches across segments
+  const searchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    const matches: { segmentIndex: number; charIndex: number }[] = [];
+    transcriptSegments.forEach((seg, segIdx) => {
+      const text = seg.text.toLowerCase();
+      let pos = 0;
+      while ((pos = text.indexOf(q, pos)) !== -1) {
+        matches.push({ segmentIndex: segIdx, charIndex: pos });
+        pos += 1;
+      }
+    });
+    return matches;
+  }, [searchQuery, transcriptSegments]);
+
+  // Navigate between search matches
+  const goToMatch = useCallback((idx: number) => {
+    if (searchMatches.length === 0) return;
+    const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    setSearchMatchIdx(wrapped);
+    const segIdx = searchMatches[wrapped].segmentIndex;
+    const el = transcriptContainerRef.current?.querySelector(`[data-testid="transcript-segment-${segIdx}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [searchMatches]);
+
   const jumpToTime = (timeMs: number) => {
     const audio = audioRef.current;
     if (audio) {
@@ -257,6 +353,32 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       }
     }
     setCurrentTime(timeMs);
+  };
+
+  // Skip to next segment (skips silence gaps between speakers)
+  const skipToNextSegment = () => {
+    const nextIdx = activeSegmentIndex + 1;
+    if (nextIdx < transcriptSegments.length) {
+      jumpToTime(transcriptSegments[nextIdx].start);
+    }
+  };
+
+  // Jump to next flagged/negative sentiment segment
+  const jumpToFlagged = () => {
+    const startIdx = activeSegmentIndex >= 0 ? activeSegmentIndex + 1 : 0;
+    for (let i = startIdx; i < transcriptSegments.length; i++) {
+      if (transcriptSegments[i].sentiment === "negative") {
+        jumpToTime(transcriptSegments[i].start);
+        return;
+      }
+    }
+    // Wrap around from beginning
+    for (let i = 0; i < startIdx; i++) {
+      if (transcriptSegments[i].sentiment === "negative") {
+        jumpToTime(transcriptSegments[i].start);
+        return;
+      }
+    }
   };
 
   const togglePlayPause = () => {
@@ -331,17 +453,39 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
-  const highlightKeywords = (text: string | any): React.ReactNode => {
+  const highlightKeywords = (text: string | any, segmentIndex?: number): React.ReactNode => {
     const str = typeof text === "string" ? text : toDisplayString(text);
-    if (topicKeywords.length === 0) return <>{str}</>;
-    const pattern = topicKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const regex = new RegExp(`(${pattern})`, "gi");
+    // Build combined regex for topics + search
+    const patterns: string[] = [];
+    if (topicKeywords.length > 0) {
+      patterns.push(...topicKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+    const sq = searchQuery.trim().toLowerCase();
+    if (sq) {
+      patterns.push(sq.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    }
+    if (patterns.length === 0) return <>{str}</>;
+    const regex = new RegExp(`(${patterns.join("|")})`, "gi");
     const parts = str.split(regex);
-    return <>{parts.map((part, i) =>
-      topicKeywords.includes(part.toLowerCase())
-        ? <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>
-        : part
-    )}</>;
+    // Track which search occurrence we're at within this segment to highlight the active match
+    let searchOccurrence = 0;
+    return <>{parts.map((part, i) => {
+      const lower = part.toLowerCase();
+      const isSearchMatch = sq && lower === sq;
+      const isTopicMatch = topicKeywords.includes(lower);
+      if (isSearchMatch) {
+        const occIdx = segmentIndex !== undefined
+          ? searchMatches.findIndex(m => m.segmentIndex === segmentIndex && m.charIndex === str.toLowerCase().indexOf(sq, searchOccurrence > 0 ? str.toLowerCase().indexOf(sq, 0) + searchOccurrence : 0))
+          : -1;
+        searchOccurrence++;
+        const isActive = searchMatches.length > 0 && searchMatches[searchMatchIdx]?.segmentIndex === segmentIndex;
+        return <mark key={i} className={`rounded px-0.5 ${isActive && occIdx === searchMatchIdx ? "bg-yellow-400 text-black" : "bg-yellow-200 dark:bg-yellow-700 text-foreground"}`}>{part}</mark>;
+      }
+      if (isTopicMatch) {
+        return <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>;
+      }
+      return part;
+    })}</>;
   };
 
   // Determine which segment is currently active based on audio time
@@ -362,17 +506,27 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={handleExportTranscript} data-testid="export-transcript">
+          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
+            <Search className="w-4 h-4 mr-1" />
+            Search
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
             <FileText className="w-4 h-4 mr-1" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} data-testid="download-audio">
+          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
             <Download className="w-4 h-4 mr-1" />
             Download
           </Button>
-          <Button size="sm" onClick={togglePlayPause} data-testid="play-audio">
+          <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
             {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
             {isPlaying ? "Pause" : "Play Audio"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={skipToNextSegment} aria-label="Skip to next segment" title="Skip silence / next speaker">
+            <SkipForward className="w-4 h-4" />
+          </Button>
+          <Button size="sm" variant="outline" onClick={jumpToFlagged} aria-label="Jump to next negative sentiment" title="Jump to next flagged moment">
+            <Flag className="w-4 h-4" />
           </Button>
           <Button
             size="sm"
@@ -430,7 +584,45 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <div className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
+          {/* Transcript search bar */}
+          {searchOpen && (
+            <div className="flex items-center gap-2 mb-2 bg-muted rounded-lg px-3 py-2">
+              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search transcript..."
+                className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    goToMatch(e.shiftKey ? searchMatchIdx - 1 : searchMatchIdx + 1);
+                  }
+                  if (e.key === "Escape") {
+                    setSearchOpen(false);
+                    setSearchQuery("");
+                  }
+                }}
+              />
+              {searchQuery && (
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {searchMatches.length > 0 ? `${searchMatchIdx + 1}/${searchMatches.length}` : "0 results"}
+                </span>
+              )}
+              <button onClick={() => goToMatch(searchMatchIdx - 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Previous match">
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => goToMatch(searchMatchIdx + 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Next match">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Close search">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          <div ref={transcriptContainerRef} className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
             {call.status !== 'completed' ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground">
@@ -460,7 +652,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                         <p className={`text-sm font-medium ${segment.speaker === 'Agent' ? 'text-primary' : 'text-gray-600'}`}>
                           {segment.speaker === 'Agent' ? `Agent (${call.employee?.name}):` : 'Customer:'}
                         </p>
-                        <p className="text-foreground">{highlightKeywords(segment.text)}</p>
+                        <p className="text-foreground">{highlightKeywords(segment.text, index)}</p>
                       </div>
                       <Badge className={getSentimentColor(segment.sentiment)}>
                         {segment.sentiment.charAt(0).toUpperCase() + segment.sentiment.slice(1)}
@@ -479,17 +671,17 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
         <div className="space-y-4">
           {/* Manual Edit Indicator */}
-          {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as any[]).length > 0 && (
+          {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as unknown[]).length > 0 && (
             <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 border border-amber-200 dark:border-amber-900">
               <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 text-xs font-medium mb-1">
                 <History className="w-3.5 h-3.5" />
-                Manually Edited ({(call.analysis.manualEdits as any[]).length} edit{(call.analysis.manualEdits as any[]).length > 1 ? "s" : ""})
+                Manually Edited ({(call.analysis.manualEdits as unknown[]).length} edit{(call.analysis.manualEdits as unknown[]).length > 1 ? "s" : ""})
               </div>
-              {(call.analysis.manualEdits as any[]).map((edit: any, i: number) => (
+              {(call.analysis.manualEdits as Array<{ editedBy?: string; reason?: string; editedAt?: string }>).map((edit, i: number) => (
                 <div key={i} className="text-xs text-muted-foreground mt-1 pl-5">
                   <span className="font-medium">{edit.editedBy}</span> — {edit.reason}
                   <span className="text-muted-foreground/60 ml-1">
-                    ({new Date(edit.editedAt).toLocaleDateString()} {new Date(edit.editedAt).toLocaleTimeString()})
+                    ({new Date(edit.editedAt || "").toLocaleDateString()} {new Date(edit.editedAt || "").toLocaleTimeString()})
                   </span>
                 </div>
               ))}
@@ -559,7 +751,14 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     {call.sentiment.overallSentiment.charAt(0).toUpperCase() + call.sentiment.overallSentiment.slice(1)}
                   </Badge>
                 ) : 'Unknown'}</p>
-                <p><strong>Performance Score:</strong> {call.analysis?.performanceScore ? Number(call.analysis.performanceScore).toFixed(1) : 'N/A'}/10</p>
+                <div className="flex items-center gap-2">
+                  <strong className="text-sm">Performance:</strong>
+                  {call.analysis?.performanceScore ? (
+                    <ScoreRing score={Number(call.analysis.performanceScore)} size={40} strokeWidth={3} />
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
                 {call.analysis?.subScores && (
                   <div className="mt-2 pt-2 border-t border-border space-y-1.5">
                     {[
@@ -568,7 +767,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                       { label: "Communication", key: "communication", color: "text-purple-600", bar: "from-purple-500 to-violet-400" },
                       { label: "Resolution", key: "resolution", color: "text-amber-600", bar: "from-amber-500 to-yellow-400" },
                     ].map(dim => {
-                      const val = (call.analysis!.subScores as any)?.[dim.key];
+                      const val = (call.analysis!.subScores as Record<string, number | undefined>)?.[dim.key];
                       if (val == null) return null;
                       return (
                         <div key={dim.key}>
@@ -577,7 +776,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                             <span className={`font-semibold ${dim.color}`}>{Number(val).toFixed(1)}</span>
                           </div>
                           <div className="w-full h-1.5 bg-muted-foreground/20 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar}`} style={{ width: `${Number(val) * 10}%` }} />
+                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar} score-bar-fill`} style={{ width: `${Number(val) * 10}%` }} />
                           </div>
                         </div>
                       );
@@ -631,17 +830,19 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             </div>
           )}
 
-          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (
+          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (() => {
+            const feedback = call.analysis.feedback as { strengths?: unknown[]; suggestions?: unknown[] };
+            return (
             <div className="bg-muted rounded-lg p-4">
               <h4 className="font-semibold text-foreground mb-3">AI Feedback</h4>
               <div className="space-y-2 text-sm">
-                {Array.isArray((call.analysis.feedback as any).strengths) && (call.analysis.feedback as any).strengths.length > 0 && (
+                {Array.isArray(feedback.strengths) && feedback.strengths.length > 0 && (
                   <div>
                     <p className="font-medium text-green-600">Strengths:</p>
                     <ul className="space-y-1.5 text-muted-foreground">
-                      {(call.analysis.feedback as any).strengths.map((item: unknown, index: number) => {
+                      {feedback.strengths.map((item: unknown, index: number) => {
                         const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as any).timestamp : null;
+                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
                         return (
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-green-500 mt-0.5 shrink-0">+</span>
@@ -664,13 +865,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     </ul>
                   </div>
                 )}
-                {Array.isArray((call.analysis.feedback as any).suggestions) && (call.analysis.feedback as any).suggestions.length > 0 && (
+                {Array.isArray(feedback.suggestions) && feedback.suggestions.length > 0 && (
                   <div>
                     <p className="font-medium text-primary">Suggestions:</p>
                     <ul className="space-y-1.5 text-muted-foreground">
-                      {(call.analysis.feedback as any).suggestions.map((item: unknown, index: number) => {
+                      {feedback.suggestions.map((item: unknown, index: number) => {
                         const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as any).timestamp : null;
+                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
                         return (
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-amber-500 mt-0.5 shrink-0">!</span>
@@ -695,7 +896,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 )}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Call Flags */}
           {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as unknown[]).length > 0 && (() => {
@@ -800,7 +1002,105 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               </div>
             );
           })()}
+
+          {/* Transcript Annotations */}
+          <AnnotationsPanel callId={callId} currentTime={currentTime} onJump={jumpToTime} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Annotations panel — timestamped comments from managers */
+function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; currentTime: number; onJump: (ms: number) => void }) {
+  const [newText, setNewText] = React.useState("");
+  const queryClient = useQueryClient();
+
+  const { data: annotations } = useQuery<import("@shared/schema").Annotation[]>({
+    queryKey: ["/api/calls", callId, "annotations"],
+    queryFn: async () => {
+      const res = await fetch(`/api/calls/${callId}/annotations`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async (payload: { timestampMs: number; text: string }) => {
+      const res = await fetch(`/api/calls/${callId}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to add annotation");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] });
+      setNewText("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include" });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
+  });
+
+  const formatTime = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="bg-muted rounded-lg p-4">
+      <h4 className="font-semibold text-foreground mb-3 flex items-center gap-1.5">
+        <ClipboardCheck className="w-4 h-4" /> Annotations
+      </h4>
+      {(annotations || []).length > 0 && (
+        <div className="space-y-2 mb-3">
+          {(annotations || []).map(a => (
+            <div key={a.id} className="text-xs border-l-2 border-primary/30 pl-2 group">
+              <button
+                className="text-primary font-mono hover:underline"
+                onClick={() => onJump(a.timestampMs)}
+              >
+                {formatTime(a.timestampMs)}
+              </button>
+              <span className="text-muted-foreground ml-1">— {a.author}</span>
+              <p className="text-foreground mt-0.5">{a.text}</p>
+              <button
+                className="text-destructive/50 hover:text-destructive text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => deleteMutation.mutate(a.id)}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <Input
+          className="h-7 text-xs flex-1"
+          placeholder={`Note at ${formatTime(currentTime)}...`}
+          value={newText}
+          onChange={e => setNewText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && newText.trim()) {
+              addMutation.mutate({ timestampMs: Math.round(currentTime), text: newText.trim() });
+            }
+          }}
+        />
+        <Button
+          size="sm"
+          className="h-7 text-xs px-2"
+          disabled={!newText.trim() || addMutation.isPending}
+          onClick={() => addMutation.mutate({ timestampMs: Math.round(currentTime), text: newText.trim() })}
+        >
+          Add
+        </Button>
       </div>
     </div>
   );

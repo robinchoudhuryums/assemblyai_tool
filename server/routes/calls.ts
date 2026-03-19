@@ -8,7 +8,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { recordDataAccess } from "../services/security-monitor";
 import { broadcastCallUpdate } from "../services/websocket";
 import { getPool } from "../db/pool";
-import { CALL_CATEGORIES } from "@shared/schema";
+import { CALL_CATEGORIES, analysisEditSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
 import { cleanupFile } from "./utils";
 import { TaskQueue } from "./utils";
@@ -47,28 +47,44 @@ export function registerCallRoutes(
   processAudioFn: ProcessAudioFn,
   getJobQueue: () => JobQueue | null,
 ) {
-  // Get all calls with details (paginated)
+  // Get all calls with details (paginated — supports offset and cursor modes)
   router.get("/api/calls", requireAuth, async (req, res) => {
     try {
-      const { status, sentiment, employee } = req.query;
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 50, 200));
-
-      const calls = await storage.getCallsWithDetails({
+      const { status, sentiment, employee, cursor } = req.query;
+      const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 25, 200));
+      const filters = {
         status: status as string,
         sentiment: sentiment as string,
-        employee: employee as string
-      });
+        employee: employee as string,
+      };
 
-      const total = calls.length;
-      const totalPages = Math.ceil(total / limit);
-      const offset = (page - 1) * limit;
-      const paginated = calls.slice(offset, offset + limit);
-
-      res.json({
-        calls: paginated,
-        pagination: { page, limit, total, totalPages },
-      });
+      if (cursor || req.query.mode === "cursor") {
+        // Cursor-based pagination (efficient for large datasets)
+        const result = await storage.getCallsPaginated({
+          filters,
+          cursor: cursor as string | undefined,
+          limit,
+        });
+        const totalPages = Math.ceil(result.total / limit);
+        res.json({
+          calls: result.calls,
+          pagination: { page: 1, limit, total: result.total, totalPages },
+          nextCursor: result.nextCursor,
+          hasMore: result.nextCursor !== null,
+        });
+      } else {
+        // Legacy offset-based pagination (backward compatible)
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const calls = await storage.getCallsWithDetails(filters);
+        const total = calls.length;
+        const totalPages = Math.ceil(total / limit);
+        const offset = (page - 1) * limit;
+        const paginated = calls.slice(offset, offset + limit);
+        res.json({
+          calls: paginated,
+          pagination: { page, limit, total, totalPages },
+        });
+      }
     } catch (error) {
       res.status(500).json({ message: "Failed to get calls" });
     }
@@ -127,6 +143,12 @@ export function registerCallRoutes(
       if (!req.file) {
         res.status(400).json({ message: "No audio file provided" });
         return;
+      }
+
+      // Sanitize file name to prevent path traversal
+      const sanitizedName = path.basename(req.file.originalname);
+      if (sanitizedName !== req.file.originalname) {
+        req.file.originalname = sanitizedName;
       }
 
       const { employeeId } = req.body;
@@ -373,24 +395,10 @@ export function registerCallRoutes(
         detail: `reason: ${reason}; fields: ${updates ? Object.keys(updates).join(",") : "none"}`,
       });
 
-      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
-        res.status(400).json({ message: "A reason for the manual edit is required." });
-        return;
-      }
-
-      if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
-        res.status(400).json({ message: "Updates must be a non-empty object." });
-        return;
-      }
-
-      // Whitelist allowed fields to prevent arbitrary overwrites
-      const ALLOWED_FIELDS = new Set([
-        "summary", "performanceScore", "topics", "actionItems",
-        "feedback", "flags", "sentiment", "sentimentScore",
-      ]);
-      const disallowed = Object.keys(updates).filter(k => !ALLOWED_FIELDS.has(k));
-      if (disallowed.length > 0) {
-        res.status(400).json({ message: `Cannot edit fields: ${disallowed.join(", ")}` });
+      // Validate using shared Zod schema (type checks + range validation + whitelist)
+      const parsed = analysisEditSchema.safeParse({ updates, reason });
+      if (!parsed.success) {
+        res.status(400).json({ message: "Invalid edit data", errors: parsed.error.flatten() });
         return;
       }
 
@@ -608,6 +616,162 @@ export function registerCallRoutes(
       })));
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls by tag" });
+    }
+  });
+
+  // ==================== BULK RE-ANALYSIS (admin only) ====================
+  router.post("/api/calls/bulk-reanalyze", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { callIds } = req.body;
+      if (!Array.isArray(callIds) || callIds.length === 0) {
+        res.status(400).json({ message: "callIds must be a non-empty array" });
+        return;
+      }
+      if (callIds.length > 50) {
+        res.status(400).json({ message: "Maximum 50 calls can be re-analyzed at once" });
+        return;
+      }
+
+      const jobQueue = getJobQueue();
+      const results: { callId: string; status: string }[] = [];
+
+      for (const callId of callIds) {
+        const call = await storage.getCall(callId);
+        if (!call) {
+          results.push({ callId, status: "not_found" });
+          continue;
+        }
+        if (call.status === "processing") {
+          results.push({ callId, status: "already_processing" });
+          continue;
+        }
+
+        // Get audio from storage
+        const audioFiles = await storage.getAudioFiles(callId);
+        if (audioFiles.length === 0) {
+          results.push({ callId, status: "no_audio" });
+          continue;
+        }
+
+        // Reset call status to processing
+        await storage.updateCall(callId, { status: "processing" });
+
+        const uploadUser = (req as any).user?.username || "admin";
+
+        if (jobQueue) {
+          await jobQueue.enqueue("process_audio", {
+            callId,
+            filePath: "",
+            originalName: call.fileName || "reanalysis",
+            mimeType: "audio/mpeg",
+            callCategory: call.callCategory || null,
+            uploadedBy: uploadUser,
+            processingMode: null,
+            language: null,
+          });
+        } else {
+          // Fallback: use in-memory queue
+          const audioBuffer = await storage.downloadAudio(audioFiles[0]);
+          if (audioBuffer) {
+            const audioQueue = new TaskQueue(3);
+            audioQueue.add(() => processAudioFn(
+              callId, "", audioBuffer, call.fileName || "reanalysis",
+              "audio/mpeg", call.callCategory, uploadUser,
+            )).catch(async (error) => {
+              console.error(`Failed to re-analyze call ${callId}:`, error);
+              await storage.updateCall(callId, { status: "failed" });
+            });
+          }
+        }
+
+        results.push({ callId, status: "queued" });
+      }
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "bulk_reanalyze",
+        resourceType: "calls",
+        resourceId: callIds.join(","),
+        detail: `Bulk re-analysis of ${callIds.length} calls`,
+      });
+
+      res.json({
+        message: `${results.filter(r => r.status === "queued").length} of ${callIds.length} calls queued for re-analysis`,
+        results,
+      });
+    } catch (error) {
+      console.error("Bulk re-analysis failed:", (error as Error).message);
+      res.status(500).json({ message: "Failed to start bulk re-analysis" });
+    }
+  });
+
+  // ==================== ANNOTATIONS ====================
+
+  // Get annotations for a call
+  router.get("/api/calls/:id/annotations", requireAuth, async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.json([]);
+        return;
+      }
+      const { rows } = await pool.query(
+        "SELECT * FROM annotations WHERE call_id = $1 ORDER BY timestamp_ms ASC",
+        [req.params.id]
+      );
+      res.json(rows.map(r => ({
+        id: r.id,
+        callId: r.call_id,
+        timestampMs: r.timestamp_ms,
+        text: r.text,
+        author: r.author,
+        createdAt: r.created_at?.toISOString?.() ?? r.created_at,
+      })));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get annotations" });
+    }
+  });
+
+  // Create annotation
+  router.post("/api/calls/:id/annotations", requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.status(503).json({ message: "Annotations require PostgreSQL" });
+        return;
+      }
+      const { timestampMs, text } = req.body;
+      if (typeof timestampMs !== "number" || !text?.trim()) {
+        res.status(400).json({ message: "timestampMs (number) and text (string) are required" });
+        return;
+      }
+      const { rows } = await pool.query(
+        `INSERT INTO annotations (call_id, timestamp_ms, text, author) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [req.params.id, timestampMs, text.trim(), req.user?.name || req.user?.username || "unknown"]
+      );
+      const r = rows[0];
+      res.json({
+        id: r.id, callId: r.call_id, timestampMs: r.timestamp_ms,
+        text: r.text, author: r.author, createdAt: r.created_at?.toISOString?.() ?? r.created_at,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create annotation" });
+    }
+  });
+
+  // Delete annotation
+  router.delete("/api/calls/:id/annotations/:annotationId", requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const pool = (await import("../db/pool")).getPool();
+      if (!pool) {
+        res.status(503).json({ message: "Annotations require PostgreSQL" });
+        return;
+      }
+      await pool.query("DELETE FROM annotations WHERE id = $1 AND call_id = $2", [req.params.annotationId, req.params.id]);
+      res.json({ message: "Annotation deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete annotation" });
     }
   });
 }

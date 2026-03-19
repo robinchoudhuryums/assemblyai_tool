@@ -1,5 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
+import { DEFAULT_STALE_TIME_MS } from "@/lib/constants";
 
 /** Sentinel error so components can distinguish session expiry from real errors. */
 export class SessionExpiredError extends Error {
@@ -111,7 +112,7 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchOnWindowFocus: true,
-      staleTime: 60000, // Data considered fresh for 1 minute
+      staleTime: DEFAULT_STALE_TIME_MS, // Data considered fresh for 1 minute
       retry: (failureCount, error) => {
         // Never retry on session expiry
         if (error instanceof SessionExpiredError) return false;

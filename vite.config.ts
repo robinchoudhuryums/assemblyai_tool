@@ -24,6 +24,23 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split Recharts into its own chunk (372KB) — only loaded by pages that use charts
+          recharts: ["recharts"],
+          // Split heavy UI framework into vendor chunk
+          "radix-ui": [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-select",
+            "@radix-ui/react-tabs",
+            "@radix-ui/react-toast",
+            "@radix-ui/react-tooltip",
+            "@radix-ui/react-popover",
+          ],
+        },
+      },
+    },
   },
   server: {
     fs: {

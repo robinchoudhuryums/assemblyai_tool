@@ -4,6 +4,7 @@ import fs from "fs";
 import { randomUUID } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
+import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { getRecentAlerts, acknowledgeAlert, getSecuritySummary, createBreachReport, updateBreachStatus, getAllBreachReports } from "../services/security-monitor";
@@ -803,4 +804,33 @@ export function registerAdminRoutes(
       await cleanupFile(filePath);
     }
   }
+
+  // ==================== SCHEDULED REPORTS ====================
+
+  // List all generated reports
+  router.get("/api/admin/reports", requireRole("manager", "admin"), async (_req, res) => {
+    res.json(getReports());
+  });
+
+  // Get a specific report
+  router.get("/api/admin/reports/:id", requireRole("manager", "admin"), async (req, res) => {
+    const report = getReport(req.params.id);
+    if (!report) {
+      res.status(404).json({ message: "Report not found" });
+      return;
+    }
+    res.json(report);
+  });
+
+  // Generate a report on-demand
+  router.post("/api/admin/reports/generate", requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const type = req.body.type === "monthly" ? "monthly" : "weekly";
+      const report = await generateReport(type, req.user?.username || "unknown");
+      res.json(report);
+    } catch (error) {
+      console.error("Report generation error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to generate report" });
+    }
+  });
 }

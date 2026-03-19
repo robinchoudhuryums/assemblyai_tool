@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings, KeyRound } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { extractErrorMessage } from "@/lib/display-utils";
 import { USER_ROLES } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -50,10 +51,8 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       }
 
       onLogin();
-    } catch (error: any) {
-      const message = error.message?.includes(":")
-        ? error.message.split(": ").slice(1).join(": ")
-        : error.message;
+    } catch (error: unknown) {
+      const message = extractErrorMessage(error);
       toast({
         title: "Login Failed",
         description: message,
@@ -71,10 +70,8 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     try {
       await apiRequest("POST", "/api/auth/login", { mfaToken, totpCode });
       onLogin();
-    } catch (error: any) {
-      const message = error.message?.includes(":")
-        ? error.message.split(": ").slice(1).join(": ")
-        : error.message;
+    } catch (error: unknown) {
+      const message = extractErrorMessage(error);
       toast({
         title: "Verification Failed",
         description: message,
@@ -107,10 +104,10 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         title: "Request Submitted",
         description: "An administrator will review your access request.",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Request Failed",
-        description: error.message || "Could not submit access request.",
+        description: extractErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -250,7 +247,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     autoComplete="current-password"
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
+                <Button type="submit" className="w-full" disabled={isLoading || !username.trim() || !password}>
                   {isLoading ? (
                     <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
@@ -316,7 +313,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     onChange={(e) => setRequestReason(e.target.value)}
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
+                <Button type="submit" className="w-full" disabled={isLoading || !requestName.trim() || !requestEmail.trim()}>
                   {isLoading ? (
                     <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (

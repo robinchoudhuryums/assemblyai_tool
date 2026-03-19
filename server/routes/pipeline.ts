@@ -3,6 +3,7 @@ import fs from "fs";
 import { storage } from "../storage";
 import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetrics } from "../services/assemblyai";
 import { aiProvider } from "../services/ai-factory";
+import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
 import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
@@ -60,10 +61,24 @@ export async function processAudioFile(
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
-    // Step 1a: Upload to AssemblyAI
-    console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
-    const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
-    console.log(`[${callId}] Step 1/7: Upload to AssemblyAI successful.`);
+    // Step 1a: Get audio URL for AssemblyAI
+    // Prefer pre-signed S3 URL (avoids re-uploading audio buffer to AssemblyAI)
+    let audioUrl: string;
+    const existingAudioFiles = await storage.getAudioFiles(callId);
+    if (existingAudioFiles.length > 0 && storage.getAudioPresignedUrl) {
+      const presigned = await storage.getAudioPresignedUrl(existingAudioFiles[0]);
+      if (presigned) {
+        audioUrl = presigned;
+        console.log(`[${callId}] Step 1/7: Using pre-signed S3 URL for AssemblyAI (skipping upload).`);
+      } else {
+        console.log(`[${callId}] Step 1/7: Pre-signed URL unavailable, uploading to AssemblyAI...`);
+        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      }
+    } else {
+      console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
+      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+    }
+    console.log(`[${callId}] Step 1/7: Audio URL ready.`);
 
     // Step 1b: Archive audio to cloud storage (skip if already archived by job queue)
     const existingAudio = await storage.getAudioFiles(callId);
@@ -268,7 +283,12 @@ export async function processAudioFile(
       }
     }
 
-    if (aiProvider.isAvailable && speakerLabeledText) {
+    // Skip AI for very short calls (< 15 seconds) — likely noise, voicemail, or misdials
+    const tooShortForAI = callDurationSeconds < 15;
+
+    if (tooShortForAI) {
+      console.log(`[${callId}] Step 4/6: Skipping AI analysis (call too short: ${callDurationSeconds}s). Saves ~$0.05.`);
+    } else if (aiProvider.isAvailable && speakerLabeledText) {
       try {
         const transcriptCharCount = speakerLabeledText.length;
         const estimatedTokens = Math.ceil(transcriptCharCount / 4);
@@ -278,7 +298,22 @@ export async function processAudioFile(
           console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
         }
 
-        aiAnalysis = await aiProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
+        // Cost optimization: use Haiku for short routine calls (≤ 2min, no flags, no custom template)
+        // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call
+        const isRoutineShort = callDurationSeconds <= 120 && !promptTemplate && estimatedTokens < 3000;
+        let analysisProvider = aiProvider;
+        if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
+          try {
+            const { BedrockProvider } = await import("../services/bedrock");
+            const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
+            analysisProvider = BedrockProvider.createWithModel(haikuModel);
+            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ 120s, ~${estimatedTokens} tokens) — 67% cost savings`);
+          } catch {
+            // Fall back to default provider
+          }
+        }
+
+        aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);
@@ -323,11 +358,13 @@ export async function processAudioFile(
     analysis.confidenceFactors = confidenceFactors;
 
     if (aiAnalysis?.sub_scores) {
+      const calConfig = getCalibrationConfig();
+      const calibrated = calibrateSubScores(aiAnalysis.sub_scores, calConfig);
       analysis.subScores = {
-        compliance: aiAnalysis.sub_scores.compliance ?? 0,
-        customerExperience: aiAnalysis.sub_scores.customer_experience ?? 0,
-        communication: aiAnalysis.sub_scores.communication ?? 0,
-        resolution: aiAnalysis.sub_scores.resolution ?? 0,
+        compliance: calibrated.compliance,
+        customerExperience: calibrated.customer_experience,
+        communication: calibrated.communication,
+        resolution: calibrated.resolution,
       };
     }
 
@@ -393,27 +430,27 @@ export async function processAudioFile(
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
 
+    // Generate embedding for clustering (non-blocking, fires in background)
+    if (aiProvider.isAvailable && speakerLabeledText) {
+      const embeddingText = [
+        aiAnalysis?.summary || "",
+        ...(aiAnalysis?.topics || []).map((t: any) => typeof t === "string" ? t : t?.text || ""),
+        ...(aiAnalysis?.action_items || []).slice(0, 3).map((a: any) => typeof a === "string" ? a : a?.text || ""),
+      ].filter(Boolean).join(". ");
+
+      if (embeddingText.length > 20) {
+        generateCallEmbedding(callId, embeddingText).catch(err =>
+          console.warn(`[${callId}] Embedding generation failed (non-blocking):`, err.message)
+        );
+      }
+    }
+
     // Auto-assign to employee based on detected agent name
     const currentCall = await storage.getCall(callId);
     let autoAssigned = false;
     if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
-      const detectedName = aiAnalysis.detected_agent_name.toLowerCase().trim();
-      const allEmployees = await storage.getAllEmployees();
-
-      let matchedEmployee = allEmployees.find(emp =>
-        emp.name.toLowerCase() === detectedName
-      );
-
-      if (!matchedEmployee) {
-        const firstNameMatches = allEmployees.filter(emp =>
-          emp.name.toLowerCase().split(" ")[0] === detectedName
-        );
-        if (firstNameMatches.length === 1) {
-          matchedEmployee = firstNameMatches[0];
-        } else if (firstNameMatches.length > 1) {
-          console.log(`[${callId}] Detected agent "${detectedName}" matches ${firstNameMatches.length} employees — skipping ambiguous auto-assign.`);
-        }
-      }
+      const detectedName = aiAnalysis.detected_agent_name.trim();
+      const matchedEmployee = await storage.findEmployeeByName(detectedName);
 
       if (matchedEmployee) {
         await storage.updateCall(callId, { employeeId: matchedEmployee.id });
@@ -537,5 +574,22 @@ export async function processAudioFile(
     }).catch(() => {});
 
     await cleanupFile(filePath);
+  }
+}
+
+/**
+ * Generate and store a Bedrock Titan embedding for a call.
+ * Non-blocking — failures don't affect the main pipeline.
+ */
+async function generateCallEmbedding(callId: string, text: string): Promise<void> {
+  const { BedrockProvider } = await import("../services/bedrock");
+  const provider = new BedrockProvider();
+  const embedding = await provider.generateEmbedding(text);
+  if (embedding && embedding.length > 0) {
+    const existing = await storage.getCallAnalysis(callId);
+    if (existing) {
+      await storage.updateCallAnalysis(callId, { embedding } as any);
+      console.log(`[${callId}] Embedding stored (${embedding.length}-dim)`);
+    }
   }
 }

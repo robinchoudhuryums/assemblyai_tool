@@ -22,7 +22,7 @@ import { registerAdminRoutes } from "./routes/admin";
 import { register as registerDashboardRoutes } from "./routes/dashboard";
 import { register as registerEmployeeRoutes } from "./routes/employees";
 import { registerReportRoutes } from "./routes/reports";
-import { register as registerAnalyticsRoutes } from "./routes/analytics";
+import { register as registerAnalyticsRoutes, registerHeatmapRoutes } from "./routes/analytics";
 import { register as registerCoachingRoutes } from "./routes/coaching";
 import { register as registerInsightRoutes } from "./routes/insights";
 import { registerUserRoutes } from "./routes/users";
@@ -44,18 +44,18 @@ const upload = multer({
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg'];
+    const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg', '.webm'];
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
       'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/flac', 'audio/x-flac',
-      'audio/ogg', 'audio/vorbis', 'video/mp4',
+      'audio/ogg', 'audio/vorbis', 'video/mp4', 'audio/webm', 'video/webm',
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     const mimeOk = allowedMimeTypes.includes(file.mimetype);
     if (allowedTypes.includes(ext) && mimeOk) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only audio files (MP3, WAV, M4A, MP4, FLAC, OGG) are allowed.'), false);
+      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`), false);
     }
   }
 });
@@ -73,6 +73,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerCallRoutes(router, upload.single('audioFile'), processAudioFile, () => jobQueue);
   registerReportRoutes(router);
   registerAnalyticsRoutes(router);
+  registerHeatmapRoutes(router);
   registerCoachingRoutes(router);
   registerInsightRoutes(router);
   registerUserRoutes(router);
@@ -81,6 +82,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     getJobQueue: () => jobQueue,
     shouldUseBatchMode,
   });
+
+  // Start scheduled report generation
+  import("./services/scheduled-reports").then(m => m.startReportScheduler()).catch(() => {});
 
   // Mount all routes on the app
   app.use(router);
@@ -169,15 +173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   if (analysis.detected_agent_name) {
                     const currentCall = await storage.getCall(callId);
                     if (currentCall && !currentCall.employeeId) {
-                      const detectedName = analysis.detected_agent_name.toLowerCase().trim();
-                      const allEmployees = await storage.getAllEmployees();
-                      let matchedEmployee = allEmployees.find(emp => emp.name.toLowerCase() === detectedName);
-                      if (!matchedEmployee) {
-                        const firstNameMatches = allEmployees.filter(emp =>
-                          emp.name.toLowerCase().split(" ")[0] === detectedName
-                        );
-                        if (firstNameMatches.length === 1) matchedEmployee = firstNameMatches[0];
-                      }
+                      const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
                       if (matchedEmployee) {
                         await storage.updateCall(callId, { employeeId: matchedEmployee.id });
                         console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
@@ -282,6 +278,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
     const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
     jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
+
+    // Alert when a job exhausts all retries (dead letter)
+    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
+      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
+      // Broadcast via WebSocket so admin UI can display alert
+      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
+    };
 
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {

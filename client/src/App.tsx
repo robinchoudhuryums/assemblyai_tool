@@ -29,6 +29,10 @@ const ABTestingPage = lazy(() => import("@/pages/ab-testing"));
 const SpendTrackingPage = lazy(() => import("@/pages/spend-tracking"));
 const AgentScorecardPage = lazy(() => import("@/pages/agent-scorecard"));
 const TeamAnalyticsPage = lazy(() => import("@/pages/team-analytics"));
+const AgentComparePage = lazy(() => import("@/pages/agent-compare"));
+const HeatmapCalendarPage = lazy(() => import("@/pages/heatmap-calendar"));
+const CallClustersPage = lazy(() => import("@/pages/call-clusters"));
+const MyPerformancePage = lazy(() => import("@/pages/my-performance"));
 const SecurityPage = lazy(() => import("@/pages/security"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -94,6 +98,7 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
 function Router() {
   const [location, navigate] = useLocation();
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // WebSocket listener for real-time notifications
   useWebSocket();
@@ -145,8 +150,18 @@ function Router() {
   return (
     <div className="flex h-screen">
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
-      <Sidebar />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <main className="flex-1 overflow-auto">
+        {/* Mobile hamburger button */}
+        <button
+          className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-md bg-card border border-border shadow-sm"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open navigation menu"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         <Suspense fallback={<PageLoader />}>
           <AnimatePresence mode="wait">
             <Switch key={location}>
@@ -167,6 +182,10 @@ function Router() {
               <Route path="/admin/spend">{() => <ErrorBoundary><AnimatedPage><SpendTrackingPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/scorecard/:id">{() => <ErrorBoundary><AnimatedPage><AgentScorecardPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/analytics/teams">{() => <ErrorBoundary><AnimatedPage><TeamAnalyticsPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/analytics/compare">{() => <ErrorBoundary><AnimatedPage><AgentComparePage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/analytics/heatmap">{() => <ErrorBoundary><AnimatedPage><HeatmapCalendarPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/analytics/clusters">{() => <ErrorBoundary><AnimatedPage><CallClustersPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/my-performance">{() => <ErrorBoundary><AnimatedPage><MyPerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/security">{() => <ErrorBoundary><AnimatedPage><SecurityPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>

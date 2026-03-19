@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown } from "lucide-react";
+import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown, Bookmark, BookmarkPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -11,20 +11,53 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
+import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/constants";
+import { useTranslation } from "@/lib/i18n";
+import { loadSavedFilters, saveSavedFilter, deleteSavedFilter, type SavedFilter } from "@/lib/saved-filters";
+import { Input } from "@/components/ui/input";
 
 type SortField = "date" | "duration" | "score" | "sentiment";
 type SortDir = "asc" | "desc";
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50];
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
 export default function CallsTable() {
+  const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
 
+  // Saved filters
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [newFilterName, setNewFilterName] = useState("");
+
+  const handleSaveFilter = () => {
+    if (!newFilterName.trim()) return;
+    const saved = saveSavedFilter({
+      name: newFilterName.trim(),
+      status: statusFilter,
+      sentiment: sentimentFilter,
+      employee: employeeFilter,
+    });
+    setSavedFilters(prev => [...prev, saved]);
+    setNewFilterName("");
+    setShowSaveDialog(false);
+  };
+
+  const handleLoadFilter = (filter: SavedFilter) => {
+    setStatusFilter(filter.status);
+    setSentimentFilter(filter.sentiment);
+    setEmployeeFilter(filter.employee);
+  };
+
+  const handleDeleteFilter = (id: string) => {
+    deleteSavedFilter(id);
+    setSavedFilters(prev => prev.filter(f => f.id !== id));
+  };
+
   // Pagination
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>("date");
@@ -39,14 +72,46 @@ export default function CallsTable() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: callsResponse, isLoading: isLoadingCalls } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", {
-      status: statusFilter === "all" ? "" : statusFilter,
-      sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
-      employee: employeeFilter === "all" ? "" : employeeFilter
-    }],
+  // Cursor-based pagination state
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [allLoadedCalls, setAllLoadedCalls] = useState<CallWithDetails[]>([]);
+
+  const filterParams = useMemo(() => ({
+    status: statusFilter === "all" ? "" : statusFilter,
+    sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
+    employee: employeeFilter === "all" ? "" : employeeFilter,
+  }), [statusFilter, sentimentFilter, employeeFilter]);
+
+  const { data: callsResponse, isLoading: isLoadingCalls, isFetching } = useQuery<PaginatedCalls>({
+    queryKey: ["/api/calls", { ...filterParams, cursor, mode: "cursor" }],
   });
-  const calls = callsResponse?.calls;
+
+  // Reset accumulated calls when filters change
+  useEffect(() => {
+    setCursor(undefined);
+    setAllLoadedCalls([]);
+  }, [filterParams.status, filterParams.sentiment, filterParams.employee]);
+
+  // Accumulate loaded pages
+  useEffect(() => {
+    if (callsResponse?.calls) {
+      if (!cursor) {
+        // First page or filter change — replace
+        setAllLoadedCalls(callsResponse.calls);
+      } else {
+        // Subsequent page — append, deduplicate by id
+        setAllLoadedCalls(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const newCalls = callsResponse.calls.filter(c => !existingIds.has(c.id));
+          return [...prev, ...newCalls];
+        });
+      }
+    }
+  }, [callsResponse, cursor]);
+
+  const calls = allLoadedCalls;
+  const hasMore = callsResponse?.hasMore ?? false;
+  const nextCursor = callsResponse?.nextCursor ?? null;
 
   const { data: employees, isLoading: isLoadingEmployees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
@@ -152,6 +217,39 @@ export default function CallsTable() {
     });
   };
 
+  // Auto-refetch when WebSocket notifies of call completion (for re-analysis progress)
+  useEffect(() => {
+    const handler = () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+    };
+    window.addEventListener("ws:call_update", handler);
+    return () => window.removeEventListener("ws:call_update", handler);
+  }, [queryClient]);
+
+  const processingCount = useMemo(() =>
+    (calls || []).filter(c => c.status === "processing").length,
+  [calls]);
+
+  const reanalyzeMutation = useMutation({
+    mutationFn: async (callIds: string[]) => {
+      const res = await apiRequest("POST", "/api/calls/bulk-reanalyze", { callIds });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Re-analysis Started", description: data.message });
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+    },
+    onError: (error) => {
+      toast({ title: "Re-analysis Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleBulkReanalyze = () => {
+    if (selectedIds.size === 0) return;
+    reanalyzeMutation.mutate(Array.from(selectedIds));
+  };
+
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
     setDeleteConfirm({ open: true, bulk: true });
@@ -224,7 +322,7 @@ export default function CallsTable() {
 
   const getSentimentBadge = (sentiment?: string) => {
     if (!sentiment) return <Badge variant="secondary">Unknown</Badge>;
-    const variants: Record<string, any> = {
+    const variants: Record<string, BadgeVariant> = {
       positive: "default", neutral: "secondary", negative: "destructive",
     };
     return (
@@ -267,6 +365,12 @@ export default function CallsTable() {
           <span className="text-xs text-muted-foreground">
             {sortedCalls.length} total
           </span>
+          {processingCount > 0 && (
+            <Badge variant="secondary" className="animate-pulse text-xs">
+              <AudioWaveform className="w-3 h-3 mr-1" />
+              {processingCount} processing
+            </Badge>
+          )}
         </div>
         <div className="flex items-center space-x-2">
           <Button
@@ -308,6 +412,50 @@ export default function CallsTable() {
               <SelectItem value="negative">Negative</SelectItem>
             </SelectContent>
           </Select>
+          {/* Saved filters */}
+          {savedFilters.length > 0 && (
+            <Select onValueChange={(id) => {
+              const filter = savedFilters.find(f => f.id === id);
+              if (filter) handleLoadFilter(filter);
+            }}>
+              <SelectTrigger className="w-40">
+                <Bookmark className="w-3.5 h-3.5 mr-1.5" />
+                <SelectValue placeholder="Saved Filters" />
+              </SelectTrigger>
+              <SelectContent>
+                {savedFilters.map(f => (
+                  <SelectItem key={f.id} value={f.id}>
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <span>{f.name}</span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {showSaveDialog ? (
+            <div className="flex items-center gap-1">
+              <Input
+                className="w-32 h-9 text-xs"
+                placeholder="Filter name..."
+                value={newFilterName}
+                onChange={(e) => setNewFilterName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSaveFilter()}
+                autoFocus
+              />
+              <Button size="sm" variant="default" className="h-9 px-2" onClick={handleSaveFilter} disabled={!newFilterName.trim()}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" className="h-9 px-2" onClick={() => setShowSaveDialog(false)}>
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="h-9" onClick={() => setShowSaveDialog(true)} title="Save current filters">
+              <BookmarkPlus className="w-3.5 h-3.5 mr-1" />
+              Save
+            </Button>
+          )}
         </div>
       </div>
 
@@ -325,6 +473,9 @@ export default function CallsTable() {
               ))}
             </SelectContent>
           </Select>
+          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleBulkReanalyze} disabled={reanalyzeMutation.isPending}>
+            <AudioWaveform className="w-3 h-3 mr-1" /> Re-analyze
+          </Button>
           <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={handleBulkDelete}>
             <Trash2 className="w-3 h-3 mr-1" /> Delete Selected
           </Button>
@@ -345,28 +496,28 @@ export default function CallsTable() {
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("date")}>
-                  Date <SortIcon field="date" />
+                  {t("table.date")} <SortIcon field="date" />
                 </button>
               </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Employee</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.agent")}</th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("duration")}>
-                  Duration <SortIcon field="duration" />
+                  {t("table.duration")} <SortIcon field="duration" />
                 </button>
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("sentiment")}>
-                  Sentiment <SortIcon field="sentiment" />
+                  {t("sentiment.title")} <SortIcon field="sentiment" />
                 </button>
               </th>
               <th className="text-left py-3 px-2 font-medium text-muted-foreground">
                 <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("score")}>
-                  Score <SortIcon field="score" />
+                  {t("table.score")} <SortIcon field="score" />
                 </button>
               </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Party</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Status</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">Actions</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("transcript.callParty")}</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.status")}</th>
+              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -520,6 +671,9 @@ export default function CallsTable() {
             </Select>
             <span className="ml-2">
               {page * pageSize + 1}–{Math.min((page + 1) * pageSize, sortedCalls.length)} of {sortedCalls.length}
+              {callsResponse?.pagination?.total != null && callsResponse.pagination.total > sortedCalls.length && (
+                <span className="text-muted-foreground/60"> ({callsResponse.pagination.total} total)</span>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -543,6 +697,17 @@ export default function CallsTable() {
             <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
               <ChevronRight className="w-4 h-4" />
             </Button>
+            {hasMore && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-2 text-xs"
+                disabled={isFetching}
+                onClick={() => { if (nextCursor) setCursor(nextCursor); }}
+              >
+                {isFetching ? "Loading..." : "Load More"}
+              </Button>
+            )}
           </div>
         </div>
       )}

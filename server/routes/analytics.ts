@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
+import { getCallClusters } from "../services/call-clustering";
 
 export function register(router: Router) {
   // ==================== TEAM ANALYTICS ROUTES ====================
@@ -338,6 +339,102 @@ export function register(router: Router) {
       res.status(500).json({ message: "Failed to export team analytics" });
     }
   });
+
+  // ==================== AGENT COMPARISON ====================
+  // Compare 2-5 agents side-by-side with detailed metrics
+  router.get("/api/analytics/compare", requireAuth, async (req, res) => {
+    try {
+      const ids = (req.query.ids as string || "").split(",").filter(Boolean);
+      if (ids.length < 2 || ids.length > 5) {
+        res.status(400).json({ message: "Provide 2-5 employee IDs (comma-separated)" });
+        return;
+      }
+
+      const pool = getPool();
+      if (!pool) {
+        // Fallback for in-memory
+        const allCalls = await storage.getCallsWithDetails();
+        const agents = [];
+        for (const id of ids) {
+          const emp = await storage.getEmployee(id);
+          if (!emp) continue;
+          const empCalls = allCalls.filter(c => c.employeeId === id && c.status === "completed");
+          const scores = empCalls.map(c => parseFloat(c.analysis?.performanceScore || "0")).filter(s => s > 0);
+          agents.push({
+            id: emp.id, name: emp.name, subTeam: emp.subTeam,
+            callCount: empCalls.length,
+            avgScore: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10 : null,
+            sentimentBreakdown: {
+              positive: empCalls.filter(c => c.sentiment?.overallSentiment === "positive").length,
+              neutral: empCalls.filter(c => c.sentiment?.overallSentiment === "neutral").length,
+              negative: empCalls.filter(c => c.sentiment?.overallSentiment === "negative").length,
+            },
+          });
+        }
+        return res.json(agents);
+      }
+
+      const result = await pool.query(`
+        SELECT
+          e.id, e.name, e.sub_team,
+          COUNT(c.id) as call_count,
+          ROUND(AVG(NULLIF(ca.performance_score, '')::numeric), 1) as avg_score,
+          ROUND(AVG(NULLIF(ca.confidence_score, '')::numeric), 2) as avg_confidence,
+          ROUND(AVG(c.duration), 0) as avg_duration,
+          COUNT(CASE WHEN sa.overall_sentiment = 'positive' THEN 1 END) as positive_count,
+          COUNT(CASE WHEN sa.overall_sentiment = 'neutral' THEN 1 END) as neutral_count,
+          COUNT(CASE WHEN sa.overall_sentiment = 'negative' THEN 1 END) as negative_count,
+          jsonb_build_object(
+            'compliance', ROUND(AVG(NULLIF((ca.sub_scores->>'compliance')::numeric, 0)), 1),
+            'customerExperience', ROUND(AVG(NULLIF((ca.sub_scores->>'customerExperience')::numeric, 0)), 1),
+            'communication', ROUND(AVG(NULLIF((ca.sub_scores->>'communication')::numeric, 0)), 1),
+            'resolution', ROUND(AVG(NULLIF((ca.sub_scores->>'resolution')::numeric, 0)), 1)
+          ) as avg_sub_scores
+        FROM employees e
+        LEFT JOIN calls c ON c.employee_id = e.id AND c.status = 'completed'
+        LEFT JOIN call_analyses ca ON ca.call_id = c.id
+        LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
+        WHERE e.id = ANY($1)
+        GROUP BY e.id, e.name, e.sub_team
+        ORDER BY avg_score DESC NULLS LAST
+      `, [ids]);
+
+      res.json(result.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        subTeam: r.sub_team,
+        callCount: parseInt(r.call_count),
+        avgScore: r.avg_score ? parseFloat(r.avg_score) : null,
+        avgConfidence: r.avg_confidence ? parseFloat(r.avg_confidence) : null,
+        avgDuration: r.avg_duration ? parseInt(r.avg_duration) : null,
+        sentimentBreakdown: {
+          positive: parseInt(r.positive_count),
+          neutral: parseInt(r.neutral_count),
+          negative: parseInt(r.negative_count),
+        },
+        avgSubScores: r.avg_sub_scores,
+      })));
+    } catch (error) {
+      console.error("Agent comparison failed:", (error as Error).message);
+      res.status(500).json({ message: "Failed to compare agents" });
+    }
+  });
+
+  // ==================== CALL CLUSTERING ====================
+  // Topic-based clustering to surface trending issues
+  router.get("/api/analytics/clusters", requireAuth, async (req, res) => {
+    try {
+      const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 30, 365));
+      const employeeId = req.query.employee as string | undefined;
+      const minSize = Math.max(2, parseInt(req.query.minSize as string) || 2);
+
+      const clusters = await getCallClusters({ days, employeeId, minClusterSize: minSize });
+      res.json({ clusters, days });
+    } catch (error) {
+      console.error("Clustering error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to generate call clusters" });
+    }
+  });
 }
 
 // ==================== TREND HELPER FUNCTIONS ====================
@@ -452,4 +549,89 @@ function formatTrendResponse(rows: any[], isPostgres: boolean): { periods: Trend
   }
 
   return { periods, comparisons };
+}
+
+// ==================== HEATMAP CALENDAR ====================
+
+export function registerHeatmapRoutes(router: Router) {
+  // Call volume & avg score by day-of-week × hour
+  router.get("/api/analytics/heatmap", requireAuth, async (req, res) => {
+    try {
+      const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 90, 365));
+      const employeeId = req.query.employee as string | undefined;
+      const pool = getPool();
+
+      // Initialize 7×24 grid (dow 0=Sun..6=Sat, hour 0..23)
+      const grid: { dow: number; hour: number; count: number; totalScore: number; scored: number }[][] = [];
+      for (let d = 0; d < 7; d++) {
+        grid[d] = [];
+        for (let h = 0; h < 24; h++) {
+          grid[d][h] = { dow: d, hour: h, count: 0, totalScore: 0, scored: 0 };
+        }
+      }
+
+      if (pool) {
+        let query = `
+          SELECT
+            EXTRACT(DOW FROM c.uploaded_at) AS dow,
+            EXTRACT(HOUR FROM c.uploaded_at) AS hour,
+            COUNT(*)::int AS count,
+            AVG(a.performance_score)::float AS avg_score
+          FROM calls c
+          LEFT JOIN call_analyses a ON a.call_id = c.id
+          WHERE c.uploaded_at >= NOW() - INTERVAL '1 day' * $1
+            AND c.status = 'completed'
+        `;
+        const params: (string | number)[] = [days];
+        let idx = 2;
+        if (employeeId) {
+          query += ` AND c.employee_id = $${idx++}`;
+          params.push(employeeId);
+        }
+        query += ` GROUP BY 1, 2 ORDER BY 1, 2`;
+        const { rows } = await pool.query(query, params);
+        for (const row of rows) {
+          const d = parseInt(row.dow);
+          const h = parseInt(row.hour);
+          grid[d][h].count = parseInt(row.count);
+          if (row.avg_score != null) {
+            grid[d][h].totalScore = row.avg_score * parseInt(row.count);
+            grid[d][h].scored = parseInt(row.count);
+          }
+        }
+      } else {
+        // In-memory fallback
+        const allCalls = await storage.getCallsWithDetails(
+          employeeId ? { employee: employeeId } : undefined
+        );
+        const cutoff = Date.now() - days * 86400000;
+        for (const call of allCalls) {
+          if (call.status !== "completed") continue;
+          const date = new Date(call.uploadedAt || 0);
+          if (date.getTime() < cutoff) continue;
+          const d = date.getDay();
+          const h = date.getHours();
+          grid[d][h].count++;
+          const score = call.analysis?.performanceScore;
+          if (score != null) {
+            grid[d][h].totalScore += Number(score);
+            grid[d][h].scored++;
+          }
+        }
+      }
+
+      // Flatten to array
+      const cells = grid.flat().map(cell => ({
+        dow: cell.dow,
+        hour: cell.hour,
+        count: cell.count,
+        avgScore: cell.scored > 0 ? Math.round((cell.totalScore / cell.scored) * 10) / 10 : null,
+      }));
+
+      res.json({ cells, days });
+    } catch (error) {
+      console.error("Heatmap error:", error instanceof Error ? error.message : error);
+      res.status(500).json({ message: "Failed to generate heatmap data" });
+    }
+  });
 }

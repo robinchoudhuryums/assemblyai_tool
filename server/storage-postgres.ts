@@ -245,6 +245,28 @@ export class PostgresStorage implements IStorage {
     return rows.map(mapEmployee);
   }
 
+  /**
+   * Find employee by name (case-insensitive). Tries exact match first,
+   * then falls back to first-name match. Returns undefined if ambiguous or not found.
+   */
+  async findEmployeeByName(name: string): Promise<Employee | undefined> {
+    const normalized = name.toLowerCase().trim();
+    // Exact match
+    const { rows: exact } = await this.db.query(
+      "SELECT * FROM employees WHERE lower(name) = $1 LIMIT 1",
+      [normalized],
+    );
+    if (exact.length > 0) return mapEmployee(exact[0]);
+
+    // First-name match (only if unambiguous)
+    const { rows: firstNameRows } = await this.db.query(
+      "SELECT * FROM employees WHERE split_part(lower(name), ' ', 1) = $1",
+      [normalized],
+    );
+    if (firstNameRows.length === 1) return mapEmployee(firstNameRows[0]);
+    return undefined;
+  }
+
   // ── Calls ─────────────────────────────────────────────────
   async getCall(id: string): Promise<Call | undefined> {
     const { rows } = await this.db.query("SELECT * FROM calls WHERE id = $1", [id]);
@@ -366,6 +388,121 @@ export class PostgresStorage implements IStorage {
     });
   }
 
+  async getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }> {
+    const filters = options.filters || {};
+    const limit = Math.max(1, Math.min(options.limit || 25, 200));
+
+    // Build WHERE clause for both count and data queries
+    let whereClause = "WHERE 1=1";
+    const params: any[] = [];
+    let idx = 1;
+    if (filters.status) {
+      whereClause += ` AND c.status = $${idx++}`;
+      params.push(filters.status);
+    }
+    if (filters.sentiment) {
+      whereClause += ` AND s.overall_sentiment = $${idx++}`;
+      params.push(filters.sentiment);
+    }
+    if (filters.employee) {
+      whereClause += ` AND c.employee_id = $${idx++}`;
+      params.push(filters.employee);
+    }
+
+    // Get total count
+    const countQuery = `
+      SELECT COUNT(*) as cnt FROM calls c
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      ${whereClause}
+    `;
+    const { rows: countRows } = await this.db.query(countQuery, params);
+    const total = parseInt(countRows[0]?.cnt || "0", 10);
+
+    // Apply cursor
+    const dataParams = [...params];
+    let cursorClause = "";
+    if (options.cursor) {
+      const sepIdx = options.cursor.indexOf("|");
+      const cursorDate = options.cursor.substring(0, sepIdx);
+      const cursorId = options.cursor.substring(sepIdx + 1);
+      cursorClause = ` AND (c.uploaded_at < $${idx} OR (c.uploaded_at = $${idx} AND c.id < $${idx + 1}))`;
+      idx += 2;
+      dataParams.push(cursorDate, cursorId);
+    }
+
+    const dataQuery = `
+      SELECT c.*,
+        e.id AS e_id, e.name AS e_name, e.role AS e_role, e.email AS e_email,
+        e.initials AS e_initials, e.status AS e_status, e.sub_team AS e_sub_team, e.created_at AS e_created_at,
+        t.id AS t_id, t.text AS t_text, t.confidence AS t_confidence, t.words AS t_words, t.created_at AS t_created_at,
+        s.id AS s_id, s.overall_sentiment, s.overall_score, s.segments AS s_segments, s.created_at AS s_created_at,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN transcripts t ON t.call_id = c.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      ${whereClause}${cursorClause}
+      ORDER BY c.uploaded_at DESC, c.id DESC
+      LIMIT $${idx}
+    `;
+    dataParams.push(limit + 1); // Fetch one extra to check hasMore
+
+    const { rows } = await this.db.query(dataQuery, dataParams);
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+    const calls = pageRows.map((row) => {
+      const call = mapCall(row);
+      const employee = row.e_id ? {
+        id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
+        initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
+        createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
+      } : undefined;
+      const transcript = row.t_id ? {
+        id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
+        words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
+      } : undefined;
+      const sentiment = row.s_id ? {
+        id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
+        overallScore: row.overall_score, segments: row.s_segments,
+        createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
+      } : undefined;
+      const analysis = row.a_id ? {
+        id: row.a_id, callId: call.id,
+        performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
+        responseTime: row.response_time, keywords: row.keywords,
+        topics: Array.isArray(row.topics) ? row.topics : [],
+        summary: typeof row.summary === "string" ? row.summary : "",
+        actionItems: Array.isArray(row.action_items) ? row.action_items : [],
+        feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
+          ? row.feedback : { strengths: [], suggestions: [] },
+        lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
+        flags: Array.isArray(row.flags) ? row.flags : [],
+        manualEdits: row.manual_edits,
+        confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
+        subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
+        createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
+      } : undefined;
+
+      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+    });
+
+    const lastCall = calls[calls.length - 1];
+    const nextCursor = hasMore && lastCall
+      ? `${lastCall.uploadedAt}|${lastCall.id}`
+      : null;
+
+    return { calls, nextCursor, total };
+  }
+
   // ── Transcripts ───────────────────────────────────────────
   async getTranscript(callId: string): Promise<Transcript | undefined> {
     const { rows } = await this.db.query("SELECT * FROM transcripts WHERE call_id = $1", [callId]);
@@ -423,6 +560,35 @@ export class PostgresStorage implements IStorage {
     return mapAnalysis(rows[0]);
   }
 
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    // Build dynamic SET clause from provided fields
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    if (updates.embedding !== undefined) {
+      fields.push(`embedding = $${idx++}`);
+      values.push(JSON.stringify(updates.embedding));
+    }
+    if (updates.manualEdits !== undefined) {
+      fields.push(`manual_edits = $${idx++}`);
+      values.push(JSON.stringify(updates.manualEdits));
+    }
+    if (updates.performanceScore !== undefined) {
+      fields.push(`performance_score = $${idx++}`);
+      values.push(updates.performanceScore);
+    }
+    if (updates.summary !== undefined) {
+      fields.push(`summary = $${idx++}`);
+      values.push(updates.summary);
+    }
+    if (fields.length === 0) return;
+    values.push(callId);
+    await this.db.query(
+      `UPDATE call_analyses SET ${fields.join(", ")} WHERE call_id = $${idx}`,
+      values
+    );
+  }
+
   // ── Audio (delegated to S3 client) ────────────────────────
   async uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void> {
     if (!this.audioClient) throw new Error("No audio storage configured");
@@ -437,6 +603,11 @@ export class PostgresStorage implements IStorage {
   async downloadAudio(objectName: string): Promise<Buffer | undefined> {
     if (!this.audioClient) return undefined;
     return this.audioClient.downloadFile(objectName);
+  }
+
+  async getAudioPresignedUrl(objectName: string): Promise<string | undefined> {
+    if (!this.audioClient) return undefined;
+    return this.audioClient.getPresignedUrl?.(objectName, 3600);
   }
 
   // ── Dashboard Metrics ─────────────────────────────────────
@@ -493,21 +664,66 @@ export class PostgresStorage implements IStorage {
 
   // ── Search ────────────────────────────────────────────────
   async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
-    // Use ILIKE for simple text search; could upgrade to tsvector later
+    // Single query: join transcript search with full call details (no N+1)
     const { rows } = await this.db.query(`
-      SELECT c.id FROM calls c
+      SELECT c.*,
+        e.id AS e_id, e.name AS e_name, e.role AS e_role, e.email AS e_email,
+        e.initials AS e_initials, e.status AS e_status, e.sub_team AS e_sub_team, e.created_at AS e_created_at,
+        t.id AS t_id, t.text AS t_text, t.confidence AS t_confidence, t.words AS t_words, t.created_at AS t_created_at,
+        s.id AS s_id, s.overall_sentiment, s.overall_score, s.segments AS s_segments, s.created_at AS s_created_at,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+      FROM calls c
       JOIN transcripts t ON t.call_id = c.id
-      WHERE t.text ILIKE $1
-      ORDER BY c.uploaded_at DESC
-      LIMIT $2
-    `, [`%${query}%`, limit]);
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE to_tsvector('english', coalesce(t.text, '')) @@ plainto_tsquery('english', $1)
+         OR t.text ILIKE $2
+      ORDER BY ts_rank(to_tsvector('english', coalesce(t.text, '')), plainto_tsquery('english', $1)) DESC,
+               c.uploaded_at DESC
+      LIMIT $3
+    `, [query, `%${query}%`, limit]);
 
     if (rows.length === 0) return [];
 
-    // Get full details for matching calls
-    const allDetails = await this.getCallsWithDetails();
-    const matchIds = new Set(rows.map((r) => r.id));
-    return allDetails.filter((c) => matchIds.has(c.id));
+    return rows.map((row) => {
+      const call = mapCall(row);
+      const employee = row.e_id ? {
+        id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
+        initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
+        createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
+      } : undefined;
+      const transcript = row.t_id ? {
+        id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
+        words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
+      } : undefined;
+      const sentiment = row.s_id ? {
+        id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
+        overallScore: row.overall_score, segments: row.s_segments,
+        createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
+      } : undefined;
+      const analysis = row.a_id ? {
+        id: row.a_id, callId: call.id,
+        performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
+        responseTime: row.response_time, keywords: row.keywords,
+        topics: Array.isArray(row.topics) ? row.topics : [],
+        summary: typeof row.summary === "string" ? row.summary : "",
+        actionItems: Array.isArray(row.action_items) ? row.action_items : [],
+        feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
+          ? row.feedback : { strengths: [], suggestions: [] },
+        lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
+        flags: Array.isArray(row.flags) ? row.flags : [],
+        manualEdits: row.manual_edits,
+        confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
+        subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
+        createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
+      } : undefined;
+
+      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+    });
   }
 
   // ── Access Requests ───────────────────────────────────────

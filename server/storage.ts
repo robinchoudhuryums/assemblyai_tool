@@ -49,6 +49,7 @@ export interface ObjectStorageClient {
   listAndDownloadJson<T>(prefix: string): Promise<T[]>;
   deleteObject(objectName: string): Promise<void>;
   deleteByPrefix(prefix: string): Promise<void>;
+  getPresignedUrl?(objectName: string, expiresInSeconds?: number): Promise<string>;
 }
 
 export interface IStorage {
@@ -71,6 +72,7 @@ export interface IStorage {
   createEmployee(employee: InsertEmployee): Promise<Employee>;
   updateEmployee(id: string, updates: Partial<Employee>): Promise<Employee | undefined>;
   getAllEmployees(): Promise<Employee[]>;
+  findEmployeeByName(name: string): Promise<Employee | undefined>;
 
   // Call operations
   getCall(id: string): Promise<Call | undefined>;
@@ -79,6 +81,11 @@ export interface IStorage {
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
+  getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string; // ISO timestamp:id cursor
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }>;
 
   // Transcript operations
   getTranscript(callId: string): Promise<Transcript | undefined>;
@@ -91,6 +98,7 @@ export interface IStorage {
   // Call analysis operations
   getCallAnalysis(callId: string): Promise<CallAnalysis | undefined>;
   createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis>;
+  updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void>;
 
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
@@ -104,6 +112,8 @@ export interface IStorage {
   uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
   getAudioFiles(callId: string): Promise<string[]>;
   downloadAudio(objectName: string): Promise<Buffer | undefined>;
+  /** Get a pre-signed S3 URL for direct audio access (avoids buffering). Returns undefined if not supported. */
+  getAudioPresignedUrl?(objectName: string): Promise<string | undefined>;
 
   // Access request operations
   createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest>;
@@ -200,6 +210,14 @@ export class MemStorage implements IStorage {
   async getAllEmployees(): Promise<Employee[]> {
     return [...this.employees.values()];
   }
+  async findEmployeeByName(name: string): Promise<Employee | undefined> {
+    const normalized = name.toLowerCase().trim();
+    const all = [...this.employees.values()];
+    const exact = all.find(e => e.name.toLowerCase() === normalized);
+    if (exact) return exact;
+    const firstNameMatches = all.filter(e => e.name.toLowerCase().split(" ")[0] === normalized);
+    return firstNameMatches.length === 1 ? firstNameMatches[0] : undefined;
+  }
 
   async getCall(id: string): Promise<Call | undefined> {
     return this.calls.get(id);
@@ -253,6 +271,37 @@ export class MemStorage implements IStorage {
     return results;
   }
 
+  async getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }> {
+    let all = await this.getCallsWithDetails(options.filters);
+    // Sort by uploadedAt DESC, then id DESC for stability
+    all.sort((a, b) => {
+      const dateA = new Date(a.uploadedAt || 0).getTime();
+      const dateB = new Date(b.uploadedAt || 0).getTime();
+      if (dateB !== dateA) return dateB - dateA;
+      return (b.id > a.id ? 1 : -1);
+    });
+    const total = all.length;
+    // Apply cursor filter
+    if (options.cursor) {
+      const [cursorDate, cursorId] = options.cursor.split("|");
+      const cursorTime = new Date(cursorDate).getTime();
+      all = all.filter(c => {
+        const t = new Date(c.uploadedAt || 0).getTime();
+        return t < cursorTime || (t === cursorTime && c.id < cursorId);
+      });
+    }
+    const limit = options.limit || 25;
+    const page = all.slice(0, limit);
+    const nextCursor = page.length === limit && all.length > limit
+      ? `${page[limit - 1].uploadedAt}|${page[limit - 1].id}`
+      : null;
+    return { calls: page, nextCursor, total };
+  }
+
   async getTranscript(callId: string): Promise<Transcript | undefined> {
     return this.transcripts.get(callId);
   }
@@ -281,6 +330,11 @@ export class MemStorage implements IStorage {
     const newAnalysis: CallAnalysis = { ...analysis, id, createdAt: new Date().toISOString() };
     this.analyses.set(analysis.callId, newAnalysis);
     return newAnalysis;
+  }
+
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    const existing = this.analyses.get(callId);
+    if (existing) this.analyses.set(callId, { ...existing, ...updates });
   }
 
   async uploadAudio(callId: string, fileName: string, buffer: Buffer, _contentType: string): Promise<void> {
@@ -554,6 +608,14 @@ export class CloudStorage implements IStorage {
       return [];
     }
   }
+  async findEmployeeByName(name: string): Promise<Employee | undefined> {
+    const normalized = name.toLowerCase().trim();
+    const all = await this.getAllEmployees();
+    const exact = all.find(e => e.name.toLowerCase() === normalized);
+    if (exact) return exact;
+    const firstNameMatches = all.filter(e => e.name.toLowerCase().split(" ")[0] === normalized);
+    return firstNameMatches.length === 1 ? firstNameMatches[0] : undefined;
+  }
 
   // --- Call Methods ---
   async getCall(id: string): Promise<Call | undefined> {
@@ -659,6 +721,30 @@ export class CloudStorage implements IStorage {
     return filtered;
   }
 
+  async getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }> {
+    let all = await this.getCallsWithDetails(options.filters);
+    // Already sorted DESC by getCallsWithDetails
+    const total = all.length;
+    if (options.cursor) {
+      const [cursorDate, cursorId] = options.cursor.split("|");
+      const cursorTime = new Date(cursorDate).getTime();
+      all = all.filter(c => {
+        const t = new Date(c.uploadedAt || 0).getTime();
+        return t < cursorTime || (t === cursorTime && c.id < cursorId);
+      });
+    }
+    const limit = options.limit || 25;
+    const page = all.slice(0, limit);
+    const nextCursor = page.length === limit && all.length > limit
+      ? `${page[limit - 1].uploadedAt}|${page[limit - 1].id}`
+      : null;
+    return { calls: page, nextCursor, total };
+  }
+
   // --- Transcript Methods ---
   async getTranscript(callId: string): Promise<Transcript | undefined> {
     return this.client.downloadJson<Transcript>(`transcripts/${callId}.json`);
@@ -705,6 +791,13 @@ export class CloudStorage implements IStorage {
     };
     await this.client.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
     return newAnalysis;
+  }
+
+  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+    const existing = await this.getCallAnalysis(callId);
+    if (existing) {
+      await this.client.uploadJson(`analyses/${callId}.json`, { ...existing, ...updates });
+    }
   }
 
   // --- Audio File Methods ---

@@ -1,5 +1,6 @@
-import { useMemo } from "react";
-import { Search, Plus, AlertTriangle, Award, TrendingUp } from "lucide-react";
+import { useMemo, useState, useCallback } from "react";
+import { Search, Plus, AlertTriangle, Award, TrendingUp, Settings2, Eye, EyeOff, ChevronUp, ChevronDown, RotateCcw } from "lucide-react";
+import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
@@ -11,9 +12,23 @@ import PerformanceCard from "@/components/dashboard/performance-card";
 import FileUpload from "@/components/upload/file-upload";
 import CallsTable from "@/components/tables/calls-table";
 import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
+import { loadWidgetConfig, saveWidgetConfig, moveWidget, toggleWidget, DEFAULT_WIDGETS, type WidgetConfig } from "@/lib/dashboard-config";
 
 export default function Dashboard() {
   const [, navigate] = useLocation();
+  const { t } = useTranslation();
+  const [widgets, setWidgets] = useState<WidgetConfig[]>(loadWidgetConfig);
+  const [showConfig, setShowConfig] = useState(false);
+
+  const updateWidgets = useCallback((updater: (prev: WidgetConfig[]) => WidgetConfig[]) => {
+    setWidgets(prev => {
+      const next = updater(prev);
+      saveWidgetConfig(next);
+      return next;
+    });
+  }, []);
+
+  const isVisible = useCallback((id: string) => widgets.find(w => w.id === id)?.visible ?? true, [widgets]);
 
   // Fetch recent calls to extract flagged ones for the dashboard alert panel
   const { data: callsResponse } = useQuery<PaginatedCalls>({
@@ -90,8 +105,8 @@ export default function Dashboard() {
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-foreground">Call Analysis Dashboard</h2>
-            <p className="text-muted-foreground">Monitor performance and sentiment across all customer interactions</p>
+            <h2 className="text-2xl font-bold text-foreground">{t("dashboard.title")}</h2>
+            <p className="text-muted-foreground">{t("dashboard.subtitle")}</p>
           </div>
           <div className="flex items-center space-x-4">
             <Button
@@ -101,21 +116,69 @@ export default function Dashboard() {
               data-testid="search-input"
             >
               <Search className="w-4 h-4 mr-2" />
-              Search calls...
+              {t("dashboard.searchCalls")}
             </Button>
             <Link href="/upload">
               <Button data-testid="upload-call-button">
                 <Plus className="w-4 h-4 mr-2" />
-                Upload Call
+                {t("dashboard.uploadCall")}
               </Button>
             </Link>
           </div>
+          <Button variant="ghost" size="sm" onClick={() => setShowConfig(!showConfig)} aria-label="Customize dashboard">
+            <Settings2 className="w-4 h-4" />
+          </Button>
         </div>
       </header>
 
+      {/* Widget configuration panel */}
+      {showConfig && (
+        <div className="bg-card border-b border-border px-6 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-foreground">Customize Dashboard</h3>
+            <Button
+              variant="ghost" size="sm" className="text-xs h-7"
+              onClick={() => updateWidgets(() => DEFAULT_WIDGETS)}
+            >
+              <RotateCcw className="w-3 h-3 mr-1" /> Reset
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {widgets.map((w, i) => (
+              <div key={w.id} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1">
+                <button
+                  onClick={() => updateWidgets(prev => toggleWidget(prev, w.id))}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label={w.visible ? `Hide ${w.label}` : `Show ${w.label}`}
+                >
+                  {w.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                </button>
+                <span className={`text-xs ${w.visible ? "text-foreground" : "text-muted-foreground line-through"}`}>{w.label}</span>
+                <button
+                  onClick={() => updateWidgets(prev => moveWidget(prev, w.id, "up"))}
+                  disabled={i === 0}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label={`Move ${w.label} up`}
+                >
+                  <ChevronUp className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => updateWidgets(prev => moveWidget(prev, w.id, "down"))}
+                  disabled={i === widgets.length - 1}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label={`Move ${w.label} down`}
+                >
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="p-6 space-y-6">
         {/* Flagged Calls Alert Banner */}
-        {flaggedCalls.length > 0 && (
+        {isVisible("alerts") && flaggedCalls.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {badCalls.length > 0 && (
               <div className="bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-900 p-4">
@@ -176,10 +239,10 @@ export default function Dashboard() {
         )}
 
         {/* Metrics Overview */}
-        <MetricsOverview />
+        {isVisible("metrics") && <MetricsOverview />}
 
         {/* Sentiment & Call Volume Trend (Last 30 Days) */}
-        {trendData.length > 0 && trendData.some(d => d.calls > 0) && (
+        {isVisible("trend") && trendData.length > 0 && trendData.some(d => d.calls > 0) && (
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
               <TrendingUp className="w-5 h-5 mr-2" />
@@ -215,18 +278,17 @@ export default function Dashboard() {
         )}
 
         {/* File Upload Section */}
-        <FileUpload />
+        {isVisible("upload") && <FileUpload />}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Sentiment Analysis */}
-          <SentimentAnalysis />
-
-          {/* Top Performers */}
-          <PerformanceCard />
-        </div>
+        {(isVisible("sentiment") || isVisible("performers")) && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {isVisible("sentiment") && <SentimentAnalysis />}
+            {isVisible("performers") && <PerformanceCard />}
+          </div>
+        )}
 
         {/* Recent Calls Table */}
-        <CallsTable />
+        {isVisible("calls") && <CallsTable />}
       </div>
     </div>
   );

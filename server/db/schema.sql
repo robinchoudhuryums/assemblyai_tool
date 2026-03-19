@@ -4,6 +4,8 @@
 
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- Enable trigram similarity for fast ILIKE text search
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- ============================================================
 -- Session store (used by connect-pg-simple)
@@ -61,6 +63,10 @@ CREATE TABLE IF NOT EXISTS transcripts (
   words JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Full-text search index for transcript content (speeds up ILIKE and tsvector queries)
+CREATE INDEX IF NOT EXISTS idx_transcripts_text_trgm ON transcripts USING gin (text gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_transcripts_text_fts ON transcripts USING gin (to_tsvector('english', coalesce(text, '')));
 
 -- ============================================================
 -- Sentiment Analyses (1:1 per call)

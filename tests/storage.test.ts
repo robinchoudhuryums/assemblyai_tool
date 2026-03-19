@@ -327,3 +327,64 @@ describe("MemStorage — Data retention", () => {
     assert.equal(remaining.length, 1);
   });
 });
+
+describe("MemStorage — findEmployeeByName", () => {
+  it("finds employee by exact name (case-insensitive)", async () => {
+    await storage.createEmployee({ name: "Sarah Johnson", email: "sarah@co.com" });
+    const found = await storage.findEmployeeByName("sarah johnson");
+    assert.equal(found?.name, "Sarah Johnson");
+  });
+
+  it("finds employee by first name when unambiguous", async () => {
+    await storage.createEmployee({ name: "Sarah Johnson", email: "sarah@co.com" });
+    await storage.createEmployee({ name: "Mike Smith", email: "mike@co.com" });
+    const found = await storage.findEmployeeByName("Sarah");
+    assert.equal(found?.name, "Sarah Johnson");
+  });
+
+  it("returns undefined for ambiguous first name", async () => {
+    await storage.createEmployee({ name: "Sarah Johnson", email: "sarah1@co.com" });
+    await storage.createEmployee({ name: "Sarah Williams", email: "sarah2@co.com" });
+    const found = await storage.findEmployeeByName("Sarah");
+    assert.equal(found, undefined);
+  });
+
+  it("returns undefined when no match", async () => {
+    await storage.createEmployee({ name: "Mike Smith", email: "mike@co.com" });
+    const found = await storage.findEmployeeByName("Unknown Person");
+    assert.equal(found, undefined);
+  });
+
+  it("prefers exact match over first-name match", async () => {
+    await storage.createEmployee({ name: "Sarah", email: "sarah@co.com" });
+    await storage.createEmployee({ name: "Sarah Johnson", email: "sarah2@co.com" });
+    const found = await storage.findEmployeeByName("Sarah");
+    assert.equal(found?.email, "sarah@co.com");
+  });
+});
+
+describe("MemStorage — searchCalls", () => {
+  it("searches transcripts by text", async () => {
+    const call = await storage.createCall({ status: "completed" });
+    await storage.createTranscript({ callId: call.id, text: "Hello how can I help you today" });
+    const results = await storage.searchCalls("help you");
+    assert.equal(results.length, 1);
+    assert.equal(results[0].id, call.id);
+  });
+
+  it("returns empty for no match", async () => {
+    const call = await storage.createCall({ status: "completed" });
+    await storage.createTranscript({ callId: call.id, text: "Hello world" });
+    const results = await storage.searchCalls("nonexistent phrase xyz");
+    assert.equal(results.length, 0);
+  });
+
+  it("respects limit parameter", async () => {
+    for (let i = 0; i < 5; i++) {
+      const call = await storage.createCall({ status: "completed" });
+      await storage.createTranscript({ callId: call.id, text: `test call number ${i}` });
+    }
+    const results = await storage.searchCalls("test call", 2);
+    assert.equal(results.length, 2);
+  });
+});

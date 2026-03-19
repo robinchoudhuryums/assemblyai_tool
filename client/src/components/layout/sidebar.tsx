@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert } from "lucide-react";
+import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert, GitCompareArrows, CalendarDays, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -8,11 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
+import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from "@/lib/constants";
 
-type NavItem = { nameKey: string; href: string; icon: any; sectionKey?: string; requireRole?: string[] };
+type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
 
 const navigation: NavItem[] = [
   { nameKey: "nav.dashboard", href: "/", icon: BarChart3 },
+  { nameKey: "nav.myPerformance", href: "/my-performance", icon: User },
   { nameKey: "nav.uploadCalls", href: "/upload", icon: Upload },
   { nameKey: "nav.transcripts", href: "/transcripts", icon: FileText },
   { nameKey: "nav.search", href: "/search", icon: Search },
@@ -21,6 +23,9 @@ const navigation: NavItem[] = [
   { nameKey: "nav.reports", href: "/reports", icon: TrendingUp },
   { nameKey: "nav.insights", href: "/insights", icon: Building2 },
   { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: Users2 },
+  { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitCompareArrows },
+  { nameKey: "nav.heatmap", href: "/analytics/heatmap", icon: CalendarDays },
+  { nameKey: "nav.clusters", href: "/analytics/clusters", icon: Layers },
   { nameKey: "nav.employees", href: "/employees", icon: UserPlus, sectionKey: "section.management" },
   { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardCheck, requireRole: ["manager", "admin"] },
 ];
@@ -41,7 +46,7 @@ interface Notification {
   read: boolean;
 }
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void } = {}) {
   const [location, navigate] = useLocation();
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -76,7 +81,7 @@ export default function Sidebar() {
           message,
           timestamp: new Date(),
           read: false,
-        }, ...prev].slice(0, 30));
+        }, ...prev].slice(0, MAX_NOTIFICATIONS));
       }
     };
     window.addEventListener("ws:call_update", handler);
@@ -94,7 +99,7 @@ export default function Sidebar() {
     localStorage.setItem("theme", next ? "dark" : "light");
   };
 
-  // Initialize dark mode from localStorage on mount
+  // Initialize dark mode from localStorage or OS preference on mount
   useEffect(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "dark") {
@@ -103,6 +108,10 @@ export default function Sidebar() {
     } else if (saved === "light") {
       document.documentElement.classList.remove("dark");
       setIsDark(false);
+    } else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+      // No saved preference — respect OS dark mode
+      document.documentElement.classList.add("dark");
+      setIsDark(true);
     }
   }, []);
 
@@ -115,14 +124,14 @@ export default function Sidebar() {
   // Fetch calls for flagged count badge
   const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
-    staleTime: 30000,
+    staleTime: CALLS_STALE_TIME_MS,
   });
   const calls = callsResponse?.calls;
 
   // Fetch employees for quick-switch
   const { data: employees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
-    staleTime: 60000,
+    staleTime: EMPLOYEES_STALE_TIME_MS,
   });
 
   // Fetch access requests for admin badge count
@@ -154,8 +163,24 @@ export default function Sidebar() {
     navigate(`/reports?employee=${employeeId}`);
   };
 
+  // Close sidebar on navigation (mobile)
+  useEffect(() => {
+    if (onClose) onClose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+
   return (
-    <aside className="w-64 bg-card border-r border-border flex flex-col" data-testid="sidebar">
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />
+      )}
+      <aside className={cn(
+        "w-64 bg-card border-r border-border flex flex-col z-50",
+        "lg:relative lg:translate-x-0",
+        "fixed inset-y-0 left-0 transition-transform duration-200",
+        isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+      )} data-testid="sidebar">
       <div className="p-6 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -174,6 +199,7 @@ export default function Sidebar() {
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
                 title={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "No new notifications"}
+                aria-label={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "Notifications"}
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
@@ -245,6 +271,7 @@ export default function Sidebar() {
               onClick={toggleDarkMode}
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
             >
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -418,6 +445,7 @@ export default function Sidebar() {
             className="text-muted-foreground hover:text-foreground"
             onClick={handleLogout}
             title="Sign out"
+            aria-label="Sign out"
             data-testid="logout-button"
           >
             <LogOut className="w-4 h-4" />
@@ -425,5 +453,6 @@ export default function Sidebar() {
         </div>
       </div>
     </aside>
+    </>
   );
 }

@@ -1,4 +1,18 @@
 import fs from "fs";
+import type { Request, Response, NextFunction, RequestHandler } from "express";
+
+/**
+ * Wrap an async route handler so unhandled promise rejections are forwarded
+ * to Express error middleware. Express 4 doesn't do this natively.
+ * Usage: router.get("/api/foo", asyncHandler(async (req, res) => { ... }));
+ */
+export function asyncHandler(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
+): RequestHandler {
+  return (req, res, next) => {
+    fn(req, res, next).catch(next);
+  };
+}
 
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
 export function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {
@@ -52,9 +66,17 @@ export function estimateBedrockCost(model: string, inputTokens: number, outputTo
   return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
 }
 
-/** Estimate AssemblyAI cost: base $0.15/hr + sentiment $0.02/hr = $0.17/hr = ~$0.0000472/sec */
-export function estimateAssemblyAICost(durationSeconds: number): number {
-  return durationSeconds * 0.0000472;
+/** Estimate AssemblyAI cost: base $0.15/hr + sentiment $0.02/hr = $0.17/hr = ~$0.0000472/sec
+ *  When sentiment is disabled (non-English): $0.15/hr = ~$0.0000417/sec */
+export function estimateAssemblyAICost(durationSeconds: number, sentimentEnabled = true): number {
+  const ratePerSecond = sentimentEnabled ? 0.0000472 : 0.0000417;
+  return durationSeconds * ratePerSecond;
+}
+
+/** Estimate Bedrock Titan Embed cost: $0.00002 per 1K tokens */
+export function estimateEmbeddingCost(textLength: number): number {
+  const estimatedTokens = Math.ceil(textLength / 4);
+  return (estimatedTokens / 1000) * 0.00002;
 }
 
 /** Concurrency-limited task queue for expensive async operations. */

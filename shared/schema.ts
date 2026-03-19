@@ -272,6 +272,56 @@ export const insertPromptTemplateSchema = promptTemplateSchema.omit({ id: true }
 export type PromptTemplate = z.infer<typeof promptTemplateSchema>;
 export type InsertPromptTemplate = z.infer<typeof insertPromptTemplateSchema>;
 
+// --- ANALYSIS EDIT SCHEMA (shared for client + server validation) ---
+export const analysisEditSchema = z.object({
+  updates: z.object({
+    summary: z.string().optional(),
+    performanceScore: z.union([z.string(), z.number()])
+      .transform(v => typeof v === "string" ? parseFloat(v) : v)
+      .pipe(z.number().min(0).max(10))
+      .optional(),
+    topics: z.array(z.string()).optional(),
+    actionItems: z.array(z.string()).optional(),
+    feedback: z.object({
+      strengths: z.array(z.unknown()).optional(),
+      suggestions: z.array(z.unknown()).optional(),
+    }).optional(),
+    flags: z.array(z.string()).optional(),
+    sentiment: z.string().optional(),
+    sentimentScore: z.union([z.string(), z.number()])
+      .transform(v => typeof v === "string" ? parseFloat(v) : v)
+      .pipe(z.number().min(0).max(10))
+      .optional(),
+  }).refine(obj => Object.keys(obj).length > 0, { message: "At least one field must be updated" }),
+  reason: z.string().min(1, "A reason for the edit is required").max(1000),
+});
+
+export type AnalysisEdit = z.infer<typeof analysisEditSchema>;
+
+// --- LOGIN SCHEMA (client-side validation) ---
+export const loginSchema = z.object({
+  username: z.string().min(1, "Username is required"),
+  password: z.string().min(1, "Password is required"),
+});
+
+// --- ACCESS REQUEST FORM SCHEMA (client-side validation) ---
+export const accessRequestFormSchema = z.object({
+  name: z.string().min(1, "Name is required").max(255),
+  email: z.string().email("Please enter a valid email address"),
+  reason: z.string().optional(),
+  requestedRole: z.enum(["viewer", "manager"]).default("viewer"),
+});
+
+// --- COACHING FORM SCHEMA (client-side validation) ---
+export const coachingFormSchema = z.object({
+  employeeId: z.string().min(1, "Please select an employee"),
+  title: z.string().min(1, "Title is required").max(500),
+  category: z.string().default("general"),
+  notes: z.string().optional(),
+  dueDate: z.string().optional(),
+  callId: z.string().optional(),
+});
+
 // --- ROLE DEFINITIONS ---
 export const USER_ROLES = [
   {
@@ -422,9 +472,21 @@ export type PerformerSummary = {
   totalCalls: number;
 };
 
+export interface Annotation {
+  id: string;
+  callId: string;
+  timestampMs: number;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
 export type PaginatedCalls = {
   calls: CallWithDetails[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
+  /** Cursor-based pagination fields (present when cursor mode is used) */
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };
 
 export type DashboardMetrics = {
