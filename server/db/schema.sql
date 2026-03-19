@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   updated_by VARCHAR(255)
 );
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates (call_category) WHERE is_active = TRUE;
 
 -- ============================================================
 -- Coaching Sessions
@@ -191,6 +192,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
   total_estimated_cost NUMERIC(10,4) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_call_id ON usage_records (call_id);
 
 -- ============================================================
 -- Job Queue (durable async processing)
@@ -335,4 +337,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (username);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log (user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log (event);
+-- Note: audit_log intentionally does NOT have a FK to users.id.
+-- HIPAA audit logs must be immutable and survive user deletion/renaming.
+-- Both user_id and username are denormalized to preserve the audit trail.

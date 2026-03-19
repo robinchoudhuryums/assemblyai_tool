@@ -564,6 +564,11 @@ export function registerCallRoutes(
         return res.status(400).json({ message: "Tag is required (max 100 characters)" });
       }
       const normalizedTag = tag.trim().toLowerCase();
+      // SECURITY: Allowlist validation — tags must be alphanumeric with limited punctuation.
+      // Prevents stored XSS if tags are rendered in HTML contexts.
+      if (!/^[a-z0-9][a-z0-9 _./-]*$/.test(normalizedTag) || normalizedTag.length === 0) {
+        return res.status(400).json({ message: "Tags must contain only letters, numbers, spaces, dots, underscores, hyphens, and slashes" });
+      }
       const pool = getPool();
       if (!pool) {
         return res.status(503).json({ message: "Tagging requires a database connection" });

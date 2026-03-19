@@ -132,9 +132,25 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // Content hash for upload idempotency (deduplication)
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
     "CREATE INDEX IF NOT EXISTS idx_calls_content_hash ON calls (content_hash)",
-    // Missing index for call_category filtering
+    // Missing indexes for query performance
     "CREATE INDEX IF NOT EXISTS idx_calls_call_category ON calls (call_category)",
+    "CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates (call_category) WHERE is_active = TRUE",
+    "CREATE INDEX IF NOT EXISTS idx_usage_call_id ON usage_records (call_id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log (user_id)",
   ];
+
+  // --- pgvector migration (optional, non-blocking) ---
+  // If pgvector extension is available (RDS supports it), create a native VECTOR column
+  // for embedding similarity search. Falls back gracefully to the existing JSONB column.
+  try {
+    await db.query("CREATE EXTENSION IF NOT EXISTS vector");
+    // Add native vector column alongside the existing JSONB embedding column
+    await db.query("ALTER TABLE call_analyses ADD COLUMN IF NOT EXISTS embedding_vec vector(256)");
+    await db.query("CREATE INDEX IF NOT EXISTS idx_call_analyses_embedding ON call_analyses USING ivfflat (embedding_vec vector_cosine_ops) WITH (lists = 50)");
+    console.log("[DB] pgvector extension enabled — native vector similarity search available");
+  } catch {
+    // pgvector not available — JSONB embedding column is the fallback (already exists)
+  }
   for (const sql of migrations) {
     try {
       await db.query(sql);

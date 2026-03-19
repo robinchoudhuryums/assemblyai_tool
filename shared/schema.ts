@@ -117,9 +117,12 @@ export const callSchema = insertCallSchema.extend({
   uploadedAt: z.string().optional(),
 });
 
-// --- Reusable schema for AI data that may be strings or objects ---
-// Bedrock may return objects where strings are expected; use z.unknown() + runtime normalization
+// --- Reusable schemas for AI data that may be strings or objects ---
+// Bedrock may return objects where strings are expected.
+// Accept both forms here; normalizeStringArray() coerces objects to strings at the storage layer.
 const aiDataField = z.unknown().optional();
+const aiStringOrObject = z.union([z.string(), z.record(z.unknown())]);
+const aiStringArray = z.array(aiStringOrObject).optional();
 
 // --- TRANSCRIPT SCHEMAS ---
 export const insertTranscriptSchema = z.object({
@@ -166,17 +169,17 @@ export const insertCallAnalysisSchema = z.object({
   performanceScore: z.string().optional(),
   talkTimeRatio: z.string().optional(),
   responseTime: z.string().optional(),
-  keywords: z.array(z.unknown()).optional(),
-  topics: z.array(z.unknown()).optional(),
+  keywords: aiStringArray,
+  topics: aiStringArray,
   summary: z.string().optional(),
-  actionItems: z.array(z.unknown()).optional(),
+  actionItems: aiStringArray,
   feedback: z.object({
-    strengths: z.array(z.unknown()).optional(),
-    suggestions: z.array(z.unknown()).optional(),
-  }).passthrough().optional(),
+    strengths: aiStringArray,
+    suggestions: aiStringArray,
+  }).optional(),
   lemurResponse: aiDataField,
   callPartyType: z.string().optional(),
-  flags: z.array(z.unknown()).optional(),
+  flags: z.array(z.string()).optional(),
   manualEdits: z.array(z.object({
     editedBy: z.string().optional(),
     editedAt: z.string().optional(),
