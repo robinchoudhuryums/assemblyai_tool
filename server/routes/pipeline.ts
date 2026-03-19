@@ -298,16 +298,16 @@ export async function processAudioFile(
           console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
         }
 
-        // Cost optimization: use Haiku for short routine calls (< 3min, no flags, no custom template)
+        // Cost optimization: use Haiku for short routine calls (≤ 2min, no flags, no custom template)
         // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call
-        const isRoutineShort = callDurationSeconds < 180 && !promptTemplate && estimatedTokens < 3000;
+        const isRoutineShort = callDurationSeconds <= 120 && !promptTemplate && estimatedTokens < 3000;
         let analysisProvider = aiProvider;
         if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
           try {
             const { BedrockProvider } = await import("../services/bedrock");
             const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
             analysisProvider = BedrockProvider.createWithModel(haikuModel);
-            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s, ~${estimatedTokens} tokens) — 67% cost savings`);
+            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ 120s, ~${estimatedTokens} tokens) — 67% cost savings`);
           } catch {
             // Fall back to default provider
           }
