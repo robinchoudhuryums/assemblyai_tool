@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck } from "lucide-react";
+import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck, Search, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [editScore, setEditScore] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
+
+  // Transcript search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
   // Warn before navigating away with unsaved edits
   useBeforeUnload(isEditing && (editScore !== "" || editSummary !== "" || editReason !== ""));
@@ -106,10 +113,29 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   // Close edit mode on Escape key (broadcast from App.tsx)
   useEffect(() => {
-    const onEscape = () => { if (isEditing) setIsEditing(false); };
+    const onEscape = () => {
+      if (searchOpen) { setSearchOpen(false); setSearchQuery(""); return; }
+      if (isEditing) setIsEditing(false);
+    };
     window.addEventListener("app:escape", onEscape);
     return () => window.removeEventListener("app:escape", onEscape);
-  }, [isEditing]);
+  }, [isEditing, searchOpen]);
+
+  // Ctrl+F / Cmd+F to open transcript search
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        // Only intercept if transcript viewer is visible
+        const el = transcriptContainerRef.current;
+        if (!el) return;
+        e.preventDefault();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // toDisplayString is a pure function imported from @/lib/display-utils — no memoization needed
 
@@ -291,6 +317,32 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return segments;
   }
 
+  // Compute search matches across segments
+  const searchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    const matches: { segmentIndex: number; charIndex: number }[] = [];
+    transcriptSegments.forEach((seg, segIdx) => {
+      const text = seg.text.toLowerCase();
+      let pos = 0;
+      while ((pos = text.indexOf(q, pos)) !== -1) {
+        matches.push({ segmentIndex: segIdx, charIndex: pos });
+        pos += 1;
+      }
+    });
+    return matches;
+  }, [searchQuery, transcriptSegments]);
+
+  // Navigate between search matches
+  const goToMatch = useCallback((idx: number) => {
+    if (searchMatches.length === 0) return;
+    const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    setSearchMatchIdx(wrapped);
+    const segIdx = searchMatches[wrapped].segmentIndex;
+    const el = transcriptContainerRef.current?.querySelector(`[data-testid="transcript-segment-${segIdx}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [searchMatches]);
+
   const jumpToTime = (timeMs: number) => {
     const audio = audioRef.current;
     if (audio) {
@@ -374,17 +426,39 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
-  const highlightKeywords = (text: string | any): React.ReactNode => {
+  const highlightKeywords = (text: string | any, segmentIndex?: number): React.ReactNode => {
     const str = typeof text === "string" ? text : toDisplayString(text);
-    if (topicKeywords.length === 0) return <>{str}</>;
-    const pattern = topicKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const regex = new RegExp(`(${pattern})`, "gi");
+    // Build combined regex for topics + search
+    const patterns: string[] = [];
+    if (topicKeywords.length > 0) {
+      patterns.push(...topicKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+    const sq = searchQuery.trim().toLowerCase();
+    if (sq) {
+      patterns.push(sq.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    }
+    if (patterns.length === 0) return <>{str}</>;
+    const regex = new RegExp(`(${patterns.join("|")})`, "gi");
     const parts = str.split(regex);
-    return <>{parts.map((part, i) =>
-      topicKeywords.includes(part.toLowerCase())
-        ? <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>
-        : part
-    )}</>;
+    // Track which search occurrence we're at within this segment to highlight the active match
+    let searchOccurrence = 0;
+    return <>{parts.map((part, i) => {
+      const lower = part.toLowerCase();
+      const isSearchMatch = sq && lower === sq;
+      const isTopicMatch = topicKeywords.includes(lower);
+      if (isSearchMatch) {
+        const occIdx = segmentIndex !== undefined
+          ? searchMatches.findIndex(m => m.segmentIndex === segmentIndex && m.charIndex === str.toLowerCase().indexOf(sq, searchOccurrence > 0 ? str.toLowerCase().indexOf(sq, 0) + searchOccurrence : 0))
+          : -1;
+        searchOccurrence++;
+        const isActive = searchMatches.length > 0 && searchMatches[searchMatchIdx]?.segmentIndex === segmentIndex;
+        return <mark key={i} className={`rounded px-0.5 ${isActive && occIdx === searchMatchIdx ? "bg-yellow-400 text-black" : "bg-yellow-200 dark:bg-yellow-700 text-foreground"}`}>{part}</mark>;
+      }
+      if (isTopicMatch) {
+        return <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>;
+      }
+      return part;
+    })}</>;
   };
 
   // Determine which segment is currently active based on audio time
@@ -405,6 +479,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </p>
         </div>
         <div className="flex items-center space-x-2">
+          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
+            <Search className="w-4 h-4 mr-1" />
+            Search
+          </Button>
           <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
             <FileText className="w-4 h-4 mr-1" />
             Export
@@ -473,7 +551,45 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <div className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
+          {/* Transcript search bar */}
+          {searchOpen && (
+            <div className="flex items-center gap-2 mb-2 bg-muted rounded-lg px-3 py-2">
+              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search transcript..."
+                className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    goToMatch(e.shiftKey ? searchMatchIdx - 1 : searchMatchIdx + 1);
+                  }
+                  if (e.key === "Escape") {
+                    setSearchOpen(false);
+                    setSearchQuery("");
+                  }
+                }}
+              />
+              {searchQuery && (
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {searchMatches.length > 0 ? `${searchMatchIdx + 1}/${searchMatches.length}` : "0 results"}
+                </span>
+              )}
+              <button onClick={() => goToMatch(searchMatchIdx - 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Previous match">
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => goToMatch(searchMatchIdx + 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Next match">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Close search">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          <div ref={transcriptContainerRef} className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
             {call.status !== 'completed' ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground">
@@ -503,7 +619,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                         <p className={`text-sm font-medium ${segment.speaker === 'Agent' ? 'text-primary' : 'text-gray-600'}`}>
                           {segment.speaker === 'Agent' ? `Agent (${call.employee?.name}):` : 'Customer:'}
                         </p>
-                        <p className="text-foreground">{highlightKeywords(segment.text)}</p>
+                        <p className="text-foreground">{highlightKeywords(segment.text, index)}</p>
                       </div>
                       <Badge className={getSentimentColor(segment.sentiment)}>
                         {segment.sentiment.charAt(0).toUpperCase() + segment.sentiment.slice(1)}

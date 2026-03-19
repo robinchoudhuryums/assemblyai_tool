@@ -41,14 +41,46 @@ export default function CallsTable() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: callsResponse, isLoading: isLoadingCalls } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", {
-      status: statusFilter === "all" ? "" : statusFilter,
-      sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
-      employee: employeeFilter === "all" ? "" : employeeFilter
-    }],
+  // Cursor-based pagination state
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [allLoadedCalls, setAllLoadedCalls] = useState<CallWithDetails[]>([]);
+
+  const filterParams = useMemo(() => ({
+    status: statusFilter === "all" ? "" : statusFilter,
+    sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
+    employee: employeeFilter === "all" ? "" : employeeFilter,
+  }), [statusFilter, sentimentFilter, employeeFilter]);
+
+  const { data: callsResponse, isLoading: isLoadingCalls, isFetching } = useQuery<PaginatedCalls>({
+    queryKey: ["/api/calls", { ...filterParams, cursor, mode: "cursor" }],
   });
-  const calls = callsResponse?.calls;
+
+  // Reset accumulated calls when filters change
+  useEffect(() => {
+    setCursor(undefined);
+    setAllLoadedCalls([]);
+  }, [filterParams.status, filterParams.sentiment, filterParams.employee]);
+
+  // Accumulate loaded pages
+  useEffect(() => {
+    if (callsResponse?.calls) {
+      if (!cursor) {
+        // First page or filter change — replace
+        setAllLoadedCalls(callsResponse.calls);
+      } else {
+        // Subsequent page — append, deduplicate by id
+        setAllLoadedCalls(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const newCalls = callsResponse.calls.filter(c => !existingIds.has(c.id));
+          return [...prev, ...newCalls];
+        });
+      }
+    }
+  }, [callsResponse, cursor]);
+
+  const calls = allLoadedCalls;
+  const hasMore = callsResponse?.hasMore ?? false;
+  const nextCursor = callsResponse?.nextCursor ?? null;
 
   const { data: employees, isLoading: isLoadingEmployees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
@@ -564,6 +596,9 @@ export default function CallsTable() {
             </Select>
             <span className="ml-2">
               {page * pageSize + 1}–{Math.min((page + 1) * pageSize, sortedCalls.length)} of {sortedCalls.length}
+              {callsResponse?.pagination?.total != null && callsResponse.pagination.total > sortedCalls.length && (
+                <span className="text-muted-foreground/60"> ({callsResponse.pagination.total} total)</span>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -587,6 +622,17 @@ export default function CallsTable() {
             <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
               <ChevronRight className="w-4 h-4" />
             </Button>
+            {hasMore && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-2 text-xs"
+                disabled={isFetching}
+                onClick={() => { if (nextCursor) setCursor(nextCursor); }}
+              >
+                {isFetching ? "Loading..." : "Load More"}
+              </Button>
+            )}
           </div>
         </div>
       )}

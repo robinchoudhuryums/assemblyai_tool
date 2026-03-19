@@ -47,28 +47,44 @@ export function registerCallRoutes(
   processAudioFn: ProcessAudioFn,
   getJobQueue: () => JobQueue | null,
 ) {
-  // Get all calls with details (paginated)
+  // Get all calls with details (paginated — supports offset and cursor modes)
   router.get("/api/calls", requireAuth, async (req, res) => {
     try {
-      const { status, sentiment, employee } = req.query;
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 50, 200));
-
-      const calls = await storage.getCallsWithDetails({
+      const { status, sentiment, employee, cursor } = req.query;
+      const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 25, 200));
+      const filters = {
         status: status as string,
         sentiment: sentiment as string,
-        employee: employee as string
-      });
+        employee: employee as string,
+      };
 
-      const total = calls.length;
-      const totalPages = Math.ceil(total / limit);
-      const offset = (page - 1) * limit;
-      const paginated = calls.slice(offset, offset + limit);
-
-      res.json({
-        calls: paginated,
-        pagination: { page, limit, total, totalPages },
-      });
+      if (cursor || req.query.mode === "cursor") {
+        // Cursor-based pagination (efficient for large datasets)
+        const result = await storage.getCallsPaginated({
+          filters,
+          cursor: cursor as string | undefined,
+          limit,
+        });
+        const totalPages = Math.ceil(result.total / limit);
+        res.json({
+          calls: result.calls,
+          pagination: { page: 1, limit, total: result.total, totalPages },
+          nextCursor: result.nextCursor,
+          hasMore: result.nextCursor !== null,
+        });
+      } else {
+        // Legacy offset-based pagination (backward compatible)
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const calls = await storage.getCallsWithDetails(filters);
+        const total = calls.length;
+        const totalPages = Math.ceil(total / limit);
+        const offset = (page - 1) * limit;
+        const paginated = calls.slice(offset, offset + limit);
+        res.json({
+          calls: paginated,
+          pagination: { page, limit, total, totalPages },
+        });
+      }
     } catch (error) {
       res.status(500).json({ message: "Failed to get calls" });
     }

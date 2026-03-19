@@ -475,6 +475,9 @@ export type PerformerSummary = {
 export type PaginatedCalls = {
   calls: CallWithDetails[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
+  /** Cursor-based pagination fields (present when cursor mode is used) */
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };
 
 export type DashboardMetrics = {

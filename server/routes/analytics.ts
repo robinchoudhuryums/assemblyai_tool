@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
+import { getCallClusters } from "../services/call-clustering";
 
 export function register(router: Router) {
   // ==================== TEAM ANALYTICS ROUTES ====================
@@ -418,6 +419,22 @@ export function register(router: Router) {
       res.status(500).json({ message: "Failed to compare agents" });
     }
   });
+
+  // ==================== CALL CLUSTERING ====================
+  // Topic-based clustering to surface trending issues
+  router.get("/api/analytics/clusters", requireAuth, async (req, res) => {
+    try {
+      const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 30, 365));
+      const employeeId = req.query.employee as string | undefined;
+      const minSize = Math.max(2, parseInt(req.query.minSize as string) || 2);
+
+      const clusters = await getCallClusters({ days, employeeId, minClusterSize: minSize });
+      res.json({ clusters, days });
+    } catch (error) {
+      console.error("Clustering error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to generate call clusters" });
+    }
+  });
 }
 
 // ==================== TREND HELPER FUNCTIONS ====================
@@ -532,4 +549,89 @@ function formatTrendResponse(rows: any[], isPostgres: boolean): { periods: Trend
   }
 
   return { periods, comparisons };
+}
+
+// ==================== HEATMAP CALENDAR ====================
+
+export function registerHeatmapRoutes(router: Router) {
+  // Call volume & avg score by day-of-week × hour
+  router.get("/api/analytics/heatmap", requireAuth, async (req, res) => {
+    try {
+      const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 90, 365));
+      const employeeId = req.query.employee as string | undefined;
+      const pool = getPool();
+
+      // Initialize 7×24 grid (dow 0=Sun..6=Sat, hour 0..23)
+      const grid: { dow: number; hour: number; count: number; totalScore: number; scored: number }[][] = [];
+      for (let d = 0; d < 7; d++) {
+        grid[d] = [];
+        for (let h = 0; h < 24; h++) {
+          grid[d][h] = { dow: d, hour: h, count: 0, totalScore: 0, scored: 0 };
+        }
+      }
+
+      if (pool) {
+        let query = `
+          SELECT
+            EXTRACT(DOW FROM c.uploaded_at) AS dow,
+            EXTRACT(HOUR FROM c.uploaded_at) AS hour,
+            COUNT(*)::int AS count,
+            AVG(a.performance_score)::float AS avg_score
+          FROM calls c
+          LEFT JOIN call_analyses a ON a.call_id = c.id
+          WHERE c.uploaded_at >= NOW() - INTERVAL '1 day' * $1
+            AND c.status = 'completed'
+        `;
+        const params: (string | number)[] = [days];
+        let idx = 2;
+        if (employeeId) {
+          query += ` AND c.employee_id = $${idx++}`;
+          params.push(employeeId);
+        }
+        query += ` GROUP BY 1, 2 ORDER BY 1, 2`;
+        const { rows } = await pool.query(query, params);
+        for (const row of rows) {
+          const d = parseInt(row.dow);
+          const h = parseInt(row.hour);
+          grid[d][h].count = parseInt(row.count);
+          if (row.avg_score != null) {
+            grid[d][h].totalScore = row.avg_score * parseInt(row.count);
+            grid[d][h].scored = parseInt(row.count);
+          }
+        }
+      } else {
+        // In-memory fallback
+        const allCalls = await storage.getCallsWithDetails(
+          employeeId ? { employee: employeeId } : undefined
+        );
+        const cutoff = Date.now() - days * 86400000;
+        for (const call of allCalls) {
+          if (call.status !== "completed") continue;
+          const date = new Date(call.uploadedAt || 0);
+          if (date.getTime() < cutoff) continue;
+          const d = date.getDay();
+          const h = date.getHours();
+          grid[d][h].count++;
+          const score = call.analysis?.performanceScore;
+          if (score != null) {
+            grid[d][h].totalScore += Number(score);
+            grid[d][h].scored++;
+          }
+        }
+      }
+
+      // Flatten to array
+      const cells = grid.flat().map(cell => ({
+        dow: cell.dow,
+        hour: cell.hour,
+        count: cell.count,
+        avgScore: cell.scored > 0 ? Math.round((cell.totalScore / cell.scored) * 10) / 10 : null,
+      }));
+
+      res.json({ cells, days });
+    } catch (error) {
+      console.error("Heatmap error:", error instanceof Error ? error.message : error);
+      res.status(500).json({ message: "Failed to generate heatmap data" });
+    }
+  });
 }

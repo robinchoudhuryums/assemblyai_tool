@@ -81,6 +81,11 @@ export interface IStorage {
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
+  getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string; // ISO timestamp:id cursor
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }>;
 
   // Transcript operations
   getTranscript(callId: string): Promise<Transcript | undefined>;
@@ -263,6 +268,37 @@ export class MemStorage implements IStorage {
     if (filters.sentiment) results = results.filter((c) => c.sentiment?.overallSentiment === filters.sentiment);
     if (filters.employee) results = results.filter((c) => c.employeeId === filters.employee);
     return results;
+  }
+
+  async getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }> {
+    let all = await this.getCallsWithDetails(options.filters);
+    // Sort by uploadedAt DESC, then id DESC for stability
+    all.sort((a, b) => {
+      const dateA = new Date(a.uploadedAt || 0).getTime();
+      const dateB = new Date(b.uploadedAt || 0).getTime();
+      if (dateB !== dateA) return dateB - dateA;
+      return (b.id > a.id ? 1 : -1);
+    });
+    const total = all.length;
+    // Apply cursor filter
+    if (options.cursor) {
+      const [cursorDate, cursorId] = options.cursor.split("|");
+      const cursorTime = new Date(cursorDate).getTime();
+      all = all.filter(c => {
+        const t = new Date(c.uploadedAt || 0).getTime();
+        return t < cursorTime || (t === cursorTime && c.id < cursorId);
+      });
+    }
+    const limit = options.limit || 25;
+    const page = all.slice(0, limit);
+    const nextCursor = page.length === limit && all.length > limit
+      ? `${page[limit - 1].uploadedAt}|${page[limit - 1].id}`
+      : null;
+    return { calls: page, nextCursor, total };
   }
 
   async getTranscript(callId: string): Promise<Transcript | undefined> {
@@ -677,6 +713,30 @@ export class CloudStorage implements IStorage {
 
     console.log(`Returning ${filtered.length} filtered calls.`);
     return filtered;
+  }
+
+  async getCallsPaginated(options: {
+    filters?: { status?: string; sentiment?: string; employee?: string };
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ calls: CallWithDetails[]; nextCursor: string | null; total: number }> {
+    let all = await this.getCallsWithDetails(options.filters);
+    // Already sorted DESC by getCallsWithDetails
+    const total = all.length;
+    if (options.cursor) {
+      const [cursorDate, cursorId] = options.cursor.split("|");
+      const cursorTime = new Date(cursorDate).getTime();
+      all = all.filter(c => {
+        const t = new Date(c.uploadedAt || 0).getTime();
+        return t < cursorTime || (t === cursorTime && c.id < cursorId);
+      });
+    }
+    const limit = options.limit || 25;
+    const page = all.slice(0, limit);
+    const nextCursor = page.length === limit && all.length > limit
+      ? `${page[limit - 1].uploadedAt}|${page[limit - 1].id}`
+      : null;
+    return { calls: page, nextCursor, total };
   }
 
   // --- Transcript Methods ---

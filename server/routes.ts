@@ -22,7 +22,7 @@ import { registerAdminRoutes } from "./routes/admin";
 import { register as registerDashboardRoutes } from "./routes/dashboard";
 import { register as registerEmployeeRoutes } from "./routes/employees";
 import { registerReportRoutes } from "./routes/reports";
-import { register as registerAnalyticsRoutes } from "./routes/analytics";
+import { register as registerAnalyticsRoutes, registerHeatmapRoutes } from "./routes/analytics";
 import { register as registerCoachingRoutes } from "./routes/coaching";
 import { register as registerInsightRoutes } from "./routes/insights";
 import { registerUserRoutes } from "./routes/users";
@@ -73,6 +73,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerCallRoutes(router, upload.single('audioFile'), processAudioFile, () => jobQueue);
   registerReportRoutes(router);
   registerAnalyticsRoutes(router);
+  registerHeatmapRoutes(router);
   registerCoachingRoutes(router);
   registerInsightRoutes(router);
   registerUserRoutes(router);
