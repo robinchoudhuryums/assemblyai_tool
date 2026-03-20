@@ -55,9 +55,9 @@
 .dark {
   --background: hsl(220, 30%, 7%);
   --foreground: hsl(220, 15%, 95%);
-  --card: hsl(220, 30%, 9%);
+  --card: hsla(220, 30%, 9%, 0.85);
   --card-foreground: hsl(220, 15%, 95%);
-  --popover: hsl(220, 30%, 9%);
+  --popover: hsla(220, 30%, 9%, 0.9);
   --popover-foreground: hsl(220, 15%, 95%);
   --primary: hsl(217, 91%, 60%);
   --primary-foreground: hsl(0, 0%, 100%);
@@ -90,6 +90,24 @@
   body {
     @apply font-sans antialiased bg-background text-foreground;
     font-family: var(--font-sans);
+  }
+
+  /* Global glassmorphism: all bg-card elements get backdrop blur */
+  .bg-card {
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    backdrop-filter: blur(16px) saturate(1.4);
+  }
+
+  /* Phosphor duotone icon accent — slate blue fill instead of gray */
+  svg[data-phosphor-id] path[opacity="0.2"],
+  svg path[opacity="0.2"] {
+    fill: hsl(217, 60%, 55%);
+    opacity: 0.25;
+  }
+  .dark svg[data-phosphor-id] path[opacity="0.2"],
+  .dark svg path[opacity="0.2"] {
+    fill: hsl(217, 70%, 65%);
+    opacity: 0.3;
   }
 }
 
