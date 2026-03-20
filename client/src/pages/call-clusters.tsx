@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { Layers, TrendingUp, TrendingDown, Minus, ArrowRight } from "lucide-react";
+import { ArrowRight, Minus, Stack, TrendDown, TrendUp } from "@phosphor-icons/react";
 import type { Employee } from "@shared/schema";
 
 interface TopicCluster {
@@ -21,9 +21,9 @@ interface TopicCluster {
 }
 
 const TREND_ICONS = {
-  rising: <TrendingUp className="w-4 h-4 text-red-500" />,
+  rising: <TrendUp className="w-4 h-4 text-red-500" />,
   stable: <Minus className="w-4 h-4 text-muted-foreground" />,
-  declining: <TrendingDown className="w-4 h-4 text-green-500" />,
+  declining: <TrendDown className="w-4 h-4 text-green-500" />,
 };
 
 const TREND_LABELS = {
@@ -59,7 +59,7 @@ export default function CallClusters() {
     <div className="min-h-screen">
       <header className="bg-card border-b border-border px-6 py-4">
         <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-          <Layers className="w-6 h-6" />
+          <Stack className="w-6 h-6" />
           Call Clusters
         </h2>
         <p className="text-muted-foreground">Calls grouped by topic similarity — surface trending issues</p>

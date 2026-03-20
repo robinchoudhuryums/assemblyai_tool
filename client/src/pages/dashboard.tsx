@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import { Search, Plus, AlertTriangle, Award, TrendingUp, Settings2, Eye, EyeOff, ChevronUp, ChevronDown, RotateCcw } from "lucide-react";
+import { ArrowCounterClockwise, CaretDown, CaretUp, Eye, EyeSlash, GearSix, MagnifyingGlass, Plus, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
 import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -115,7 +115,7 @@ export default function Dashboard() {
               onClick={() => navigate("/search")}
               data-testid="search-input"
             >
-              <Search className="w-4 h-4 mr-2" />
+              <MagnifyingGlass className="w-4 h-4 mr-2" />
               {t("dashboard.searchCalls")}
             </Button>
             <Link href="/upload">
@@ -126,7 +126,7 @@ export default function Dashboard() {
             </Link>
           </div>
           <Button variant="ghost" size="sm" onClick={() => setShowConfig(!showConfig)} aria-label="Customize dashboard">
-            <Settings2 className="w-4 h-4" />
+            <GearSix className="w-4 h-4" />
           </Button>
         </div>
       </header>
@@ -140,7 +140,7 @@ export default function Dashboard() {
               variant="ghost" size="sm" className="text-xs h-7"
               onClick={() => updateWidgets(() => DEFAULT_WIDGETS)}
             >
-              <RotateCcw className="w-3 h-3 mr-1" /> Reset
+              <ArrowCounterClockwise className="w-3 h-3 mr-1" /> Reset
             </Button>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -151,7 +151,7 @@ export default function Dashboard() {
                   className="text-muted-foreground hover:text-foreground"
                   aria-label={w.visible ? `Hide ${w.label}` : `Show ${w.label}`}
                 >
-                  {w.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  {w.visible ? <Eye className="w-3 h-3" /> : <EyeSlash className="w-3 h-3" />}
                 </button>
                 <span className={`text-xs ${w.visible ? "text-foreground" : "text-muted-foreground line-through"}`}>{w.label}</span>
                 <button
@@ -160,7 +160,7 @@ export default function Dashboard() {
                   className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                   aria-label={`Move ${w.label} up`}
                 >
-                  <ChevronUp className="w-3 h-3" />
+                  <CaretUp className="w-3 h-3" />
                 </button>
                 <button
                   onClick={() => updateWidgets(prev => moveWidget(prev, w.id, "down"))}
@@ -168,7 +168,7 @@ export default function Dashboard() {
                   className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                   aria-label={`Move ${w.label} down`}
                 >
-                  <ChevronDown className="w-3 h-3" />
+                  <CaretDown className="w-3 h-3" />
                 </button>
               </div>
             ))}
@@ -183,7 +183,7 @@ export default function Dashboard() {
             {badCalls.length > 0 && (
               <div className="bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-900 p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                  <Warning className="w-5 h-5 text-red-500" />
                   <h3 className="font-semibold text-red-700 dark:text-red-400">
                     {badCalls.length} Call{badCalls.length > 1 ? "s" : ""} Need Attention
                   </h3>
@@ -210,7 +210,7 @@ export default function Dashboard() {
             {goodCalls.length > 0 && (
               <div className="bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-900 p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Award className="w-5 h-5 text-emerald-500" />
+                  <Trophy className="w-5 h-5 text-emerald-500" />
                   <h3 className="font-semibold text-emerald-700 dark:text-emerald-400">
                     {goodCalls.length} Exceptional Call{goodCalls.length > 1 ? "s" : ""}
                   </h3>
@@ -222,7 +222,7 @@ export default function Dashboard() {
                   {goodCalls.slice(0, 5).map(c => (
                     <Link key={c.id} href={`/transcripts/${c.id}`}>
                       <Badge className="bg-emerald-200 text-emerald-900 text-xs cursor-pointer hover:bg-emerald-300">
-                        <Award className="w-3 h-3 mr-1" />
+                        <Trophy className="w-3 h-3 mr-1" />
                         {c.employee?.name || "Unassigned"} — {Number(c.analysis?.performanceScore || 0).toFixed(1)}
                       </Badge>
                     </Link>
@@ -245,7 +245,7 @@ export default function Dashboard() {
         {isVisible("trend") && trendData.length > 0 && trendData.some(d => d.calls > 0) && (
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <TrendingUp className="w-5 h-5 mr-2" />
+              <TrendUp className="w-5 h-5 mr-2" />
               Sentiment &amp; Volume — Last 30 Days
             </h3>
             <ResponsiveContainer width="100%" height={250}>

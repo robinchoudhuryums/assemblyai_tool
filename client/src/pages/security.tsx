@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, AlertTriangle, Bell, CheckCircle, XCircle, KeyRound, FileWarning } from "lucide-react";
+import { Bell, CheckCircle, FileX, Key, Shield, Warning, XCircle } from "@phosphor-icons/react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -148,7 +148,7 @@ export default function SecurityPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-500" />
+              <Warning className="w-4 h-4 text-red-500" />
               <span className="text-sm text-muted-foreground">Critical</span>
             </div>
             <div className="text-2xl font-bold mt-1">{summary?.criticalAlerts ?? 0}</div>
@@ -158,7 +158,7 @@ export default function SecurityPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center gap-2">
-              <FileWarning className="w-4 h-4 text-amber-500" />
+              <FileX className="w-4 h-4 text-amber-500" />
               <span className="text-sm text-muted-foreground">Active Breach</span>
             </div>
             <div className="text-2xl font-bold mt-1">{summary?.activeBreach ? "Yes" : "None"}</div>
@@ -168,7 +168,7 @@ export default function SecurityPage() {
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-green-500" />
+              <Key className="w-4 h-4 text-green-500" />
               <span className="text-sm text-muted-foreground">MFA</span>
             </div>
             <div className="text-2xl font-bold mt-1">{mfaUsers.length}</div>
@@ -224,7 +224,7 @@ export default function SecurityPage() {
         {/* BREACHES TAB */}
         <TabsContent value="breaches" className="space-y-4 mt-4">
           <Button onClick={() => setShowBreachForm(!showBreachForm)} variant={showBreachForm ? "secondary" : "default"}>
-            <FileWarning className="w-4 h-4 mr-2" />
+            <FileX className="w-4 h-4 mr-2" />
             {showBreachForm ? "Cancel" : "Report New Breach"}
           </Button>
 

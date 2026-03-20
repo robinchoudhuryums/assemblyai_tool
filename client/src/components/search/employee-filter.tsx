@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { User } from "lucide-react";
+import { User } from "@phosphor-icons/react";
 import type { Employee } from "@shared/schema";
 
 interface EmployeeFilterProps {

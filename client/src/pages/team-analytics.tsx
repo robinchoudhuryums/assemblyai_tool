@@ -4,7 +4,7 @@ import { getQueryFn } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users, TrendingUp, Clock, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { CaretDown, CaretRight, Clock, DownloadSimple, TrendUp, Users } from "@phosphor-icons/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 interface TeamData {
@@ -128,7 +128,7 @@ export default function TeamAnalyticsPage() {
           <p className="text-muted-foreground">Compare performance across sub-teams</p>
         </div>
         <Button variant="outline" size="sm" onClick={handleExport}>
-          <Download className="w-4 h-4 mr-2" />
+          <DownloadSimple className="w-4 h-4 mr-2" />
           Export CSV
         </Button>
       </div>
@@ -212,7 +212,7 @@ export default function TeamAnalyticsPage() {
                     </div>
                     <div className="text-right">
                       <div className="flex items-center gap-1 text-sm">
-                        <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" />
+                        <TrendUp className="w-3.5 h-3.5 text-muted-foreground" />
                         <ScoreBar score={team.avgScore} />
                       </div>
                     </div>
@@ -223,9 +223,9 @@ export default function TeamAnalyticsPage() {
                       </div>
                     </div>
                     {expandedTeam === team.team ? (
-                      <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                      <CaretDown className="w-4 h-4 text-muted-foreground" />
                     ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      <CaretRight className="w-4 h-4 text-muted-foreground" />
                     )}
                   </div>
                 </div>

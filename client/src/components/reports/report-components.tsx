@@ -1,5 +1,5 @@
 import { useState, useRef, type ComponentType } from "react";
-import { ChevronUp, ChevronDown, AlertTriangle, Award, Play, Pause, Eye } from "lucide-react";
+import { CaretDown, CaretUp, Eye, Pause, Play, Trophy, Warning } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 
@@ -115,7 +115,7 @@ export function MetricCard({
       <p className={`text-3xl font-bold ${color || ""}`}>{formatted}</p>
       {d && (
         <div className={`flex items-center justify-center gap-1 mt-1 text-xs ${d.positive ? "text-green-500" : "text-red-500"}`}>
-          {d.positive ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {d.positive ? <CaretUp className="w-3 h-3" /> : <CaretDown className="w-3 h-3" />}
           <span>{d.positive ? "+" : ""}{d.pct}%</span>
           {compareValue !== undefined && (
             <span className="text-muted-foreground ml-1">
@@ -137,7 +137,7 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
   const bgClass = isGood ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-red-50/50 dark:bg-red-950/20";
   const accentClass = isGood ? "text-emerald-600" : "text-red-600";
   const playerBg = isGood ? "bg-emerald-100 dark:bg-emerald-900/40" : "bg-red-100 dark:bg-red-900/40";
-  const Icon = isGood ? Award : AlertTriangle;
+  const Icon = isGood ? Trophy : Warning;
 
   const togglePlay = () => {
     if (!audioRef.current) return;

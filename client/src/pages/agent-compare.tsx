@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, BarChart2, X, Plus, TrendingUp, Heart, Clock, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { ChartBar, ChatCircle, CheckCircle, Clock, Headphones, Heart, Plus, Shield, TrendUp, Users, X } from "@phosphor-icons/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from "recharts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Employee } from "@shared/schema";
@@ -173,11 +173,11 @@ export default function AgentComparePage() {
                     {agent.subTeam && <p className="text-xs text-muted-foreground mb-3">{agent.subTeam}</p>}
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Avg Score</span>
+                        <span className="text-muted-foreground flex items-center gap-1"><TrendUp className="w-3 h-3" /> Avg Score</span>
                         <span className="font-bold" style={{ color: COLORS[i] }}>{agent.avgScore?.toFixed(1) ?? "N/A"}/10</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground flex items-center gap-1"><BarChart2 className="w-3 h-3" /> Calls</span>
+                        <span className="text-muted-foreground flex items-center gap-1"><ChartBar className="w-3 h-3" /> Calls</span>
                         <span className="font-medium">{agent.callCount}</span>
                       </div>
                       <div className="flex justify-between text-sm">

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, Pause, Download, Clock, FileText, AlertTriangle, Shield, Pencil, X, Save, History, Award, Gauge, ShieldQuestion, ClipboardCheck, Search, ChevronUp, ChevronDown, SkipForward, Flag } from "lucide-react";
+import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, DownloadSimple, FileText, Flag, FloppyDisk, Gauge, MagnifyingGlass, Pause, PencilSimple, Play, Shield, ShieldStar, SkipForward, Trophy, Warning, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -506,17 +506,17 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
-            <Search className="w-4 h-4 mr-1" />
-            Search
+          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="MagnifyingGlass transcript (Ctrl+F)">
+            <MagnifyingGlass className="w-4 h-4 mr-1" />
+            MagnifyingGlass
           </Button>
           <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
             <FileText className="w-4 h-4 mr-1" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
-            <Download className="w-4 h-4 mr-1" />
-            Download
+          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="DownloadSimple audio file" data-testid="download-audio">
+            <DownloadSimple className="w-4 h-4 mr-1" />
+            DownloadSimple
           </Button>
           <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
             {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
@@ -587,11 +587,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           {/* Transcript search bar */}
           {searchOpen && (
             <div className="flex items-center gap-2 mb-2 bg-muted rounded-lg px-3 py-2">
-              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <MagnifyingGlass className="w-4 h-4 text-muted-foreground shrink-0" />
               <input
                 ref={searchInputRef}
                 type="text"
-                placeholder="Search transcript..."
+                placeholder="MagnifyingGlass transcript..."
                 className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
@@ -612,10 +612,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 </span>
               )}
               <button onClick={() => goToMatch(searchMatchIdx - 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Previous match">
-                <ChevronUp className="w-3.5 h-3.5" />
+                <CaretUp className="w-3.5 h-3.5" />
               </button>
               <button onClick={() => goToMatch(searchMatchIdx + 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Next match">
-                <ChevronDown className="w-3.5 h-3.5" />
+                <CaretDown className="w-3.5 h-3.5" />
               </button>
               <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Close search">
                 <X className="w-3.5 h-3.5" />
@@ -674,7 +674,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as unknown[]).length > 0 && (
             <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 border border-amber-200 dark:border-amber-900">
               <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 text-xs font-medium mb-1">
-                <History className="w-3.5 h-3.5" />
+                <ClockCounterClockwise className="w-3.5 h-3.5" />
                 Manually Edited ({(call.analysis.manualEdits as unknown[]).length} edit{(call.analysis.manualEdits as unknown[]).length > 1 ? "s" : ""})
               </div>
               {(call.analysis.manualEdits as Array<{ editedBy?: string; reason?: string; editedAt?: string }>).map((edit, i: number) => (
@@ -693,7 +693,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               <h4 className="font-semibold text-foreground">Call Summary</h4>
               {!isEditing && call.analysis && (
                 <Button size="sm" variant="ghost" onClick={startEditing} className="h-7 text-xs">
-                  <Pencil className="w-3 h-3 mr-1" /> Edit
+                  <PencilSimple className="w-3 h-3 mr-1" /> Edit
                 </Button>
               )}
             </div>
@@ -735,7 +735,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     disabled={!editReason.trim() || editMutation.isPending}
                     className="h-7 text-xs"
                   >
-                    <Save className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "Save"}
+                    <FloppyDisk className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "FloppyDisk"}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-7 text-xs">
                     <X className="w-3 h-3 mr-1" /> Cancel
@@ -910,7 +910,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             const headerClass = hasExceptional && !hasBad
               ? "text-emerald-700 dark:text-emerald-400"
               : "text-red-700 dark:text-red-400";
-            const HeaderIcon = hasExceptional && !hasBad ? Award : AlertTriangle;
+            const HeaderIcon = hasExceptional && !hasBad ? Trophy : Warning;
             return (
               <div className={`rounded-lg p-4 border ${bgClass}`}>
                 <h4 className={`font-semibold mb-2 flex items-center gap-1.5 ${headerClass}`}>
@@ -926,7 +926,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     const color = isExceptional ? "bg-emerald-200 text-emerald-900" : isMisconduct ? "bg-red-200 text-red-900" : isMedicare ? "bg-blue-200 text-blue-900" : "bg-amber-200 text-amber-900";
                     return (
                       <Badge key={i} className={`${color} text-xs`}>
-                        {isExceptional && <Award className="w-3 h-3 mr-1 inline" />}
+                        {isExceptional && <Trophy className="w-3 h-3 mr-1 inline" />}
                         {label}
                       </Badge>
                     );
@@ -937,7 +937,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     href={`/coaching?newSession=true&employeeId=${call.employee.id}&callId=${callId}&category=${flags.some(f => f.startsWith("agent_misconduct")) ? "compliance" : "general"}`}
                     className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                   >
-                    <ClipboardCheck className="w-3.5 h-3.5" /> Create Coaching Session
+                    <ClipboardText className="w-3.5 h-3.5" /> Create Coaching Session
                   </Link>
                 )}
               </div>
@@ -970,7 +970,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             return (
               <div className={`rounded-lg p-4 ${bgClass}`}>
                 <h4 className={`font-semibold mb-2 flex items-center gap-1.5 ${isLow ? "text-yellow-700 dark:text-yellow-400" : "text-foreground"}`}>
-                  <ShieldQuestion className="w-4 h-4" /> AI Confidence
+                  <ShieldStar className="w-4 h-4" /> AI Confidence
                 </h4>
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -1057,7 +1057,7 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
   return (
     <div className="bg-muted rounded-lg p-4">
       <h4 className="font-semibold text-foreground mb-3 flex items-center gap-1.5">
-        <ClipboardCheck className="w-4 h-4" /> Annotations
+        <ClipboardText className="w-4 h-4" /> Annotations
       </h4>
       {(annotations || []).length > 0 && (
         <div className="space-y-2 mb-3">

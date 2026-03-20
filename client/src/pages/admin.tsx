@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Shield, UserPlus, CheckCircle2, XCircle, Clock, Eye, Settings, ChevronRight, Users } from "lucide-react";
+import { CaretRight, CheckCircle, Clock, Eye, Gear, Shield, UserPlus, Users, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -45,7 +45,7 @@ export default function AdminPage() {
 
   const roleIcons: Record<string, React.ReactNode> = {
     viewer: <Eye className="w-4 h-4 text-blue-500" />,
-    manager: <Settings className="w-4 h-4 text-amber-500" />,
+    manager: <Gear className="w-4 h-4 text-amber-500" />,
     admin: <Shield className="w-4 h-4 text-purple-500" />,
   };
 
@@ -54,7 +54,7 @@ export default function AdminPage() {
       case "pending":
         return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
       case "approved":
-        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"><CheckCircle2 className="w-3 h-3 mr-1" />Approved</Badge>;
+        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"><CheckCircle className="w-3 h-3 mr-1" />Approved</Badge>;
       case "denied":
         return <Badge className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"><XCircle className="w-3 h-3 mr-1" />Denied</Badge>;
       default:
@@ -152,7 +152,7 @@ export default function AdminPage() {
                 ) : pendingRequests.length === 0 ? (
                   <div className="text-center py-12">
                     <div className="mx-auto w-14 h-14 bg-gradient-to-br from-green-100 to-green-50 dark:from-green-900/30 dark:to-green-900/10 rounded-full flex items-center justify-center mb-3">
-                      <CheckCircle2 className="w-7 h-7 text-green-500" />
+                      <CheckCircle className="w-7 h-7 text-green-500" />
                     </div>
                     <p className="text-sm text-muted-foreground">No pending access requests</p>
                   </div>
@@ -182,7 +182,7 @@ export default function AdminPage() {
                             onClick={() => reviewMutation.mutate({ id: req.id, status: "approved" })}
                             disabled={reviewMutation.isPending}
                           >
-                            <CheckCircle2 className="w-4 h-4 mr-1" />
+                            <CheckCircle className="w-4 h-4 mr-1" />
                             Approve
                           </Button>
                           <Button
@@ -274,12 +274,12 @@ export default function AdminPage() {
                       {/* Permission details per role */}
                       {role.value === "viewer" && (
                         <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> View dashboard & metrics</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> View call transcripts</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> View reports & charts</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> View employee profiles</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Search calls</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Play audio recordings</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View dashboard & metrics</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View call transcripts</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View reports & charts</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View employee profiles</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Search calls</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Play audio recordings</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Upload calls</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Edit analysis</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Delete calls</div>
@@ -288,13 +288,13 @@ export default function AdminPage() {
                       )}
                       {role.value === "manager" && (
                         <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> All Viewer permissions</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Upload call recordings</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Assign calls to employees</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Edit call analysis</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Manage employees</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Export reports</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Delete calls</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> All Viewer permissions</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Upload call recordings</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Assign calls to employees</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Edit call analysis</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Manage employees</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Export reports</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Delete calls</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Manage users</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Approve access requests</div>
                           <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Bulk import</div>
@@ -302,12 +302,12 @@ export default function AdminPage() {
                       )}
                       {role.value === "admin" && (
                         <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> All Manager permissions</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Manage users & roles</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Approve/deny access requests</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Bulk CSV import</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> System configuration</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle2 className="w-3 h-3" /> Full API access</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> All Manager permissions</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Manage users & roles</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Approve/deny access requests</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Bulk CSV import</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> System configuration</div>
+                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Full API access</div>
                         </div>
                       )}
                     </div>

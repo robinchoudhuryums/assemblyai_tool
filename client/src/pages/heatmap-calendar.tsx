@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CalendarDays, Clock } from "lucide-react";
+import { CalendarDots, Clock } from "@phosphor-icons/react";
 import type { Employee } from "@shared/schema";
 
 interface HeatmapCell {
@@ -82,7 +82,7 @@ export default function HeatmapCalendar() {
     <div className="min-h-screen">
       <header className="bg-card border-b border-border px-6 py-4">
         <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-          <CalendarDays className="w-6 h-6" />
+          <CalendarDots className="w-6 h-6" />
           Call Heatmap
         </h2>
         <p className="text-muted-foreground">Call volume and performance by day of week and hour</p>

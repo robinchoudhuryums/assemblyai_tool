@@ -1,14 +1,14 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Clock, TrendingUp, TrendingDown, Minus, AlertCircle } from "lucide-react";
+import { Clock, Minus, TrendDown, TrendUp, WarningCircle } from "@phosphor-icons/react";
 import type { ABTest } from "@shared/schema";
 import { BEDROCK_MODEL_PRESETS } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 
 export function ScoreComparison({ label, baseline, test }: { label: string; baseline?: number; test?: number }) {
   const diff = (test ?? 0) - (baseline ?? 0);
-  const DiffIcon = diff > 0.5 ? TrendingUp : diff < -0.5 ? TrendingDown : Minus;
+  const DiffIcon = diff > 0.5 ? TrendUp : diff < -0.5 ? TrendDown : Minus;
   const diffColor = diff > 0.5 ? "text-green-600" : diff < -0.5 ? "text-red-600" : "text-muted-foreground";
 
   return (
@@ -56,7 +56,7 @@ export function AnalysisPanel({ title, model, analysis, latencyMs }: {
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-2 text-red-600">
-            <AlertCircle className="w-4 h-4" />
+            <WarningCircle className="w-4 h-4" />
             <span className="text-sm">Analysis failed: {analysis.error}</span>
           </div>
         </CardContent>

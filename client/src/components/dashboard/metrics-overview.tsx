@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Phone, Heart, Clock, Star, AlertTriangle } from "lucide-react";
+import { Clock, Heart, Phone, Star, Warning } from "@phosphor-icons/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { useLocation } from "wouter";
@@ -16,7 +16,7 @@ export default function MetricsOverview() {
   if (error) {
     return (
       <div className="bg-card rounded-lg border border-destructive/30 p-6 text-center">
-        <AlertTriangle className="w-6 h-6 text-destructive mx-auto mb-2" />
+        <Warning className="w-6 h-6 text-destructive mx-auto mb-2" />
         <p className="text-sm font-medium text-destructive">{t("metrics.failedToLoad")}</p>
         <p className="text-xs text-muted-foreground">{error.message}</p>
       </div>

@@ -1,4 +1,4 @@
-import { Globe } from "lucide-react";
+import { Globe } from "@phosphor-icons/react";
 import { useTranslation, type Locale } from "@/lib/i18n";
 import {
   Select,

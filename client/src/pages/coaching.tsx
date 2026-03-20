@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClipboardCheck, Plus, User, Calendar, CheckCircle2, Clock, X, Eye, ChevronDown, ChevronUp } from "lucide-react";
+import { Calendar, CaretDown, CaretUp, CheckCircle, ClipboardText, Clock, Eye, Plus, User, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -89,7 +89,7 @@ export default function CoachingPage() {
       <header className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <ClipboardCheck className="w-6 h-6" /> Coaching & Action Plans
+            <ClipboardText className="w-6 h-6" /> Coaching & Action Plans
           </h2>
           <p className="text-muted-foreground">Assign coaching sessions from flagged calls and track agent improvement.</p>
         </div>
@@ -152,7 +152,7 @@ export default function CoachingPage() {
 
         {!isLoading && filtered.length === 0 && (
           <div className="text-center py-16">
-            <ClipboardCheck className="w-12 h-12 text-muted-foreground/40 mx-auto mb-3" />
+            <ClipboardText className="w-12 h-12 text-muted-foreground/40 mx-auto mb-3" />
             <h4 className="font-semibold text-foreground mb-1">No coaching sessions</h4>
             <p className="text-sm text-muted-foreground mb-4">Create coaching sessions from flagged calls or add them manually.</p>
             <Button onClick={() => setShowForm(true)}>
@@ -186,7 +186,7 @@ export default function CoachingPage() {
                     <span className="flex items-center gap-1"><User className="w-3 h-3" /> {session.employeeName || "Unknown"}</span>
                     <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {session.createdAt ? new Date(session.createdAt).toLocaleDateString() : "—"}</span>
                     {session.dueDate && <span>Due: {new Date(session.dueDate).toLocaleDateString()}</span>}
-                    {totalTasks > 0 && <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> {completedTasks}/{totalTasks} tasks</span>}
+                    {totalTasks > 0 && <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> {completedTasks}/{totalTasks} tasks</span>}
                     <span>Assigned by: {session.assignedBy}</span>
                   </div>
                 </div>
@@ -197,7 +197,7 @@ export default function CoachingPage() {
                     </div>
                   </div>
                 )}
-                {isExpanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+                {isExpanded ? <CaretUp className="w-4 h-4 text-muted-foreground" /> : <CaretDown className="w-4 h-4 text-muted-foreground" />}
               </div>
 
               {isExpanded && (
@@ -246,7 +246,7 @@ export default function CoachingPage() {
                     )}
                     {(session.status === "pending" || session.status === "in_progress") && (
                       <Button size="sm" onClick={() => updateMutation.mutate({ id: session.id, updates: { status: "completed" } })}>
-                        <CheckCircle2 className="w-3 h-3 mr-1" /> Complete
+                        <CheckCircle className="w-3 h-3 mr-1" /> Complete
                       </Button>
                     )}
                     {session.status !== "dismissed" && session.status !== "completed" && (

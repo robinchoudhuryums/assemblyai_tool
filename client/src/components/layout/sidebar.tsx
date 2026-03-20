@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Mic, BarChart3, Upload, FileText, Heart, Users, UserPlus, Search, LogOut, User, TrendingUp, Sun, Moon, Shield, Building2, SlidersHorizontal, ClipboardCheck, FlaskConical, DollarSign, Bell, X, Eye, AlertTriangle, CheckCircle2, Users2, ShieldAlert, GitCompareArrows, CalendarDays, Layers } from "lucide-react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GitDiff, Heart, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -13,21 +13,21 @@ import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from 
 type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
 
 const navigation: NavItem[] = [
-  { nameKey: "nav.dashboard", href: "/", icon: BarChart3 },
+  { nameKey: "nav.dashboard", href: "/", icon: ChartBarHorizontal },
   { nameKey: "nav.myPerformance", href: "/my-performance", icon: User },
-  { nameKey: "nav.uploadCalls", href: "/upload", icon: Upload },
+  { nameKey: "nav.uploadCalls", href: "/upload", icon: UploadSimple },
   { nameKey: "nav.transcripts", href: "/transcripts", icon: FileText },
-  { nameKey: "nav.search", href: "/search", icon: Search },
+  { nameKey: "nav.search", href: "/search", icon: MagnifyingGlass },
   { nameKey: "nav.sentiment", href: "/sentiment", icon: Heart, sectionKey: "section.analytics" },
   { nameKey: "nav.performance", href: "/performance", icon: Users },
-  { nameKey: "nav.reports", href: "/reports", icon: TrendingUp },
-  { nameKey: "nav.insights", href: "/insights", icon: Building2 },
-  { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: Users2 },
-  { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitCompareArrows },
-  { nameKey: "nav.heatmap", href: "/analytics/heatmap", icon: CalendarDays },
-  { nameKey: "nav.clusters", href: "/analytics/clusters", icon: Layers },
+  { nameKey: "nav.reports", href: "/reports", icon: TrendUp },
+  { nameKey: "nav.insights", href: "/insights", icon: Buildings },
+  { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: UsersThree },
+  { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitDiff },
+  { nameKey: "nav.heatmap", href: "/analytics/heatmap", icon: CalendarDots },
+  { nameKey: "nav.clusters", href: "/analytics/clusters", icon: Stack },
   { nameKey: "nav.employees", href: "/employees", icon: UserPlus, sectionKey: "section.management" },
-  { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardCheck, requireRole: ["manager", "admin"] },
+  { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardText, requireRole: ["manager", "admin"] },
 ];
 
 interface AuthUser {
@@ -184,7 +184,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <Mic className="text-primary-foreground w-4 h-4" />
+            <Microphone className="text-primary-foreground w-4 h-4" />
           </div>
           <div>
             <h1 className="font-bold text-lg text-foreground">CallAnalyzer</h1>
@@ -242,11 +242,11 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
                           }}
                         >
                           {n.type === "completed" ? (
-                            <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
+                            <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
                           ) : n.type === "failed" ? (
-                            <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                            <Warning className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
                           ) : (
-                            <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 shrink-0" />
+                            <Warning className="w-4 h-4 text-yellow-500 mt-0.5 shrink-0" />
                           )}
                           <div className="min-w-0 flex-1">
                             <p className={cn("text-xs", !n.read ? "font-medium text-foreground" : "text-muted-foreground")}>
@@ -360,7 +360,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
               )}
               data-testid="nav-link-templates"
             >
-              <SlidersHorizontal className="w-5 h-5" />
+              <Sliders className="w-5 h-5" />
               <span>{t("nav.promptTemplates")}</span>
             </Link>
             <Link
@@ -373,7 +373,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
               )}
               data-testid="nav-link-ab-testing"
             >
-              <FlaskConical className="w-5 h-5" />
+              <Flask className="w-5 h-5" />
               <span>{t("nav.modelTesting")}</span>
             </Link>
             <Link
@@ -386,7 +386,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
               )}
               data-testid="nav-link-spend"
             >
-              <DollarSign className="w-5 h-5" />
+              <CurrencyDollar className="w-5 h-5" />
               <span>{t("nav.spendTracking")}</span>
             </Link>
             <Link
@@ -399,7 +399,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
               )}
               data-testid="nav-link-security"
             >
-              <ShieldAlert className="w-5 h-5" />
+              <ShieldWarning className="w-5 h-5" />
               <span>{t("nav.security")}</span>
             </Link>
           </>
@@ -446,7 +446,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
             aria-label="Sign out"
             data-testid="logout-button"
           >
-            <LogOut className="w-4 h-4" />
+            <SignOut className="w-4 h-4" />
           </button>
         </div>
       </div>
