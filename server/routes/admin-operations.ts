@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
+import { metrics } from "../services/logger";
 
 export function registerOperationsRoutes(
   router: Router,
@@ -156,5 +157,10 @@ export function registerOperationsRoutes(
       console.error("Report generation error:", (error as Error).message);
       res.status(500).json({ message: "Failed to generate report" });
     }
+  });
+
+  // ==================== ADMIN: APPLICATION METRICS ====================
+  router.get("/api/admin/metrics", requireRole("admin"), (_req, res) => {
+    res.json(metrics.snapshot());
   });
 }

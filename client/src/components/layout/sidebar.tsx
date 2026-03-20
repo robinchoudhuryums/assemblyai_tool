@@ -46,7 +46,9 @@ interface Notification {
   read: boolean;
 }
 
-export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose?: () => void } = {}) {
+type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
+
+export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean; onClose?: () => void; wsState?: ConnectionState } = {}) {
   const [location, navigate] = useLocation();
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -437,7 +439,21 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
           </div>
           <div className="flex-1 min-w-0">
             <p className="font-medium text-sm text-foreground truncate">{user?.name || "User"}</p>
-            <p className="text-xs text-muted-foreground capitalize">{user?.role || "viewer"}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs text-muted-foreground capitalize">{user?.role || "viewer"}</p>
+              {wsState && (
+                <span
+                  className={cn(
+                    "w-1.5 h-1.5 rounded-full shrink-0",
+                    wsState === "connected" && "bg-green-500",
+                    wsState === "reconnecting" && "bg-yellow-500 animate-pulse",
+                    wsState === "connecting" && "bg-yellow-500 animate-pulse",
+                    wsState === "disconnected" && "bg-red-500",
+                  )}
+                  title={`Real-time updates: ${wsState}`}
+                />
+              )}
+            </div>
           </div>
           <button
             className="text-muted-foreground hover:text-foreground"

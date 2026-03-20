@@ -9,6 +9,7 @@
     "start": "NODE_ENV=production node dist/index.js",
     "test": "tsx --test tests/*.test.ts",
     "test:client": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test",
     "check": "tsc",
     "seed": "tsx seed.ts"
   },
@@ -76,6 +77,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@replit/vite-plugin-cartographer": "^0.3.1",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",

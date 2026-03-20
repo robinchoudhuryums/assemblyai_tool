@@ -10,6 +10,7 @@ import { userRateLimit } from "./middleware/rate-limit";
 import { wafMiddleware } from "./middleware/waf";
 import { startScheduledScans } from "./services/vulnerability-scanner";
 import crypto from "crypto";
+import { logger, metrics } from "./services/logger";
 
 const app = express();
 
@@ -149,15 +150,32 @@ app.use((req, res, next) => {
 // HIPAA: Audit logging middleware - logs all API access with user identity but never PHI
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const reqPath = req.path;
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
+    if (reqPath.startsWith("/api")) {
       const user = req.user;
-      const userId = user ? `${user.username}(${user.role})` : "anonymous";
-      const logLine = `[AUDIT] ${new Date().toISOString()} ${userId} ${req.method} ${path} ${res.statusCode} ${duration}ms`;
-      log(logLine);
+      const username = user ? user.username : "anonymous";
+      const role = user ? user.role : undefined;
+
+      // Structured JSON log for aggregators
+      logger.info("api_request", {
+        method: req.method,
+        path: reqPath,
+        status: res.statusCode,
+        duration_ms: duration,
+        username,
+        role,
+      });
+
+      // Metrics: request count by method and status class
+      const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
+      metrics.increment("http_requests_total", 1, { method: req.method, status: statusClass });
+      metrics.observe("http_request_duration_ms", duration, { method: req.method });
+
+      // Also write the human-readable log for pm2 console
+      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms`);
     }
   });
 
@@ -188,14 +206,17 @@ app.get("/api/health", async (_req, res) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     uptime: Math.round(process.uptime()),
+    version: process.env.npm_package_version || "unknown",
   };
 
   // Check database connectivity
   const pool = getPool();
   if (pool) {
     try {
+      const dbStart = Date.now();
       await pool.query("SELECT 1");
       health.database = "connected";
+      health.db_latency_ms = Date.now() - dbStart;
     } catch {
       health.database = "error";
       health.status = "degraded";
@@ -203,6 +224,13 @@ app.get("/api/health", async (_req, res) => {
   } else {
     health.database = "not_configured";
   }
+
+  // Process memory snapshot
+  const mem = process.memoryUsage();
+  health.memory = {
+    rss_mb: Math.round(mem.rss / 1048576),
+    heap_used_mb: Math.round(mem.heapUsed / 1048576),
+  };
 
   res.json(health);
 });
@@ -257,7 +285,8 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
     res.status(status).json({ message });
     if (status >= 500) {
-      console.error(`[ERROR] ${status}: ${message}`);
+      logger.error("unhandled_error", { status, message });
+      metrics.increment("http_errors_total", 1, { status: String(status) });
     }
   });
 
