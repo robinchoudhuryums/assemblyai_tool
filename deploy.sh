@@ -31,6 +31,7 @@ npm install --production=false
 
 # Build (with rollback on failure)
 echo "[3/4] Building..."
+export NODE_OPTIONS="--max-old-space-size=1024"
 if ! npm run build; then
   echo ""
   echo "!!! BUILD FAILED — Rolling back to $PREV_COMMIT !!!"
