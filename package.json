@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && cp server/db/schema.sql dist/schema.sql",
+    "build": "NODE_OPTIONS='--max-old-space-size=1536' vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && cp server/db/schema.sql dist/schema.sql",
     "start": "NODE_ENV=production node dist/index.js",
     "test": "tsx --test tests/*.test.ts",
     "test:client": "vitest run --config vitest.config.ts",
