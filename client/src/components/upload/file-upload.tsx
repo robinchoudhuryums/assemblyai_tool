@@ -1,7 +1,7 @@
 import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, FileAudio, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle, CloudArrowUp, FileAudio, SpinnerGap, X, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
@@ -191,7 +191,7 @@ export default function FileUpload() {
         isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
       }`}>
         <input {...getInputProps()} />
-        <CloudUpload className={`mx-auto h-12 w-12 ${isDragActive ? "text-primary" : "text-muted-foreground"}`} />
+        <CloudArrowUp className={`mx-auto h-12 w-12 ${isDragActive ? "text-primary" : "text-muted-foreground"}`} />
         <p className="mt-2 text-sm text-muted-foreground">
           {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select files"}
         </p>
@@ -314,7 +314,7 @@ export default function FileUpload() {
 
                 {fileData.status === 'completed' && (
                   <div className="flex items-center gap-2 text-green-600">
-                    <CheckCircle2 className="w-5 h-5" />
+                    <CheckCircle className="w-5 h-5" />
                     <span className="text-sm font-medium">Complete</span>
                     <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>
@@ -333,7 +333,7 @@ export default function FileUpload() {
               {(fileData.status === 'uploading' || fileData.status === 'processing') && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                    <SpinnerGap className="w-4 h-4 animate-spin text-primary" />
                     <span className="text-xs font-medium text-primary">
                       {fileData.processingStep || "Processing..."}
                     </span>

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Building2, TrendingDown, AlertTriangle, BarChart3, MessageCircle, ShieldAlert } from "lucide-react";
+import { Buildings, ChartBarHorizontal, ChatCircle, ShieldWarning, TrendDown, Warning } from "@phosphor-icons/react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -64,7 +64,7 @@ export default function InsightsPage() {
         <div className="p-6">
           <div className="text-center py-16">
             <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">
-              <Building2 className="w-8 h-8 text-primary/60" />
+              <Buildings className="w-8 h-8 text-primary/60" />
             </div>
             <h4 className="font-semibold text-foreground mb-1">No data yet</h4>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
@@ -117,7 +117,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <TrendingDown className="w-5 h-5 text-muted-foreground" />
+                <TrendDown className="w-5 h-5 text-muted-foreground" />
                 Customer Sentiment Over Time
               </CardTitle>
               <CardDescription>Weekly breakdown of positive, neutral, and negative calls</CardDescription>
@@ -158,7 +158,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-red-500" />
+                <Warning className="w-5 h-5 text-red-500" />
                 Top Complaint Topics
               </CardTitle>
               <CardDescription>Most frequent topics in negative-sentiment calls</CardDescription>
@@ -194,7 +194,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-blue-500" />
+                <ChartBarHorizontal className="w-5 h-5 text-blue-500" />
                 Most Common Call Topics
               </CardTitle>
               <CardDescription>Topics discussed most frequently across all calls</CardDescription>
@@ -226,7 +226,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-amber-500" />
+                <ShieldWarning className="w-5 h-5 text-amber-500" />
                 Recent Escalations & Low-Score Calls
               </CardTitle>
               <CardDescription>
@@ -260,7 +260,7 @@ export default function InsightsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <MessageCircle className="w-5 h-5 text-yellow-500" />
+                <ChatCircle className="w-5 h-5 text-yellow-500" />
                 Low Confidence Analyses
               </CardTitle>
               <CardDescription>

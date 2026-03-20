@@ -90,7 +90,7 @@ const SQL_INJECTION_PATTERNS = [
   /\bsleep\s*\(\s*\d+\s*\)/i,                    // SLEEP() injection
 ];
 
-// XSS patterns
+// XSS patterns (includes SVG/XML vectors)
 const XSS_PATTERNS = [
   /<script[\s>]/i,
   /javascript\s*:/i,
@@ -101,6 +101,18 @@ const XSS_PATTERNS = [
   /\beval\s*\(/i,
   /expression\s*\(/i,
   /url\s*\(\s*['"]?\s*data:/i,
+  /<svg[\s>]/i,                    // SVG-based XSS
+  /<math[\s>]/i,                   // MathML-based XSS
+  /xlink:href\s*=/i,              // SVG xlink injection
+  /formaction\s*=/i,              // Form action hijacking
+];
+
+// CRLF injection patterns (HTTP header injection)
+const CRLF_PATTERNS = [
+  /\r\n/,                         // Literal CRLF
+  /%0[dD]%0[aA]/,                 // URL-encoded CRLF
+  /%0[aA]/,                       // URL-encoded LF (can split headers in some servers)
+  /\\r\\n/,                       // Escaped CRLF in JSON
 ];
 
 // Path traversal patterns
@@ -144,6 +156,15 @@ const ANOMALY_WINDOW = 10 * 60 * 1000;         // 10-minute sliding window
 
 function recordAnomaly(ip: string, violation: string, points: number): number {
   const now = Date.now();
+
+  // SECURITY: If IP is in cooldown period (recently auto-blocked), don't reset score
+  const cooldownUntil = anomalyCooldowns.get(ip);
+  if (cooldownUntil && now < cooldownUntil) {
+    // Still in cooldown — immediately re-block
+    temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Repeat offense during cooldown: ${violation}`);
+    return ANOMALY_THRESHOLD;
+  }
+
   let tracker = anomalyScores.get(ip);
 
   if (!tracker || now - tracker.firstSeen > ANOMALY_WINDOW) {
@@ -157,6 +178,8 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
 
   if (tracker.score >= ANOMALY_THRESHOLD) {
     temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Anomaly score ${tracker.score}: ${tracker.violations.join(", ")}`);
+    // Set cooldown so score doesn't reset immediately if they retry
+    anomalyCooldowns.set(ip, now + ANOMALY_COOLDOWN_MS);
     anomalyScores.delete(ip);
   }
 
@@ -173,11 +196,14 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// Cleanup expired temporary blocks every 5 minutes
+// Cleanup expired temporary blocks and cooldowns every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [ip, expiresAt] of temporaryBlocks) {
     if (now >= expiresAt) temporaryBlocks.delete(ip);
+  }
+  for (const [ip, expiresAt] of anomalyCooldowns) {
+    if (now >= expiresAt) anomalyCooldowns.delete(ip);
   }
 }, 5 * 60 * 1000);
 
@@ -213,10 +239,46 @@ export function getWAFStats(): WAFStats & { blockedIPs: ReturnType<typeof getBlo
   };
 }
 
+// --- Constants ---
+
+// Maximum request body size the WAF will inspect (1MB). Larger payloads
+// are blocked before pattern matching to prevent regex DoS.
+const MAX_INSPECTABLE_BODY_SIZE = 1_048_576; // 1MB
+
+// Cooldown period after auto-block: prevent score reset gaming
+const ANOMALY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const anomalyCooldowns = new Map<string, number>(); // IP -> cooldown-until timestamp
+
 // --- Helpers ---
+
+/**
+ * Normalize a value by decoding multi-layer URL encoding.
+ * Catches double-encoding attacks like %2525 → %25 → %.
+ */
+function deepDecode(value: string, maxDepth = 3): string {
+  let decoded = value;
+  for (let i = 0; i < maxDepth; i++) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break; // Malformed encoding — use what we have
+    }
+  }
+  return decoded;
+}
 
 function checkPatterns(value: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(value));
+}
+
+/** Check patterns against both raw and decoded values. */
+function checkPatternsNormalized(value: string, patterns: RegExp[]): boolean {
+  if (checkPatterns(value, patterns)) return true;
+  const decoded = deepDecode(value);
+  if (decoded !== value && checkPatterns(decoded, patterns)) return true;
+  return false;
 }
 
 function getAllRequestValues(req: Request): string[] {
@@ -288,8 +350,21 @@ export function wafMiddleware() {
       }
     }
 
-    // 3. Path traversal check (on URL only — fast)
-    if (checkPatterns(decodeURIComponent(req.originalUrl), PATH_TRAVERSAL_PATTERNS)) {
+    // 3. CRLF injection check (on raw URL and headers — fast)
+    if (checkPatternsNormalized(req.originalUrl, CRLF_PATTERNS)) {
+      stats.totalBlocked++;
+      recordAnomaly(ip, "crlf_injection", 5);
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "waf_crlf_blocked",
+        resourceType: "security",
+        detail: JSON.stringify({ ip, path: req.path }),
+      });
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    // 4. Path traversal check (with unicode normalization)
+    if (checkPatternsNormalized(req.originalUrl, PATH_TRAVERSAL_PATTERNS)) {
       stats.totalBlocked++;
       stats.pathTraversalBlocked++;
       recordAnomaly(ip, "path_traversal", 5);
@@ -302,16 +377,42 @@ export function wafMiddleware() {
       return res.status(400).json({ message: "Invalid request" });
     }
 
-    // 4. Skip deep inspection for non-API routes and file uploads
-    const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
-    if (!req.path.startsWith("/api") || isMultipart) {
+    // 5. Request body size check — reject oversized bodies before pattern matching
+    const contentLength = parseInt(req.headers["content-length"] || "0", 10);
+    if (contentLength > MAX_INSPECTABLE_BODY_SIZE) {
+      // Allow multipart file uploads (handled by multer limits), block oversized JSON
+      const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
+      if (!isMultipart) {
+        stats.totalBlocked++;
+        recordAnomaly(ip, "oversized_body", 3);
+        return res.status(413).json({ message: "Request body too large" });
+      }
+    }
+
+    // 6. Skip deep inspection for non-API routes
+    if (!req.path.startsWith("/api")) {
       return next();
     }
 
-    // 5. SQL injection check
+    // 7. For multipart uploads, inspect field names (not file content)
+    const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
+    if (isMultipart) {
+      // Check query params and URL for injection even on multipart requests
+      const urlValues = [req.path, ...Object.values(req.query || {}).filter((v): v is string => typeof v === "string")];
+      for (const val of urlValues) {
+        if (checkPatternsNormalized(val, SQL_INJECTION_PATTERNS) || checkPatternsNormalized(val, XSS_PATTERNS)) {
+          stats.totalBlocked++;
+          recordAnomaly(ip, "multipart_param_injection", 5);
+          return res.status(400).json({ message: "Invalid request" });
+        }
+      }
+      return next();
+    }
+
+    // 8. SQL injection check (with unicode normalization)
     const values = getAllRequestValues(req);
     for (const val of values) {
-      if (checkPatterns(val, SQL_INJECTION_PATTERNS)) {
+      if (checkPatternsNormalized(val, SQL_INJECTION_PATTERNS)) {
         stats.totalBlocked++;
         stats.sqliBlocked++;
         recordAnomaly(ip, "sql_injection", 5);
@@ -325,9 +426,9 @@ export function wafMiddleware() {
       }
     }
 
-    // 6. XSS check
+    // 9. XSS check (with unicode normalization)
     for (const val of values) {
-      if (checkPatterns(val, XSS_PATTERNS)) {
+      if (checkPatternsNormalized(val, XSS_PATTERNS)) {
         stats.totalBlocked++;
         stats.xssBlocked++;
         recordAnomaly(ip, "xss_attempt", 4);

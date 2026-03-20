@@ -11,10 +11,10 @@
  *
  * Uses the Bedrock "Converse" API (no SDK needed, plain fetch + SigV4).
  */
-import { createHmac, createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
+import { signRequest, sha256Buffer } from "./sigv4.js";
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
@@ -88,7 +88,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       inferenceConfig: { temperature: 0.4, maxTokens: 2048 },
     });
 
-    const headers = this.signRequest("POST", host, rawPath, body, region, creds);
+    const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
     try {
@@ -132,7 +132,7 @@ export class BedrockProvider implements AIAnalysisProvider {
 
     console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
 
-    const headers = this.signRequest("POST", host, rawPath, body, region, creds);
+    const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
     let result: any;
@@ -187,7 +187,7 @@ export class BedrockProvider implements AIAnalysisProvider {
         normalize: true,
       });
 
-      const headers = this.signRequest("POST", host, rawPath, body, region, creds);
+      const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout for embeddings
       try {
@@ -209,9 +209,9 @@ export class BedrockProvider implements AIAnalysisProvider {
     }
   }
 
-  // --- AWS Signature V4 ---
+  // --- AWS Signature V4 (delegated to shared sigv4.ts) ---
 
-  private signRequest(
+  private signBedrockRequest(
     method: string,
     host: string,
     rawPath: string,
@@ -220,85 +220,15 @@ export class BedrockProvider implements AIAnalysisProvider {
     creds?: AwsCredentials,
   ): Record<string, string> {
     if (!creds) creds = this.credentials!;
-    const service = "bedrock";
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const dateStamp = amzDate.slice(0, 8);
-
-    const payloadHash = sha256(body);
-
-    // SigV4: canonical URI must have each path segment URI-encoded once
-    const canonicalUri = rawPath
-      .split("/")
-      .map((seg) => encodeURIComponent(seg))
-      .join("/");
-
-    // Headers must be sorted alphabetically by name for canonical form
-    const canonicalHeaders =
-      `content-type:application/json\n` +
-      `host:${host}\n` +
-      `x-amz-date:${amzDate}\n` +
-      (creds.sessionToken ? `x-amz-security-token:${creds.sessionToken}\n` : "");
-
-    const signedHeaders = creds.sessionToken
-      ? "content-type;host;x-amz-date;x-amz-security-token"
-      : "content-type;host;x-amz-date";
-
-    const canonicalRequest = [
+    return signRequest({
       method,
-      canonicalUri,
-      "", // query string
-      canonicalHeaders,
-      signedHeaders,
-      payloadHash,
-    ].join("\n");
-
-    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-    const stringToSign = [
-      "AWS4-HMAC-SHA256",
-      amzDate,
-      credentialScope,
-      sha256(canonicalRequest),
-    ].join("\n");
-
-    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, region, service);
-    const signature = hmacHex(signingKey, stringToSign);
-
-    const authHeader =
-      `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${credentialScope}, ` +
-      `SignedHeaders=${signedHeaders}, ` +
-      `Signature=${signature}`;
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "Host": host,
-      "X-Amz-Date": amzDate,
-      "Authorization": authHeader,
-    };
-    if (creds.sessionToken) {
-      headers["X-Amz-Security-Token"] = creds.sessionToken;
-    }
-    return headers;
+      host,
+      rawPath,
+      service: "bedrock",
+      region,
+      creds,
+      body,
+      extraHeaders: [["content-type", "application/json"]],
+    });
   }
-}
-
-// --- Crypto helpers ---
-
-function sha256(data: string): string {
-  return createHash("sha256").update(data, "utf8").digest("hex");
-}
-
-function hmac(key: Buffer | string, data: string): Buffer {
-  return createHmac("sha256", key).update(data, "utf8").digest();
-}
-
-function hmacHex(key: Buffer | string, data: string): string {
-  return createHmac("sha256", key).update(data, "utf8").digest("hex");
-}
-
-function getSignatureKey(key: string, dateStamp: string, region: string, service: string): Buffer {
-  const kDate = hmac(`AWS4${key}`, dateStamp);
-  const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, service);
-  return hmac(kService, "aws4_request");
 }

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DollarSign, TrendingUp, Calendar, FlaskConical, Phone } from "lucide-react";
+import { Calendar, CurrencyDollar, Flask, Phone, TrendUp } from "@phosphor-icons/react";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { type UsageRecord } from "@shared/schema";
 import {
@@ -137,7 +137,7 @@ export default function SpendTrackingPage() {
                     {r.type === "call" ? (
                       <Phone className="w-4 h-4 text-blue-500" />
                     ) : (
-                      <FlaskConical className="w-4 h-4 text-purple-500" />
+                      <Flask className="w-4 h-4 text-purple-500" />
                     )}
                     <div>
                       <span className="text-sm font-medium">
@@ -202,7 +202,7 @@ function PeriodView({ records, period }: { records: UsageRecord[]; period: Perio
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
-                <DollarSign className="w-5 h-5 text-green-600 dark:text-green-400" />
+                <CurrencyDollar className="w-5 h-5 text-green-600 dark:text-green-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Estimated Cost</p>
@@ -233,7 +233,7 @@ function PeriodView({ records, period }: { records: UsageRecord[]; period: Perio
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                <TrendingUp className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                <TrendUp className="w-5 h-5 text-purple-600 dark:text-purple-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Avg Cost / Call</p>

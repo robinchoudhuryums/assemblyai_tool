@@ -10,10 +10,9 @@ import { JobQueue, type Job } from "./services/job-queue";
 import { bedrockBatchService, type PendingBatchItem, type BatchJob } from "./services/bedrock-batch";
 import { assemblyAIService } from "./services/assemblyai";
 import { broadcastCallUpdate } from "./services/websocket";
-import { estimateBedrockCost } from "./routes/utils";
+import { estimateBedrockCost, computeConfidenceScore, autoAssignEmployee } from "./routes/utils";
 import type { UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
-import type { S3Client as S3ClientType } from "./services/s3";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -96,7 +95,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const runBatchCycle = async () => {
       try {
-        const s3Client: S3ClientType | undefined = (storage as any).audioClient || (storage as any).client;
+        const s3Client = storage.getObjectStorageClient();
         if (!s3Client) return;
 
         // 1. Check active jobs for completion
@@ -126,22 +125,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   const { transcript: _, sentiment: __, analysis: updatedAnalysis } =
                     assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId);
 
-                  const transcriptConfidence = transcriptResponse.confidence || 0;
-                  const wordCount = transcriptResponse.words?.length || 0;
                   const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
-                  const wordConfidence = Math.min(wordCount / 50, 1);
-                  const durationConfidence = callDuration > 30 ? 1 : callDuration / 30;
-                  const confidenceScore = transcriptConfidence * 0.4 + wordConfidence * 0.2 + durationConfidence * 0.15 + 0.25;
+                  const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore(
+                    {
+                      transcriptConfidence: transcriptResponse.confidence || 0,
+                      wordCount: transcriptResponse.words?.length || 0,
+                      callDurationSeconds: callDuration,
+                      hasAiAnalysis: true, // Batch always has AI analysis
+                    },
+                    (transcriptResponse.text || "").length,
+                  );
 
                   updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
-                  updatedAnalysis.confidenceFactors = {
-                    transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
-                    wordCount,
-                    callDurationSeconds: callDuration,
-                    transcriptLength: (transcriptResponse.text || "").length,
-                    aiAnalysisCompleted: true,
-                    overallScore: Math.round(confidenceScore * 100) / 100,
-                  };
+                  updatedAnalysis.confidenceFactors = confidenceFactors;
 
                   if (analysis.sub_scores) {
                     updatedAnalysis.subScores = {
@@ -169,16 +165,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   await storage.createCallAnalysis(updatedAnalysis);
                   await storage.updateCall(callId, { status: "completed" });
 
-                  // Auto-assign employee
+                  // Auto-assign employee (shared logic from utils.ts)
                   if (analysis.detected_agent_name) {
-                    const currentCall = await storage.getCall(callId);
-                    if (currentCall && !currentCall.employeeId) {
-                      const matchedEmployee = await storage.findEmployeeByName(analysis.detected_agent_name.trim());
-                      if (matchedEmployee) {
-                        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
-                        console.log(`[BATCH] Auto-assigned call ${callId} to ${matchedEmployee.name}`);
-                      }
-                    }
+                    await autoAssignEmployee(callId, analysis.detected_agent_name, storage, `[BATCH] `);
                   }
 
                   // Track Bedrock usage (at batch pricing — 50% off)
@@ -270,6 +259,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     setTimeout(runBatchCycle, 60_000);
     setInterval(runBatchCycle, batchIntervalMinutes * 60 * 1000);
+
+    // Orphan recovery: detect calls stuck in "awaiting_analysis" with no matching pending batch item.
+    // Runs every 30 minutes. If a call has been awaiting_analysis for >2 hours with no pending
+    // batch-inference item, mark it as failed so it's visible to admins.
+    const ORPHAN_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+    const ORPHAN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+    const recoverOrphans = async () => {
+      try {
+        const s3Client = storage.getObjectStorageClient();
+        if (!s3Client) return;
+
+        const allCalls = await storage.getAllCalls();
+        const awaitingCalls = allCalls.filter(c => c.status === "awaiting_analysis");
+        if (awaitingCalls.length === 0) return;
+
+        const pendingKeys = new Set(
+          (await s3Client.listObjects("batch-inference/pending/"))
+            .map(k => k.replace("batch-inference/pending/", "").replace(".json", ""))
+        );
+
+        let recovered = 0;
+        for (const call of awaitingCalls) {
+          const age = Date.now() - new Date(call.uploadedAt || Date.now()).getTime();
+          if (age > ORPHAN_THRESHOLD_MS && !pendingKeys.has(call.id)) {
+            await storage.updateCall(call.id, { status: "failed" });
+            broadcastCallUpdate(call.id, "failed", { label: "Orphaned: batch analysis never completed" });
+            recovered++;
+          }
+        }
+        if (recovered > 0) {
+          console.warn(`[BATCH] Recovered ${recovered} orphaned call(s) stuck in awaiting_analysis.`);
+        }
+      } catch (err) {
+        console.warn("[BATCH] Orphan recovery error:", (err as Error).message);
+      }
+    };
+    setTimeout(recoverOrphans, 5 * 60 * 1000); // First run after 5 minutes
+    setInterval(recoverOrphans, ORPHAN_CHECK_INTERVAL_MS);
   }
 
   // ==================== JOB QUEUE INITIALIZATION ====================

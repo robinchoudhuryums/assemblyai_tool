@@ -120,16 +120,12 @@ async function loadUsersFromEnv(): Promise<void> {
     const [username, password, role = "viewer", ...nameParts] = parts;
     const displayName = nameParts.length > 0 ? nameParts.join(":") : username;
 
-    // HIPAA: Enforce password complexity — reject weak passwords
+    // HIPAA: Enforce password complexity — reject weak passwords in ALL environments.
+    // Weak dev passwords can leak to production via .env files.
     const complexity = validatePasswordComplexity(password);
     if (!complexity.valid) {
-      const msg = `[SECURITY] Rejecting AUTH_USERS entry "${username}": weak password (missing ${complexity.errors.join(", ")}). HIPAA requires strong passwords.`;
-      if (process.env.NODE_ENV === "production") {
-        console.error(msg);
-        continue; // Skip this user entirely in production
-      } else {
-        console.warn(msg + " (allowed in development only)");
-      }
+      console.error(`[SECURITY] Rejecting AUTH_USERS entry "${username}": weak password (missing ${complexity.errors.join(", ")}). HIPAA requires strong passwords.`);
+      continue; // Skip this user entirely
     }
 
     const passwordHash = await hashPassword(password);
@@ -372,8 +368,12 @@ export async function setupAuth(app: Express) {
  * If the user-agent changes mid-session, destroy the session and force re-login.
  */
 function getSessionFingerprint(req: import("express").Request): string {
+  // HIPAA: Bind session to multiple browser characteristics to detect hijacking.
+  // Includes user-agent, accept-language, and client IP for stronger fingerprinting.
   const ua = req.headers["user-agent"] || "";
-  return createHash("sha256").update(ua).digest("hex").slice(0, 16);
+  const lang = req.headers["accept-language"] || "";
+  const ip = req.ip || req.socket.remoteAddress || "";
+  return createHash("sha256").update(`${ua}|${lang}|${ip}`).digest("hex").slice(0, 16);
 }
 
 export const requireAuth: RequestHandler = (req, res, next) => {

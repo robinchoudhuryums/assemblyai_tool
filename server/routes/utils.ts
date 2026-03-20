@@ -52,6 +52,82 @@ export async function cleanupFile(filePath: string) {
   }
 }
 
+// --- Confidence Score Calculation ---
+// Shared formula used by both real-time pipeline and batch inference.
+// Weights: transcript accuracy (40%) + word density (20%) + call duration (15%) + AI completeness (25%)
+
+export interface ConfidenceInput {
+  transcriptConfidence: number;  // 0-1, from AssemblyAI
+  wordCount: number;             // number of words in transcript
+  callDurationSeconds: number;   // call length in seconds
+  hasAiAnalysis: boolean;        // whether AI (Bedrock) analysis was completed
+}
+
+export interface ConfidenceResult {
+  score: number;
+  factors: {
+    transcriptConfidence: number;
+    wordCount: number;
+    callDurationSeconds: number;
+    transcriptLength: number;
+    aiAnalysisCompleted: boolean;
+    overallScore: number;
+  };
+}
+
+export function computeConfidenceScore(input: ConfidenceInput, transcriptLength: number): ConfidenceResult {
+  const { transcriptConfidence, wordCount, callDurationSeconds, hasAiAnalysis } = input;
+  const wordConfidence = Math.min(wordCount / 50, 1);
+  const durationConfidence = callDurationSeconds > 30 ? 1 : callDurationSeconds / 30;
+  const aiConfidence = hasAiAnalysis ? 1 : 0.3;
+
+  const score = (
+    transcriptConfidence * 0.4 +
+    wordConfidence * 0.2 +
+    durationConfidence * 0.15 +
+    aiConfidence * 0.25
+  );
+
+  return {
+    score,
+    factors: {
+      transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
+      wordCount,
+      callDurationSeconds,
+      transcriptLength,
+      aiAnalysisCompleted: hasAiAnalysis,
+      overallScore: Math.round(score * 100) / 100,
+    },
+  };
+}
+
+// --- Auto-Assign Employee ---
+// Shared logic: detect agent name → find matching employee → atomic assign.
+
+export async function autoAssignEmployee(
+  callId: string,
+  detectedAgentName: string,
+  storage: { findEmployeeByName(name: string): Promise<{ id: string; name: string } | undefined>; atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> },
+  logPrefix = "",
+): Promise<{ assigned: boolean; employeeName?: string }> {
+  const detectedName = detectedAgentName.trim();
+  const matchedEmployee = await storage.findEmployeeByName(detectedName);
+
+  if (!matchedEmployee) {
+    console.log(`${logPrefix}Detected agent name "${detectedName}" but no matching employee found.`);
+    return { assigned: false };
+  }
+
+  const assigned = await storage.atomicAssignEmployee(callId, matchedEmployee.id);
+  if (assigned) {
+    console.log(`${logPrefix}Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
+    return { assigned: true, employeeName: matchedEmployee.name };
+  }
+
+  console.log(`${logPrefix}Call already assigned, skipping auto-assign.`);
+  return { assigned: false };
+}
+
 /** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output).
  *  Note: When BEDROCK_BATCH_MODE=true, actual cost is 50% of these rates. */
 export function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {

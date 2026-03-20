@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, Link } from "wouter";
-import { Printer, ArrowLeft, Star, TrendingUp, AlertTriangle, Award, MessageCircle, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, ChatCircle, CheckCircle, Printer, Star, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoadingIndicator } from "@/components/ui/loading";
@@ -56,7 +56,7 @@ export default function AgentScorecard() {
     return (
       <div className="p-6">
         <div className="bg-card rounded-lg border border-border p-8 text-center">
-          <AlertTriangle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+          <Warning className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
           <h3 className="font-semibold text-foreground mb-1">Agent Not Found</h3>
           <p className="text-sm text-muted-foreground mb-4">Could not load scorecard for this agent.</p>
           <Link href="/employees"><Button variant="outline">Back to Employees</Button></Link>
@@ -172,7 +172,7 @@ export default function AgentScorecard() {
           {/* Strengths */}
           <div className="bg-card rounded-lg border border-border p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-green-500" /> Top Strengths
+              <CheckCircle className="w-4 h-4 text-green-500" /> Top Strengths
             </h3>
             {topStrengths.length > 0 ? (
               <ul className="space-y-2">
@@ -192,7 +192,7 @@ export default function AgentScorecard() {
           {/* Areas for Improvement */}
           <div className="bg-card rounded-lg border border-border p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5">
-              <MessageCircle className="w-4 h-4 text-amber-500" /> Areas for Improvement
+              <ChatCircle className="w-4 h-4 text-amber-500" /> Areas for Improvement
             </h3>
             {topSuggestions.length > 0 ? (
               <ul className="space-y-2">
@@ -228,7 +228,7 @@ export default function AgentScorecard() {
         {scoreTrend.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-4 mb-6 print:mb-4">
             <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5">
-              <TrendingUp className="w-4 h-4" /> Score Trend
+              <TrendUp className="w-4 h-4" /> Score Trend
             </h3>
             <div className="flex items-end gap-1 h-20">
               {scoreTrend.slice(-12).map((point, i) => {
@@ -254,7 +254,7 @@ export default function AgentScorecard() {
             {goodFlags.length > 0 && (
               <div className="bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-900 p-4 print:p-2">
                 <h3 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 mb-2 flex items-center gap-1.5">
-                  <Award className="w-4 h-4" /> Exceptional Calls ({goodFlags.length})
+                  <Trophy className="w-4 h-4" /> Exceptional Calls ({goodFlags.length})
                 </h3>
                 <ul className="space-y-1">
                   {goodFlags.slice(0, 3).map(f => (
@@ -268,7 +268,7 @@ export default function AgentScorecard() {
             {badFlags.length > 0 && (
               <div className="bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-900 p-4 print:p-2">
                 <h3 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1.5">
-                  <AlertTriangle className="w-4 h-4" /> Flagged Calls ({badFlags.length})
+                  <Warning className="w-4 h-4" /> Flagged Calls ({badFlags.length})
                 </h3>
                 <ul className="space-y-1">
                   {badFlags.slice(0, 3).map(f => (

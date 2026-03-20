@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { LoadingIndicator } from "@/components/ui/loading";
-import { useWebSocket } from "@/hooks/use-websocket";
+import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
 import { AnimatePresence, motion } from "framer-motion";
 
 // Route-level code splitting — each page loads on demand
@@ -100,8 +100,8 @@ function Router() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // WebSocket listener for real-time notifications
-  useWebSocket();
+  // WebSocket listener for real-time notifications (returns connection state)
+  const wsState = useWebSocket();
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -150,8 +150,8 @@ function Router() {
   return (
     <div className="flex h-screen">
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <main className="flex-1 overflow-auto">
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
+      <main className="flex-1 overflow-auto bg-gradient-to-br from-background via-background to-primary/[0.03]">
         {/* Mobile hamburger button */}
         <button
           className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-md bg-card border border-border shadow-sm"

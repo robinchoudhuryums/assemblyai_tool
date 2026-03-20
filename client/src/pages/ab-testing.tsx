@@ -10,9 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  FlaskConical, Upload, Trash2, CheckCircle2, Loader2, FileAudio, AlertCircle,
-} from "lucide-react";
+import { CheckCircle, FileAudio, Flask, SpinnerGap, Trash, UploadSimple, WarningCircle } from "@phosphor-icons/react";
 import { BEDROCK_MODEL_PRESETS, CALL_CATEGORIES, type ABTest } from "@shared/schema";
 import { TestResultView } from "@/components/ab-testing/ab-test-components";
 
@@ -56,7 +54,7 @@ export default function ABTestingPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Upload failed");
+        throw new Error(err.message || "UploadSimple failed");
       }
       return res.json();
     },
@@ -71,7 +69,7 @@ export default function ABTestingPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/ab-tests"] });
     },
     onError: (error: Error) => {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+      toast({ title: "UploadSimple failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -101,7 +99,7 @@ export default function ABTestingPage() {
     <div className="min-h-screen" data-testid="ab-testing-page">
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center gap-3">
-          <FlaskConical className="w-6 h-6 text-primary" />
+          <Flask className="w-6 h-6 text-primary" />
           <div>
             <h2 className="text-2xl font-bold text-foreground">Model A/B Testing</h2>
             <p className="text-muted-foreground">Compare Bedrock model analysis quality and cost — test calls are excluded from all metrics</p>
@@ -120,10 +118,10 @@ export default function ABTestingPage() {
 
           <TabsContent value="new" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Upload card */}
+              {/* UploadSimple card */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Upload Test Call</CardTitle>
+                  <CardTitle>UploadSimple Test Call</CardTitle>
                   <CardDescription>This call will NOT be counted in employee or department metrics</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -149,7 +147,7 @@ export default function ABTestingPage() {
                       </div>
                     ) : (
                       <div>
-                        <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                        <UploadSimple className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
                         <p className="text-sm text-muted-foreground">Click or drag audio file here</p>
                         <p className="text-xs text-muted-foreground mt-1">MP3, WAV, M4A, MP4, FLAC, OGG</p>
                       </div>
@@ -226,12 +224,12 @@ export default function ABTestingPage() {
                   >
                     {uploadMutation.isPending ? (
                       <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                         Uploading...
                       </>
                     ) : (
                       <>
-                        <FlaskConical className="w-4 h-4 mr-2" />
+                        <Flask className="w-4 h-4 mr-2" />
                         Start A/B Test
                       </>
                     )}
@@ -244,13 +242,13 @@ export default function ABTestingPage() {
           <TabsContent value="results" className="space-y-4">
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                <SpinnerGap className="w-6 h-6 animate-spin text-muted-foreground" />
               </div>
             ) : tests.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
-                  <FlaskConical className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                  <p className="text-muted-foreground">No A/B tests yet. Upload a call to get started.</p>
+                  <Flask className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground">No A/B tests yet. UploadSimple a call to get started.</p>
                 </CardContent>
               </Card>
             ) : (
@@ -272,11 +270,11 @@ export default function ABTestingPage() {
                             <span className="text-sm font-medium truncate flex-1">{test.fileName}</span>
                             <div className="flex items-center gap-1">
                               {test.status === "processing" || test.status === "analyzing" ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                                <SpinnerGap className="w-3.5 h-3.5 animate-spin text-blue-500" />
                               ) : test.status === "completed" ? (
-                                <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
                               ) : (
-                                <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                                <WarningCircle className="w-3.5 h-3.5 text-red-500" />
                               )}
                             </div>
                           </div>
@@ -325,7 +323,7 @@ export default function ABTestingPage() {
                             onClick={() => setDeleteConfirmId(selectedTest.id)}
                             disabled={deleteMutation.isPending}
                           >
-                            <Trash2 className="w-3.5 h-3.5 mr-1" />
+                            <Trash className="w-3.5 h-3.5 mr-1" />
                             Delete Test
                           </Button>
                         )}
@@ -333,7 +331,7 @@ export default function ABTestingPage() {
                       {selectedTest.status === "processing" || selectedTest.status === "analyzing" ? (
                         <Card>
                           <CardContent className="py-12 text-center">
-                            <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-3" />
+                            <SpinnerGap className="w-8 h-8 animate-spin text-primary mx-auto mb-3" />
                             <p className="text-muted-foreground">
                               {selectedTest.status === "processing" ? "Transcribing audio..." : "Running analysis with both models..."}
                             </p>

@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Play, Download, Star, Trash2, UserCheck, AlertTriangle, Award, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square, FileAudio, ShieldQuestion, FileDown, Bookmark, BookmarkPlus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowsDownUp, BookmarkSimple, CaretLeft, CaretRight, CheckSquare, DownloadSimple, Eye, FileArrowDown, FileAudio, Play, ShieldStar, Square, Star, Trash, Trophy, UserCheck, Warning, Waveform, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import type { CallWithDetails, Employee, PaginatedCalls } from "@shared/schema";
-import { AudioWaveform } from "lucide-react";
+
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -196,7 +196,7 @@ export default function CallsTable() {
   };
 
   const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    if (sortField !== field) return <ArrowsDownUp className="w-3 h-3 ml-1 opacity-40" />;
     return sortDir === "asc" ? <ArrowUp className="w-3 h-3 ml-1" /> : <ArrowDown className="w-3 h-3 ml-1" />;
   };
 
@@ -367,7 +367,7 @@ export default function CallsTable() {
           </span>
           {processingCount > 0 && (
             <Badge variant="secondary" className="animate-pulse text-xs">
-              <AudioWaveform className="w-3 h-3 mr-1" />
+              <Waveform className="w-3 h-3 mr-1" />
               {processingCount} processing
             </Badge>
           )}
@@ -385,7 +385,7 @@ export default function CallsTable() {
             }}
             title="Export as CSV"
           >
-            <FileDown className="w-4 h-4 mr-1" />
+            <FileArrowDown className="w-4 h-4 mr-1" />
             Export CSV
           </Button>
           <Select value={employeeFilter} onValueChange={handleFilterChange(setEmployeeFilter)}>
@@ -419,7 +419,7 @@ export default function CallsTable() {
               if (filter) handleLoadFilter(filter);
             }}>
               <SelectTrigger className="w-40">
-                <Bookmark className="w-3.5 h-3.5 mr-1.5" />
+                <BookmarkSimple className="w-3.5 h-3.5 mr-1.5" />
                 <SelectValue placeholder="Saved Filters" />
               </SelectTrigger>
               <SelectContent>
@@ -452,7 +452,7 @@ export default function CallsTable() {
             </div>
           ) : (
             <Button size="sm" variant="outline" className="h-9" onClick={() => setShowSaveDialog(true)} title="Save current filters">
-              <BookmarkPlus className="w-3.5 h-3.5 mr-1" />
+              <BookmarkSimple className="w-3.5 h-3.5 mr-1" />
               Save
             </Button>
           )}
@@ -474,10 +474,10 @@ export default function CallsTable() {
             </SelectContent>
           </Select>
           <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleBulkReanalyze} disabled={reanalyzeMutation.isPending}>
-            <AudioWaveform className="w-3 h-3 mr-1" /> Re-analyze
+            <Waveform className="w-3 h-3 mr-1" /> Re-analyze
           </Button>
           <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={handleBulkDelete}>
-            <Trash2 className="w-3 h-3 mr-1" /> Delete Selected
+            <Trash className="w-3 h-3 mr-1" /> Delete Selected
           </Button>
           <Button size="sm" variant="ghost" className="h-8 text-xs ml-auto" onClick={() => setSelectedIds(new Set())}>
             Clear Selection
@@ -608,22 +608,22 @@ export default function CallsTable() {
                         <>
                           {hasExceptional && (
                             <span title="Exceptional Call">
-                              <Award className="w-4 h-4 text-emerald-500" />
+                              <Trophy className="w-4 h-4 text-emerald-500" />
                             </span>
                           )}
                           {hasBad && (
                             <span title={flags.filter(f => f !== "exceptional_call" && f !== "medicare_call" && f !== "low_confidence").join(", ")}>
-                              <AlertTriangle className="w-4 h-4 text-red-500" />
+                              <Warning className="w-4 h-4 text-red-500" />
                             </span>
                           )}
                           {!hasExceptional && !hasBad && flags.includes("medicare_call") && (
                             <span title="Medicare Call">
-                              <AlertTriangle className="w-4 h-4 text-blue-500" />
+                              <Warning className="w-4 h-4 text-blue-500" />
                             </span>
                           )}
                           {hasLowConfidence && (
                             <span title="Low AI Confidence — may need manual review">
-                              <ShieldQuestion className="w-4 h-4 text-yellow-500" />
+                              <ShieldStar className="w-4 h-4 text-yellow-500" />
                             </span>
                           )}
                         </>
@@ -639,12 +639,12 @@ export default function CallsTable() {
                       </Button>
                     </Link>
                     <Button size="sm" variant="ghost"><Play className="w-4 h-4" /></Button>
-                    <Button size="sm" variant="ghost" disabled={call.status !== 'completed'}><Download className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" disabled={call.status !== 'completed'}><DownloadSimple className="w-4 h-4" /></Button>
                     <Button
                       size="sm" variant="ghost" className="text-red-500 hover:text-red-600"
                       onClick={() => handleDelete(call.id)} disabled={deleteMutation.isPending}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash className="w-4 h-4" />
                     </Button>
                   </div>
                 </td>
@@ -678,7 +678,7 @@ export default function CallsTable() {
           </div>
           <div className="flex items-center gap-1">
             <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
-              <ChevronLeft className="w-4 h-4" />
+              <CaretLeft className="w-4 h-4" />
             </Button>
             {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
               const pageNum = totalPages <= 5 ? i : Math.max(0, Math.min(page - 2, totalPages - 5)) + i;
@@ -695,7 +695,7 @@ export default function CallsTable() {
               );
             })}
             <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
-              <ChevronRight className="w-4 h-4" />
+              <CaretRight className="w-4 h-4" />
             </Button>
             {hasMore && (
               <Button

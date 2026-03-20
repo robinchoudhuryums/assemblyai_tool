@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { AudioWaveform, LogIn, UserPlus, Shield, Eye, Settings, KeyRound } from "lucide-react";
+import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-icons/react";
 import { apiRequest } from "@/lib/queryClient";
 import { extractErrorMessage } from "@/lib/display-utils";
 import { USER_ROLES } from "@shared/schema";
@@ -117,7 +117,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
 
   const roleIcons: Record<string, React.ReactNode> = {
     viewer: <Eye className="w-4 h-4 text-blue-500" />,
-    manager: <Settings className="w-4 h-4 text-amber-500" />,
+    manager: <Gear className="w-4 h-4 text-amber-500" />,
     admin: <Shield className="w-4 h-4 text-purple-500" />,
   };
 
@@ -128,7 +128,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           <CardHeader className="text-center">
             <div className="flex justify-center mb-4">
               <div className="w-12 h-12 bg-gradient-to-br from-primary/20 to-primary/5 rounded-lg flex items-center justify-center">
-                <AudioWaveform className="w-6 h-6 text-primary" />
+                <Waveform className="w-6 h-6 text-primary" />
               </div>
             </div>
             <CardTitle className="text-2xl">CallAnalyzer</CardTitle>
@@ -148,7 +148,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
               <form onSubmit={handleMfaVerify} className="space-y-4">
                 <div className="flex justify-center mb-2">
                   <div className="w-14 h-14 bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900/30 dark:to-amber-900/10 rounded-full flex items-center justify-center">
-                    <KeyRound className="w-7 h-7 text-amber-600" />
+                    <Key className="w-7 h-7 text-amber-600" />
                   </div>
                 </div>
                 <div>
@@ -175,9 +175,9 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading || totpCode.length !== 6}>
                   {isLoading ? (
-                    <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                    <Waveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
-                    <KeyRound className="w-4 h-4 mr-2" />
+                    <Key className="w-4 h-4 mr-2" />
                   )}
                   Verify
                 </Button>
@@ -201,7 +201,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                   }`}
                   onClick={() => setView("login")}
                 >
-                  <LogIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
+                  <SignIn className="w-4 h-4 inline mr-1.5 -mt-0.5" />
                   Sign In
                 </button>
                 <button
@@ -249,9 +249,9 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading || !username.trim() || !password}>
                   {isLoading ? (
-                    <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                    <Waveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
-                    <LogIn className="w-4 h-4 mr-2" />
+                    <SignIn className="w-4 h-4 mr-2" />
                   )}
                   Sign In
                 </Button>
@@ -315,7 +315,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading || !requestName.trim() || !requestEmail.trim()}>
                   {isLoading ? (
-                    <AudioWaveform className="w-4 h-4 mr-2 animate-spin" />
+                    <Waveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
                     <UserPlus className="w-4 h-4 mr-2" />
                   )}

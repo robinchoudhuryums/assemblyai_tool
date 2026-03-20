@@ -78,6 +78,8 @@ export interface IStorage {
   getCall(id: string): Promise<Call | undefined>;
   createCall(call: InsertCall): Promise<Call>;
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
+  /** Atomically assign employee only if not already assigned. Returns true if assignment was made. */
+  atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
@@ -149,6 +151,10 @@ export interface IStorage {
 
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
+
+  // Object storage access (for batch inference, webhooks, admin operations)
+  // Returns the underlying S3 client, or undefined if not configured.
+  getObjectStorageClient(): ObjectStorageClient | undefined;
 }
 
 /**
@@ -234,6 +240,13 @@ export class MemStorage implements IStorage {
     const updated = { ...call, ...updates };
     this.calls.set(id, updated);
     return updated;
+  }
+  async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
+    const call = this.calls.get(callId);
+    if (!call || call.employeeId) return false;
+    call.employeeId = employeeId;
+    this.calls.set(callId, call);
+    return true;
   }
   async deleteCall(id: string): Promise<void> {
     this.calls.delete(id);
@@ -534,6 +547,10 @@ export class MemStorage implements IStorage {
     }
     return purged;
   }
+
+  getObjectStorageClient(): ObjectStorageClient | undefined {
+    return undefined; // MemStorage has no S3 client
+  }
 }
 
 export class CloudStorage implements IStorage {
@@ -639,6 +656,13 @@ export class CloudStorage implements IStorage {
     const updated = { ...call, ...updates };
     await this.client.uploadJson(`calls/${id}.json`, updated);
     return updated;
+  }
+  async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
+    // S3 has no atomic conditional update, so do read-check-write (best effort)
+    const call = await this.getCall(callId);
+    if (!call || call.employeeId) return false;
+    await this.client.uploadJson(`calls/${callId}.json`, { ...call, employeeId });
+    return true;
   }
 
   async deleteCall(id: string): Promise<void> {
@@ -1062,6 +1086,10 @@ export class CloudStorage implements IStorage {
 
     return purged;
   }
+
+  getObjectStorageClient(): ObjectStorageClient | undefined {
+    return this.client;
+  }
 }
 
 function createStorage(): IStorage {
@@ -1091,4 +1119,4 @@ export const storage = createStorage();
 
 // Initialize webhook service with S3 client from the storage backend
 import { initWebhooks } from "./services/webhooks";
-initWebhooks(() => (storage as any).audioClient || (storage as any).client || null);
+initWebhooks(() => storage.getObjectStorageClient() || null);

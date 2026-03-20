@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, FileText, Scale, ShieldCheck, MessageSquare, Save, X } from "lucide-react";
+import { Chat, FileText, FloppyDisk, PencilSimple, Plus, Scales, ShieldCheck, Trash, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -202,10 +202,10 @@ function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={onEdit}>
-              <Pencil className="w-3 h-3 mr-1" /> Edit
+              <PencilSimple className="w-3 h-3 mr-1" /> Edit
             </Button>
             <Button size="sm" variant="outline" className="text-red-600" onClick={onDelete}>
-              <Trash2 className="w-3 h-3" />
+              <Trash className="w-3 h-3" />
             </Button>
           </div>
         </div>
@@ -214,7 +214,7 @@ function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate
         {/* Evaluation Criteria */}
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Scale className="w-4 h-4 text-muted-foreground" />
+            <Scales className="w-4 h-4 text-muted-foreground" />
             <p className="text-sm font-medium">Evaluation Criteria</p>
           </div>
           <p className="text-sm text-muted-foreground whitespace-pre-wrap">{template.evaluationCriteria}</p>
@@ -260,7 +260,7 @@ function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate
         {template.additionalInstructions && (
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <MessageSquare className="w-4 h-4 text-muted-foreground" />
+              <Chat className="w-4 h-4 text-muted-foreground" />
               <p className="text-sm font-medium">Additional Instructions</p>
             </div>
             <p className="text-sm text-muted-foreground">{template.additionalInstructions}</p>
@@ -464,7 +464,7 @@ function TemplateForm({
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
               <Button type="submit" disabled={isPending || !name || !callCategory || !evaluationCriteria}>
-                <Save className="w-4 h-4 mr-2" />
+                <FloppyDisk className="w-4 h-4 mr-2" />
                 {initial ? "Update" : "Create"} Template
               </Button>
             </div>

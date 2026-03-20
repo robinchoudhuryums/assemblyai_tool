@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Download, BarChart2, Smile, Star, User, Users, TrendingUp, Calendar, ArrowRight, Sparkles, Phone, AlertTriangle, SlidersHorizontal, Shield, MessageCircle, Headphones, CheckCircle2 } from "lucide-react";
+import { ArrowRight, Calendar, ChartBar, ChatCircle, CheckCircle, DownloadSimple, Headphones, Phone, Shield, Sliders, Smiley, Sparkle, Star, TrendUp, User, Users, Warning } from "@phosphor-icons/react";
 import { LoadingIndicator, LoadingDots, ShimmerCard } from "@/components/ui/loading";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -122,7 +122,7 @@ export default function ReportsPage() {
     enabled: reportType === "employee" && !!selectedEmployee,
   });
 
-  // Download handler
+  // DownloadSimple handler
   const handleDownloadReport = () => {
     if (!report) return;
     const lines: string[] = [];
@@ -267,7 +267,7 @@ export default function ReportsPage() {
   if (reportError) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-destructive">
-        <AlertTriangle className="w-8 h-8 mb-2" />
+        <Warning className="w-8 h-8 mb-2" />
         <p className="font-semibold">Failed to load report</p>
         <p className="text-sm text-muted-foreground">{reportError.message}</p>
       </div>
@@ -283,11 +283,11 @@ export default function ReportsPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleDownloadCSV} disabled={!report}>
-            <Download className="w-4 h-4 mr-2" />
+            <DownloadSimple className="w-4 h-4 mr-2" />
             CSV
           </Button>
           <Button onClick={handleDownloadReport} disabled={!report}>
-            <Download className="w-4 h-4 mr-2" />
+            <DownloadSimple className="w-4 h-4 mr-2" />
             Report
           </Button>
         </div>
@@ -302,7 +302,7 @@ export default function ReportsPage() {
             <Select value={reportType} onValueChange={(v) => setReportType(v as ReportType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="overall"><span className="flex items-center gap-1.5"><BarChart2 className="w-3.5 h-3.5" /> Overall</span></SelectItem>
+                <SelectItem value="overall"><span className="flex items-center gap-1.5"><ChartBar className="w-3.5 h-3.5" /> Overall</span></SelectItem>
                 <SelectItem value="employee"><span className="flex items-center gap-1.5"><User className="w-3.5 h-3.5" /> Individual Employee</span></SelectItem>
                 <SelectItem value="department"><span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> Department</span></SelectItem>
               </SelectContent>
@@ -435,7 +435,7 @@ export default function ReportsPage() {
         {/* Metrics Cards */}
         <div className="bg-card rounded-lg border border-border p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-            <BarChart2 className="w-5 h-5 mr-2" />
+            <ChartBar className="w-5 h-5 mr-2" />
             Metrics — {PRESET_LABELS[datePreset]}
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
@@ -475,7 +475,7 @@ export default function ReportsPage() {
           <div className="bg-card rounded-lg border border-border p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-foreground flex items-center">
-                <SlidersHorizontal className="w-5 h-5 mr-2" />
+                <Sliders className="w-5 h-5 mr-2" />
                 Score Breakdown
               </h3>
               <Button
@@ -490,8 +490,8 @@ export default function ReportsPage() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-blue-600" barColor="from-blue-500 to-blue-400" />
                 <SubScoreCard icon={Headphones} label="Customer Experience" score={report.avgSubScores.customerExperience} color="text-green-600" barColor="from-green-500 to-emerald-400" />
-                <SubScoreCard icon={MessageCircle} label="Communication" score={report.avgSubScores.communication} color="text-purple-600" barColor="from-purple-500 to-violet-400" />
-                <SubScoreCard icon={CheckCircle2} label="Resolution" score={report.avgSubScores.resolution} color="text-amber-600" barColor="from-amber-500 to-yellow-400" />
+                <SubScoreCard icon={ChatCircle} label="Communication" score={report.avgSubScores.communication} color="text-purple-600" barColor="from-purple-500 to-violet-400" />
+                <SubScoreCard icon={CheckCircle} label="Resolution" score={report.avgSubScores.resolution} color="text-amber-600" barColor="from-amber-500 to-yellow-400" />
               </div>
             )}
             {!showDetailedScores && (
@@ -516,7 +516,7 @@ export default function ReportsPage() {
         {report?.trends && report.trends.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <TrendingUp className="w-5 h-5 mr-2" />
+              <TrendUp className="w-5 h-5 mr-2" />
               Performance Trend
             </h3>
             <ResponsiveContainer width="100%" height={300}>
@@ -538,7 +538,7 @@ export default function ReportsPage() {
         {report?.trends && report.trends.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smile className="w-5 h-5 mr-2" />
+              <Smiley className="w-5 h-5 mr-2" />
               Sentiment Trend
             </h3>
             <ResponsiveContainer width="100%" height={250}>
@@ -585,7 +585,7 @@ export default function ReportsPage() {
 
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smile className="w-5 h-5 mr-2" />
+              <Smiley className="w-5 h-5 mr-2" />
               Sentiment Breakdown
             </h3>
             <ul className="space-y-3">
@@ -728,7 +728,7 @@ export default function ReportsPage() {
             <div className="mt-4 pt-4 border-t border-border">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                  <Sparkles className="w-4 h-4" /> AI Performance Summary
+                  <Sparkle className="w-4 h-4" /> AI Performance Summary
                 </h4>
                 <Button
                   size="sm"
@@ -736,13 +736,13 @@ export default function ReportsPage() {
                   onClick={() => summaryMutation.mutate()}
                   disabled={summaryMutation.isPending}
                 >
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                  <Sparkle className="w-3.5 h-3.5 mr-1.5" />
                   {summaryMutation.isPending ? "Generating..." : aiSummary ? "Regenerate" : "Generate AI Summary"}
                 </Button>
               </div>
               {summaryMutation.isError && (
                 <p className="text-sm text-red-500 mb-2">
-                  <AlertTriangle className="w-3.5 h-3.5 inline mr-1" />
+                  <Warning className="w-3.5 h-3.5 inline mr-1" />
                   {summaryMutation.error?.message || "Failed to generate summary"}
                 </p>
               )}

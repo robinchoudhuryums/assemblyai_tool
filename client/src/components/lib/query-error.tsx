@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { ArrowsClockwise, Warning } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -13,10 +13,10 @@ export function QueryError({ error, onRetry, compact }: {
   if (compact) {
     return (
       <div className="flex items-center gap-2 text-sm text-destructive">
-        <AlertTriangle className="w-4 h-4 shrink-0" />
+        <Warning className="w-4 h-4 shrink-0" />
         <span className="truncate">{error.message}</span>
         <Button variant="ghost" size="sm" className="shrink-0 h-7 px-2" onClick={onRetry}>
-          <RefreshCw className="w-3 h-3" />
+          <ArrowsClockwise className="w-3 h-3" />
         </Button>
       </div>
     );
@@ -24,11 +24,11 @@ export function QueryError({ error, onRetry, compact }: {
 
   return (
     <div className="flex flex-col items-center justify-center py-12 text-center">
-      <AlertTriangle className="w-8 h-8 text-destructive mb-3" />
+      <Warning className="w-8 h-8 text-destructive mb-3" />
       <p className="font-medium text-foreground mb-1">Something went wrong</p>
       <p className="text-sm text-muted-foreground mb-4 max-w-md">{error.message}</p>
       <Button variant="outline" onClick={onRetry}>
-        <RefreshCw className="w-4 h-4 mr-2" />
+        <ArrowsClockwise className="w-4 h-4 mr-2" />
         Try Again
       </Button>
     </div>

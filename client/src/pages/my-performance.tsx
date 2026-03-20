@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { User, TrendingUp, Phone, Award, ClipboardCheck, ArrowRight, Heart } from "lucide-react";
+import { ArrowRight, ClipboardText, Heart, Phone, TrendUp, Trophy, User } from "@phosphor-icons/react";
 import { ScoreRing } from "@/components/ui/animated-number";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
@@ -91,7 +91,7 @@ export default function MyPerformancePage() {
               </Card>
               <Card className="animate-stagger" style={{ "--stagger": 3 } as React.CSSProperties}>
                 <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ClipboardCheck className="w-3 h-3" /> Active Coaching</p>
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ClipboardText className="w-3 h-3" /> Active Coaching</p>
                   <p className="text-2xl font-bold">{myData.coaching.filter(c => c.status !== "completed" && c.status !== "dismissed").length}</p>
                 </CardContent>
               </Card>
@@ -101,7 +101,7 @@ export default function MyPerformancePage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4" />
+                  <TrendUp className="w-4 h-4" />
                   Recent Calls
                 </CardTitle>
               </CardHeader>
@@ -155,7 +155,7 @@ export default function MyPerformancePage() {
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Award className="w-4 h-4" />
+                    <Trophy className="w-4 h-4" />
                     Coaching & Feedback
                   </CardTitle>
                 </CardHeader>

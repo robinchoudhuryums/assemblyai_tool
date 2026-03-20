@@ -10,10 +10,13 @@ import { userRateLimit } from "./middleware/rate-limit";
 import { wafMiddleware } from "./middleware/waf";
 import { startScheduledScans } from "./services/vulnerability-scanner";
 import crypto from "crypto";
+import { logger, metrics } from "./services/logger";
 
 const app = express();
 
 // HIPAA: Simple rate limiter for sensitive endpoints (login, search)
+// Bounded to prevent memory exhaustion under distributed attacks.
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 function rateLimit(windowMs: number, maxRequests: number) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -21,6 +24,12 @@ function rateLimit(windowMs: number, maxRequests: number) {
     const now = Date.now();
     const entry = rateLimitMap.get(key);
     if (!entry || now > entry.resetTime) {
+      // Evict oldest entries if map is at capacity
+      if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
+        // Delete the first (oldest-inserted) entry — Map preserves insertion order
+        const firstKey = rateLimitMap.keys().next().value;
+        if (firstKey) rateLimitMap.delete(firstKey);
+      }
       rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
       return next();
     }
@@ -39,11 +48,27 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
-// Trust reverse proxy (Render, Heroku, etc.) so secure cookies and
-// x-forwarded-proto work correctly behind their load balancer.
+// Trust reverse proxy (Caddy on EC2, or Render/Heroku load balancers).
+// "trust proxy" = 1 means trust only the first hop — prevents attackers
+// from spoofing X-Forwarded-For with arbitrary IPs to bypass rate limits.
 if (process.env.NODE_ENV === "production" && !process.env.DISABLE_SECURE_COOKIE) {
   app.set("trust proxy", 1);
 }
+// SECURITY: Validate X-Forwarded-For when present — strip invalid entries
+app.use((req, _res, next) => {
+  // Only validate in production where trust proxy is set
+  if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-for"]) {
+    const forwarded = (req.headers["x-forwarded-for"] as string).split(",").map(s => s.trim());
+    // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6)
+    const ipPattern = /^[\da-fA-F.:]+$/;
+    const validIPs = forwarded.filter(ip => ipPattern.test(ip) && ip.length <= 45);
+    if (validIPs.length !== forwarded.length) {
+      // Sanitize the header to only contain valid IPs
+      req.headers["x-forwarded-for"] = validIPs.join(", ");
+    }
+  }
+  next();
+});
 
 // HIPAA: Enforce HTTPS in production (redirect HTTP → HTTPS)
 app.use((req, res, next) => {
@@ -107,13 +132,13 @@ app.use((req, res, next) => {
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  // CSP: restrict resource loading to same-origin and trusted CDNs
-  // Note: script-src 'unsafe-inline' is required for the dark-mode flash-prevention script in index.html.
-  // Vite also injects inline scripts during development. A nonce-based approach would be more
-  // secure but requires server-side HTML templating; acceptable trade-off for now.
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';"
-  );
+  // CSP for HTML pages is set per-request with nonce in vite.ts (injectCspNonce).
+  // For API responses that don't go through vite.ts, set a restrictive fallback CSP.
+  if (req.path.startsWith("/api")) {
+    res.setHeader('Content-Security-Policy',
+      "default-src 'none'; frame-ancestors 'none';"
+    );
+  }
   // Only set no-cache on API routes — static assets need caching for performance
   if (req.path.startsWith("/api")) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -125,15 +150,32 @@ app.use((req, res, next) => {
 // HIPAA: Audit logging middleware - logs all API access with user identity but never PHI
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const reqPath = req.path;
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
+    if (reqPath.startsWith("/api")) {
       const user = req.user;
-      const userId = user ? `${user.username}(${user.role})` : "anonymous";
-      const logLine = `[AUDIT] ${new Date().toISOString()} ${userId} ${req.method} ${path} ${res.statusCode} ${duration}ms`;
-      log(logLine);
+      const username = user ? user.username : "anonymous";
+      const role = user ? user.role : undefined;
+
+      // Structured JSON log for aggregators
+      logger.info("api_request", {
+        method: req.method,
+        path: reqPath,
+        status: res.statusCode,
+        duration_ms: duration,
+        username,
+        role,
+      });
+
+      // Metrics: request count by method and status class
+      const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
+      metrics.increment("http_requests_total", 1, { method: req.method, status: statusClass });
+      metrics.observe("http_request_duration_ms", duration, { method: req.method });
+
+      // Also write the human-readable log for pm2 console
+      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms`);
     }
   });
 
@@ -164,14 +206,17 @@ app.get("/api/health", async (_req, res) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     uptime: Math.round(process.uptime()),
+    version: process.env.npm_package_version || "unknown",
   };
 
   // Check database connectivity
   const pool = getPool();
   if (pool) {
     try {
+      const dbStart = Date.now();
       await pool.query("SELECT 1");
       health.database = "connected";
+      health.db_latency_ms = Date.now() - dbStart;
     } catch {
       health.database = "error";
       health.status = "degraded";
@@ -179,6 +224,13 @@ app.get("/api/health", async (_req, res) => {
   } else {
     health.database = "not_configured";
   }
+
+  // Process memory snapshot
+  const mem = process.memoryUsage();
+  health.memory = {
+    rss_mb: Math.round(mem.rss / 1048576),
+    heap_used_mb: Math.round(mem.heapUsed / 1048576),
+  };
 
   res.json(health);
 });
@@ -233,7 +285,8 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
     res.status(status).json({ message });
     if (status >= 500) {
-      console.error(`[ERROR] ${status}: ${message}`);
+      logger.error("unhandled_error", { status, message });
+      metrics.increment("http_errors_total", 1, { status: String(status) });
     }
   });
 

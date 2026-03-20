@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Users, Upload, ChevronDown, ChevronRight, Pencil, Eye, GitCompare, FileText } from "lucide-react";
+import { CaretDown, CaretRight, Eye, FileText, GitDiff, PencilSimple, UploadSimple, UserPlus, Users } from "@phosphor-icons/react";
 import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
@@ -343,10 +343,10 @@ export default function EmployeesPage() {
             title="Compare"
             className="w-7 h-7 p-0"
           >
-            <GitCompare className="w-3.5 h-3.5" />
+            <GitDiff className="w-3.5 h-3.5" />
           </Button>
           <Button size="sm" variant="ghost" onClick={() => openEditDialog(emp)}>
-            <Pencil className="w-3.5 h-3.5" />
+            <PencilSimple className="w-3.5 h-3.5" />
           </Button>
         </div>
       </td>
@@ -422,7 +422,7 @@ export default function EmployeesPage() {
             {showSubTeam ? "Hide Sub-Teams" : "Show Sub-Teams"}
           </Button>
           <Button variant="outline" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
-            <Upload className="w-4 h-4 mr-2" />
+            <UploadSimple className="w-4 h-4 mr-2" />
             {importMutation.isPending ? "Importing..." : "Import from CSV"}
           </Button>
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -512,7 +512,7 @@ export default function EmployeesPage() {
           <div className="mx-6 mt-6 bg-card rounded-lg border border-primary/30 p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-                <GitCompare className="w-5 h-5 text-primary" />
+                <GitDiff className="w-5 h-5 text-primary" />
                 Comparing Agents
               </h3>
               <Button size="sm" variant="ghost" onClick={() => setCompareIds([])}>Clear</Button>
@@ -540,7 +540,7 @@ export default function EmployeesPage() {
             <h3 className="mt-4 text-lg font-medium text-foreground">No employees yet</h3>
             <p className="text-muted-foreground mt-1 mb-4">Import from the CSV or add employees manually.</p>
             <Button variant="outline" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
-              <Upload className="w-4 h-4 mr-2" />
+              <UploadSimple className="w-4 h-4 mr-2" />
               {importMutation.isPending ? "Importing..." : "Import from CSV"}
             </Button>
           </div>
@@ -559,7 +559,7 @@ export default function EmployeesPage() {
                     className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-muted/80 transition-colors"
                   >
                     <div className="flex items-center gap-2">
-                      {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      {isCollapsed ? <CaretRight className="w-4 h-4" /> : <CaretDown className="w-4 h-4" />}
                       <span className="font-semibold text-sm text-foreground">{department}</span>
                     </div>
                     <span className="text-xs text-muted-foreground">

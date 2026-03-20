@@ -9,7 +9,7 @@ import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
 import { type UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
+import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, computeConfidenceScore, autoAssignEmployee } from "./utils";
 import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
 import { triggerWebhook } from "../services/webhooks";
 
@@ -217,7 +217,7 @@ export async function processAudioFile(
       };
 
       try {
-        const s3Client = (storage as any).audioClient || (storage as any).client;
+        const s3Client = storage.getObjectStorageClient();
         if (s3Client) {
           await s3Client.uploadJson(`batch-inference/pending/${callId}.json`, {
             ...pendingItem,
@@ -327,32 +327,16 @@ export async function processAudioFile(
     console.log(`[${callId}] Step 5/6: Processing combined transcript and analysis data...`);
     const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, aiAnalysis, callId);
 
-    // Compute confidence score
-    const transcriptConfidence = transcriptResponse.confidence || 0;
-    const wordCount = transcriptResponse.words?.length || 0;
-    const callDuration = callDurationSeconds;
-    const hasAiAnalysis = aiAnalysis !== null;
-
-    const wordConfidence = Math.min(wordCount / 50, 1);
-    const durationConfidence = callDuration > 30 ? 1 : callDuration / 30;
-    const aiConfidence = hasAiAnalysis ? 1 : 0.3;
-
-    const confidenceScore = (
-      transcriptConfidence * 0.4 +
-      wordConfidence * 0.2 +
-      durationConfidence * 0.15 +
-      aiConfidence * 0.25
+    // Compute confidence score (shared formula from utils.ts)
+    const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore(
+      {
+        transcriptConfidence: transcriptResponse.confidence || 0,
+        wordCount: transcriptResponse.words?.length || 0,
+        callDurationSeconds,
+        hasAiAnalysis: aiAnalysis !== null,
+      },
+      (transcriptResponse.text || "").length,
     );
-
-    const transcriptCharCount = (transcriptResponse.text || "").length;
-    const confidenceFactors = {
-      transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
-      wordCount,
-      callDurationSeconds: callDuration,
-      transcriptLength: transcriptCharCount,
-      aiAnalysisCompleted: hasAiAnalysis,
-      overallScore: Math.round(confidenceScore * 100) / 100,
-    };
 
     analysis.confidenceScore = confidenceScore.toFixed(3);
     analysis.confidenceFactors = confidenceFactors;
@@ -445,20 +429,11 @@ export async function processAudioFile(
       }
     }
 
-    // Auto-assign to employee based on detected agent name
-    const currentCall = await storage.getCall(callId);
+    // Auto-assign to employee based on detected agent name (shared logic from utils.ts)
     let autoAssigned = false;
-    if (!currentCall?.employeeId && aiAnalysis?.detected_agent_name) {
-      const detectedName = aiAnalysis.detected_agent_name.trim();
-      const matchedEmployee = await storage.findEmployeeByName(detectedName);
-
-      if (matchedEmployee) {
-        await storage.updateCall(callId, { employeeId: matchedEmployee.id });
-        autoAssigned = true;
-        console.log(`[${callId}] Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
-      } else {
-        console.log(`[${callId}] Detected agent name "${detectedName}" but no matching employee found.`);
-      }
+    if (aiAnalysis?.detected_agent_name) {
+      const result = await autoAssignEmployee(callId, aiAnalysis.detected_agent_name, storage, `[${callId}] `);
+      autoAssigned = result.assigned;
     }
 
     await storage.updateCall(callId, {
@@ -470,8 +445,8 @@ export async function processAudioFile(
     // Auto-generate coaching alerts for low/high scores (non-blocking)
     try {
       const performanceScore = parseFloat(analysis.performanceScore || "0");
-      const finalCall = autoAssigned ? await storage.getCall(callId) : currentCall;
-      const finalEmployeeId = finalCall?.employeeId;
+      const completedCall = await storage.getCall(callId);
+      const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
       checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
@@ -483,7 +458,7 @@ export async function processAudioFile(
     // Trigger webhooks (non-blocking)
     try {
       const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
-      const finalCallForWebhook = autoAssigned ? await storage.getCall(callId) : currentCall;
+      const finalCallForWebhook = await storage.getCall(callId);
       const employeeId = finalCallForWebhook?.employeeId;
       let employeeName: string | undefined;
       if (employeeId) {
@@ -498,7 +473,7 @@ export async function processAudioFile(
         callId,
         score: performanceScoreNum,
         sentiment: sentiment.overallSentiment,
-        duration: callDuration,
+        duration: callDurationSeconds,
         employee: employeeName || undefined,
         fileName: originalName,
       }).catch(() => {});
@@ -528,12 +503,12 @@ export async function processAudioFile(
 
     // Track usage/cost
     try {
-      const audioDuration = callDuration || 0;
+      const audioDuration = callDurationSeconds || 0;
       const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
       const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
       const estimatedOutputTokens = 800;
       const assemblyaiCost = estimateAssemblyAICost(audioDuration);
-      const bedrockCost = hasAiAnalysis ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) : 0;
+      const bedrockCost = (aiAnalysis !== null) ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) : 0;
 
       const usageRecord: UsageRecord = {
         id: randomUUID(),
@@ -543,7 +518,7 @@ export async function processAudioFile(
         user: uploadedBy || "unknown",
         services: {
           assemblyai: { durationSeconds: audioDuration, estimatedCost: Math.round(assemblyaiCost * 10000) / 10000 },
-          bedrock: hasAiAnalysis ? {
+          bedrock: (aiAnalysis !== null) ? {
             model: bedrockModel,
             estimatedInputTokens,
             estimatedOutputTokens,

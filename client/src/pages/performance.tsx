@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Star, TrendingUp, UserCheck, Calendar, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowsDownUp, Calendar, Star, TrendUp, UserCheck } from "@phosphor-icons/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -84,7 +84,7 @@ export default function PerformancePage() {
   };
 
   const SortIcon = ({ field }: { field: SortKey }) => {
-    if (sortBy !== field) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    if (sortBy !== field) return <ArrowsDownUp className="w-3 h-3 ml-1 opacity-40" />;
     return sortDir === "asc" ? <ArrowUp className="w-3 h-3 ml-1" /> : <ArrowDown className="w-3 h-3 ml-1" />;
   };
 
@@ -145,7 +145,7 @@ export default function PerformancePage() {
         {chartData.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-6">
             <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5" />
+              <TrendUp className="w-5 h-5" />
               Score Overview — Top {chartData.length}
             </h3>
             <ResponsiveContainer width="100%" height={250}>
