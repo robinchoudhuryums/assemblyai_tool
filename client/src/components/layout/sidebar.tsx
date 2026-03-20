@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GitDiff, Heart, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -186,7 +186,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <Microphone className="text-primary-foreground w-4 h-4" />
+            <Waveform className="text-primary-foreground w-4 h-4" />
           </div>
           <div>
             <h1 className="font-bold text-lg text-foreground">CallAnalyzer</h1>
