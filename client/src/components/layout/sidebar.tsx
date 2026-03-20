@@ -176,12 +176,12 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />
       )}
       <aside className={cn(
-        "w-64 bg-card border-r border-border flex flex-col z-50",
+        "w-64 h-full bg-sidebar backdrop-blur-xl border-r border-sidebar-border flex flex-col z-50",
         "lg:relative lg:translate-x-0",
         "fixed inset-y-0 left-0 transition-transform duration-200",
         isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
       )} data-testid="sidebar">
-      <div className="p-6 border-b border-border">
+      <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
             <Mic className="text-primary-foreground w-4 h-4" />
@@ -277,7 +277,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
         </div>
       </div>
 
-      <nav className="flex-1 p-4 space-y-1">
+      <nav className="flex-1 overflow-y-auto p-4 space-y-1">
         {navigation.map((item) => {
           // Role-based visibility
           if (item.requireRole && (!user?.role || !item.requireRole.includes(user.role))) return null;
@@ -430,7 +430,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen?: boolean; onClose
         </div>
       )}
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-sidebar-border mt-auto">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center">
             <User className="text-muted-foreground w-4 h-4" />
