@@ -34,7 +34,7 @@ export default function SearchV2Page() {
         <CardContent>
           <div className="relative mb-4">
             <MagnifyingGlass className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-            <Input type="text" placeholder="MagnifyingGlass by keywords..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+            <Input type="text" placeholder="Search by keywords..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
           </div>
           {isLoading ? (
             <div className="flex items-center justify-center h-48"><LoadingIndicator text="Searching..." /></div>

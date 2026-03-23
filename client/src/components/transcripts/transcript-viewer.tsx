@@ -506,9 +506,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="MagnifyingGlass transcript (Ctrl+F)">
+          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
             <MagnifyingGlass className="w-4 h-4 mr-1" />
-            MagnifyingGlass
+            Search
           </Button>
           <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
             <FileText className="w-4 h-4 mr-1" />
@@ -591,7 +591,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               <input
                 ref={searchInputRef}
                 type="text"
-                placeholder="MagnifyingGlass transcript..."
+                placeholder="Search transcript..."
                 className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}

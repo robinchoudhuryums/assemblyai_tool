@@ -54,7 +54,7 @@ export default function SearchPage() {
 
   useEffect(() => {
     if (searchError) {
-      toast({ title: "MagnifyingGlass Failed", description: searchError.message, variant: "destructive" });
+      toast({ title: "Search Failed", description: searchError.message, variant: "destructive" });
     }
   }, [searchError, toast]);
 
@@ -113,7 +113,7 @@ export default function SearchPage() {
     <div className="min-h-screen" data-testid="search-page">
       <header className="bg-card border-b border-border px-6 py-4">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">MagnifyingGlass Calls</h2>
+          <h2 className="text-2xl font-bold text-foreground">Search Calls</h2>
           <p className="text-muted-foreground">Find specific call recordings using keywords, filters, and criteria</p>
         </div>
       </header>
@@ -122,7 +122,7 @@ export default function SearchPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2"><MagnifyingGlass className="w-5 h-5" /> MagnifyingGlass & Funnel</CardTitle>
+              <CardTitle className="flex items-center gap-2"><MagnifyingGlass className="w-5 h-5" /> Search & Filter</CardTitle>
               <Button variant="ghost" size="sm" onClick={() => setShowAdvanced(!showAdvanced)}>
                 <Funnel className="w-4 h-4 mr-1" />
                 {showAdvanced ? "Hide Filters" : "More Filters"}
@@ -132,7 +132,7 @@ export default function SearchPage() {
           <CardContent className="space-y-4">
             <div className="relative">
               <MagnifyingGlass className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input type="text" placeholder="MagnifyingGlass by keywords, transcript content..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
+              <Input type="text" placeholder="Search by keywords, transcript content..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
@@ -201,7 +201,7 @@ export default function SearchPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>MagnifyingGlass Results {displayCalls && `(${displayCalls.length} found)`}</CardTitle>
+            <CardTitle>Search Results {displayCalls && `(${displayCalls.length} found)`}</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -212,12 +212,12 @@ export default function SearchPage() {
                   <MagnifyingGlass className="w-8 h-8 text-primary/60" />
                 </div>
                 <h3 className="text-lg font-medium text-foreground mb-1">
-                  {debouncedQuery.length > 0 ? 'No matching calls found' : 'MagnifyingGlass your calls'}
+                  {debouncedQuery.length > 0 ? 'No matching calls found' : 'Search your calls'}
                 </h3>
                 <p className="text-sm text-muted-foreground mb-4 max-w-sm mx-auto">
                   {debouncedQuery.length > 0
                     ? 'Try a different search term or adjust your filters.'
-                    : 'MagnifyingGlass across transcripts, topics, and call summaries.'}
+                    : 'Search across transcripts, topics, and call summaries.'}
                 </p>
                 {!debouncedQuery.length && (
                   <Link href="/upload"><Button variant="outline">Upload Call Recording</Button></Link>
