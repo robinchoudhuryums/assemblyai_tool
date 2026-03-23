@@ -50,6 +50,36 @@
   --shadow-2xl: 0 24px 48px rgba(0, 0, 0, 0.14);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+
+  /* Glass effect tiers (overridden by data-glass attribute) */
+  --glass-blur: 20px;
+  --glass-saturate: 1.6;
+  --glass-card-alpha: 0.45;
+  --glass-border-alpha: 0.45;
+  --glass-inset-alpha: 0.5;
+}
+
+/* Glass effect levels */
+[data-glass="subtle"] {
+  --glass-blur: 8px;
+  --glass-saturate: 1.2;
+  --glass-card-alpha: 0.65;
+  --glass-border-alpha: 0.3;
+  --glass-inset-alpha: 0.3;
+}
+[data-glass="medium"] {
+  --glass-blur: 14px;
+  --glass-saturate: 1.4;
+  --glass-card-alpha: 0.5;
+  --glass-border-alpha: 0.4;
+  --glass-inset-alpha: 0.4;
+}
+[data-glass="strong"] {
+  --glass-blur: 22px;
+  --glass-saturate: 1.7;
+  --glass-card-alpha: 0.38;
+  --glass-border-alpha: 0.5;
+  --glass-inset-alpha: 0.6;
 }
 
 .dark {
@@ -94,10 +124,10 @@
 
   /* Global glassmorphism: all bg-card elements get frosted glass */
   .bg-card {
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
-    backdrop-filter: blur(20px) saturate(1.6);
-    border-color: rgba(255, 255, 255, 0.45);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    border-color: rgba(255, 255, 255, var(--glass-border-alpha));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, var(--glass-inset-alpha));
   }
   .dark .bg-card {
     border-color: rgba(255, 255, 255, 0.08);
@@ -195,11 +225,11 @@
   }
 
   .metric-card {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(220, 230, 245, 0.35));
-    backdrop-filter: blur(20px) saturate(1.6);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    background: linear-gradient(135deg, rgba(255, 255, 255, var(--glass-card-alpha)), rgba(220, 230, 245, calc(var(--glass-card-alpha) - 0.1)));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    border: 1px solid rgba(255, 255, 255, var(--glass-border-alpha));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, var(--glass-inset-alpha));
     transition: transform 0.2s ease, box-shadow 0.2s ease;
   }
 
@@ -286,4 +316,50 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     border-color: rgba(255, 255, 255, 0.12);
   }
+}
+
+/* ===== Background Patterns (applied via data-bg on <html>) ===== */
+
+/* Grid pattern — subtle isometric lines */
+[data-bg="grid"] .bg-pattern {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.dark[data-bg="grid"] .bg-pattern {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Dots pattern — polka dot grid */
+[data-bg="dots"] .bg-pattern {
+  background-image: radial-gradient(circle, rgba(148, 163, 184, 0.2) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.dark[data-bg="dots"] .bg-pattern {
+  background-image: radial-gradient(circle, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Waves pattern — diagonal repeating stripes */
+[data-bg="waves"] .bg-pattern {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 20px,
+    rgba(148, 163, 184, 0.06) 20px,
+    rgba(148, 163, 184, 0.06) 21px
+  );
+}
+.dark[data-bg="waves"] .bg-pattern {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 20px,
+    rgba(148, 163, 184, 0.04) 20px,
+    rgba(148, 163, 184, 0.04) 21px
+  );
 }

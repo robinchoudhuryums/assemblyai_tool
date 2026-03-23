@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
+import { useAppearance } from "@/components/appearance-provider";
 import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from "@/lib/constants";
 
 type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
@@ -50,11 +51,11 @@ type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecti
 
 export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean; onClose?: () => void; wsState?: ConnectionState } = {}) {
   const [location, navigate] = useLocation();
-  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const { theme, setTheme } = useAppearance();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -93,29 +94,6 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const unreadCount = notifications.filter(n => !n.read).length;
   const clearNotifications = () => setNotifications([]);
   const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-
-  const toggleDarkMode = () => {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-  };
-
-  // Initialize dark mode from localStorage or OS preference on mount
-  useEffect(() => {
-    const saved = localStorage.getItem("theme");
-    if (saved === "dark") {
-      document.documentElement.classList.add("dark");
-      setIsDark(true);
-    } else if (saved === "light") {
-      document.documentElement.classList.remove("dark");
-      setIsDark(false);
-    } else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-      // No saved preference — respect OS dark mode
-      document.documentElement.classList.add("dark");
-      setIsDark(true);
-    }
-  }, []);
 
   const { data: user } = useQuery<AuthUser>({
     queryKey: ["/api/auth/me"],
@@ -269,13 +247,21 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
               )}
             </div>
             <button
-              onClick={toggleDarkMode}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
-              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
+            <Link
+              href="/settings"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Settings"
+              aria-label="Settings"
+            >
+              <GearSix className="w-4 h-4" />
+            </Link>
         </div>
       </div>
 

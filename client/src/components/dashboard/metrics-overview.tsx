@@ -52,9 +52,9 @@ export default function MetricsOverview() {
       suffix: "",
       change: `${totalCalls} ${t("metrics.analyzed")}`,
       icon: Phone,
-      iconBg: "bg-gradient-to-br from-primary/20 to-primary/5",
-      iconColor: "text-primary",
-      accentBorder: "border-l-4 border-l-primary",
+      iconBg: "bg-blue-100 dark:bg-blue-900/30",
+      iconColor: "text-blue-500",
+      iconGlow: "shadow-[0_0_12px_rgba(59,130,246,0.3)]",
       href: "/transcripts",
     },
     {
@@ -65,9 +65,9 @@ export default function MetricsOverview() {
       suffix: "/10",
       change: t("metrics.avgAcrossCalls"),
       icon: Heart,
-      iconBg: "bg-gradient-to-br from-green-200 to-green-50 dark:from-green-900/40 dark:to-green-900/10",
-      iconColor: "text-green-600",
-      accentBorder: "border-l-4 border-l-green-500",
+      iconBg: "bg-emerald-100 dark:bg-emerald-900/30",
+      iconColor: "text-emerald-500",
+      iconGlow: "shadow-[0_0_12px_rgba(16,185,129,0.3)]",
       href: "/sentiment",
     },
     {
@@ -78,9 +78,9 @@ export default function MetricsOverview() {
       suffix: "min",
       change: t("metrics.avgPerCall"),
       icon: Clock,
-      iconBg: "bg-gradient-to-br from-blue-200 to-blue-50 dark:from-blue-900/40 dark:to-blue-900/10",
-      iconColor: "text-blue-600",
-      accentBorder: "border-l-4 border-l-blue-500",
+      iconBg: "bg-violet-100 dark:bg-violet-900/30",
+      iconColor: "text-violet-500",
+      iconGlow: "shadow-[0_0_12px_rgba(139,92,246,0.3)]",
       href: "/reports",
     },
     {
@@ -91,9 +91,9 @@ export default function MetricsOverview() {
       suffix: "/10",
       change: t("metrics.avgPerformance"),
       icon: Star,
-      iconBg: "bg-gradient-to-br from-purple-200 to-purple-50 dark:from-purple-900/40 dark:to-purple-900/10",
-      iconColor: "text-purple-600",
-      accentBorder: "border-l-4 border-l-purple-500",
+      iconBg: "bg-amber-100 dark:bg-amber-900/30",
+      iconColor: "text-amber-500",
+      iconGlow: "shadow-[0_0_12px_rgba(245,158,11,0.3)]",
       href: "/performance",
     },
   ];
@@ -106,7 +106,7 @@ export default function MetricsOverview() {
           <button
             key={metric.title}
             type="button"
-            className={`metric-card rounded-lg p-6 ${metric.accentBorder} cursor-pointer card-interactive text-left w-full animate-stagger`}
+            className="metric-card rounded-xl p-6 cursor-pointer card-interactive text-left w-full animate-stagger group"
             style={{ "--stagger": idx } as React.CSSProperties}
             onClick={() => navigate(metric.href)}
             aria-label={`View ${metric.title}: ${metric.value}`}
@@ -114,18 +114,18 @@ export default function MetricsOverview() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-muted-foreground text-sm">{metric.title}</p>
-                <p className="text-2xl font-bold text-foreground animate-count-up" data-testid={`metric-${metric.title.toLowerCase().replace(/\s+/g, '-')}`}>
+                <p className="text-2xl font-bold text-foreground mt-1" data-testid={`metric-${metric.title.toLowerCase().replace(/\s+/g, '-')}`}>
                   {typeof metric.rawValue === "number" ? (
                     <AnimatedNumber value={metric.rawValue} decimals={metric.decimals ?? 0} suffix={metric.suffix ?? ""} />
                   ) : (
                     metric.value
                   )}
                 </p>
-                <p className="text-xs mt-1 text-muted-foreground">
+                <p className="text-xs mt-1.5 text-muted-foreground">
                   {metric.change}
                 </p>
               </div>
-              <div className={`w-12 h-12 ${metric.iconBg} rounded-lg flex items-center justify-center transition-transform group-hover:scale-110`}>
+              <div className={`w-11 h-11 ${metric.iconBg} ${metric.iconGlow} rounded-full flex items-center justify-center transition-transform group-hover:scale-110`}>
                 <Icon className={`${metric.iconColor} w-5 h-5`} />
               </div>
             </div>
