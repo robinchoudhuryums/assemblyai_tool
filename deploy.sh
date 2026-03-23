@@ -35,7 +35,11 @@ export NODE_OPTIONS="--max-old-space-size=1024"
 if ! npm run build; then
   echo ""
   echo "!!! BUILD FAILED — Rolling back to $PREV_COMMIT !!!"
+  # Preserve .env before checkout (it may exist in old commits)
+  [ -f .env ] && cp .env .env.deploy-backup
   git checkout "$PREV_COMMIT"
+  # Restore .env after checkout
+  [ -f .env.deploy-backup ] && mv .env.deploy-backup .env
   npm install --production=false
   npm run build
   pm2 restart all

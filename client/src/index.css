@@ -6,7 +6,7 @@
 :root {
   --background: hsl(220, 20%, 95%);
   --foreground: hsl(220, 25%, 15%);
-  --card: hsla(0, 0%, 100%, 0.65);
+  --card: hsla(0, 0%, 100%, 0.55);
   --card-foreground: hsl(220, 25%, 15%);
   --popover: hsla(0, 0%, 100%, 0.85);
   --popover-foreground: hsl(220, 25%, 15%);
@@ -96,6 +96,10 @@
   .bg-card {
     -webkit-backdrop-filter: blur(16px) saturate(1.4);
     backdrop-filter: blur(16px) saturate(1.4);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+  .dark .bg-card {
+    border-color: rgba(255, 255, 255, 0.08);
   }
 
   /* Phosphor duotone icon accent — slate blue fill instead of gray */
