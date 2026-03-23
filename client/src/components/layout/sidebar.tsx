@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Shield, ShieldWarning, SignOut, Sliders, Stack, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
 import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
+import { useAppearance } from "@/components/appearance-provider";
 import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from "@/lib/constants";
 
 type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
@@ -54,6 +55,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const { theme, setTheme } = useAppearance();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -244,6 +246,14 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 </div>
               )}
             </div>
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
             <Link
               href="/settings"
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
