@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Shield, ShieldWarning, SignOut, Sliders, Stack, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -50,7 +50,6 @@ type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecti
 
 export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean; onClose?: () => void; wsState?: ConnectionState } = {}) {
   const [location, navigate] = useLocation();
-  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -93,29 +92,6 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const unreadCount = notifications.filter(n => !n.read).length;
   const clearNotifications = () => setNotifications([]);
   const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-
-  const toggleDarkMode = () => {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-  };
-
-  // Initialize dark mode from localStorage or OS preference on mount
-  useEffect(() => {
-    const saved = localStorage.getItem("theme");
-    if (saved === "dark") {
-      document.documentElement.classList.add("dark");
-      setIsDark(true);
-    } else if (saved === "light") {
-      document.documentElement.classList.remove("dark");
-      setIsDark(false);
-    } else if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-      // No saved preference — respect OS dark mode
-      document.documentElement.classList.add("dark");
-      setIsDark(true);
-    }
-  }, []);
 
   const { data: user } = useQuery<AuthUser>({
     queryKey: ["/api/auth/me"],
@@ -268,14 +244,14 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 </div>
               )}
             </div>
-            <button
-              onClick={toggleDarkMode}
+            <Link
+              href="/settings"
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              title="Settings"
+              aria-label="Settings"
             >
-              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
+              <GearSix className="w-4 h-4" />
+            </Link>
         </div>
       </div>
 

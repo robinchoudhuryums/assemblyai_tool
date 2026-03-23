@@ -5,6 +5,7 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import I18nProvider from "@/components/i18n-provider";
+import AppearanceProvider from "@/components/appearance-provider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
@@ -34,6 +35,7 @@ const HeatmapCalendarPage = lazy(() => import("@/pages/heatmap-calendar"));
 const CallClustersPage = lazy(() => import("@/pages/call-clusters"));
 const MyPerformancePage = lazy(() => import("@/pages/my-performance"));
 const SecurityPage = lazy(() => import("@/pages/security"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -152,6 +154,8 @@ function Router() {
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
       <main className="flex-1 overflow-auto bg-gradient-to-br from-sky-100 via-slate-100 to-blue-200 dark:from-slate-900 dark:via-slate-900 dark:to-blue-950 relative">
+        {/* Background pattern overlay (driven by data-bg on <html>) */}
+        <div className="bg-pattern pointer-events-none fixed inset-0 z-0" aria-hidden="true" />
         {/* Ambient gradient blobs for glassmorphism depth */}
         <div className="pointer-events-none fixed inset-0 overflow-hidden z-0" aria-hidden="true">
           <div className="absolute -top-32 -right-32 w-[28rem] h-[28rem] bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl" />
@@ -194,6 +198,7 @@ function Router() {
               <Route path="/analytics/clusters">{() => <ErrorBoundary><AnimatedPage><CallClustersPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/my-performance">{() => <ErrorBoundary><AnimatedPage><MyPerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/security">{() => <ErrorBoundary><AnimatedPage><SecurityPage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/settings">{() => <ErrorBoundary><AnimatedPage><SettingsPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
             </Switch>
           </AnimatePresence>
@@ -243,12 +248,14 @@ function AuthenticatedApp() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <I18nProvider>
-        <TooltipProvider>
-          <Toaster />
-          <AuthenticatedApp />
-        </TooltipProvider>
-      </I18nProvider>
+      <AppearanceProvider>
+        <I18nProvider>
+          <TooltipProvider>
+            <Toaster />
+            <AuthenticatedApp />
+          </TooltipProvider>
+        </I18nProvider>
+      </AppearanceProvider>
     </QueryClientProvider>
   );
 }
