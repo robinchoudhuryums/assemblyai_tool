@@ -52,7 +52,7 @@ export default function MetricsOverview() {
       suffix: "",
       change: `${totalCalls} ${t("metrics.analyzed")}`,
       icon: Phone,
-      iconBg: "bg-blue-100 dark:bg-blue-900/30",
+      iconBg: "bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/20",
       iconColor: "text-blue-500",
       iconGlow: "shadow-[0_0_12px_rgba(59,130,246,0.3)]",
       href: "/transcripts",
@@ -65,7 +65,7 @@ export default function MetricsOverview() {
       suffix: "/10",
       change: t("metrics.avgAcrossCalls"),
       icon: Heart,
-      iconBg: "bg-emerald-100 dark:bg-emerald-900/30",
+      iconBg: "bg-gradient-to-br from-emerald-100 to-emerald-200 dark:from-emerald-900/40 dark:to-emerald-800/20",
       iconColor: "text-emerald-500",
       iconGlow: "shadow-[0_0_12px_rgba(16,185,129,0.3)]",
       href: "/sentiment",
@@ -78,7 +78,7 @@ export default function MetricsOverview() {
       suffix: "min",
       change: t("metrics.avgPerCall"),
       icon: Clock,
-      iconBg: "bg-violet-100 dark:bg-violet-900/30",
+      iconBg: "bg-gradient-to-br from-violet-100 to-violet-200 dark:from-violet-900/40 dark:to-violet-800/20",
       iconColor: "text-violet-500",
       iconGlow: "shadow-[0_0_12px_rgba(139,92,246,0.3)]",
       href: "/reports",
@@ -91,7 +91,7 @@ export default function MetricsOverview() {
       suffix: "/10",
       change: t("metrics.avgPerformance"),
       icon: Star,
-      iconBg: "bg-amber-100 dark:bg-amber-900/30",
+      iconBg: "bg-gradient-to-br from-amber-100 to-amber-200 dark:from-amber-900/40 dark:to-amber-800/20",
       iconColor: "text-amber-500",
       iconGlow: "shadow-[0_0_12px_rgba(245,158,11,0.3)]",
       href: "/performance",
@@ -125,7 +125,7 @@ export default function MetricsOverview() {
                   {metric.change}
                 </p>
               </div>
-              <div className={`w-11 h-11 ${metric.iconBg} ${metric.iconGlow} rounded-full flex items-center justify-center transition-transform group-hover:scale-110`}>
+              <div className={`w-11 h-11 ${metric.iconBg} ${metric.iconGlow} rounded-lg flex items-center justify-center transition-transform group-hover:scale-110`}>
                 <Icon className={`${metric.iconColor} w-5 h-5`} />
               </div>
             </div>

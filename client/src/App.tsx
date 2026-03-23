@@ -12,7 +12,11 @@ import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
 import { AnimatePresence, motion } from "framer-motion";
+import { useAppearance } from "@/components/appearance-provider";
 import HexBackground from "@/components/hex-background";
+import SoftWavesBackground from "@/components/bg-soft-waves";
+import NeonFlowBackground from "@/components/bg-neon-flow";
+import TopoMeshBackground from "@/components/bg-topo-mesh";
 
 // Route-level code splitting — each page loads on demand
 const Dashboard = lazy(() => import("@/pages/dashboard"));
@@ -98,6 +102,17 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   );
 }
 
+function BackgroundLayer() {
+  const { background } = useAppearance();
+  switch (background) {
+    case "hexagons": return <HexBackground />;
+    case "softWaves": return <SoftWavesBackground />;
+    case "neonFlow": return <NeonFlowBackground />;
+    case "topoMesh": return <TopoMeshBackground />;
+    default: return null;
+  }
+}
+
 function Router() {
   const [location, navigate] = useLocation();
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -155,10 +170,8 @@ function Router() {
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
       <main className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 relative">
-        {/* Background pattern overlay (driven by data-bg on <html>) */}
-        <div className="bg-pattern pointer-events-none fixed inset-0 z-0" aria-hidden="true" />
-        {/* Hexagonal pattern background */}
-        <HexBackground />
+        {/* Background pattern (selected via Settings page) */}
+        <BackgroundLayer />
         {/* Mobile hamburger button */}
         <button
           className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-md bg-card border border-border shadow-sm"
