@@ -125,7 +125,7 @@ export default function MetricsOverview() {
                   {metric.change}
                 </p>
               </div>
-              <div className={`w-11 h-11 ${metric.iconBg} ${metric.iconGlow} rounded-lg flex items-center justify-center transition-transform group-hover:scale-110`}>
+              <div className={`w-11 h-11 ${metric.iconBg} ${metric.iconGlow} rounded-lg ring-1 ring-inset ring-black/10 dark:ring-white/10 flex items-center justify-center transition-transform group-hover:scale-110`}>
                 <Icon className={`${metric.iconColor} w-5 h-5`} />
               </div>
             </div>

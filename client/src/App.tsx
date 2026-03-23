@@ -68,7 +68,7 @@ const pageTransition = {
 
 function AnimatedPage({ children }: { children: React.ReactNode }) {
   return (
-    <motion.div {...pageTransition}>
+    <motion.div className="relative z-10" {...pageTransition}>
       {children}
     </motion.div>
   );
