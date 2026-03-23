@@ -151,12 +151,13 @@ function Router() {
     <div className="flex h-screen">
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
-      <main className="flex-1 overflow-auto bg-gradient-to-br from-background via-background to-primary/[0.06] relative">
+      <main className="flex-1 overflow-auto bg-gradient-to-br from-sky-100 via-slate-100 to-blue-200 dark:from-slate-900 dark:via-slate-900 dark:to-blue-950 relative">
         {/* Ambient gradient blobs for glassmorphism depth */}
         <div className="pointer-events-none fixed inset-0 overflow-hidden z-0" aria-hidden="true">
-          <div className="absolute -top-32 -right-32 w-96 h-96 bg-primary/[0.07] rounded-full blur-3xl" />
-          <div className="absolute top-1/3 -left-24 w-80 h-80 bg-indigo-500/[0.05] rounded-full blur-3xl" />
-          <div className="absolute bottom-0 right-1/4 w-72 h-72 bg-cyan-500/[0.04] rounded-full blur-3xl" />
+          <div className="absolute -top-32 -right-32 w-[28rem] h-[28rem] bg-blue-400/20 dark:bg-blue-500/10 rounded-full blur-3xl" />
+          <div className="absolute top-1/3 -left-24 w-96 h-96 bg-indigo-400/15 dark:bg-indigo-500/8 rounded-full blur-3xl" />
+          <div className="absolute bottom-0 right-1/4 w-80 h-80 bg-cyan-400/15 dark:bg-cyan-500/8 rounded-full blur-3xl" />
+          <div className="absolute top-2/3 left-1/3 w-72 h-72 bg-violet-400/10 dark:bg-violet-500/5 rounded-full blur-3xl" />
         </div>
         {/* Mobile hamburger button */}
         <button

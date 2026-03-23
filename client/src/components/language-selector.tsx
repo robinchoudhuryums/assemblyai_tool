@@ -18,7 +18,7 @@ export default function LanguageSelector() {
 
   return (
     <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
-      <SelectTrigger className="w-[72px] h-8 text-xs gap-1 px-2" title="Language">
+      <SelectTrigger className="w-[62px] h-8 text-xs gap-1 px-2 overflow-hidden" title="Language">
         <Globe className="w-3.5 h-3.5 shrink-0" />
         <SelectValue />
       </SelectTrigger>
