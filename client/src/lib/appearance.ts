@@ -1,6 +1,8 @@
 export type Theme = "light" | "dark";
-export type BackgroundPattern = "none" | "grid" | "dots" | "waves";
+export type BackgroundPattern = "none" | "hexagons" | "softWaves" | "neonFlow" | "topoMesh";
 export type GlassEffect = "subtle" | "medium" | "strong";
+
+export const VALID_BACKGROUNDS: BackgroundPattern[] = ["none", "hexagons", "softWaves", "neonFlow", "topoMesh"];
 
 export interface AppearancePrefs {
   theme: Theme;
@@ -35,7 +37,7 @@ export function loadAppearance(): AppearancePrefs {
     const parsed = JSON.parse(raw);
     return {
       theme: parsed.theme === "dark" ? "dark" : "light",
-      background: ["none", "grid", "dots", "waves"].includes(parsed.background) ? parsed.background : "none",
+      background: VALID_BACKGROUNDS.includes(parsed.background) ? parsed.background : "none",
       glass: ["subtle", "medium", "strong"].includes(parsed.glass) ? parsed.glass : "strong",
     };
   } catch {
