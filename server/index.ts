@@ -120,11 +120,15 @@ app.use((req, res, next) => {
     if (process.env.NODE_ENV === "production") {
       return res.status(403).json({ message: "Cross-origin requests are not allowed" });
     }
-    // In development, allow cross-origin (Vite proxy)
+    // In development, only allow cross-origin from localhost (Vite dev server)
+    // This prevents accidental CORS exposure if NODE_ENV is misconfigured.
+    if (!originHost || !["localhost", "127.0.0.1", "0.0.0.0"].includes(originHost)) {
+      return res.status(403).json({ message: "Cross-origin requests are not allowed" });
+    }
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Requested-With");
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;

@@ -142,10 +142,14 @@ const SUSPICIOUS_USER_AGENTS = [
 
 // --- Anomaly Scoring ---
 
+interface AnomalyEvent {
+  points: number;
+  violation: string;
+  timestamp: number;
+}
+
 interface AnomalyTracker {
-  score: number;
-  violations: string[];
-  firstSeen: number;
+  events: AnomalyEvent[];
   lastSeen: number;
 }
 
@@ -154,6 +158,11 @@ const ANOMALY_THRESHOLD = 10;      // Score threshold to auto-block
 const ANOMALY_BLOCK_DURATION = 30 * 60 * 1000; // 30 minutes
 const ANOMALY_WINDOW = 10 * 60 * 1000;         // 10-minute sliding window
 
+/**
+ * Record an anomaly event with time-decay sliding window.
+ * Events older than ANOMALY_WINDOW are pruned, so an attacker cannot
+ * space out attacks across windows to avoid the threshold.
+ */
 function recordAnomaly(ip: string, violation: string, points: number): number {
   const now = Date.now();
 
@@ -167,23 +176,30 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
 
   let tracker = anomalyScores.get(ip);
 
-  if (!tracker || now - tracker.firstSeen > ANOMALY_WINDOW) {
-    tracker = { score: 0, violations: [], firstSeen: now, lastSeen: now };
+  if (!tracker) {
+    tracker = { events: [], lastSeen: now };
   }
 
-  tracker.score += points;
-  tracker.violations.push(violation);
+  // Prune events outside the sliding window
+  tracker.events = tracker.events.filter(e => now - e.timestamp <= ANOMALY_WINDOW);
+
+  // Add new event
+  tracker.events.push({ points, violation, timestamp: now });
   tracker.lastSeen = now;
   anomalyScores.set(ip, tracker);
 
-  if (tracker.score >= ANOMALY_THRESHOLD) {
-    temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Anomaly score ${tracker.score}: ${tracker.violations.join(", ")}`);
+  // Compute current score from all events within the window
+  const score = tracker.events.reduce((sum, e) => sum + e.points, 0);
+
+  if (score >= ANOMALY_THRESHOLD) {
+    const violations = tracker.events.map(e => e.violation);
+    temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Anomaly score ${score}: ${violations.join(", ")}`);
     // Set cooldown so score doesn't reset immediately if they retry
     anomalyCooldowns.set(ip, now + ANOMALY_COOLDOWN_MS);
     anomalyScores.delete(ip);
   }
 
-  return tracker.score;
+  return score;
 }
 
 // Cleanup anomaly scores every 15 minutes

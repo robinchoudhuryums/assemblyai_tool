@@ -74,15 +74,29 @@ export function registerCallRoutes(
         });
       } else {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
-        const calls = await storage.getCallsWithDetails(filters);
-        const total = calls.length;
-        const totalPages = Math.ceil(total / limit);
-        const offset = (page - 1) * limit;
-        const paginated = calls.slice(offset, offset + limit);
-        res.json({
-          calls: paginated,
-          pagination: { page, limit, total, totalPages },
-        });
+        // Use cursor-based pagination under the hood for offset mode too,
+        // to avoid loading all calls into memory (which causes OOM on large datasets).
+        // If the storage backend supports getCallsPaginated, use it with offset emulation.
+        if (storage.getCallsPaginated) {
+          const offset = (page - 1) * limit;
+          const result = await storage.getCallsPaginated({ filters, limit, offset });
+          const totalPages = Math.ceil(result.total / limit);
+          res.json({
+            calls: result.calls,
+            pagination: { page, limit, total: result.total, totalPages },
+          });
+        } else {
+          // Fallback for in-memory storage that doesn't support server-side pagination
+          const calls = await storage.getCallsWithDetails(filters);
+          const total = calls.length;
+          const totalPages = Math.ceil(total / limit);
+          const offset = (page - 1) * limit;
+          const paginated = calls.slice(offset, offset + limit);
+          res.json({
+            calls: paginated,
+            pagination: { page, limit, total, totalPages },
+          });
+        }
       }
     } catch (error) {
       res.status(500).json({ message: "Failed to get calls" });
@@ -165,7 +179,7 @@ export function registerCallRoutes(
       const allCalls = await storage.getAllCalls();
       const duplicate = allCalls.find(c =>
         c.contentHash === contentHash &&
-        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis")
+        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis" || c.status === "failed")
       );
       if (duplicate) {
         await cleanupFile(req.file.path);
@@ -268,8 +282,10 @@ export function registerCallRoutes(
 
       if (req.query.download === 'true') {
         const rawName = call.fileName || `call-${req.params.id}${ext}`;
-        const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_");
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        // Sanitize: take basename, strip non-safe chars, remove quotes to prevent header injection
+        const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_").replace(/"/g, "");
+        // Use RFC 6266 format with both filename (ASCII) and filename* (UTF-8) for broad compatibility
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
       }
 
       res.setHeader('Content-Type', contentType);

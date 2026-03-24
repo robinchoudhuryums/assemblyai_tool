@@ -12,7 +12,7 @@ import { assemblyAIService } from "./services/assemblyai";
 import { broadcastCallUpdate } from "./services/websocket";
 import { estimateBedrockCost, computeConfidenceScore, autoAssignEmployee } from "./routes/utils";
 import type { UsageRecord } from "@shared/schema";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -70,11 +70,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AssemblyAI webhook endpoint (no auth — verified by shared secret)
   // This receives transcript completion callbacks when APP_BASE_URL is configured
   router.post("/api/webhooks/assemblyai", (req, res) => {
-    // Verify webhook secret if configured
+    // Verify webhook secret if configured (timing-safe to prevent side-channel leaks)
     const secret = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
-    if (secret && req.headers["x-webhook-secret"] !== secret) {
-      console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
-      return res.status(401).json({ message: "Invalid webhook secret" });
+    if (secret) {
+      const provided = String(req.headers["x-webhook-secret"] || "");
+      const secretBuf = Buffer.from(secret, "utf8");
+      const providedBuf = Buffer.from(provided, "utf8");
+      if (secretBuf.length !== providedBuf.length || !timingSafeEqual(secretBuf, providedBuf)) {
+        console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
+        return res.status(401).json({ message: "Invalid webhook secret" });
+      }
     }
 
     const { transcript_id, status, text, confidence, words, sentiment_analysis_results, error } = req.body;
