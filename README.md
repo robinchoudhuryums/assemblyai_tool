@@ -720,3 +720,20 @@ To switch the production AI model (e.g., from Sonnet to Haiku for cost savings):
 - **Calls stuck in "processing"** → Check `pm2 logs --err` for AssemblyAI or Bedrock errors
 - **Login not working** → Verify `AUTH_USERS` format: `user:pass:role:name`
 - **Empty dashboard** → Verify S3 bucket has data; in-memory storage loses data on restart
+
+---
+
+## Planned Integration: RAG Knowledge Base
+
+CallAnalyzer will integrate with the **ums-knowledge-reference** repository to ground AI analysis in company-specific documentation (SOPs, compliance guides, product catalogs, required scripts).
+
+### How It Will Work
+1. The `ums-knowledge-reference` repo provides a standalone RAG service (document ingestion, chunking, embedding, vector search)
+2. During call analysis, CallAnalyzer will query the RAG service for relevant company policies and procedures based on the call transcript
+3. Retrieved context is injected into the Bedrock AI prompt, improving scoring accuracy against actual company standards
+4. Coaching recommendations will reference specific company training materials
+
+### Configuration
+- `RAG_SERVICE_URL` — URL of the knowledge reference API
+- `RAG_ENABLED=true` — toggle to enable RAG context injection
+- Graceful fallback: if the RAG service is unavailable, analysis proceeds without additional context (current behavior)

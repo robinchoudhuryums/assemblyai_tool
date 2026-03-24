@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, computeConfidenceScore, autoAssignEmployee } from "./utils";
 import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
 import { triggerWebhook } from "../services/webhooks";
+import { captureException } from "../services/sentry";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -127,10 +128,10 @@ export async function processAudioFile(
 
     await storage.updateCall(callId, { assemblyAiId: transcriptId });
 
-    // Step 3: Poll for transcription completion
+    // Step 3: Wait for transcription completion (webhook if available, polling fallback)
     broadcastCallUpdate(callId, "transcribing", { step: 3, totalSteps: 6, label: "Waiting for transcript..." });
-    console.log(`[${callId}] Step 3/7: Polling for transcript results...`);
-    const transcriptResponse = await assemblyAIService.pollTranscript(transcriptId);
+    console.log(`[${callId}] Step 3/7: Waiting for transcript results...`);
+    const transcriptResponse = await assemblyAIService.waitForTranscript(transcriptId);
 
     if (!transcriptResponse || transcriptResponse.status !== 'completed') {
       throw new Error(`Transcription polling failed or did not complete. Final status: ${transcriptResponse?.status}`);
@@ -139,6 +140,35 @@ export async function processAudioFile(
 
     // Compute call duration from word-level data
     const callDurationSeconds = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
+
+    // Quality gate: skip AI analysis for empty/near-empty transcripts (prevents wasted Bedrock spend)
+    const transcriptText = (transcriptResponse.text || "").trim();
+    if (transcriptText.length < 10) {
+      console.warn(`[${callId}] Empty transcript (${transcriptText.length} chars) — skipping AI analysis.`);
+
+      const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
+      analysis.confidenceScore = "0.000";
+      analysis.confidenceFactors = {
+        transcriptConfidence: 0,
+        wordCount: transcriptResponse.words?.length || 0,
+        callDurationSeconds,
+        transcriptLength: transcriptText.length,
+        aiAnalysisCompleted: false,
+        overallScore: 0,
+      };
+      analysis.flags = ["empty_transcript"];
+      analysis.summary = "Transcript was empty or too short for analysis.";
+      analysis.performanceScore = "0";
+
+      await storage.createTranscript(transcript);
+      await storage.createSentimentAnalysis(sentiment);
+      await storage.createCallAnalysis(analysis);
+      await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
+      await cleanupFile(filePath);
+      broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (empty transcript)" });
+      console.log(`[${callId}] Completed with empty_transcript flag. AI analysis skipped.`);
+      return;
+    }
 
     // Quality gate: skip AI analysis for very low-confidence transcripts (#3)
     const transcriptConfidenceValue = transcriptResponse.confidence || 0;
@@ -538,6 +568,7 @@ export async function processAudioFile(
 
   } catch (error) {
     console.error(`[${callId}] A critical error occurred during audio processing:`, (error as Error).message);
+    captureException(error instanceof Error ? error : new Error(String(error)), { callId, step: "processAudioFile" });
     await storage.updateCall(callId, { status: "failed" });
     broadcastCallUpdate(callId, "failed", { label: "Processing failed" });
 

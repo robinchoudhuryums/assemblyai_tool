@@ -6,7 +6,8 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 ## Tech Stack
 - **Frontend**: React 18 + TypeScript, Vite, TailwindCSS, shadcn/ui, Recharts, Wouter (routing), TanStack Query
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
-- **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
+- **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription (with webhook support)
+- **Error Tracking**: Sentry (server + client, PHI-safe with scrubbing)
 - **Database**: AWS RDS PostgreSQL — metadata, sessions, job queue, HIPAA audit log (optional; falls back to S3-only or in-memory)
 - **Storage**: AWS S3 (`ums-call-archive` bucket) — audio blobs (when PostgreSQL is configured, metadata lives in RDS)
 - **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin), PostgreSQL session store (falls back to memorystore)
@@ -73,7 +74,8 @@ tests/                   # Unit tests (Node test runner)
 ### Audio Processing Pipeline (server/routes.ts → processAudioFile)
 1. Archive audio to S3 immediately on upload (before queuing)
 2. Enqueue job in PostgreSQL job queue (falls back to in-memory TaskQueue if no DB)
-3. Job worker reads audio from S3 and sends to AssemblyAI for transcription
+3. Job worker reads audio from S3 and sends to AssemblyAI for transcription (webhook mode if `APP_BASE_URL` set, polling fallback otherwise)
+3b. **Empty transcript guard**: if transcript has <10 meaningful characters, skip AI analysis (prevents wasted Bedrock spend)
 4. Load custom prompt template by call category (falls back to default if template fails)
 5. Send transcript to Bedrock for AI analysis (falls back to transcript-based defaults if Bedrock fails)
 6. Process results: normalize data, compute confidence scores, detect agent name, set flags
@@ -329,6 +331,18 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h form
 # MFA (Two-Factor Authentication)
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
 
+# Sentry (Error Tracking)
+SENTRY_DSN                      # Sentry DSN for server-side error tracking (optional)
+VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (optional, set at build time)
+
+# AssemblyAI Webhooks (faster than polling)
+APP_BASE_URL                    # Public URL of the app (e.g. https://umscallanalyzer.com) — enables webhook mode for AssemblyAI
+ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (optional but recommended)
+
+# RAG Knowledge Base (planned — ums-knowledge-reference integration)
+RAG_SERVICE_URL                 # URL of the knowledge reference API
+RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
+
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
@@ -452,6 +466,27 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - **Dependencies** are significantly added/removed → update Tech Stack
 - **Auth/RBAC** rules change → update Role-Based Access Control
 - **AI model** defaults change → update Environment Variables and Common Gotchas
+
+## Planned Integration: RAG Knowledge Base (ums-knowledge-reference)
+
+CallAnalyzer will integrate with the **ums-knowledge-reference** repository to ground AI analysis in company-specific documentation. This RAG (Retrieval-Augmented Generation) system will:
+
+1. **Ingest reference documents** (SOPs, compliance guides, product catalogs, scripts) from the UMS knowledge base
+2. **Retrieve relevant context** at analysis time — when Bedrock analyzes a call transcript, the system will query the knowledge base for relevant company policies, required phrases, and procedures
+3. **Improve scoring accuracy** by evaluating agents against actual company standards rather than generic best practices
+4. **Enhance coaching recommendations** with specific references to company training materials
+
+### Integration Architecture
+- The `ums-knowledge-reference` repo provides a standalone RAG service (document ingestion, chunking, embedding, vector search)
+- CallAnalyzer will call the RAG service during the AI analysis step (Step 4 of the pipeline) to fetch relevant context
+- Retrieved context will be injected into the Bedrock analysis prompt alongside the transcript
+- Environment variables: `RAG_SERVICE_URL` (URL of the knowledge reference API), `RAG_ENABLED` (toggle, default false)
+- Graceful fallback: if RAG service is unavailable, analysis proceeds without additional context (current behavior)
+
+### Integration Points in CallAnalyzer
+- `server/routes/pipeline.ts:processAudioFile()` — fetch RAG context before AI analysis
+- `server/services/ai-provider.ts:buildAnalysisPrompt()` — accept and inject RAG context into prompt
+- `server/services/coaching-alerts.ts` — reference knowledge base materials in coaching plans
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data

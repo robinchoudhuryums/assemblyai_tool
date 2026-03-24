@@ -29,6 +29,7 @@ import { registerSnapshotRoutes } from "./routes/snapshots";
 
 // Pipeline
 import { processAudioFile, shouldUseBatchMode, audioProcessingQueue } from "./routes/pipeline";
+import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemblyai";
 
 // Ensure uploads directory exists
 const uploadsDir = 'uploads';
@@ -64,6 +65,47 @@ let jobQueue: JobQueue | null = null;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const router = Router();
+
+  // AssemblyAI webhook endpoint (no auth — verified by shared secret)
+  // This receives transcript completion callbacks when APP_BASE_URL is configured
+  router.post("/api/webhooks/assemblyai", (req, res) => {
+    // Verify webhook secret if configured
+    const secret = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
+    if (secret && req.headers["x-webhook-secret"] !== secret) {
+      console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
+      return res.status(401).json({ message: "Invalid webhook secret" });
+    }
+
+    const { transcript_id, status, text, confidence, words, sentiment_analysis_results, error } = req.body;
+    if (!transcript_id) {
+      return res.status(400).json({ message: "Missing transcript_id" });
+    }
+
+    console.log(`[WEBHOOK] AssemblyAI callback: transcript ${transcript_id}, status: ${status}`);
+    const handled = handleAssemblyAIWebhook(transcript_id, {
+      id: transcript_id,
+      status,
+      text,
+      confidence,
+      words,
+      sentiment_analysis_results,
+      error,
+    });
+
+    if (!handled) {
+      // Not in our pending map — may be a late delivery or from a previous server instance.
+      // Fetch the full transcript via API so we don't lose it.
+      console.log(`[WEBHOOK] Transcript ${transcript_id} not in pending map (may be stale). Acknowledged.`);
+    }
+
+    res.status(200).json({ received: true });
+  });
+
+  if (isWebhookModeEnabled()) {
+    console.log(`[ASSEMBLYAI] Webhook mode enabled. Callbacks will be sent to ${process.env.APP_BASE_URL}/api/webhooks/assemblyai`);
+  } else {
+    console.log("[ASSEMBLYAI] Polling mode (set APP_BASE_URL to enable faster webhook mode).");
+  }
 
   // Register all route modules
   registerAuthRoutes(router);
