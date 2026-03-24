@@ -465,13 +465,26 @@ pm2 logs --lines 20         # Verify startup — look for:
 S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
 
 ### GitHub Actions CI/CD
-Pushes to `main` automatically trigger the Deploy workflow (`.github/workflows/deploy.yml`), which SSHs into EC2 and runs `deploy.sh`. Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`. Can also be triggered manually via `workflow_dispatch`.
+
+**CI Pipeline** (`.github/workflows/ci.yml`):
+Runs on every push to `main` and every PR. Two parallel jobs:
+1. **Test & Build** — type check (`tsc`), unit tests (`npm test`), production build
+2. **Dependency Audit** — `npm audit` for vulnerabilities; blocks on critical severity
+
+**Deploy Pipeline** (`.github/workflows/deploy.yml`):
+Triggers automatically **after CI passes** on `main` (via `workflow_run`). SSHs into EC2 and runs `deploy.sh`. Manual `workflow_dispatch` is available for hotfixes (bypasses CI gate). Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
+
+**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 restart). On any failure, `deploy.sh` auto-rolls back to the previous commit.
 
 Additional workflows:
-- `.github/workflows/error-monitor.yml` — Error monitoring
-- `.github/workflows/view-logs.yml` — Log viewing
+- `.github/workflows/error-monitor.yml` — Checks pm2 status, HTTP health, error logs, disk/memory usage every 4 hours. Creates GitHub Issues on failure with deduplication (adds comments to existing open alerts within 24 hours instead of creating duplicates).
+- `.github/workflows/view-logs.yml` — Manual trigger to view pm2 logs without SSH
 
-A `deploy-rollback.sh` script is available for reverting to a previous build.
+**Rollback**:
+- `deploy-rollback.sh` reverts to the pre-deploy commit (auto-saved by `deploy.sh`)
+- Also accepts an explicit commit SHA: `./deploy-rollback.sh <commit-sha>`
+- Preserves `.env` across checkout to avoid losing credentials
+- Deploy history logged to `.deploy-last.log`
 
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):

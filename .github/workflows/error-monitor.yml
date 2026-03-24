@@ -1,12 +1,12 @@
 # CallAnalyzer — Error Monitor
-# Checks pm2 error logs on a schedule and sends a GitHub notification
-# (email) if new errors are detected since the last check.
+# Checks pm2 status, app health, and database connectivity on a schedule.
+# Creates a GitHub Issue if problems are detected (with deduplication).
 #
-# How notifications work:
-#   - Uses GitHub Issues to alert on errors (GitHub sends email notifications
-#     for new issues automatically based on your notification settings)
-#   - Creates one issue per check with the error details
-#   - Only creates an issue if errors are found — no noise
+# Checks performed:
+#   1. pm2 process status (running/errored/stopped)
+#   2. HTTP health check (/api/health)
+#   3. Recent pm2 error logs (last 4 hours)
+#   4. Disk space check (warn if >85% used)
 #
 # Required GitHub Secrets (same as deploy.yml):
 #   EC2_SSH_KEY, EC2_HOST, EC2_USER, EC2_APP_DIR
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 3
 
     steps:
-      - name: Check pm2 status and recent errors
+      - name: Check pm2 status, health, and logs
         id: check
         uses: appleboy/ssh-action@v1
         with:
@@ -42,22 +42,44 @@ jobs:
           port: 22
           script: |
             cd ${{ secrets.EC2_APP_DIR }}
+            ISSUES=""
 
-            # Check if pm2 process is running
-            PM2_STATUS=$(pm2 jlist 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 || echo "unknown")
+            # --- 1. Check pm2 process status ---
+            PM2_STATUS=$(pm2 jlist 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 || echo '"status":"unknown"')
             echo "PM2_STATUS=$PM2_STATUS"
 
-            if echo "$PM2_STATUS" | grep -q "errored\|stopped"; then
+            if echo "$PM2_STATUS" | grep -q "errored\|stopped\|unknown"; then
+              ISSUES="${ISSUES}PROCESS_DOWN,"
               echo "::PROCESS_DOWN::"
               pm2 list
             fi
 
-            # Check for recent errors (last 4 hours = 240 minutes)
+            # --- 2. HTTP health check (with retry) ---
+            HEALTH="000"
+            for attempt in 1 2 3; do
+              HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost:${PORT:-5000}/api/health 2>/dev/null || echo "000")
+              if [ "$HEALTH" = "200" ]; then
+                break
+              fi
+              sleep 2
+            done
+            echo "HEALTH_STATUS=$HEALTH"
+
+            if [ "$HEALTH" != "200" ]; then
+              ISSUES="${ISSUES}HEALTH_FAILED,"
+              echo "::HEALTH_FAILED::"
+
+              # Extended health — check if the server responds at all
+              HEALTH_BODY=$(curl -s --max-time 10 http://localhost:${PORT:-5000}/api/health 2>/dev/null || echo "No response")
+              echo "HEALTH_BODY=$HEALTH_BODY"
+            fi
+
+            # --- 3. Check for recent errors ---
             ERROR_LOG="$HOME/.pm2/logs/callanalyzer-error.log"
             if [ -f "$ERROR_LOG" ]; then
-              # Get errors from the last 4 hours
               RECENT_ERRORS=$(find "$ERROR_LOG" -mmin -240 -exec tail -100 {} \; 2>/dev/null)
               if [ -n "$RECENT_ERRORS" ]; then
+                ISSUES="${ISSUES}ERRORS_FOUND,"
                 echo "::ERRORS_FOUND::"
                 echo "$RECENT_ERRORS"
               else
@@ -67,32 +89,115 @@ jobs:
               echo "::NO_ERROR_LOG::"
             fi
 
-            # Quick health check
-            HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${PORT:-5000}/api/health 2>/dev/null || echo "000")
-            echo "HEALTH_STATUS=$HEALTH"
-            if [ "$HEALTH" != "200" ]; then
-              echo "::HEALTH_FAILED::"
+            # --- 4. Disk space check ---
+            DISK_PCT=$(df -h "$APP_DIR" | awk 'NR==2 {gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "0")
+            echo "DISK_USAGE=${DISK_PCT}%"
+            if [ "$DISK_PCT" -gt 85 ] 2>/dev/null; then
+              ISSUES="${ISSUES}DISK_HIGH,"
+              echo "::DISK_HIGH:: ${DISK_PCT}% used"
             fi
 
-      - name: Create alert issue if errors found
-        if: contains(steps.check.outputs.response, '::ERRORS_FOUND::') || contains(steps.check.outputs.response, '::PROCESS_DOWN::') || contains(steps.check.outputs.response, '::HEALTH_FAILED::')
+            # --- 5. Memory check ---
+            MEM_PCT=$(free | awk '/^Mem:/ {printf("%.0f", $3/$2 * 100)}' 2>/dev/null || echo "0")
+            echo "MEMORY_USAGE=${MEM_PCT}%"
+            if [ "$MEM_PCT" -gt 90 ] 2>/dev/null; then
+              ISSUES="${ISSUES}MEMORY_HIGH,"
+              echo "::MEMORY_HIGH:: ${MEM_PCT}% used"
+            fi
+
+            # Final summary
+            if [ -z "$ISSUES" ]; then
+              echo "::ALL_CLEAR::"
+            fi
+            echo "ISSUES=$ISSUES"
+
+      - name: Check for existing open alerts (deduplication)
+        if: |
+          contains(steps.check.outputs.response, '::ERRORS_FOUND::') ||
+          contains(steps.check.outputs.response, '::PROCESS_DOWN::') ||
+          contains(steps.check.outputs.response, '::HEALTH_FAILED::') ||
+          contains(steps.check.outputs.response, '::DISK_HIGH::') ||
+          contains(steps.check.outputs.response, '::MEMORY_HIGH::')
+        id: dedup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Check if there's already an open alert issue from the last 24 hours
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'alert,production',
+              state: 'open',
+              per_page: 5,
+              sort: 'created',
+              direction: 'desc'
+            });
+
+            const now = new Date();
+            const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+            const recentOpen = issues.data.find(i => new Date(i.created_at) > oneDayAgo);
+
+            if (recentOpen) {
+              core.setOutput('existing_issue', recentOpen.number);
+              core.setOutput('should_create', 'false');
+              console.log(`Found existing open alert #${recentOpen.number} from ${recentOpen.created_at}. Will add comment instead.`);
+            } else {
+              core.setOutput('existing_issue', '');
+              core.setOutput('should_create', 'true');
+            }
+
+      - name: Create or update alert issue
+        if: |
+          contains(steps.check.outputs.response, '::ERRORS_FOUND::') ||
+          contains(steps.check.outputs.response, '::PROCESS_DOWN::') ||
+          contains(steps.check.outputs.response, '::HEALTH_FAILED::') ||
+          contains(steps.check.outputs.response, '::DISK_HIGH::') ||
+          contains(steps.check.outputs.response, '::MEMORY_HIGH::')
         uses: actions/github-script@v7
         with:
           script: |
             const output = `${{ steps.check.outputs.response }}`.substring(0, 3000);
             const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+            const shouldCreate = '${{ steps.dedup.outputs.should_create }}' === 'true';
+            const existingIssue = parseInt('${{ steps.dedup.outputs.existing_issue }}') || null;
 
-            let title = `[Alert] Production errors detected — ${now} UTC`;
+            // Determine severity
+            let severity = 'warning';
+            let title = `[Alert] Production issues detected — ${now} UTC`;
             let labels = ['alert', 'production'];
 
-            if (output.includes('::PROCESS_DOWN::')) {
-              title = `[CRITICAL] pm2 process down — ${now} UTC`;
+            if (output.includes('::PROCESS_DOWN::') || output.includes('::HEALTH_FAILED::')) {
+              severity = 'critical';
+              title = `[CRITICAL] Production down — ${now} UTC`;
               labels.push('critical');
             }
-            if (output.includes('::HEALTH_FAILED::')) {
-              title = `[CRITICAL] Health check failed — ${now} UTC`;
-              labels.push('critical');
-            }
+
+            // Build issue body
+            const checks = [];
+            if (output.includes('::PROCESS_DOWN::')) checks.push('- **pm2 process down or errored**');
+            if (output.includes('::HEALTH_FAILED::')) checks.push('- **HTTP health check failed**');
+            if (output.includes('::ERRORS_FOUND::')) checks.push('- Recent error log entries detected');
+            if (output.includes('::DISK_HIGH::')) checks.push('- Disk usage above 85%');
+            if (output.includes('::MEMORY_HIGH::')) checks.push('- Memory usage above 90%');
+
+            const body = [
+              '## Automated Error Alert',
+              '',
+              `**Time:** ${now} UTC`,
+              `**Severity:** ${severity}`,
+              `**Workflow run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '### Issues Detected',
+              ...checks,
+              '',
+              '### Log Output',
+              '```',
+              output,
+              '```',
+              '',
+              '---',
+              '*Created by Error Monitor workflow. Close this issue once resolved.*',
+            ].join('\n');
 
             // Ensure labels exist
             for (const label of labels) {
@@ -112,31 +217,62 @@ jobs:
               }
             }
 
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: title,
-              labels: labels,
-              body: [
-                '## Automated Error Alert',
-                '',
-                `**Time:** ${now} UTC`,
-                `**Workflow run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                '',
-                '### Log Output',
-                '```',
-                output,
-                '```',
-                '',
-                '---',
-                '*This issue was created automatically by the Error Monitor workflow.*',
-                '*Close this issue once resolved. To adjust frequency, edit `.github/workflows/error-monitor.yml`.*'
-              ].join('\n')
-            });
+            if (shouldCreate) {
+              // Create new issue
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                labels: labels,
+                body: body
+              });
+              console.log(`Created alert issue #${issue.data.number}`);
+            } else if (existingIssue) {
+              // Add comment to existing issue (avoid alert fatigue)
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue,
+                body: [
+                  `## Follow-up check — ${now} UTC`,
+                  '',
+                  `**Severity:** ${severity}`,
+                  '',
+                  '### Issues Still Present',
+                  ...checks,
+                  '',
+                  '<details><summary>Log output</summary>',
+                  '',
+                  '```',
+                  output,
+                  '```',
+                  '',
+                  '</details>',
+                  '',
+                  `[Workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                ].join('\n')
+              });
+              console.log(`Added comment to existing alert issue #${existingIssue}`);
+
+              // Escalate to critical if needed
+              if (severity === 'critical' && !labels.includes('critical')) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue,
+                  labels: ['critical']
+                });
+              }
+            }
 
       - name: Summary
         if: always()
         run: |
           echo "### Error Monitor Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check the step output above for details." >> $GITHUB_STEP_SUMMARY
+          RESPONSE='${{ steps.check.outputs.response }}'
+          if echo "$RESPONSE" | grep -q "::ALL_CLEAR::"; then
+            echo "All checks passed. No issues detected." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Issues detected. Check the workflow steps above for details." >> $GITHUB_STEP_SUMMARY
+          fi
