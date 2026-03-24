@@ -166,6 +166,31 @@ const translations: Record<Locale, Record<string, string>> = {
     "reports.overallReport": "Overall Report",
     "reports.employeeReport": "Employee Report",
 
+    // Error states
+    "error.somethingWentWrong": "Something went wrong",
+    "error.unexpectedError": "An unexpected error occurred.",
+    "error.tryAgain": "Try Again",
+    "error.goToDashboard": "Go to Dashboard",
+    "error.retriesFailed": "Multiple retries failed. Try refreshing the page.",
+    "error.pageNotFound": "404 Page Not Found",
+    "error.pageNotFoundDesc": "The page you're looking for doesn't exist or has been moved.",
+
+    // Toast notifications
+    "toast.callComplete": "Call Processing Complete",
+    "toast.callCompleteDesc": "Your call has been analyzed and is ready to view.",
+    "toast.callFailed": "Call Processing Failed",
+    "toast.callFailedDesc": "There was an error processing your call.",
+    "toast.uploadSuccess": "Upload Successful",
+    "toast.uploadSuccessDesc": "Your file is now being processed.",
+    "toast.uploadFailed": "Upload failed",
+    "toast.batchComplete": "Batch upload complete",
+
+    // Call card
+    "call.unassigned": "Unassigned",
+    "call.unknown": "Unknown",
+    "call.viewDetails": "View Details",
+    "call.na": "N/A",
+
     // Misc
     "misc.notifications": "Notifications",
     "misc.noNotifications": "No notifications yet",
@@ -332,6 +357,31 @@ const translations: Record<Locale, Record<string, string>> = {
     // Reports
     "reports.overallReport": "Informe General",
     "reports.employeeReport": "Informe de Empleado",
+
+    // Error states
+    "error.somethingWentWrong": "Algo salio mal",
+    "error.unexpectedError": "Ocurrio un error inesperado.",
+    "error.tryAgain": "Intentar de Nuevo",
+    "error.goToDashboard": "Ir al Panel",
+    "error.retriesFailed": "Multiples intentos fallaron. Intente refrescar la pagina.",
+    "error.pageNotFound": "404 Pagina No Encontrada",
+    "error.pageNotFoundDesc": "La pagina que busca no existe o ha sido movida.",
+
+    // Toast notifications
+    "toast.callComplete": "Procesamiento de Llamada Completo",
+    "toast.callCompleteDesc": "Su llamada ha sido analizada y esta lista para ver.",
+    "toast.callFailed": "Procesamiento de Llamada Fallido",
+    "toast.callFailedDesc": "Hubo un error al procesar su llamada.",
+    "toast.uploadSuccess": "Carga Exitosa",
+    "toast.uploadSuccessDesc": "Su archivo esta siendo procesado.",
+    "toast.uploadFailed": "Error en la carga",
+    "toast.batchComplete": "Carga por lote completa",
+
+    // Call card
+    "call.unassigned": "Sin asignar",
+    "call.unknown": "Desconocido",
+    "call.viewDetails": "Ver Detalles",
+    "call.na": "N/D",
 
     // Misc
     "misc.notifications": "Notificaciones",

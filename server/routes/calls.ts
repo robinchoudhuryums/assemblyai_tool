@@ -74,29 +74,18 @@ export function registerCallRoutes(
         });
       } else {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
-        // Use cursor-based pagination under the hood for offset mode too,
-        // to avoid loading all calls into memory (which causes OOM on large datasets).
-        // If the storage backend supports getCallsPaginated, use it with offset emulation.
-        if (storage.getCallsPaginated) {
-          const offset = (page - 1) * limit;
-          const result = await storage.getCallsPaginated({ filters, limit, offset });
-          const totalPages = Math.ceil(result.total / limit);
-          res.json({
-            calls: result.calls,
-            pagination: { page, limit, total: result.total, totalPages },
-          });
-        } else {
-          // Fallback for in-memory storage that doesn't support server-side pagination
-          const calls = await storage.getCallsWithDetails(filters);
-          const total = calls.length;
-          const totalPages = Math.ceil(total / limit);
-          const offset = (page - 1) * limit;
-          const paginated = calls.slice(offset, offset + limit);
-          res.json({
-            calls: paginated,
-            pagination: { page, limit, total, totalPages },
-          });
-        }
+        // Note: offset pagination loads all matching calls into memory for slicing.
+        // For large datasets, clients should use cursor mode (?mode=cursor) which
+        // uses SQL-level pagination via getCallsPaginated().
+        const calls = await storage.getCallsWithDetails(filters);
+        const total = calls.length;
+        const totalPages = Math.ceil(total / limit);
+        const offset = (page - 1) * limit;
+        const paginated = calls.slice(offset, offset + limit);
+        res.json({
+          calls: paginated,
+          pagination: { page, limit, total, totalPages },
+        });
       }
     } catch (error) {
       res.status(500).json({ message: "Failed to get calls" });
