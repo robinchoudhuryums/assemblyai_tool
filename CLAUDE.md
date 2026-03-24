@@ -51,6 +51,12 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/storage.test.ts` — Storage abstraction CRUD operations (all backends)
   - `tests/postgres-storage.test.ts` — PostgresStorage integration tests (requires `DATABASE_URL`)
   - `tests/job-queue.test.ts` — Job queue integration tests (requires `DATABASE_URL`)
+  - `tests/pipeline.test.ts` — Audio processing pipeline (transcription, analysis, storage)
+  - `tests/confidence-score.test.ts` — Confidence score computation
+  - `tests/scoring-calibration.test.ts` — Score calibration and normalization
+  - `tests/validation.test.ts` — Input validation and sanitization
+  - `tests/utils.test.ts` — Shared utility functions
+  - `tests/waf.test.ts` — WAF middleware (SQL injection, XSS, path traversal detection)
 
 ## Architecture
 
@@ -156,6 +162,9 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
 | GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
 | GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
+| GET | `/api/calls/:id/annotations` | authenticated | Get annotations for a call |
+| POST | `/api/calls/:id/annotations` | authenticated | Add annotation to a call |
+| DELETE | `/api/calls/:id/annotations/:annotationId` | authenticated | Remove an annotation |
 
 ### Employees
 | Method | Path | Role | Description |

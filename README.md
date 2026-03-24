@@ -127,7 +127,16 @@ CallAnalyzer has three user roles with increasing permissions:
 - Create, edit, and delete custom prompt templates (per call category)
 - A/B model testing — compare different Bedrock models on the same call
 - Spend tracking — monitor estimated API costs by period, service, and user
+- User management — create, update, deactivate users, reset passwords
+- Security dashboard — WAF stats, vulnerability scanning, incident response, breach reporting
+- Webhook management — configure external integrations
+- Job queue management — view queue status, retry dead-letter jobs
+- Performance snapshots — batch generate employee/team/company snapshots
 - System configuration
+
+### All Roles
+- Gamification — view leaderboard (points, badges, streaks), filterable by week/month/all time
+- Agent scorecards — view badges, points, and streak on agent profiles
 
 Users are defined via the `AUTH_USERS` environment variable (format: `username:password:role:displayName`). New users can submit an access request through the login page, which an admin must approve.
 
@@ -169,7 +178,7 @@ When a call recording is uploaded, the server runs this async pipeline:
 The audio file is uploaded to S3 under `audio/{callId}/{originalName}`. This is non-blocking — if S3 upload fails, processing continues with a warning.
 
 ### Step 2: Transcription
-The audio is sent to AssemblyAI's API. The server uploads the raw audio, then submits a transcription request and polls for completion. AssemblyAI returns:
+The audio is sent to AssemblyAI's API. The server uploads the raw audio, then submits a transcription request. If `APP_BASE_URL` is configured, AssemblyAI uses **webhook mode** (faster, fewer API calls); otherwise it falls back to **polling mode**. AssemblyAI returns:
 - Full transcript text
 - Word-level timestamps with confidence scores
 - Speaker labels (speaker A, speaker B)
@@ -203,11 +212,20 @@ Flags are set: `low_score` (performance <= 2.0), `exceptional_call` (>= 9.0), `a
 ### Step 6: Storage
 Transcript, sentiment analysis, and call analysis are stored as separate JSON files in S3. The call status is updated to "completed".
 
+### Empty Transcript Guard
+After transcription, if the transcript has fewer than 10 meaningful characters, AI analysis is skipped entirely. The call is stored with an `empty_transcript` flag. This prevents wasted Bedrock spend on silent/empty recordings.
+
 ### Step 7: Auto-Assignment
 If no employee was specified at upload and the AI detected an agent name, the system tries to match it against the employee directory (by first name, last name, or full name) and auto-assigns.
 
+### Step 8: Coaching Alerts
+Low-scoring calls (≤ 4) trigger AI-generated coaching plans via Bedrock with personalized action items. High-scoring calls (≥ 9) trigger recognition alerts. Recurring weakness patterns generate multi-week progressive coaching plans.
+
+### Step 9: Gamification
+Badge evaluation runs non-blocking after coaching alerts. Checks for milestone badges (first call, 25/50/100), score badges (perfect 10), streak badges (consecutive high scores), and sub-score badges. Points are computed and stored. No additional API calls — badges are derived from existing call data.
+
 ### On Failure
-The call is marked as "failed", the WebSocket notifies the client, and the uploaded file is cleaned up. Error messages are logged without full stack traces (HIPAA — avoids logging PHI). There is no automatic retry — users re-upload manually.
+The call is marked as "failed", the WebSocket notifies the client, and the error is reported to Sentry (if configured). Error messages are logged without full stack traces (HIPAA — avoids logging PHI). When PostgreSQL job queue is enabled, jobs retry up to 3 times before being moved to dead-letter. Without job queue, users re-upload manually.
 
 ---
 
@@ -396,6 +414,10 @@ CallAnalyzer handles Protected Health Information (PHI) in audio recordings and 
 | **Data retention** | Auto-purge after 90 days | Configurable via `RETENTION_DAYS` env var |
 | **Error logging** | Messages only, no stacks | Prevents PHI leakage in log files |
 | **File cleanup** | Temp files deleted after S3 | No PHI persists on EC2 filesystem |
+| **Error tracking** | Sentry with PHI scrubbing | SSN, phone, email patterns stripped before data reaches Sentry |
+| **WAF** | Application-level firewall | SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring |
+| **Vulnerability scanning** | Automated daily scans | Env config, dependencies, database, auth checks; admin-triggered manual scans |
+| **Incident response** | Formal IRP | Severity classification, phase tracking, escalation contacts, action items |
 
 ### BAA Requirements
 - **AWS BAA**: Covers S3, Bedrock, KMS, and CloudTrail (signed via AWS Artifact)
@@ -405,8 +427,7 @@ CallAnalyzer handles Protected Health Information (PHI) in audio recordings and 
 - Auth users stored in environment variable (works for small teams; larger orgs should use an IdP like Cognito)
 - Same IAM user shared across 3 projects (consider separate IAM users or EC2 instance profiles)
 - MFA (TOTP) is available but optional by default — set `REQUIRE_MFA=true` to enforce for all users
-- No WAF configured (consider AWS WAF for additional protection)
-- S3/Bedrock accessed over public internet (consider VPC endpoints)
+- S3/Bedrock accessed over public internet (consider VPC endpoints for improved HIPAA posture)
 
 See `SECURITY.md` for the full HIPAA security summary with code location references and verification commands.
 
@@ -447,6 +468,9 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `DELETE` | `/api/calls/:id/tags/:tagId` | Remove a tag from a call |
 | `GET` | `/api/tags` | Get all unique tags (for autocomplete) |
 | `GET` | `/api/calls/by-tag/:tag` | Search calls by tag |
+| `GET` | `/api/calls/:id/annotations` | Get annotations for a call |
+| `POST` | `/api/calls/:id/annotations` | Add annotation to a call |
+| `DELETE` | `/api/calls/:id/annotations/:annotationId` | Remove an annotation |
 | `GET` | `/api/employees` | List all employees |
 | `GET` | `/api/dashboard/metrics` | Aggregate metrics (total calls, avg scores) |
 | `GET` | `/api/dashboard/sentiment` | Sentiment distribution (positive/neutral/negative counts) |
@@ -461,6 +485,12 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/insights` | Aggregate insights and trends |
 | `GET` | `/api/analytics/teams` | Comparative team performance (sub-team aggregates) |
 | `GET` | `/api/analytics/team/:teamName` | Individual employee metrics within a team |
+| `GET` | `/api/analytics/trends` | Week-over-week/month-over-month company-wide trends |
+| `GET` | `/api/analytics/trends/agent/:employeeId` | Agent-specific performance trends |
+| `GET` | `/api/gamification/leaderboard` | Agent leaderboard (query: `period=week\|month\|all`) |
+| `GET` | `/api/gamification/badges/:employeeId` | Badges earned by an employee |
+| `GET` | `/api/gamification/badge-types` | All possible badge definitions |
+| `GET` | `/api/gamification/stats/:employeeId` | Points, streak, and badges for one agent |
 
 ### Manager+ (manager or admin)
 | Method | Path | Description |
@@ -475,6 +505,15 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `PATCH` | `/api/coaching/:id` | Update coaching session |
 | `GET` | `/api/export/calls` | Export calls as CSV (with date/employee filters) |
 | `GET` | `/api/export/team-analytics` | Export team analytics as CSV |
+| `POST` | `/api/snapshots/employee/:id` | Generate employee performance snapshot |
+| `POST` | `/api/snapshots/team` | Generate team performance snapshot |
+| `POST` | `/api/snapshots/department` | Generate department performance snapshot |
+| `POST` | `/api/snapshots/company` | Generate company-wide performance snapshot |
+| `GET` | `/api/snapshots/employee/:id` | Get employee snapshot history |
+| `GET` | `/api/snapshots/team/:teamName` | Get team snapshot history |
+| `GET` | `/api/snapshots/department/:dept` | Get department snapshot history |
+| `GET` | `/api/snapshots/company` | Get company-wide snapshot history |
+| `GET` | `/api/snapshots/all/:level` | Get all snapshots for a level |
 
 ### Admin only
 | Method | Path | Description |
@@ -501,6 +540,34 @@ See `SECURITY.md` for the full HIPAA security summary with code location referen
 | `GET` | `/api/admin/breach-reports` | List HIPAA breach reports |
 | `POST` | `/api/admin/breach-reports` | File a new breach report |
 | `PATCH` | `/api/admin/breach-reports/:id` | Update breach notification status |
+| `GET` | `/api/admin/waf-stats` | WAF statistics and blocked IPs |
+| `POST` | `/api/admin/waf/block-ip` | Manually block an IP address |
+| `POST` | `/api/admin/waf/unblock-ip` | Unblock an IP address |
+| `GET` | `/api/admin/vuln-scan/latest` | Latest vulnerability scan report |
+| `GET` | `/api/admin/vuln-scan/history` | All scan history |
+| `POST` | `/api/admin/vuln-scan/run` | Trigger manual vulnerability scan |
+| `POST` | `/api/admin/vuln-scan/accept/:findingId` | Accept a finding as risk |
+| `GET` | `/api/admin/incidents` | List all security incidents |
+| `GET` | `/api/admin/incidents/:id` | Get incident details |
+| `POST` | `/api/admin/incidents` | Declare a new security incident |
+| `POST` | `/api/admin/incidents/:id/advance` | Advance incident to next phase |
+| `POST` | `/api/admin/incidents/:id/timeline` | Add timeline entry to incident |
+| `PATCH` | `/api/admin/incidents/:id` | Update incident details |
+| `POST` | `/api/admin/incidents/:id/action-items` | Add action item to incident |
+| `PATCH` | `/api/admin/incidents/:incidentId/action-items/:itemId` | Update action item status |
+| `GET` | `/api/admin/incident-response-plan` | Get escalation contacts and response procedures |
+| `GET` | `/api/users` | List all users |
+| `POST` | `/api/users` | Create user |
+| `PATCH` | `/api/users/:id` | Update user (role, display name, active) |
+| `DELETE` | `/api/users/:id` | Deactivate user (soft delete) |
+| `POST` | `/api/users/:id/reset-password` | Admin reset user password |
+| `PATCH` | `/api/users/me/password` | Self-service password change (any authenticated user) |
+| `GET` | `/api/webhooks` | List webhook configurations |
+| `POST` | `/api/webhooks` | Create webhook (URL, events, HMAC secret) |
+| `PATCH` | `/api/webhooks/:id` | Update webhook |
+| `DELETE` | `/api/webhooks/:id` | Delete webhook |
+| `POST` | `/api/snapshots/batch` | Batch generate all employee + team + company snapshots |
+| `DELETE` | `/api/snapshots/:level/:targetId/reset` | AI Context Reset — clear all snapshots for a target |
 
 ---
 
@@ -529,6 +596,7 @@ assemblyai_tool/
 │       │   ├── ab-testing.tsx      # A/B model comparison tool
 │       │   ├── spend-tracking.tsx  # API cost tracking dashboard
 │       │   ├── security.tsx        # Security/breach reporting dashboard
+│       │   ├── leaderboard.tsx     # Gamification leaderboard (points, badges, streaks)
 │       │   ├── auth.tsx            # Login + access request form
 │       │   └── not-found.tsx       # 404 page
 │       ├── components/
@@ -541,11 +609,32 @@ assemblyai_tool/
 │       │   ├── search/             # Search components (call card, employee filter)
 │       │   └── lib/                # Utility components (confirm dialog, error boundary)
 │       ├── hooks/                  # Custom React hooks (WebSocket, toast)
-│       ├── lib/                    # Utilities (queryClient, helpers)
+│       ├── lib/                    # Utilities (queryClient, helpers, i18n, sentry)
 │       └── App.tsx                 # Root component with routing
 ├── server/                         # Backend (Express + TypeScript)
 │   ├── index.ts                    # Server entry point (middleware, security headers, retention)
-│   ├── routes.ts                   # All API routes + audio processing pipeline
+│   ├── routes.ts                   # Route coordinator + batch scheduler + job queue init
+│   ├── routes/                     # Modular route files
+│   │   ├── admin.ts               # Admin route coordinator
+│   │   ├── admin-content.ts       # Prompt templates, A/B tests, batch status
+│   │   ├── admin-operations.ts    # Queue management, user management, access requests
+│   │   ├── admin-security.ts      # WAF, vulnerability scanning, incidents, breach reports
+│   │   ├── analytics.ts           # Team analytics, trends, exports
+│   │   ├── auth.ts                # Login, logout, MFA endpoints
+│   │   ├── calls.ts               # Call CRUD, audio streaming
+│   │   ├── calls-tags.ts          # Tags and annotations
+│   │   ├── coaching.ts            # Coaching session management
+│   │   ├── dashboard.ts           # Dashboard metrics, sentiment, performers
+│   │   ├── employees.ts           # Employee CRUD, CSV import
+│   │   ├── gamification.ts        # Leaderboard, badges, stats
+│   │   ├── insights.ts            # Aggregate insights and trends
+│   │   ├── pipeline.ts            # Audio processing pipeline (processAudioFile)
+│   │   ├── reports.ts             # Reports, agent profiles, summaries
+│   │   ├── snapshots.ts           # Performance snapshot generation
+│   │   ├── users.ts               # User management (admin)
+│   │   └── utils.ts               # Shared route utilities
+│   ├── middleware/
+│   │   └── waf.ts                 # Application-level WAF (SQL injection, XSS, path traversal)
 │   ├── storage.ts                  # Storage abstraction (MemStorage + CloudStorage)
 │   ├── storage-postgres.ts         # PostgreSQL IStorage implementation (~30 methods)
 │   ├── auth.ts                     # Authentication (passport, sessions, role middleware)
@@ -564,7 +653,20 @@ assemblyai_tool/
 │       ├── audit-log.ts            # HIPAA audit logging (stdout + PostgreSQL)
 │       ├── job-queue.ts            # PostgreSQL-backed durable job queue
 │       ├── totp.ts                 # TOTP two-factor authentication (RFC 6238)
-│       └── security-monitor.ts     # Security event tracking and breach reporting
+│       ├── security-monitor.ts     # Security event tracking and breach reporting
+│       ├── sentry.ts               # Sentry error tracking with PHI scrubbing
+│       ├── gamification.ts         # Badge evaluation, points, streaks, leaderboard
+│       ├── coaching-alerts.ts      # AI-powered coaching plans for low/high-score calls
+│       ├── vulnerability-scanner.ts # Automated security scanning
+│       ├── incident-response.ts    # Security incident tracking and response
+│       ├── webhooks.ts             # Webhook dispatch for external integrations
+│       ├── performance-snapshots.ts # Periodic performance snapshot generation
+│       ├── scoring-calibration.ts  # Score calibration and normalization
+│       ├── call-clustering.ts      # Call similarity clustering
+│       ├── scheduled-reports.ts    # Automated report generation
+│       ├── aws-credentials.ts      # AWS credential management
+│       ├── sigv4.ts                # AWS Signature V4 signing
+│       └── logger.ts               # Structured logging utility
 ├── shared/
 │   └── schema.ts                   # Zod schemas shared between client and server
 ├── tests/
@@ -573,7 +675,13 @@ assemblyai_tool/
 │   ├── auth.test.ts                # Authentication + role-based access tests
 │   ├── storage.test.ts             # Storage abstraction CRUD tests
 │   ├── postgres-storage.test.ts    # PostgreSQL integration tests (requires DATABASE_URL)
-│   └── job-queue.test.ts           # Job queue integration tests (requires DATABASE_URL)
+│   ├── job-queue.test.ts           # Job queue integration tests (requires DATABASE_URL)
+│   ├── pipeline.test.ts            # Audio processing pipeline tests
+│   ├── confidence-score.test.ts    # Confidence score computation tests
+│   ├── scoring-calibration.test.ts # Score calibration and normalization tests
+│   ├── validation.test.ts          # Input validation and sanitization tests
+│   ├── utils.test.ts               # Shared utility function tests
+│   └── waf.test.ts                 # WAF middleware tests
 ├── deploy/
 │   └── ec2/                        # EC2 deployment configs (Caddyfile, systemd, user-data)
 ├── .github/
@@ -627,6 +735,18 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP batch mode (24h format, e.
 
 # === MFA (Two-Factor Authentication) ===
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
+
+# === Error Tracking (Sentry) ===
+SENTRY_DSN                      # Sentry DSN for server-side error tracking (optional)
+VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (set at build time)
+
+# === AssemblyAI Webhooks (faster than polling) ===
+APP_BASE_URL                    # Public URL (e.g. https://umscallanalyzer.com) — enables webhook mode
+ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures
+
+# === RAG Knowledge Base (planned) ===
+RAG_SERVICE_URL                 # URL of the ums-knowledge-reference API
+RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
 
 # === Optional ===
 PORT                            # Server port (default: 5000)
