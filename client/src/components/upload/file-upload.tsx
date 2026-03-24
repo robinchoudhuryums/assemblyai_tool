@@ -93,6 +93,7 @@ export default function FileUpload() {
         method: 'POST',
         body: formData,
         credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
 
       if (!response.ok) {
@@ -164,7 +165,7 @@ export default function FileUpload() {
         processingStep: "Queued for processing...",
         processingProgress: 10,
       });
-      toast({ title: "Upload Successful", description: "Your file is now being processed." });
+      toast({ title: t("toast.uploadSuccess"), description: t("toast.uploadSuccessDesc") });
     } catch (error) {
       updateFile(index, { status: 'error', error: error instanceof Error ? error.message : 'Upload failed' });
     }
@@ -177,20 +178,34 @@ export default function FileUpload() {
       .map((file, index) => file.status === 'pending' ? index : -1)
       .filter(i => i >= 0);
 
+    let totalSuccess = 0;
+    let totalFailed = 0;
+
     // Process in batches of MAX_CONCURRENT
     for (let i = 0; i < pendingIndices.length; i += MAX_CONCURRENT) {
       const batch = pendingIndices.slice(i, i + MAX_CONCURRENT);
-      await Promise.allSettled(batch.map(idx => uploadFile(idx)));
+      const results = await Promise.allSettled(batch.map(idx => uploadFile(idx)));
+      for (const result of results) {
+        if (result.status === "fulfilled") totalSuccess++;
+        else totalFailed++;
+      }
+    }
+
+    // Report batch results to user
+    if (totalFailed > 0 && totalSuccess === 0) {
+      toast({ title: t("toast.uploadFailed"), description: `${totalFailed} file(s) failed to upload.`, variant: "destructive" });
+    } else if (totalFailed > 0) {
+      toast({ title: t("toast.batchComplete"), description: `${totalSuccess} uploaded, ${totalFailed} failed.`, variant: "destructive" });
     }
   };
 
   return (
     <div className="bg-card rounded-lg border border-border p-6">
       <h3 className="text-lg font-semibold text-foreground mb-4">Upload Call Recordings</h3>
-      <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+      <div {...getRootProps()} role="button" aria-label={t("upload.dragDrop")} className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
         isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
       }`}>
-        <input {...getInputProps()} />
+        <input {...getInputProps()} aria-label={t("upload.dragDrop")} />
         <CloudArrowUp className={`mx-auto h-12 w-12 ${isDragActive ? "text-primary" : "text-muted-foreground"}`} />
         <p className="mt-2 text-sm text-muted-foreground">
           {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select files"}

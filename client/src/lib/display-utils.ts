@@ -20,11 +20,44 @@ export function toDisplayString(val: unknown): string {
 }
 
 /**
- * Strip HTML tags from AI-generated strings to prevent XSS when rendered
- * via dangerouslySetInnerHTML or in contexts where React doesn't escape.
+ * Sanitize AI-generated strings to prevent XSS.
+ *
+ * Defense-in-depth: React already escapes JSX text children, but this protects against:
+ * 1. Usage in contexts where React doesn't escape (dangerouslySetInnerHTML, attribute values)
+ * 2. HTML entity bypasses (&#x3C;script&#x3E;)
+ * 3. Null bytes and control characters that can confuse parsers
+ *
+ * Strategy: Strip HTML tags, decode entities, strip again, then remove dangerous patterns.
  */
 function sanitizeDisplayString(str: string): string {
-  return str.replace(/<[^>]*>/g, "");
+  let clean = str;
+
+  // Remove null bytes and control characters (except whitespace)
+  clean = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+
+  // Strip HTML tags (multi-pass to catch nested/encoded tags)
+  clean = clean.replace(/<[^>]*>/g, "");
+
+  // Decode common HTML entities that could hide tags
+  clean = clean
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, "/");
+
+  // Strip tags again after entity decoding
+  clean = clean.replace(/<[^>]*>/g, "");
+
+  // Remove javascript: and data: URI patterns (case-insensitive, whitespace-tolerant)
+  clean = clean.replace(/\bjavascript\s*:/gi, "");
+  clean = clean.replace(/\bdata\s*:\s*text\/html/gi, "");
+
+  // Remove event handler patterns (onerror=, onclick=, etc.)
+  clean = clean.replace(/\bon\w+\s*=/gi, "");
+
+  return clean;
 }
 
 /**

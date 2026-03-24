@@ -272,10 +272,12 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       else if (negativeCount > total * 0.3) overallSentiment = 'negative';
       else overallSentiment = 'neutral';
 
-      const avgConfidence = sentiments.reduce((sum, s) => {
-        const weight = s.sentiment === 'POSITIVE' ? s.confidence : s.sentiment === 'NEGATIVE' ? (1 - s.confidence) : 0.5;
-        return sum + weight;
-      }, 0) / total;
+      const avgConfidence = total > 0
+        ? sentiments.reduce((sum, s) => {
+            const weight = s.sentiment === 'POSITIVE' ? s.confidence : s.sentiment === 'NEGATIVE' ? (1 - s.confidence) : 0.5;
+            return sum + weight;
+          }, 0) / total
+        : 0.5;
       overallScore = Math.round(avgConfidence * 100) / 100;
     }
 
@@ -339,7 +341,16 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       topics: normalizeStringArray(aiAnalysis?.topics),
       summary: typeof aiAnalysis?.summary === "string" ? aiAnalysis.summary : (aiAnalysis?.summary ? JSON.stringify(aiAnalysis.summary) : transcriptResponse.text?.slice(0, 500) || ''),
       actionItems: normalizeStringArray(aiAnalysis?.action_items),
-      feedback: aiAnalysis?.feedback || { strengths: [], suggestions: [] },
+      feedback: aiAnalysis?.feedback
+        ? {
+            strengths: (aiAnalysis.feedback.strengths || []).map(
+              (s: unknown) => typeof s === "string" ? s : (s && typeof s === "object" && "text" in (s as Record<string, unknown>) ? (s as { text: string }).text : JSON.stringify(s))
+            ),
+            suggestions: (aiAnalysis.feedback.suggestions || []).map(
+              (s: unknown) => typeof s === "string" ? s : (s && typeof s === "object" && "text" in (s as Record<string, unknown>) ? (s as { text: string }).text : JSON.stringify(s))
+            ),
+          }
+        : { strengths: [], suggestions: [] },
       lemurResponse: undefined,
       callPartyType: typeof aiAnalysis?.call_party_type === "string" ? aiAnalysis.call_party_type : undefined,
       flags: flags.length > 0 ? normalizeStringArray(flags) : undefined,

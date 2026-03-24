@@ -4,6 +4,9 @@ import { requireAuth, requireRole } from "../auth";
 import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { metrics } from "../services/logger";
+import { logPhiAccess } from "../services/audit-log";
+import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../services/auto-calibration";
+import { is8x8Enabled } from "../services/telephony-8x8";
 
 export function registerOperationsRoutes(
   router: Router,
@@ -54,6 +57,15 @@ export function registerOperationsRoutes(
       }
       const retried = await jobQueue.retryJob(req.params.id);
       if (retried) {
+        // HIPAA: Audit admin retry of dead-letter jobs
+        logPhiAccess({
+          timestamp: new Date().toISOString(),
+          event: "admin_dead_job_retry",
+          username: req.user?.username || "unknown",
+          resourceType: "admin",
+          resourceId: req.params.id,
+          detail: "Admin retried dead-letter job",
+        });
         res.json({ message: "Job re-queued for processing" });
       } else {
         res.status(404).json({ message: "Dead job not found or already retried" });
@@ -162,5 +174,44 @@ export function registerOperationsRoutes(
   // ==================== ADMIN: APPLICATION METRICS ====================
   router.get("/api/admin/metrics", requireRole("admin"), (_req, res) => {
     res.json(metrics.snapshot());
+  });
+
+  // ==================== ADMIN: SCORE CALIBRATION ====================
+
+  // GET /api/admin/calibration — latest calibration snapshot
+  router.get("/api/admin/calibration", requireRole("admin"), async (_req, res) => {
+    try {
+      const snapshot = await getLatestCalibrationSnapshot();
+      res.json({ snapshot, available: snapshot !== null });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch calibration data" });
+    }
+  });
+
+  // POST /api/admin/calibration/analyze — trigger manual calibration analysis
+  router.post("/api/admin/calibration/analyze", requireRole("admin"), async (req, res) => {
+    try {
+      const days = parseInt(req.query.days as string) || undefined;
+      const snapshot = await analyzeScoreDistribution(days);
+      if (!snapshot) {
+        return res.json({ message: "Insufficient data for calibration analysis", snapshot: null });
+      }
+      res.json({ snapshot });
+    } catch (error) {
+      console.error("Calibration analysis error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to run calibration analysis" });
+    }
+  });
+
+  // ==================== ADMIN: TELEPHONY INTEGRATION STATUS ====================
+
+  // GET /api/admin/telephony/status — 8x8 integration status
+  router.get("/api/admin/telephony/status", requireRole("admin"), (_req, res) => {
+    res.json({
+      provider: "8x8",
+      enabled: is8x8Enabled(),
+      configured: !!(process.env.TELEPHONY_8X8_API_KEY && process.env.TELEPHONY_8X8_SUBACCOUNT_ID),
+      pollIntervalMinutes: parseInt(process.env.TELEPHONY_8X8_POLL_MINUTES || "15", 10),
+    });
   });
 }

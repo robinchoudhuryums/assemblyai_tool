@@ -76,13 +76,18 @@ export interface ConfidenceResult {
 }
 
 export function computeConfidenceScore(input: ConfidenceInput, transcriptLength: number): ConfidenceResult {
-  const { transcriptConfidence, wordCount, callDurationSeconds, hasAiAnalysis } = input;
-  const wordConfidence = Math.min(wordCount / 50, 1);
-  const durationConfidence = callDurationSeconds > 30 ? 1 : callDurationSeconds / 30;
+  const { wordCount, callDurationSeconds, hasAiAnalysis } = input;
+  // Guard against NaN/undefined inputs — default to 0 so the score degrades gracefully
+  const safeTranscriptConf = Number.isFinite(input.transcriptConfidence) ? input.transcriptConfidence : 0;
+  const safeWordCount = Number.isFinite(wordCount) ? wordCount : 0;
+  const safeDuration = Number.isFinite(callDurationSeconds) ? callDurationSeconds : 0;
+
+  const wordConfidence = Math.min(safeWordCount / 50, 1);
+  const durationConfidence = safeDuration > 30 ? 1 : safeDuration / 30;
   const aiConfidence = hasAiAnalysis ? 1 : 0.3;
 
   const score = (
-    transcriptConfidence * 0.4 +
+    safeTranscriptConf * 0.4 +
     wordConfidence * 0.2 +
     durationConfidence * 0.15 +
     aiConfidence * 0.25
@@ -91,9 +96,9 @@ export function computeConfidenceScore(input: ConfidenceInput, transcriptLength:
   return {
     score,
     factors: {
-      transcriptConfidence: Math.round(transcriptConfidence * 100) / 100,
-      wordCount,
-      callDurationSeconds,
+      transcriptConfidence: Math.round(safeTranscriptConf * 100) / 100,
+      wordCount: safeWordCount,
+      callDurationSeconds: safeDuration,
       transcriptLength,
       aiAnalysisCompleted: hasAiAnalysis,
       overallScore: Math.round(score * 100) / 100,

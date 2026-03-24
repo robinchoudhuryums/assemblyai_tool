@@ -74,6 +74,9 @@ export function registerCallRoutes(
         });
       } else {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        // Note: offset pagination loads all matching calls into memory for slicing.
+        // For large datasets, clients should use cursor mode (?mode=cursor) which
+        // uses SQL-level pagination via getCallsPaginated().
         const calls = await storage.getCallsWithDetails(filters);
         const total = calls.length;
         const totalPages = Math.ceil(total / limit);
@@ -165,7 +168,7 @@ export function registerCallRoutes(
       const allCalls = await storage.getAllCalls();
       const duplicate = allCalls.find(c =>
         c.contentHash === contentHash &&
-        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis")
+        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis" || c.status === "failed")
       );
       if (duplicate) {
         await cleanupFile(req.file.path);
@@ -268,8 +271,10 @@ export function registerCallRoutes(
 
       if (req.query.download === 'true') {
         const rawName = call.fileName || `call-${req.params.id}${ext}`;
-        const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_");
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        // Sanitize: take basename, strip non-safe chars, remove quotes to prevent header injection
+        const safeName = path.basename(rawName).replace(/[^\w.\-() ]/g, "_").replace(/"/g, "");
+        // Use RFC 6266 format with both filename (ASCII) and filename* (UTF-8) for broad compatibility
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
       }
 
       res.setHeader('Content-Type', contentType);

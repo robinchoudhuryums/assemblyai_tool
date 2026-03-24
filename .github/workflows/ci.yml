@@ -1,0 +1,94 @@
+# CallAnalyzer — Continuous Integration
+# Runs on every push and PR to catch issues before they reach production.
+#
+# Gates:
+#   1. Type checking (tsc)
+#   2. Unit tests (Node.js test runner)
+#   3. Frontend build verification (Vite)
+#   4. Full production build (Vite + esbuild)
+#   5. Dependency audit (npm audit)
+#
+# HIPAA note: This workflow does NOT access any PHI. It only runs
+# type checks, tests, and builds against the source code.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true  # Cancel stale CI runs on the same branch
+
+jobs:
+  ci:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Run unit tests
+        run: npm run test
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NODE_OPTIONS: '--max-old-space-size=1536'
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit for vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true  # Don't block deploys on advisory-only vulns; log for visibility
+
+      - name: Check for critical vulnerabilities
+        run: |
+          # Fail only on critical severity — these must be fixed before merge
+          CRITICAL=$(npm audit --omit=dev --json 2>/dev/null | node -e "
+            const data = require('fs').readFileSync('/dev/stdin', 'utf8');
+            try {
+              const audit = JSON.parse(data);
+              const meta = audit.metadata?.vulnerabilities || {};
+              console.log(meta.critical || 0);
+            } catch { console.log(0); }
+          ")
+          echo "Critical vulnerabilities: $CRITICAL"
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "::error::Found $CRITICAL critical vulnerability(ies). Fix before merging."
+            npm audit --omit=dev 2>/dev/null || true
+            exit 1
+          fi

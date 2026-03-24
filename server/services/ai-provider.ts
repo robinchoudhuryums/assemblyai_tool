@@ -112,14 +112,16 @@ function smartTruncate(text: string, maxChars = 80000): string {
 
   const headSize = Math.floor(maxChars * 0.35);
   const tailSize = Math.floor(maxChars * 0.35);
-  const midSize = maxChars - headSize - tailSize - 200;
-  const midStart = Math.floor((text.length - midSize) / 2);
+  const midBudget = maxChars - headSize - tailSize - 200;
+  // Clamp midSize so midStart never goes negative (when text < headSize + tailSize + midBudget)
+  const midSize = Math.min(midBudget, Math.max(0, text.length - headSize - tailSize));
+  const midStart = midSize > 0 ? Math.floor((text.length - midSize) / 2) : 0;
 
   return [
     text.slice(0, headSize),
     `\n\n[... ${((text.length - maxChars) / 1000).toFixed(0)}K characters omitted from mid-call transitions ...]\n\n`,
-    text.slice(midStart, midStart + midSize),
-    "\n\n[... continued ...]\n\n",
+    midSize > 0 ? text.slice(midStart, midStart + midSize) : "",
+    midSize > 0 ? "\n\n[... continued ...]\n\n" : "",
     text.slice(-tailSize),
   ].join("");
 }
@@ -206,8 +208,8 @@ const FeedbackItemSchema = z.union([
 ]);
 
 const CallAnalysisSchema = z.object({
-  summary: z.string().min(1),
-  topics: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])),
+  summary: z.string().min(1).catch("No summary available"),
+  topics: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])).catch([]),
   sentiment: z.enum(["positive", "neutral", "negative"]).catch("neutral"),
   sentiment_score: z.number().min(0).max(1).catch(0.5),
   performance_score: z.number().min(0).max(10).catch(5.0),

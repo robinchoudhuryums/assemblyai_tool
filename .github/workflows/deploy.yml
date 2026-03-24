@@ -1,5 +1,10 @@
 # CallAnalyzer — Deploy to EC2
-# Triggers on push to main branch. Connects via SSH and runs deploy.sh.
+# Deploys to production ONLY after CI passes. Also supports manual trigger.
+#
+# Flow:
+#   1. On push to main → CI workflow runs (tests, type check, build)
+#   2. After CI passes → this workflow deploys via SSH
+#   3. Manual trigger (workflow_dispatch) skips CI gate (for hotfixes)
 #
 # Required GitHub Secrets:
 #   EC2_SSH_KEY        — Private SSH key (PEM) for the EC2 instance
@@ -14,9 +19,18 @@
 name: Deploy to EC2
 
 on:
-  push:
+  # Deploy after CI workflow completes successfully on main
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-  workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
+  # Allow manual trigger for hotfixes (bypasses CI gate)
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy (default: main)'
+        required: false
+        default: 'main'
 
 concurrency:
   group: deploy
@@ -27,6 +41,10 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only deploy if: CI succeeded (workflow_run) OR manual trigger (workflow_dispatch)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
 
     steps:
       - name: Validate secrets
@@ -38,6 +56,15 @@ jobs:
           if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
             echo "::error::EC2_SSH_KEY secret is not set."
             exit 1
+          fi
+
+      - name: Determine branch
+        id: branch
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.branch }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Deploy via SSH
@@ -53,5 +80,15 @@ jobs:
             cd ${{ secrets.EC2_APP_DIR }}
             echo "=== GitHub Actions Deploy ==="
             echo "Commit: ${{ github.sha }}"
-            echo "Branch: ${{ github.ref_name }}"
-            ./deploy.sh ${{ github.ref_name }}
+            echo "Branch: ${{ steps.branch.outputs.name }}"
+            echo "Trigger: ${{ github.event_name }}"
+            ./deploy.sh ${{ steps.branch.outputs.name }}
+
+      - name: Post deploy summary
+        if: always()
+        run: |
+          echo "### Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ steps.branch.outputs.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

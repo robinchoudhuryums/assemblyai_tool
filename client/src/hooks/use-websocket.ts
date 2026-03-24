@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useTranslation } from "@/lib/i18n";
 import { z } from "zod";
 
 const callUpdateSchema = z.object({
@@ -30,6 +31,7 @@ function backoffWithJitter(attempt: number): number {
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const { toast } = useToast();
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const attemptRef = useRef(0);
@@ -69,16 +71,16 @@ export function useWebSocket() {
 
             if (data.status === "completed") {
               toast({
-                title: "Call Processing Complete",
-                description: data.label || "Your call has been analyzed and is ready to view.",
+                title: t("toast.callComplete"),
+                description: data.label || t("toast.callCompleteDesc"),
               });
               // Refresh calls and dashboard data
               queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
               queryClient.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
             } else if (data.status === "failed") {
               toast({
-                title: "Call Processing Failed",
-                description: data.label || "There was an error processing your call.",
+                title: t("toast.callFailed"),
+                description: data.label || t("toast.callFailedDesc"),
                 variant: "destructive",
               });
               queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
@@ -115,13 +117,14 @@ export function useWebSocket() {
         reconnectTimer.current = setTimeout(connect, delay);
       }
     }
-  }, [toast, queryClient]);
+  }, [toast, t, queryClient]);
 
   useEffect(() => {
     mountedRef.current = true;
     connect();
     return () => {
       mountedRef.current = false;
+      attemptRef.current = 0; // Reset reconnect counter so remount starts fresh
       clearTimeout(reconnectTimer.current);
       if (wsRef.current) {
         wsRef.current.close();

@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
+import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
 
 export function register(router: Router) {
   // ==================== TEAM ANALYTICS ROUTES ====================
@@ -433,6 +434,106 @@ export function register(router: Router) {
     } catch (error) {
       console.error("Clustering error:", (error as Error).message);
       res.status(500).json({ message: "Failed to generate call clusters" });
+    }
+  });
+
+  // ==================== SPEECH ANALYTICS ====================
+
+  // GET /api/analytics/speech/:callId — speech metrics for a single call
+  router.get("/api/analytics/speech/:callId", requireAuth, async (req, res) => {
+    try {
+      const callId = req.params.callId;
+      const transcript = await storage.getTranscript(callId);
+      if (!transcript) return res.status(404).json({ message: "Transcript not found" });
+
+      const words = (transcript.words || []) as TranscriptWord[];
+      if (words.length < 2) {
+        return res.json({ callId, metrics: null, message: "Insufficient word data for speech analysis" });
+      }
+
+      const metrics = computeUtteranceMetrics(words);
+
+      // Compute talk time percentages
+      const totalTalkTime = metrics.speakerATalkTimeMs + metrics.speakerBTalkTimeMs;
+      const speakerAPct = totalTalkTime > 0 ? Math.round((metrics.speakerATalkTimeMs / totalTalkTime) * 100) : 50;
+
+      res.json({
+        callId,
+        metrics: {
+          ...metrics,
+          speakerATalkTimePct: speakerAPct,
+          speakerBTalkTimePct: 100 - speakerAPct,
+          totalTalkTimeMs: totalTalkTime,
+        },
+      });
+    } catch (error) {
+      console.error("Speech analytics error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to compute speech analytics" });
+    }
+  });
+
+  // GET /api/analytics/speech-summary — aggregate speech metrics across employees
+  router.get("/api/analytics/speech-summary", requireAuth, async (req, res) => {
+    try {
+      const days = Math.min(parseInt(req.query.days as string) || 30, 90);
+      const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+      const calls = await storage.getCallsWithDetails({});
+      const recentCalls = calls.filter(c =>
+        c.status === "completed" && c.uploadedAt && c.uploadedAt > cutoff
+      );
+
+      // Extract speech metrics from stored confidenceFactors
+      const agentMetrics = new Map<string, {
+        name: string;
+        interruptions: number;
+        avgLatency: number;
+        monologues: number;
+        questions: number;
+        callCount: number;
+        latencies: number[];
+      }>();
+
+      for (const call of recentCalls) {
+        if (!call.employeeId || !call.employee) continue;
+        const factors = call.analysis?.confidenceFactors as any;
+        const um = factors?.utteranceMetrics;
+        if (!um) continue;
+
+        if (!agentMetrics.has(call.employeeId)) {
+          agentMetrics.set(call.employeeId, {
+            name: call.employee.name,
+            interruptions: 0,
+            avgLatency: 0,
+            monologues: 0,
+            questions: 0,
+            callCount: 0,
+            latencies: [],
+          });
+        }
+        const m = agentMetrics.get(call.employeeId)!;
+        m.interruptions += um.interruptionCount || 0;
+        m.monologues += um.monologueSegments || 0;
+        m.questions += um.questionCount || 0;
+        m.callCount++;
+        if (um.avgResponseLatencyMs) m.latencies.push(um.avgResponseLatencyMs);
+      }
+
+      const summary = Array.from(agentMetrics.entries()).map(([employeeId, m]) => ({
+        employeeId,
+        name: m.name,
+        callCount: m.callCount,
+        avgInterruptionsPerCall: m.callCount > 0 ? Math.round((m.interruptions / m.callCount) * 10) / 10 : 0,
+        avgResponseLatencyMs: m.latencies.length > 0
+          ? Math.round(m.latencies.reduce((a, b) => a + b, 0) / m.latencies.length)
+          : 0,
+        totalMonologues: m.monologues,
+        avgQuestionsPerCall: m.callCount > 0 ? Math.round((m.questions / m.callCount) * 10) / 10 : 0,
+      }));
+
+      res.json({ summary, days, totalCalls: recentCalls.length });
+    } catch (error) {
+      console.error("Speech summary error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to compute speech summary" });
     }
   });
 }

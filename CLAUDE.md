@@ -57,6 +57,11 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/validation.test.ts` — Input validation and sanitization
   - `tests/utils.test.ts` — Shared utility functions
   - `tests/waf.test.ts` — WAF middleware (SQL injection, XSS, path traversal detection)
+  - `tests/sigv4.test.ts` — AWS Signature V4 signing (SHA-256, HMAC, key derivation, canonical requests, presigned URLs)
+  - `tests/totp.test.ts` — TOTP/MFA (base32 encoding, RFC 6238 code generation, verification window, OTPAuth URI)
+  - `tests/gamification.test.ts` — Gamification logic (points computation, streak detection, badge eligibility)
+  - `tests/assemblyai-metrics.test.ts` — AssemblyAI utilities (utterance metrics, speaker-labeled transcripts, interruption/monologue detection)
+  - `tests/webhooks.test.ts` — Webhook service (HMAC signatures, config CRUD, event filtering, S3 client fallback)
 
 ## Architecture
 
@@ -65,7 +70,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, gamification, AWS credentials
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
 server/middleware/       # Per-user rate limiting, application-level WAF
@@ -194,6 +199,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/coaching/employee/:id` | authenticated | Coaching for employee |
 | POST | `/api/coaching` | manager+ | Create coaching session |
 | PATCH | `/api/coaching/:id` | manager+ | Update coaching session |
+| PATCH | `/api/coaching/:id/action-item/:index` | authenticated | Toggle action item (agents can toggle their own) |
 | GET | `/api/prompt-templates` | admin | List prompt templates |
 | POST | `/api/prompt-templates` | admin | Create prompt template |
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
@@ -225,6 +231,9 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/admin/incidents/:id/action-items` | admin | Add action item to incident |
 | PATCH | `/api/admin/incidents/:incidentId/action-items/:itemId` | admin | Update action item status |
 | GET | `/api/admin/incident-response-plan` | admin | Get escalation contacts and response procedures |
+| GET | `/api/admin/calibration` | admin | Latest score calibration snapshot |
+| POST | `/api/admin/calibration/analyze` | admin | Trigger manual calibration analysis (query: `days`) |
+| GET | `/api/admin/telephony/status` | admin | 8x8 telephony integration status |
 
 ### User Management (admin only)
 | Method | Path | Role | Description |
@@ -243,6 +252,8 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
 | GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
 | GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
+| GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
+| GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
@@ -369,6 +380,17 @@ ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook
 RAG_SERVICE_URL                 # URL of the knowledge reference API
 RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
 
+# Auto-Calibration
+CALIBRATION_INTERVAL_HOURS      # How often to run score distribution analysis (default: 24)
+CALIBRATION_WINDOW_DAYS         # Days of call data to analyze for calibration (default: 30)
+
+# 8x8 Telephony Integration
+TELEPHONY_8X8_ENABLED           # Set to "true" to enable auto-ingestion from 8x8 (default: disabled)
+TELEPHONY_8X8_API_KEY           # 8x8 Work API key
+TELEPHONY_8X8_SUBACCOUNT_ID     # 8x8 subaccount ID
+TELEPHONY_8X8_POLL_MINUTES      # How often to poll for new recordings (default: 15)
+TELEPHONY_8X8_BASE_URL          # 8x8 API base URL (override for testing)
+
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
@@ -392,8 +414,12 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
 | **Data retention** | `server/index.ts` | Auto-purges calls older than `RETENTION_DAYS` (default 90) |
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
-| **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); enforced via `REQUIRE_MFA=true` |
-| **Password complexity** | `server/auth.ts` | Warns on weak passwords (12+ chars, uppercase, lowercase, digit, special char) |
+| **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); timing-safe code verification via `timingSafeEqual`; enforced via `REQUIRE_MFA=true` |
+| **Password complexity** | `server/auth.ts` | Rejects weak passwords (12+ chars, uppercase, lowercase, digit, special char) — enforcement on AUTH_USERS, DB user creation, and password reset |
+| **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language + IP hash; set on first authenticated request; destroys session on mismatch |
+| **CSRF protection** | `server/index.ts` | JSON requests require `Content-Type: application/json`; file uploads require `X-Requested-With` header; both prevent cross-origin form submissions |
+| **Admin action audit** | `server/routes/admin-*.ts` | WAF IP block/unblock and dead-job retry actions logged to HIPAA audit trail |
+| **Error sanitization** | `server/services/bedrock.ts` | Bedrock API errors logged server-side with details; client receives sanitized category only (no AWS account IDs, ARNs, or model details) |
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
@@ -465,13 +491,26 @@ pm2 logs --lines 20         # Verify startup — look for:
 S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
 
 ### GitHub Actions CI/CD
-Pushes to `main` automatically trigger the Deploy workflow (`.github/workflows/deploy.yml`), which SSHs into EC2 and runs `deploy.sh`. Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`. Can also be triggered manually via `workflow_dispatch`.
+
+**CI Pipeline** (`.github/workflows/ci.yml`):
+Runs on every push to `main` and every PR. Two parallel jobs:
+1. **Test & Build** — type check (`tsc`), unit tests (`npm test`), production build
+2. **Dependency Audit** — `npm audit` for vulnerabilities; blocks on critical severity
+
+**Deploy Pipeline** (`.github/workflows/deploy.yml`):
+Triggers automatically **after CI passes** on `main` (via `workflow_run`). SSHs into EC2 and runs `deploy.sh`. Manual `workflow_dispatch` is available for hotfixes (bypasses CI gate). Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
+
+**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 restart). On any failure, `deploy.sh` auto-rolls back to the previous commit.
 
 Additional workflows:
-- `.github/workflows/error-monitor.yml` — Error monitoring
-- `.github/workflows/view-logs.yml` — Log viewing
+- `.github/workflows/error-monitor.yml` — Checks pm2 status, HTTP health, error logs, disk/memory usage every 4 hours. Creates GitHub Issues on failure with deduplication (adds comments to existing open alerts within 24 hours instead of creating duplicates).
+- `.github/workflows/view-logs.yml` — Manual trigger to view pm2 logs without SSH
 
-A `deploy-rollback.sh` script is available for reverting to a previous build.
+**Rollback**:
+- `deploy-rollback.sh` reverts to the pre-deploy commit (auto-saved by `deploy.sh`)
+- Also accepts an explicit commit SHA: `./deploy-rollback.sh <commit-sha>`
+- Preserves `.env` across checkout to avoid losing credentials
+- Deploy history logged to `.deploy-last.log`
 
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):

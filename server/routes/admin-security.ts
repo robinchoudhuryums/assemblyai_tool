@@ -7,6 +7,7 @@ import {
   declareIncident, advanceIncidentPhase, addIncidentTimelineEntry, addActionItem, updateActionItem,
   updateIncidentDetails, getAllIncidents, getIncident, getEscalationContacts, getResponseProcedures,
 } from "../services/incident-response";
+import { logPhiAccess } from "../services/audit-log";
 
 export function registerSecurityRoutes(router: Router) {
 
@@ -86,6 +87,14 @@ export function registerSecurityRoutes(router: Router) {
     } else {
       blockIP(ip, `Manual block by ${req.user!.username}: ${reason}`);
     }
+    // HIPAA: Audit admin WAF IP block actions
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "admin_waf_block_ip",
+      username: req.user!.username,
+      resourceType: "admin",
+      detail: `Blocked IP ${ip}: ${reason}${durationMs ? ` (${Math.round(durationMs / 1000)}s)` : " (permanent)"}`,
+    });
     res.json({ message: `IP ${ip} blocked`, duration: durationMs ? `${Math.round(durationMs / 1000)}s` : "permanent" });
   });
 
@@ -94,6 +103,14 @@ export function registerSecurityRoutes(router: Router) {
     if (!ip) return res.status(400).json({ message: "IP address is required" });
     const removed = unblockIP(ip);
     if (!removed) return res.status(404).json({ message: "IP not found in blocklist" });
+    // HIPAA: Audit admin WAF IP unblock actions
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "admin_waf_unblock_ip",
+      username: req.user?.username || "unknown",
+      resourceType: "admin",
+      detail: `Unblocked IP ${ip}`,
+    });
     res.json({ message: `IP ${ip} unblocked` });
   });
 
