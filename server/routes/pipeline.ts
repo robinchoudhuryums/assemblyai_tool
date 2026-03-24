@@ -507,7 +507,9 @@ export async function processAudioFile(
         try {
           const emp = await storage.getEmployee(employeeId);
           employeeName = emp?.name;
-        } catch {}
+        } catch (empErr) {
+          console.warn(`[${callId}] Failed to look up employee name for webhook:`, (empErr as Error).message);
+        }
       }
 
       // call.completed
@@ -518,7 +520,7 @@ export async function processAudioFile(
         duration: callDurationSeconds,
         employee: employeeName || undefined,
         fileName: originalName,
-      }).catch(() => {});
+      }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
 
       // score.low (score <= 4)
       if (performanceScoreNum > 0 && performanceScoreNum <= 4) {
@@ -527,7 +529,7 @@ export async function processAudioFile(
           score: performanceScoreNum,
           employee: employeeName || undefined,
           fileName: originalName,
-        }).catch(() => {});
+        }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
       }
 
       // score.exceptional (score >= 9)
@@ -537,7 +539,7 @@ export async function processAudioFile(
           score: performanceScoreNum,
           employee: employeeName || undefined,
           fileName: originalName,
-        }).catch(() => {});
+        }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
       }
     } catch (webhookErr) {
       console.warn(`[${callId}] Webhook trigger failed (non-blocking):`, (webhookErr as Error).message);
@@ -574,14 +576,19 @@ export async function processAudioFile(
       console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
     }
 
-    await cleanupFile(filePath);
     broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
     console.log(`[${callId}] Processing finished successfully.`);
 
   } catch (error) {
     console.error(`[${callId}] A critical error occurred during audio processing:`, (error as Error).message);
     captureException(error instanceof Error ? error : new Error(String(error)), { callId, step: "processAudioFile" });
-    await storage.updateCall(callId, { status: "failed" });
+
+    try {
+      await storage.updateCall(callId, { status: "failed" });
+    } catch (updateErr) {
+      console.error(`[${callId}] Failed to update call status to failed:`, (updateErr as Error).message);
+    }
+
     broadcastCallUpdate(callId, "failed", { label: "Processing failed" });
 
     // Trigger call.failed webhook (non-blocking)
@@ -589,8 +596,9 @@ export async function processAudioFile(
       callId,
       error: (error as Error).message,
       fileName: originalName,
-    }).catch(() => {});
-
+    }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
+  } finally {
+    // Always attempt file cleanup, even if error handling itself fails
     await cleanupFile(filePath);
   }
 }
