@@ -992,7 +992,7 @@ export class PostgresStorage implements IStorage {
   // --- Gamification ---
   async createBadge(badge: InsertBadge): Promise<Badge> {
     const id = randomUUID();
-    const { rows } = await this.pool.query(
+    const { rows } = await this.db.query(
       `INSERT INTO badges (id, employee_id, badge_type, call_id, earned_at, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT DO NOTHING
@@ -1001,7 +1001,7 @@ export class PostgresStorage implements IStorage {
     );
     if (rows.length === 0) {
       // Badge already exists (unique constraint), return existing
-      const existing = await this.pool.query(
+      const existing = await this.db.query(
         `SELECT * FROM badges WHERE employee_id = $1 AND badge_type = $2 LIMIT 1`,
         [badge.employeeId, badge.badgeType]
       );
@@ -1012,15 +1012,15 @@ export class PostgresStorage implements IStorage {
   }
 
   async getBadgesByEmployee(employeeId: string): Promise<Badge[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.db.query(
       `SELECT * FROM badges WHERE employee_id = $1 ORDER BY earned_at DESC`,
       [employeeId]
     );
-    return rows.map(r => this.mapBadge(r));
+    return rows.map((r: any) => this.mapBadge(r));
   }
 
   async hasBadge(employeeId: string, badgeType: string): Promise<boolean> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.db.query(
       `SELECT 1 FROM badges WHERE employee_id = $1 AND badge_type = $2 LIMIT 1`,
       [employeeId, badgeType]
     );
@@ -1028,8 +1028,8 @@ export class PostgresStorage implements IStorage {
   }
 
   async getAllBadges(): Promise<Badge[]> {
-    const { rows } = await this.pool.query(`SELECT * FROM badges ORDER BY earned_at DESC`);
-    return rows.map(r => this.mapBadge(r));
+    const { rows } = await this.db.query(`SELECT * FROM badges ORDER BY earned_at DESC`);
+    return rows.map((r: any) => this.mapBadge(r));
   }
 
   private mapBadge(row: any): Badge {
