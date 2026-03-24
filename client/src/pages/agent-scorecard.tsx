@@ -1,10 +1,11 @@
 import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, Link } from "wouter";
-import { ArrowLeft, ChatCircle, CheckCircle, Printer, Star, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, ChatCircle, CheckCircle, Crown, Fire, Heart, Lightning, Printer, Rocket, Shield, Star, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoadingIndicator } from "@/components/ui/loading";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Employee } from "@shared/schema";
 
 interface AgentProfileData {
@@ -65,6 +66,23 @@ export default function AgentScorecard() {
     );
   }
 
+  const BADGE_ICONS: Record<string, typeof Star> = {
+    star: Star, fire: Fire, lightning: Lightning, rocket: Rocket, trophy: Trophy, crown: Crown, "trend-up": TrendUp, shield: Shield, heart: Heart, "check-circle": CheckCircle,
+  };
+
+  const { data: gamStats } = useQuery<{
+    totalPoints: number; currentStreak: number;
+    badges: Array<{ id: string; badgeType: string; label: string; description: string; icon: string; earnedAt: string }>;
+  }>({
+    queryKey: [`/api/gamification/stats/${employeeId}`],
+    enabled: !!employeeId,
+    queryFn: async () => {
+      const res = await fetch(`/api/gamification/stats/${employeeId}`, { credentials: "include" });
+      if (!res.ok) return { totalPoints: 0, currentStreak: 0, badges: [] };
+      return res.json();
+    },
+  });
+
   const { employee, totalCalls, avgPerformanceScore, highScore, lowScore, sentimentBreakdown, topStrengths, topSuggestions, commonTopics, scoreTrend, flaggedCalls } = profile;
   const totalSentiment = sentimentBreakdown.positive + sentimentBreakdown.neutral + sentimentBreakdown.negative;
   const pct = (v: number) => totalSentiment > 0 ? Math.round((v / totalSentiment) * 100) : 0;
@@ -122,6 +140,54 @@ export default function AgentScorecard() {
             </div>
           </div>
         </div>
+
+        {/* Gamification Stats */}
+        {gamStats && (gamStats.badges.length > 0 || gamStats.totalPoints > 0) && (
+          <div className="bg-card rounded-lg border border-border p-4 mb-6 print:mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-4">
+                <div className="text-center">
+                  <p className="text-xl font-bold">{gamStats.totalPoints.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">Points</p>
+                </div>
+                {gamStats.currentStreak > 0 && (
+                  <div className="text-center flex items-center gap-1">
+                    <Fire className="w-5 h-5 text-orange-500" weight="fill" />
+                    <span className="text-xl font-bold text-orange-600 dark:text-orange-400">{gamStats.currentStreak}</span>
+                    <span className="text-xs text-muted-foreground">streak</span>
+                  </div>
+                )}
+              </div>
+              <Link href="/leaderboard">
+                <Button variant="ghost" size="sm"><Trophy className="w-4 h-4 mr-1" /> Leaderboard</Button>
+              </Link>
+            </div>
+            {gamStats.badges.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {gamStats.badges.map((b) => {
+                  const Icon = BADGE_ICONS[b.icon] || Star;
+                  return (
+                    <Tooltip key={b.id}>
+                      <TooltipTrigger>
+                        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-primary/10 border border-primary/20">
+                          <Icon className="w-4 h-4 text-primary" weight="fill" />
+                          <span className="text-xs font-medium">{b.label}</span>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="font-semibold">{b.label}</p>
+                        <p className="text-xs">{b.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Earned {new Date(b.earnedAt).toLocaleDateString()}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Key Metrics */}
         <div className="grid grid-cols-4 gap-4 mb-6 print:mb-4 print:gap-2">

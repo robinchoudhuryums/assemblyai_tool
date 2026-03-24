@@ -183,7 +183,7 @@ export default function Dashboard() {
             {badCalls.length > 0 && (
               <div className="bg-gradient-to-r from-red-50 to-white/90 dark:from-red-950/50 dark:to-slate-900/90 rounded-xl border border-red-200 dark:border-red-900/60 p-5 backdrop-blur-sm">
                 <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/50 dark:to-red-800/30 ring-1 ring-inset ring-red-300/50 dark:ring-red-700/30 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(239,68,68,0.25)]">
+                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/50 dark:to-red-800/30 ring-1 ring-inset ring-red-300/50 dark:ring-red-700/30 flex items-center justify-center shrink-0 shadow-[0_0_8px_rgba(239,68,68,0.18)]">
                     <Warning className="w-5 h-5 text-red-500" weight="fill" />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -214,7 +214,7 @@ export default function Dashboard() {
             {goodCalls.length > 0 && (
               <div className="bg-gradient-to-r from-emerald-50 to-white/90 dark:from-emerald-950/50 dark:to-slate-900/90 rounded-xl border border-emerald-200 dark:border-emerald-900/60 p-5 backdrop-blur-sm">
                 <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-200 dark:from-emerald-900/50 dark:to-emerald-800/30 ring-1 ring-inset ring-emerald-300/50 dark:ring-emerald-700/30 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(16,185,129,0.25)]">
+                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-200 dark:from-emerald-900/50 dark:to-emerald-800/30 ring-1 ring-inset ring-emerald-300/50 dark:ring-emerald-700/30 flex items-center justify-center shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.18)]">
                     <Trophy className="w-5 h-5 text-emerald-500" weight="fill" />
                   </div>
                   <div className="flex-1 min-w-0">

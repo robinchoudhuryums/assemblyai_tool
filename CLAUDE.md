@@ -6,7 +6,8 @@ HIPAA-compliant call analysis tool for a medical supply company (UMS). Agents up
 ## Tech Stack
 - **Frontend**: React 18 + TypeScript, Vite, TailwindCSS, shadcn/ui, Recharts, Wouter (routing), TanStack Query
 - **Backend**: Express.js + TypeScript (ESM), runs on Node
-- **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription
+- **AI**: AWS Bedrock (Claude Sonnet) for call analysis, AssemblyAI for transcription (with webhook support)
+- **Error Tracking**: Sentry (server + client, PHI-safe with scrubbing)
 - **Database**: AWS RDS PostgreSQL — metadata, sessions, job queue, HIPAA audit log (optional; falls back to S3-only or in-memory)
 - **Storage**: AWS S3 (`ums-call-archive` bucket) — audio blobs (when PostgreSQL is configured, metadata lives in RDS)
 - **Auth**: Session-based with bcrypt, role-based (viewer/manager/admin), PostgreSQL session store (falls back to memorystore)
@@ -50,6 +51,12 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/storage.test.ts` — Storage abstraction CRUD operations (all backends)
   - `tests/postgres-storage.test.ts` — PostgresStorage integration tests (requires `DATABASE_URL`)
   - `tests/job-queue.test.ts` — Job queue integration tests (requires `DATABASE_URL`)
+  - `tests/pipeline.test.ts` — Audio processing pipeline (transcription, analysis, storage)
+  - `tests/confidence-score.test.ts` — Confidence score computation
+  - `tests/scoring-calibration.test.ts` — Score calibration and normalization
+  - `tests/validation.test.ts` — Input validation and sanitization
+  - `tests/utils.test.ts` — Shared utility functions
+  - `tests/waf.test.ts` — WAF middleware (SQL injection, XSS, path traversal detection)
 
 ## Architecture
 
@@ -58,8 +65,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, AWS credentials
-server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, gamification, AWS credentials
+server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
 server/middleware/       # Per-user rate limiting, application-level WAF
 client/src/lib/i18n.ts   # i18n system (English + Spanish)
@@ -73,7 +80,8 @@ tests/                   # Unit tests (Node test runner)
 ### Audio Processing Pipeline (server/routes.ts → processAudioFile)
 1. Archive audio to S3 immediately on upload (before queuing)
 2. Enqueue job in PostgreSQL job queue (falls back to in-memory TaskQueue if no DB)
-3. Job worker reads audio from S3 and sends to AssemblyAI for transcription
+3. Job worker reads audio from S3 and sends to AssemblyAI for transcription (webhook mode if `APP_BASE_URL` set, polling fallback otherwise)
+3b. **Empty transcript guard**: if transcript has <10 meaningful characters, skip AI analysis (prevents wasted Bedrock spend)
 4. Load custom prompt template by call category (falls back to default if template fails)
 5. Send transcript to Bedrock for AI analysis (falls back to transcript-based defaults if Bedrock fails)
 6. Process results: normalize data, compute confidence scores, detect agent name, set flags
@@ -154,6 +162,9 @@ tests/                   # Unit tests (Node test runner)
 | DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
 | GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
 | GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
+| GET | `/api/calls/:id/annotations` | authenticated | Get annotations for a call |
+| POST | `/api/calls/:id/annotations` | authenticated | Add annotation to a call |
+| DELETE | `/api/calls/:id/annotations/:annotationId` | authenticated | Remove an annotation |
 
 ### Employees
 | Method | Path | Role | Description |
@@ -281,6 +292,23 @@ Test calls are stored separately from production data (`ab-tests/{id}.json`), ne
 
 Usage records are automatically created after each call analysis and A/B test. Estimated costs are calculated from audio duration (AssemblyAI) and token counts (Bedrock). Stored under `usage/` S3 prefix. The admin Spend Tracking page shows current month, last month, YTD, and all-time views with charts.
 
+### Gamification (authenticated)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/gamification/leaderboard` | authenticated | Agent leaderboard (query: `period=week\|month\|all`) |
+| GET | `/api/gamification/badges/:employeeId` | authenticated | Badges earned by an employee |
+| GET | `/api/gamification/badge-types` | authenticated | All possible badge definitions |
+| GET | `/api/gamification/stats/:employeeId` | authenticated | Points, streak, and badges for one agent |
+
+**Gamification System** (`server/services/gamification.ts`):
+- **Badges**: 12 types — milestone (first call, 25/50/100 calls), score (perfect 10), streak (3/5/10 consecutive 8+), sub-score (compliance star, empathy champion, resolution ace), improvement (most improved over 30 days)
+- **Points**: Base 10 per call + score bonus (score × 10) + streak multiplier (1.5× if streak ≥ 3) + badge bonus (50 per new badge earned on that call)
+- **Streaks**: Consecutive calls scoring ≥ 8.0 (resets on any call < 8.0)
+- **Leaderboard**: Period-filtered rankings (week/month/all time) with points, avg score, call count, streak, badges
+- **Pipeline integration**: `evaluateBadges()` runs non-blocking at the end of `processAudioFile()` after coaching alerts
+- **Storage**: PostgreSQL `badges` table with unique constraint on milestone badge types per employee; S3/memory fallback supported
+- **Minimal overhead**: Badge evaluation queries only the employee's recent calls — no global scans
+
 ## Role-Based Access Control
 
 Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireRole()` middleware in `server/auth.ts`.
@@ -328,6 +356,18 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h form
 
 # MFA (Two-Factor Authentication)
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
+
+# Sentry (Error Tracking)
+SENTRY_DSN                      # Sentry DSN for server-side error tracking (optional)
+VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (optional, set at build time)
+
+# AssemblyAI Webhooks (faster than polling)
+APP_BASE_URL                    # Public URL of the app (e.g. https://umscallanalyzer.com) — enables webhook mode for AssemblyAI
+ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (optional but recommended)
+
+# RAG Knowledge Base (planned — ums-knowledge-reference integration)
+RAG_SERVICE_URL                 # URL of the knowledge reference API
+RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
 
 # Optional
 PORT                            # Default: 5000
@@ -452,6 +492,27 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - **Dependencies** are significantly added/removed → update Tech Stack
 - **Auth/RBAC** rules change → update Role-Based Access Control
 - **AI model** defaults change → update Environment Variables and Common Gotchas
+
+## Planned Integration: RAG Knowledge Base (ums-knowledge-reference)
+
+CallAnalyzer will integrate with the **ums-knowledge-reference** repository to ground AI analysis in company-specific documentation. This RAG (Retrieval-Augmented Generation) system will:
+
+1. **Ingest reference documents** (SOPs, compliance guides, product catalogs, scripts) from the UMS knowledge base
+2. **Retrieve relevant context** at analysis time — when Bedrock analyzes a call transcript, the system will query the knowledge base for relevant company policies, required phrases, and procedures
+3. **Improve scoring accuracy** by evaluating agents against actual company standards rather than generic best practices
+4. **Enhance coaching recommendations** with specific references to company training materials
+
+### Integration Architecture
+- The `ums-knowledge-reference` repo provides a standalone RAG service (document ingestion, chunking, embedding, vector search)
+- CallAnalyzer will call the RAG service during the AI analysis step (Step 4 of the pipeline) to fetch relevant context
+- Retrieved context will be injected into the Bedrock analysis prompt alongside the transcript
+- Environment variables: `RAG_SERVICE_URL` (URL of the knowledge reference API), `RAG_ENABLED` (toggle, default false)
+- Graceful fallback: if RAG service is unavailable, analysis proceeds without additional context (current behavior)
+
+### Integration Points in CallAnalyzer
+- `server/routes/pipeline.ts:processAudioFile()` — fetch RAG context before AI analysis
+- `server/services/ai-provider.ts:buildAnalysisPrompt()` — accept and inject RAG context into prompt
+- `server/services/coaching-alerts.ts` — reference knowledge base materials in coaching plans
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data

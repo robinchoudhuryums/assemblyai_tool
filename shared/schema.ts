@@ -515,6 +515,53 @@ export type PaginatedCalls = {
   hasMore?: boolean;
 };
 
+// --- GAMIFICATION SCHEMAS ---
+
+/** Badge types available in the system */
+export const BADGE_TYPES = [
+  { value: "perfect_10", label: "Perfect 10", description: "Scored a perfect 10/10 on a call", icon: "star" },
+  { value: "streak_3", label: "Hat Trick", description: "3 consecutive calls scored 8+", icon: "fire" },
+  { value: "streak_5", label: "On Fire", description: "5 consecutive calls scored 8+", icon: "fire" },
+  { value: "streak_10", label: "Unstoppable", description: "10 consecutive calls scored 8+", icon: "lightning" },
+  { value: "first_call", label: "First Call", description: "Completed first analyzed call", icon: "rocket" },
+  { value: "calls_25", label: "Quarter Century", description: "25 calls analyzed", icon: "trophy" },
+  { value: "calls_50", label: "Half Century", description: "50 calls analyzed", icon: "trophy" },
+  { value: "calls_100", label: "Century Club", description: "100 calls analyzed", icon: "crown" },
+  { value: "most_improved", label: "Most Improved", description: "Biggest score improvement over 30 days", icon: "trend-up" },
+  { value: "compliance_star", label: "Compliance Star", description: "Compliance sub-score 9+ on 5 consecutive calls", icon: "shield" },
+  { value: "empathy_champion", label: "Empathy Champion", description: "Customer Experience sub-score 9+ on 5 consecutive calls", icon: "heart" },
+  { value: "resolution_ace", label: "Resolution Ace", description: "Resolution sub-score 9+ on 5 consecutive calls", icon: "check-circle" },
+] as const;
+
+export type BadgeType = typeof BADGE_TYPES[number]["value"];
+
+export const badgeSchema = z.object({
+  id: z.string(),
+  employeeId: z.string(),
+  badgeType: z.string(),
+  callId: z.string().optional(),
+  earnedAt: z.string(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export type Badge = z.infer<typeof badgeSchema>;
+
+export const insertBadgeSchema = badgeSchema.omit({ id: true });
+export type InsertBadge = z.infer<typeof insertBadgeSchema>;
+
+/** Leaderboard entry (computed, not stored) */
+export type LeaderboardEntry = {
+  employeeId: string;
+  employeeName: string;
+  subTeam?: string;
+  totalCalls: number;
+  avgScore: number;
+  totalPoints: number;
+  currentStreak: number;
+  badges: Badge[];
+  rank: number;
+};
+
 export type DashboardMetrics = {
   totalCalls: number;
   avgSentiment: number;

@@ -9,8 +9,12 @@ import { getPool, initializeDatabase } from "./db/pool";
 import { userRateLimit } from "./middleware/rate-limit";
 import { wafMiddleware } from "./middleware/waf";
 import { startScheduledScans } from "./services/vulnerability-scanner";
+import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
+
+// Initialize Sentry early (before Express setup) so it catches startup errors
+initSentry();
 
 const app = express();
 
@@ -287,6 +291,11 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     if (status >= 500) {
       logger.error("unhandled_error", { status, message });
       metrics.increment("http_errors_total", 1, { status: String(status) });
+      sentryCaptureException(err instanceof Error ? err : new Error(message), {
+        status,
+        path: _req.path,
+        method: _req.method,
+      });
     }
   });
 

@@ -137,6 +137,18 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates (call_category) WHERE is_active = TRUE",
     "CREATE INDEX IF NOT EXISTS idx_usage_call_id ON usage_records (call_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log (user_id)",
+    // Gamification badges table
+    `CREATE TABLE IF NOT EXISTS badges (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      badge_type VARCHAR(100) NOT NULL,
+      call_id UUID REFERENCES calls(id) ON DELETE SET NULL,
+      earned_at TIMESTAMPTZ DEFAULT NOW(),
+      metadata JSONB DEFAULT '{}'
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_badges_employee_id ON badges (employee_id)",
+    "CREATE INDEX IF NOT EXISTS idx_badges_badge_type ON badges (badge_type)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_badges_unique_milestone ON badges (employee_id, badge_type) WHERE badge_type IN ('first_call', 'calls_25', 'calls_50', 'calls_100')",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

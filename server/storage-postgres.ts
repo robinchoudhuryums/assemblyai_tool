@@ -16,6 +16,7 @@ import type {
   PromptTemplate, InsertPromptTemplate,
   CoachingSession, InsertCoachingSession,
   PerformerSummary, ABTest, InsertABTest, UsageRecord,
+  Badge, InsertBadge,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient } from "./storage";
 
@@ -986,6 +987,60 @@ export class PostgresStorage implements IStorage {
     }
 
     return rowCount ?? 0;
+  }
+
+  // --- Gamification ---
+  async createBadge(badge: InsertBadge): Promise<Badge> {
+    const id = randomUUID();
+    const { rows } = await this.pool.query(
+      `INSERT INTO badges (id, employee_id, badge_type, call_id, earned_at, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT DO NOTHING
+       RETURNING *`,
+      [id, badge.employeeId, badge.badgeType, badge.callId || null, badge.earnedAt, JSON.stringify(badge.metadata || {})]
+    );
+    if (rows.length === 0) {
+      // Badge already exists (unique constraint), return existing
+      const existing = await this.pool.query(
+        `SELECT * FROM badges WHERE employee_id = $1 AND badge_type = $2 LIMIT 1`,
+        [badge.employeeId, badge.badgeType]
+      );
+      if (existing.rows.length > 0) return this.mapBadge(existing.rows[0]);
+      return { id, ...badge };
+    }
+    return this.mapBadge(rows[0]);
+  }
+
+  async getBadgesByEmployee(employeeId: string): Promise<Badge[]> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM badges WHERE employee_id = $1 ORDER BY earned_at DESC`,
+      [employeeId]
+    );
+    return rows.map(r => this.mapBadge(r));
+  }
+
+  async hasBadge(employeeId: string, badgeType: string): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM badges WHERE employee_id = $1 AND badge_type = $2 LIMIT 1`,
+      [employeeId, badgeType]
+    );
+    return rows.length > 0;
+  }
+
+  async getAllBadges(): Promise<Badge[]> {
+    const { rows } = await this.pool.query(`SELECT * FROM badges ORDER BY earned_at DESC`);
+    return rows.map(r => this.mapBadge(r));
+  }
+
+  private mapBadge(row: any): Badge {
+    return {
+      id: row.id,
+      employeeId: row.employee_id,
+      badgeType: row.badge_type,
+      callId: row.call_id,
+      earnedAt: row.earned_at?.toISOString?.() ?? row.earned_at,
+      metadata: row.metadata,
+    };
   }
 
   getObjectStorageClient(): ObjectStorageClient | undefined {

@@ -50,6 +50,44 @@ export interface LeMURResponse {
   };
 }
 
+/**
+ * Pending webhook transcripts — when webhook mode is active, transcription results
+ * are delivered via POST callback instead of polling. This map holds Promise resolvers
+ * keyed by transcript ID.
+ */
+const pendingWebhookTranscripts = new Map<string, {
+  resolve: (response: AssemblyAIResponse) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
+
+/** Whether webhook mode is available (APP_BASE_URL is set) */
+export function isWebhookModeEnabled(): boolean {
+  return !!(process.env.APP_BASE_URL && process.env.ASSEMBLYAI_API_KEY);
+}
+
+/**
+ * Handle an incoming AssemblyAI webhook callback.
+ * Called from the webhook route handler.
+ */
+export function handleAssemblyAIWebhook(transcriptId: string, response: AssemblyAIResponse): boolean {
+  const pending = pendingWebhookTranscripts.get(transcriptId);
+  if (!pending) {
+    console.warn(`[WEBHOOK] Received callback for unknown transcript ${transcriptId}`);
+    return false;
+  }
+
+  clearTimeout(pending.timeout);
+  pendingWebhookTranscripts.delete(transcriptId);
+
+  if (response.status === "error") {
+    pending.reject(new Error(`Transcription failed: ${response.error || "Unknown error"}`));
+  } else {
+    pending.resolve(response);
+  }
+  return true;
+}
+
 export class AssemblyAIService {
   private config: AssemblyAIConfig;
 
@@ -99,6 +137,18 @@ export class AssemblyAIService {
       body.boost_param = "high"; // "low", "default", or "high"
     }
 
+    // Webhook mode: if APP_BASE_URL is set, tell AssemblyAI to POST results back to us
+    const appBaseUrl = process.env.APP_BASE_URL;
+    if (appBaseUrl) {
+      const webhookUrl = `${appBaseUrl.replace(/\/$/, "")}/api/webhooks/assemblyai`;
+      body.webhook_url = webhookUrl;
+      // Include auth token in webhook URL for verification
+      if (process.env.ASSEMBLYAI_WEBHOOK_SECRET) {
+        body.webhook_auth_header_name = "X-Webhook-Secret";
+        body.webhook_auth_header_value = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
+      }
+    }
+
     const response = await fetch(`${this.config.baseUrl}/transcript`, {
       method: 'POST',
       headers: { 'Authorization': this.config.apiKey, 'Content-Type': 'application/json' },
@@ -114,6 +164,33 @@ export class AssemblyAIService {
     });
     if (!response.ok) throw new Error(`Failed to get transcript: ${await response.text()}`);
     return await response.json();
+  }
+
+  /**
+   * Wait for transcript completion — uses webhook if APP_BASE_URL is set, falls back to polling.
+   * Webhook mode is faster (no polling delay) and uses fewer API calls.
+   */
+  async waitForTranscript(transcriptId: string): Promise<AssemblyAIResponse> {
+    if (isWebhookModeEnabled()) {
+      console.log(`[${transcriptId}] Waiting for webhook callback (timeout: 10 min)...`);
+      try {
+        const result = await new Promise<AssemblyAIResponse>((resolve, reject) => {
+          const WEBHOOK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+          const timeout = setTimeout(() => {
+            pendingWebhookTranscripts.delete(transcriptId);
+            reject(new Error("Webhook timeout — falling back to polling"));
+          }, WEBHOOK_TIMEOUT_MS);
+
+          pendingWebhookTranscripts.set(transcriptId, { resolve, reject, timeout });
+        });
+        console.log(`[${transcriptId}] Webhook callback received. Status: ${result.status}`);
+        return result;
+      } catch (webhookErr) {
+        console.warn(`[${transcriptId}] Webhook failed: ${(webhookErr as Error).message}. Falling back to polling.`);
+        // Fall through to polling
+      }
+    }
+    return this.pollTranscript(transcriptId);
   }
 
   async pollTranscript(transcriptId: string, maxAttempts = 60): Promise<AssemblyAIResponse> {

@@ -25,6 +25,8 @@ import {
   type ABTest,
   type InsertABTest,
   type UsageRecord,
+  type Badge,
+  type InsertBadge,
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
 import { getPool } from "./db/pool";
@@ -151,6 +153,12 @@ export interface IStorage {
 
   // Data retention
   purgeExpiredCalls(retentionDays: number): Promise<number>;
+
+  // Gamification
+  createBadge(badge: InsertBadge): Promise<Badge>;
+  getBadgesByEmployee(employeeId: string): Promise<Badge[]>;
+  hasBadge(employeeId: string, badgeType: string): Promise<boolean>;
+  getAllBadges(): Promise<Badge[]>;
 
   // Object storage access (for batch inference, webhooks, admin operations)
   // Returns the underlying S3 client, or undefined if not configured.
@@ -546,6 +554,25 @@ export class MemStorage implements IStorage {
       }
     }
     return purged;
+  }
+
+  // Gamification
+  private badges = new Map<string, Badge>();
+
+  async createBadge(badge: InsertBadge): Promise<Badge> {
+    const id = randomUUID();
+    const newBadge: Badge = { id, ...badge };
+    this.badges.set(id, newBadge);
+    return newBadge;
+  }
+  async getBadgesByEmployee(employeeId: string): Promise<Badge[]> {
+    return Array.from(this.badges.values()).filter(b => b.employeeId === employeeId);
+  }
+  async hasBadge(employeeId: string, badgeType: string): Promise<boolean> {
+    return Array.from(this.badges.values()).some(b => b.employeeId === employeeId && b.badgeType === badgeType);
+  }
+  async getAllBadges(): Promise<Badge[]> {
+    return Array.from(this.badges.values());
   }
 
   getObjectStorageClient(): ObjectStorageClient | undefined {
@@ -1085,6 +1112,25 @@ export class CloudStorage implements IStorage {
     }
 
     return purged;
+  }
+
+  // Gamification
+  async createBadge(badge: InsertBadge): Promise<Badge> {
+    const id = randomUUID();
+    const newBadge: Badge = { id, ...badge };
+    await this.client.uploadJson(`badges/${id}.json`, newBadge);
+    return newBadge;
+  }
+  async getBadgesByEmployee(employeeId: string): Promise<Badge[]> {
+    const all = await this.client.listAndDownloadJson<Badge>("badges/");
+    return all.filter(b => b.employeeId === employeeId);
+  }
+  async hasBadge(employeeId: string, badgeType: string): Promise<boolean> {
+    const badges = await this.getBadgesByEmployee(employeeId);
+    return badges.some(b => b.badgeType === badgeType);
+  }
+  async getAllBadges(): Promise<Badge[]> {
+    return this.client.listAndDownloadJson<Badge>("badges/");
   }
 
   getObjectStorageClient(): ObjectStorageClient | undefined {

@@ -40,6 +40,7 @@ const HeatmapCalendarPage = lazy(() => import("@/pages/heatmap-calendar"));
 const CallClustersPage = lazy(() => import("@/pages/call-clusters"));
 const MyPerformancePage = lazy(() => import("@/pages/my-performance"));
 const SecurityPage = lazy(() => import("@/pages/security"));
+const LeaderboardPage = lazy(() => import("@/pages/leaderboard"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const AuthPage = lazy(() => import("@/pages/auth"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -206,6 +207,7 @@ function Router() {
               <Route path="/analytics/heatmap">{() => <ErrorBoundary><AnimatedPage><HeatmapCalendarPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/analytics/clusters">{() => <ErrorBoundary><AnimatedPage><CallClustersPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/my-performance">{() => <ErrorBoundary><AnimatedPage><MyPerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
+              <Route path="/leaderboard">{() => <ErrorBoundary><AnimatedPage><LeaderboardPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/admin/security">{() => <ErrorBoundary><AnimatedPage><SecurityPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route path="/settings">{() => <ErrorBoundary><AnimatedPage><SettingsPage /></AnimatedPage></ErrorBoundary>}</Route>
               <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
