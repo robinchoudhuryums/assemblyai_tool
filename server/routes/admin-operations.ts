@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { metrics } from "../services/logger";
+import { logPhiAccess } from "../services/audit-log";
 
 export function registerOperationsRoutes(
   router: Router,
@@ -54,6 +55,15 @@ export function registerOperationsRoutes(
       }
       const retried = await jobQueue.retryJob(req.params.id);
       if (retried) {
+        // HIPAA: Audit admin retry of dead-letter jobs
+        logPhiAccess({
+          timestamp: new Date().toISOString(),
+          event: "admin_dead_job_retry",
+          username: req.user?.username || "unknown",
+          resourceType: "admin",
+          resourceId: req.params.id,
+          detail: "Admin retried dead-letter job",
+        });
         res.json({ message: "Job re-queued for processing" });
       } else {
         res.status(404).json({ message: "Dead job not found or already retried" });

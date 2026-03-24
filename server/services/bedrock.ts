@@ -96,8 +96,13 @@ export class BedrockProvider implements AIAnalysisProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        // HIPAA: Truncate error to avoid leaking PHI in logs
-        throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+        // HIPAA: Log full error server-side, throw sanitized message to prevent
+        // AWS internals (account IDs, ARNs, model details) from reaching clients.
+        console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+        const statusCategory = response.status >= 500 ? "service unavailable" :
+          response.status === 429 ? "rate limited" :
+          response.status === 403 ? "access denied" : "request failed";
+        throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
       }
 
       const result = await response.json();
@@ -146,8 +151,13 @@ export class BedrockProvider implements AIAnalysisProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        // HIPAA: Truncate error to avoid leaking PHI in logs
-        throw new Error(`Bedrock API error (${response.status}): ${errorText.substring(0, 200)}`);
+        // HIPAA: Log full error server-side, throw sanitized message to prevent
+        // AWS internals (account IDs, ARNs, model details) from reaching clients.
+        console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+        const statusCategory = response.status >= 500 ? "service unavailable" :
+          response.status === 429 ? "rate limited" :
+          response.status === 403 ? "access denied" : "request failed";
+        throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
       }
 
       result = await response.json();

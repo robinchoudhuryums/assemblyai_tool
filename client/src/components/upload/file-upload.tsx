@@ -93,6 +93,7 @@ export default function FileUpload() {
         method: 'POST',
         body: formData,
         credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
 
       if (!response.ok) {

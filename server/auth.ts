@@ -381,11 +381,15 @@ export const requireAuth: RequestHandler = (req, res, next) => {
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  // Validate session fingerprint
+  // HIPAA: Session fingerprinting — bind sessions to browser characteristics.
+  // Set fingerprint on first authenticated request; reject mismatches thereafter.
   const currentFp = getSessionFingerprint(req);
   const sessionFp = (req.session as any)?.fingerprint;
-  if (sessionFp && sessionFp !== currentFp) {
-    // User-agent changed mid-session — possible session hijacking
+  if (!sessionFp) {
+    // First request with this session — stamp the fingerprint
+    (req.session as any).fingerprint = currentFp;
+  } else if (sessionFp !== currentFp) {
+    // Fingerprint changed mid-session — possible session hijacking
     logPhiAccess({
       timestamp: new Date().toISOString(),
       event: "session_fingerprint_mismatch",

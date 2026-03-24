@@ -397,8 +397,12 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **HTTPS enforcement** | `server/index.ts` | HTTP → HTTPS redirect in production |
 | **Data retention** | `server/index.ts` | Auto-purges calls older than `RETENTION_DAYS` (default 90) |
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
-| **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); enforced via `REQUIRE_MFA=true` |
-| **Password complexity** | `server/auth.ts` | Warns on weak passwords (12+ chars, uppercase, lowercase, digit, special char) |
+| **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); timing-safe code verification via `timingSafeEqual`; enforced via `REQUIRE_MFA=true` |
+| **Password complexity** | `server/auth.ts` | Rejects weak passwords (12+ chars, uppercase, lowercase, digit, special char) — enforcement on AUTH_USERS, DB user creation, and password reset |
+| **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language + IP hash; set on first authenticated request; destroys session on mismatch |
+| **CSRF protection** | `server/index.ts` | JSON requests require `Content-Type: application/json`; file uploads require `X-Requested-With` header; both prevent cross-origin form submissions |
+| **Admin action audit** | `server/routes/admin-*.ts` | WAF IP block/unblock and dead-job retry actions logged to HIPAA audit trail |
+| **Error sanitization** | `server/services/bedrock.ts` | Bedrock API errors logged server-side with details; client receives sanitized category only (no AWS account IDs, ARNs, or model details) |
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |

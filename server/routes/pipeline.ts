@@ -39,9 +39,12 @@ export function shouldUseBatchMode(perUploadOverride?: string): boolean {
     const endMinutes = endH * 60 + (endM || 0);
 
     if (startMinutes <= endMinutes) {
+      // Same-day window (e.g., 09:00–17:00): active between start and end
       if (currentMinutes < startMinutes || currentMinutes >= endMinutes) return false;
     } else {
-      if (currentMinutes < startMinutes && currentMinutes >= endMinutes) return false;
+      // Overnight window (e.g., 22:00–06:00): active from start to midnight, and midnight to end
+      // Inactive only between endMinutes and startMinutes
+      if (currentMinutes >= endMinutes && currentMinutes < startMinutes) return false;
     }
   }
 

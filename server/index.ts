@@ -28,11 +28,22 @@ function rateLimit(windowMs: number, maxRequests: number) {
     const now = Date.now();
     const entry = rateLimitMap.get(key);
     if (!entry || now > entry.resetTime) {
-      // Evict oldest entries if map is at capacity
+      // HIPAA: Evict expired entries first to prevent memory bloat from diverse IPs.
+      // If still at capacity after cleanup, evict the oldest entry.
       if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
-        // Delete the first (oldest-inserted) entry — Map preserves insertion order
-        const firstKey = rateLimitMap.keys().next().value;
-        if (firstKey) rateLimitMap.delete(firstKey);
+        let evicted = 0;
+        for (const [k, v] of rateLimitMap) {
+          if (now > v.resetTime) {
+            rateLimitMap.delete(k);
+            evicted++;
+            if (rateLimitMap.size < RATE_LIMIT_MAX_ENTRIES) break;
+          }
+        }
+        // If no expired entries to evict, remove the oldest by insertion order
+        if (evicted === 0 && rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES) {
+          const firstKey = rateLimitMap.keys().next().value;
+          if (firstKey) rateLimitMap.delete(firstKey);
+        }
       }
       rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
       return next();
@@ -47,9 +58,9 @@ function rateLimit(windowMs: number, maxRequests: number) {
 // Clean up expired rate limit entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
-  rateLimitMap.forEach((entry, key) => {
+  for (const [key, entry] of rateLimitMap) {
     if (now > entry.resetTime) rateLimitMap.delete(key);
-  });
+  }
 }, 5 * 60 * 1000);
 
 // Trust reverse proxy (Caddy on EC2, or Render/Heroku load balancers).
@@ -186,16 +197,27 @@ app.use((req, res, next) => {
   next();
 });
 
-// CSRF protection: Require a custom header on state-changing requests.
-// Browsers will not send custom headers on cross-origin requests without CORS preflight,
-// so the presence of this header proves the request is same-origin.
+// CSRF protection: Require proof that the request originates from our app.
+// For JSON requests: Content-Type: application/json (browsers won't send this cross-origin without CORS preflight).
+// For multipart uploads: Require a custom X-Requested-With header (same CORS protection mechanism).
+// Exempt: login, logout, access-requests (unauthenticated public endpoints).
 app.use((req, res, next) => {
   if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method) && req.path.startsWith("/api")) {
-    // Exempt file uploads (Content-Type is multipart) and login/access-requests (unauthenticated)
     const exempt = ["/api/auth/login", "/api/auth/logout", "/api/access-requests"];
-    const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
-    if (!exempt.includes(req.path) && !isMultipart) {
-      const hasJsonContent = (req.headers["content-type"] || "").includes("application/json");
+    if (exempt.includes(req.path)) return next();
+
+    const contentType = req.headers["content-type"] || "";
+    const isMultipart = contentType.includes("multipart/form-data");
+
+    if (isMultipart) {
+      // HIPAA: Multipart uploads must include X-Requested-With header to prove same-origin.
+      // Cross-origin forms cannot set custom headers without CORS preflight approval.
+      const hasCustomHeader = !!req.headers["x-requested-with"];
+      if (!hasCustomHeader) {
+        return res.status(403).json({ message: "CSRF check failed: X-Requested-With header required for file uploads" });
+      }
+    } else {
+      const hasJsonContent = contentType.includes("application/json");
       if (!hasJsonContent) {
         return res.status(403).json({ message: "CSRF check failed: Content-Type must be application/json" });
       }

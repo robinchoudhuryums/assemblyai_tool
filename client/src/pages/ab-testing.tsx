@@ -51,6 +51,7 @@ export default function ABTestingPage() {
         method: "POST",
         body: formData,
         credentials: "include",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
       });
       if (!res.ok) {
         const err = await res.json();

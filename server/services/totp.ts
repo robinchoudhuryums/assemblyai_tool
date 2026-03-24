@@ -4,7 +4,7 @@
  *
  * Used for HIPAA-compliant Multi-Factor Authentication.
  */
-import { createHmac, randomBytes } from "crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { getPool } from "../db/pool";
 
 // Base32 alphabet (RFC 4648)
@@ -80,9 +80,13 @@ export function generateTOTP(secret: string, timeStep = 30, digits = 6, now?: nu
  */
 export function verifyTOTP(secret: string, token: string, window = 1): boolean {
   const now = Date.now();
+  // HIPAA: Use timing-safe comparison to prevent timing attacks on TOTP codes.
+  // String comparison leaks code length via timing; timingSafeEqual does not.
+  const tokenBuf = Buffer.from(token, "utf8");
   for (let i = -window; i <= window; i++) {
     const expected = generateTOTP(secret, 30, 6, now + i * 30000);
-    if (expected === token) return true;
+    const expectedBuf = Buffer.from(expected, "utf8");
+    if (tokenBuf.length === expectedBuf.length && timingSafeEqual(tokenBuf, expectedBuf)) return true;
   }
   return false;
 }
