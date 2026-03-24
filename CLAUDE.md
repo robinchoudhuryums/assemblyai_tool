@@ -57,6 +57,11 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/validation.test.ts` — Input validation and sanitization
   - `tests/utils.test.ts` — Shared utility functions
   - `tests/waf.test.ts` — WAF middleware (SQL injection, XSS, path traversal detection)
+  - `tests/sigv4.test.ts` — AWS Signature V4 signing (SHA-256, HMAC, key derivation, canonical requests, presigned URLs)
+  - `tests/totp.test.ts` — TOTP/MFA (base32 encoding, RFC 6238 code generation, verification window, OTPAuth URI)
+  - `tests/gamification.test.ts` — Gamification logic (points computation, streak detection, badge eligibility)
+  - `tests/assemblyai-metrics.test.ts` — AssemblyAI utilities (utterance metrics, speaker-labeled transcripts, interruption/monologue detection)
+  - `tests/webhooks.test.ts` — Webhook service (HMAC signatures, config CRUD, event filtering, S3 client fallback)
 
 ## Architecture
 
