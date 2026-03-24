@@ -28,15 +28,22 @@ export interface ScoringCalibration {
   highThreshold: number;
 }
 
+/** Parse a float from env var with a fallback default (guards against NaN from malformed values). */
+function safeParseFloat(envVal: string | undefined, fallback: number): number {
+  if (!envVal) return fallback;
+  const parsed = parseFloat(envVal);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 /** Default calibration config — loaded from env vars */
 export function getCalibrationConfig(): ScoringCalibration {
   return {
     enabled: process.env.SCORE_CALIBRATION_ENABLED === "true",
-    center: parseFloat(process.env.SCORE_CALIBRATION_CENTER || "5.5"),
-    spread: parseFloat(process.env.SCORE_CALIBRATION_SPREAD || "1.2"),
-    aiModelMean: parseFloat(process.env.SCORE_AI_MODEL_MEAN || "7.0"),
-    lowThreshold: parseFloat(process.env.SCORE_LOW_THRESHOLD || "4.0"),
-    highThreshold: parseFloat(process.env.SCORE_HIGH_THRESHOLD || "9.0"),
+    center: safeParseFloat(process.env.SCORE_CALIBRATION_CENTER, 5.5),
+    spread: safeParseFloat(process.env.SCORE_CALIBRATION_SPREAD, 1.2),
+    aiModelMean: safeParseFloat(process.env.SCORE_AI_MODEL_MEAN, 7.0),
+    lowThreshold: safeParseFloat(process.env.SCORE_LOW_THRESHOLD, 4.0),
+    highThreshold: safeParseFloat(process.env.SCORE_HIGH_THRESHOLD, 9.0),
   };
 }
 
