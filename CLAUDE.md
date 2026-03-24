@@ -70,7 +70,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, gamification, AWS credentials
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
 server/middleware/       # Per-user rate limiting, application-level WAF
@@ -199,6 +199,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/coaching/employee/:id` | authenticated | Coaching for employee |
 | POST | `/api/coaching` | manager+ | Create coaching session |
 | PATCH | `/api/coaching/:id` | manager+ | Update coaching session |
+| PATCH | `/api/coaching/:id/action-item/:index` | authenticated | Toggle action item (agents can toggle their own) |
 | GET | `/api/prompt-templates` | admin | List prompt templates |
 | POST | `/api/prompt-templates` | admin | Create prompt template |
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
@@ -230,6 +231,9 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/admin/incidents/:id/action-items` | admin | Add action item to incident |
 | PATCH | `/api/admin/incidents/:incidentId/action-items/:itemId` | admin | Update action item status |
 | GET | `/api/admin/incident-response-plan` | admin | Get escalation contacts and response procedures |
+| GET | `/api/admin/calibration` | admin | Latest score calibration snapshot |
+| POST | `/api/admin/calibration/analyze` | admin | Trigger manual calibration analysis (query: `days`) |
+| GET | `/api/admin/telephony/status` | admin | 8x8 telephony integration status |
 
 ### User Management (admin only)
 | Method | Path | Role | Description |
@@ -248,6 +252,8 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
 | GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
 | GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
+| GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
+| GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
@@ -373,6 +379,17 @@ ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook
 # RAG Knowledge Base (planned — ums-knowledge-reference integration)
 RAG_SERVICE_URL                 # URL of the knowledge reference API
 RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
+
+# Auto-Calibration
+CALIBRATION_INTERVAL_HOURS      # How often to run score distribution analysis (default: 24)
+CALIBRATION_WINDOW_DAYS         # Days of call data to analyze for calibration (default: 30)
+
+# 8x8 Telephony Integration
+TELEPHONY_8X8_ENABLED           # Set to "true" to enable auto-ingestion from 8x8 (default: disabled)
+TELEPHONY_8X8_API_KEY           # 8x8 Work API key
+TELEPHONY_8X8_SUBACCOUNT_ID     # 8x8 subaccount ID
+TELEPHONY_8X8_POLL_MINUTES      # How often to poll for new recordings (default: 15)
+TELEPHONY_8X8_BASE_URL          # 8x8 API base URL (override for testing)
 
 # Optional
 PORT                            # Default: 5000

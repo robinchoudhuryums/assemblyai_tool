@@ -31,6 +31,10 @@ import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemb
 // Batch scheduler (extracted for testability)
 import { startBatchScheduler, stopBatchScheduler } from "./services/batch-scheduler";
 
+// Auto-calibration and telephony
+import { startCalibrationScheduler } from "./services/auto-calibration";
+import { startTelephonyScheduler } from "./services/telephony-8x8";
+
 // Ensure uploads directory exists
 const uploadsDir = 'uploads';
 if (!fs.existsSync(uploadsDir)) {
@@ -140,6 +144,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start batch inference scheduler (extracted to services/batch-scheduler.ts)
   startBatchScheduler();
+
+  // Start auto-calibration analysis (runs daily by default)
+  startCalibrationScheduler();
+
+  // Start 8x8 telephony auto-ingestion (if configured)
+  startTelephonyScheduler(processAudioFile);
 
   // ==================== JOB QUEUE INITIALIZATION ====================
   const dbPool = getPool();

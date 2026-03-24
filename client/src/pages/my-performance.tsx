@@ -1,35 +1,73 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ClipboardText, Heart, Phone, TrendUp, Trophy, User } from "@phosphor-icons/react";
+import { ArrowRight, ClipboardText, Fire, Heart, Medal, Phone, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
 import { ScoreRing } from "@/components/ui/animated-number";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
+interface BadgeData {
+  id: string;
+  badgeType: string;
+  label: string;
+  description: string;
+  icon: string;
+  earnedAt?: string;
+}
+
+interface WeeklyTrend {
+  week: string;
+  avgScore: number;
+  count: number;
+}
+
+interface MyPerformanceData {
+  employee: { id: string; name: string } | null;
+  recentCalls: CallWithDetails[];
+  coaching: CoachingSession[];
+  avgScore: number | null;
+  callCount: number;
+  positivePct: number;
+  badges: BadgeData[];
+  currentStreak: number;
+  totalPoints: number;
+  weeklyTrend: WeeklyTrend[];
+}
+
 /**
  * Agent self-service portal.
- * Viewers see their own performance scores, recent calls, and coaching sessions.
+ * Viewers see their own performance scores, badges, trends, and coaching sessions.
  * Requires the user to be linked to an employee record.
  */
 export default function MyPerformancePage() {
+  const queryClient = useQueryClient();
+
   const { data: me } = useQuery<{ id: string; username: string; name: string; role: string }>({
     queryKey: ["/api/auth/me"],
   });
 
-  const { data: myData, isLoading } = useQuery<{
-    employee: { id: string; name: string } | null;
-    recentCalls: CallWithDetails[];
-    coaching: CoachingSession[];
-    avgScore: number | null;
-    callCount: number;
-    positivePct: number;
-  }>({
+  const { data: myData, isLoading } = useQuery<MyPerformanceData>({
     queryKey: ["/api/my-performance"],
     queryFn: async () => {
       const res = await fetch("/api/my-performance", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch performance data");
       return res.json();
+    },
+  });
+
+  const toggleActionItem = useMutation({
+    mutationFn: async ({ sessionId, index }: { sessionId: string; index: number }) => {
+      const res = await fetch(`/api/coaching/${sessionId}/action-item/${index}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error("Failed to toggle action item");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/my-performance"] });
     },
   });
 
@@ -63,7 +101,7 @@ export default function MyPerformancePage() {
         ) : (
           <>
             {/* Summary cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <Card className="animate-stagger" style={{ "--stagger": 0 } as React.CSSProperties}>
                 <CardContent className="pt-4 flex items-center gap-4">
                   {myData.avgScore != null ? (
@@ -85,17 +123,87 @@ export default function MyPerformancePage() {
               </Card>
               <Card className="animate-stagger" style={{ "--stagger": 2 } as React.CSSProperties}>
                 <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Heart className="w-3 h-3" /> Positive Calls</p>
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Heart className="w-3 h-3" /> Positive</p>
                   <p className="text-2xl font-bold text-green-600">{myData.positivePct}%</p>
                 </CardContent>
               </Card>
               <Card className="animate-stagger" style={{ "--stagger": 3 } as React.CSSProperties}>
                 <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ClipboardText className="w-3 h-3" /> Active Coaching</p>
-                  <p className="text-2xl font-bold">{myData.coaching.filter(c => c.status !== "completed" && c.status !== "dismissed").length}</p>
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Fire className="w-3 h-3" /> Streak</p>
+                  <p className="text-2xl font-bold text-orange-500">{myData.currentStreak}</p>
+                </CardContent>
+              </Card>
+              <Card className="animate-stagger" style={{ "--stagger": 4 } as React.CSSProperties}>
+                <CardContent className="pt-4">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Star className="w-3 h-3" /> Points</p>
+                  <p className="text-2xl font-bold text-primary">{myData.totalPoints.toLocaleString()}</p>
                 </CardContent>
               </Card>
             </div>
+
+            {/* Badges */}
+            {myData.badges.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Medal className="w-4 h-4" />
+                    My Badges ({myData.badges.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-3">
+                    {myData.badges.map(badge => (
+                      <div
+                        key={badge.id}
+                        className="flex items-center gap-2 bg-primary/5 border border-primary/20 rounded-full px-3 py-1.5"
+                        title={badge.description}
+                      >
+                        <Trophy className="w-4 h-4 text-primary" />
+                        <span className="text-sm font-medium">{badge.label}</span>
+                        {badge.earnedAt && (
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(badge.earnedAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Weekly Trend */}
+            {myData.weeklyTrend.length > 1 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <TrendUp className="w-4 h-4" />
+                    Weekly Score Trend
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-end gap-2 h-32">
+                    {myData.weeklyTrend.map((week, i) => {
+                      const height = Math.max(10, (week.avgScore / 10) * 100);
+                      const color = week.avgScore >= 8 ? "bg-green-500" : week.avgScore >= 5 ? "bg-primary" : "bg-red-400";
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                          <span className="text-xs font-medium">{week.avgScore}</span>
+                          <div
+                            className={`w-full rounded-t ${color} transition-all`}
+                            style={{ height: `${height}%` }}
+                            title={`${week.count} call(s)`}
+                          />
+                          <span className="text-[10px] text-muted-foreground">
+                            {new Date(week.week).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Recent calls */}
             <Card>
@@ -150,20 +258,21 @@ export default function MyPerformancePage() {
               </CardContent>
             </Card>
 
-            {/* Coaching sessions */}
+            {/* Coaching sessions with self-service action item toggle */}
             {myData.coaching.length > 0 && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Trophy className="w-4 h-4" />
+                    <ClipboardText className="w-4 h-4" />
                     Coaching & Feedback
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
                     {myData.coaching.slice(0, 5).map(session => {
-                      const statusColor = session.status === "completed" ? "bg-green-100 text-green-700" :
-                        session.status === "in_progress" ? "bg-blue-100 text-blue-700" : "bg-yellow-100 text-yellow-700";
+                      const statusColor = session.status === "completed" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
+                        session.status === "in_progress" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                        "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
                       return (
                         <div key={session.id} className="border border-border rounded-lg p-3">
                           <div className="flex items-center justify-between mb-1">
@@ -174,12 +283,20 @@ export default function MyPerformancePage() {
                           {session.actionPlan && Array.isArray(session.actionPlan) && (
                             <div className="space-y-1">
                               {(session.actionPlan as Array<{ task: string; completed: boolean }>).map((item, i) => (
-                                <div key={i} className="flex items-center gap-2 text-xs">
-                                  <span className={item.completed ? "text-green-600" : "text-muted-foreground"}>
-                                    {item.completed ? "✓" : "○"}
+                                <button
+                                  key={i}
+                                  className="flex items-center gap-2 text-xs w-full text-left hover:bg-muted/50 rounded px-1 py-0.5 transition-colors"
+                                  onClick={() => toggleActionItem.mutate({ sessionId: session.id, index: i })}
+                                  disabled={toggleActionItem.isPending}
+                                  aria-label={`Toggle "${item.task}" ${item.completed ? "incomplete" : "complete"}`}
+                                >
+                                  <span className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
+                                    item.completed ? "bg-green-500 border-green-500 text-white" : "border-muted-foreground/30"
+                                  }`}>
+                                    {item.completed && "✓"}
                                   </span>
                                   <span className={item.completed ? "line-through text-muted-foreground" : ""}>{item.task}</span>
-                                </div>
+                                </button>
                               ))}
                             </div>
                           )}

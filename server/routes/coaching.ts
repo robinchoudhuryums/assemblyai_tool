@@ -101,4 +101,46 @@ export function register(router: Router) {
       res.status(500).json({ message: "Failed to update coaching session" });
     }
   });
+
+  // Agent self-service: toggle a coaching action item's completed status.
+  // Agents can only modify their OWN coaching sessions.
+  router.patch("/api/coaching/:id/action-item/:index", requireAuth, async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const itemIndex = parseInt(req.params.index, 10);
+      if (!Number.isFinite(itemIndex) || itemIndex < 0) {
+        return res.status(400).json({ message: "Invalid action item index" });
+      }
+
+      const session = await storage.getCoachingSession(sessionId);
+      if (!session) return res.status(404).json({ message: "Coaching session not found" });
+
+      // Verify the agent owns this coaching session
+      const username = req.user?.username;
+      const displayName = req.user?.name;
+      const allEmployees = await storage.getAllEmployees();
+      const myEmployee = allEmployees.find(e =>
+        e.name.toLowerCase() === displayName?.toLowerCase() ||
+        e.email?.toLowerCase() === username?.toLowerCase()
+      );
+
+      const isOwner = myEmployee && session.employeeId === myEmployee.id;
+      const isManagerOrAdmin = req.user?.role === "manager" || req.user?.role === "admin";
+      if (!isOwner && !isManagerOrAdmin) {
+        return res.status(403).json({ message: "You can only update your own coaching action items" });
+      }
+
+      const actionPlan = Array.isArray(session.actionPlan) ? [...session.actionPlan] as Array<{ task: string; completed: boolean }> : [];
+      if (itemIndex >= actionPlan.length) {
+        return res.status(400).json({ message: "Action item index out of range" });
+      }
+
+      actionPlan[itemIndex] = { ...actionPlan[itemIndex], completed: !actionPlan[itemIndex].completed };
+
+      const updated = await storage.updateCoachingSession(sessionId, { actionPlan });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to toggle action item" });
+    }
+  });
 }
