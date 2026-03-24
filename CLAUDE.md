@@ -59,8 +59,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, AWS credentials
-server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, etc.)
+server/services/         # AI provider (Bedrock), S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference, webhooks, coaching alerts, gamification, AWS credentials
+server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
 server/middleware/       # Per-user rate limiting, application-level WAF
 client/src/lib/i18n.ts   # i18n system (English + Spanish)
@@ -282,6 +282,23 @@ Test calls are stored separately from production data (`ab-tests/{id}.json`), ne
 | GET | `/api/usage` | admin | List all usage records with estimated costs |
 
 Usage records are automatically created after each call analysis and A/B test. Estimated costs are calculated from audio duration (AssemblyAI) and token counts (Bedrock). Stored under `usage/` S3 prefix. The admin Spend Tracking page shows current month, last month, YTD, and all-time views with charts.
+
+### Gamification (authenticated)
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/api/gamification/leaderboard` | authenticated | Agent leaderboard (query: `period=week\|month\|all`) |
+| GET | `/api/gamification/badges/:employeeId` | authenticated | Badges earned by an employee |
+| GET | `/api/gamification/badge-types` | authenticated | All possible badge definitions |
+| GET | `/api/gamification/stats/:employeeId` | authenticated | Points, streak, and badges for one agent |
+
+**Gamification System** (`server/services/gamification.ts`):
+- **Badges**: 12 types — milestone (first call, 25/50/100 calls), score (perfect 10), streak (3/5/10 consecutive 8+), sub-score (compliance star, empathy champion, resolution ace), improvement (most improved over 30 days)
+- **Points**: Base 10 per call + score bonus (score × 10) + streak multiplier (1.5× if streak ≥ 3) + badge bonus (50 per new badge earned on that call)
+- **Streaks**: Consecutive calls scoring ≥ 8.0 (resets on any call < 8.0)
+- **Leaderboard**: Period-filtered rankings (week/month/all time) with points, avg score, call count, streak, badges
+- **Pipeline integration**: `evaluateBadges()` runs non-blocking at the end of `processAudioFile()` after coaching alerts
+- **Storage**: PostgreSQL `badges` table with unique constraint on milestone badge types per employee; S3/memory fallback supported
+- **Minimal overhead**: Badge evaluation queries only the employee's recent calls — no global scans
 
 ## Role-Based Access Control
 

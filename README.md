@@ -16,15 +16,16 @@ AI-powered call quality analysis platform built for UMS (a medical supply compan
 6. [Audio Processing Pipeline](#audio-processing-pipeline)
 7. [AI Analysis Details](#ai-analysis-details)
 8. [A/B Model Testing](#ab-model-testing)
-9. [Data Storage](#data-storage)
-10. [Authentication and Security](#authentication-and-security)
-11. [HIPAA Compliance](#hipaa-compliance)
-12. [API Reference](#api-reference)
-13. [Project Structure](#project-structure)
-14. [Environment Variables](#environment-variables)
-15. [Local Development](#local-development)
-16. [Deployment](#deployment)
-17. [Maintenance](#maintenance)
+9. [Gamification](#gamification)
+10. [Data Storage](#data-storage)
+11. [Authentication and Security](#authentication-and-security)
+12. [HIPAA Compliance](#hipaa-compliance)
+13. [API Reference](#api-reference)
+14. [Project Structure](#project-structure)
+15. [Environment Variables](#environment-variables)
+16. [Local Development](#local-development)
+17. [Deployment](#deployment)
+18. [Maintenance](#maintenance)
 
 ---
 
@@ -153,6 +154,8 @@ The app has a sidebar navigation that adapts based on user role:
 | **Prompt Templates** | `/admin/templates` | Custom AI prompt configuration per call category (admin only) |
 | **Model Testing** | `/admin/ab-testing` | A/B model comparison tool (admin only) |
 | **Spend Tracking** | `/admin/spend` | Estimated API cost tracking with charts (admin only) |
+| **Leaderboard** | `/leaderboard` | Agent rankings by points, streaks, and badges with period filtering |
+| **Agent Scorecard** | `/scorecard/:id` | Detailed agent profile with gamification stats (badges, points, streak) |
 
 Keyboard shortcuts: `D` (Dashboard), `K` (Search), `N` (Upload), `R` (Reports), `?` (Help)
 
@@ -285,6 +288,28 @@ Each view shows: total estimated cost, calls processed, average cost per call, d
 2. The record includes: estimated AssemblyAI cost (from audio duration), estimated Bedrock cost (from transcript token count), user who uploaded, and type (call vs A/B test)
 3. A/B tests track costs for both models separately
 4. All costs are estimates — actual AWS/AssemblyAI billing may vary slightly
+
+---
+
+## Gamification
+
+CallAnalyzer includes a gamification system to encourage agent performance through friendly competition.
+
+### Badges (12 types)
+- **Milestone**: First Call, Quarter Century (25), Half Century (50), Century Club (100)
+- **Score**: Perfect 10 (scored 10/10 on a call)
+- **Streak**: Hat Trick (3), On Fire (5), Unstoppable (10) — consecutive calls scoring 8+
+- **Sub-score**: Compliance Star, Empathy Champion, Resolution Ace — sub-score 9+ on 5 consecutive calls
+- **Improvement**: Most Improved — biggest score gain over 30 days
+
+### Points
+Points are computed per call: base 10 + score bonus (score × 10) + streak multiplier (1.5× if streak ≥ 3) + badge bonus (50 per new badge). Points accumulate and are displayed on the leaderboard and agent scorecard.
+
+### Leaderboard
+The `/leaderboard` page shows agent rankings filterable by week, month, or all time. Displays points, average score, call count, current streak, and earned badges. Top 3 agents get a podium display.
+
+### Integration
+Badge evaluation runs automatically at the end of the audio processing pipeline (non-blocking, after coaching alerts). No additional API calls or AI processing — badges are computed from existing call data in storage.
 
 ---
 

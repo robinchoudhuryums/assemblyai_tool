@@ -13,6 +13,7 @@ import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, co
 import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
 import { triggerWebhook } from "../services/webhooks";
 import { captureException } from "../services/sentry";
+import { evaluateBadges } from "../services/gamification";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -481,6 +482,14 @@ export async function processAudioFile(
       checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
       });
+
+      // Gamification: evaluate badges (non-blocking)
+      if (finalEmployeeId) {
+        const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
+        evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
+          console.warn(`[${callId}] Badge evaluation failed (non-blocking):`, (err as Error).message);
+        });
+      }
     } catch (alertErr) {
       console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);
     }

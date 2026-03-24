@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -27,6 +27,7 @@ const navigation: NavItem[] = [
   { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitDiff },
   { nameKey: "nav.heatmap", href: "/analytics/heatmap", icon: CalendarDots },
   { nameKey: "nav.clusters", href: "/analytics/clusters", icon: Stack },
+  { nameKey: "nav.leaderboard", href: "/leaderboard", icon: Trophy },
   { nameKey: "nav.employees", href: "/employees", icon: UserPlus, sectionKey: "section.management" },
   { nameKey: "nav.coaching", href: "/coaching", icon: ClipboardText, requireRole: ["manager", "admin"] },
 ];
