@@ -368,12 +368,13 @@ export async function setupAuth(app: Express) {
  * If the user-agent changes mid-session, destroy the session and force re-login.
  */
 function getSessionFingerprint(req: import("express").Request): string {
-  // HIPAA: Bind session to multiple browser characteristics to detect hijacking.
-  // Includes user-agent, accept-language, and client IP for stronger fingerprinting.
+  // HIPAA: Bind session to browser characteristics to detect hijacking.
+  // Uses user-agent + accept-language (stable across requests).
+  // IP is intentionally excluded: mobile networks and VPNs rotate IPs frequently,
+  // causing false-positive session kills for legitimate users.
   const ua = req.headers["user-agent"] || "";
   const lang = req.headers["accept-language"] || "";
-  const ip = req.ip || req.socket.remoteAddress || "";
-  return createHash("sha256").update(`${ua}|${lang}|${ip}`).digest("hex").slice(0, 16);
+  return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
 }
 
 export const requireAuth: RequestHandler = (req, res, next) => {

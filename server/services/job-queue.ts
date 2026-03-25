@@ -127,7 +127,11 @@ export class JobQueue {
         [jobId, reason],
       );
       console.error(`[JOB_QUEUE] Job ${jobId} moved to dead letter after ${attempts} attempts: ${reason}`);
-      this.onDeadLetter?.(jobId, reason, attempts);
+      try {
+        this.onDeadLetter?.(jobId, reason, attempts);
+      } catch (callbackErr) {
+        console.error(`[JOB_QUEUE] Dead-letter callback threw for job ${jobId}:`, (callbackErr as Error).message);
+      }
     } else {
       // Exponential backoff: 10s, 30s, 60s (capped)
       const backoffSeconds = Math.min(10 * Math.pow(3, attempts - 1), 60);

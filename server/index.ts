@@ -295,6 +295,25 @@ app.get("/api/export/calls", rateLimit(60 * 1000, 5)); // 5 exports per minute
 app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
 (async () => {
+  // Startup validation: warn about missing critical configuration
+  const isProduction = process.env.NODE_ENV === "production";
+  if (!process.env.SESSION_SECRET) {
+    console.error("[STARTUP] SESSION_SECRET is not set — sessions will use an insecure default.");
+    if (isProduction) throw new Error("SESSION_SECRET is required in production");
+  }
+  if (!process.env.ASSEMBLYAI_API_KEY) {
+    console.warn("[STARTUP] ASSEMBLYAI_API_KEY is not set — transcription will be unavailable.");
+  }
+  if (isProduction && !process.env.DATABASE_URL) {
+    console.warn("[STARTUP] DATABASE_URL is not set in production — using in-memory storage (data will be lost on restart).");
+  }
+  if (isProduction && process.env.APP_BASE_URL && !process.env.ASSEMBLYAI_WEBHOOK_SECRET) {
+    console.error("[STARTUP] APP_BASE_URL is set but ASSEMBLYAI_WEBHOOK_SECRET is missing — webhooks will be rejected.");
+  }
+  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    console.warn("[STARTUP] AWS credentials not set — Bedrock AI analysis and S3 storage will be unavailable.");
+  }
+
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();
 
