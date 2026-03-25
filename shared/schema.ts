@@ -101,6 +101,8 @@ export const CALL_CATEGORIES = [
 export type CallCategory = typeof CALL_CATEGORIES[number]["value"];
 
 // --- CALL SCHEMAS ---
+export const CALL_CATEGORY_VALUES = CALL_CATEGORIES.map(c => c.value);
+
 export const insertCallSchema = z.object({
   employeeId: z.string().optional(),
   fileName: z.string().optional(),
@@ -108,7 +110,7 @@ export const insertCallSchema = z.object({
   status: z.string().default("pending"),
   duration: z.number().optional(),
   assemblyAiId: z.string().optional(),
-  callCategory: z.string().optional(),
+  callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
   contentHash: z.string().optional(),
 });
 
@@ -181,7 +183,9 @@ export const sentimentAnalysisSchema = insertSentimentAnalysisSchema.extend({
 // --- CALL ANALYSIS SCHEMAS ---
 export const insertCallAnalysisSchema = z.object({
   callId: z.string(),
-  performanceScore: z.string().optional(),
+  performanceScore: z.union([z.string(), z.number()])
+    .transform(v => typeof v === "number" ? v.toString() : v)
+    .optional(),
   talkTimeRatio: z.string().optional(),
   responseTime: z.string().optional(),
   keywords: aiStringArray,
@@ -194,7 +198,7 @@ export const insertCallAnalysisSchema = z.object({
   }).optional(),
   lemurResponse: lemurResponseSchema,
   callPartyType: z.string().optional(),
-  flags: z.array(z.string()).optional(),
+  flags: z.array(aiStringOrObject).optional(),
   manualEdits: z.array(z.object({
     editedBy: z.string().optional(),
     editedAt: z.string().optional(),
@@ -305,6 +309,7 @@ export const analysisEditSchema = z.object({
     performanceScore: z.union([z.string(), z.number()])
       .transform(v => typeof v === "string" ? parseFloat(v) : v)
       .pipe(z.number().min(0).max(10))
+      .transform(v => v.toString())
       .optional(),
     topics: z.array(z.string()).optional(),
     actionItems: z.array(z.string()).optional(),

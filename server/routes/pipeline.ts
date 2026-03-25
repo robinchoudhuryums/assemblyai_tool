@@ -342,15 +342,23 @@ export async function processAudioFile(
             const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
             analysisProvider = BedrockProvider.createWithModel(haikuModel);
             console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ 120s, ~${estimatedTokens} tokens) — 67% cost savings`);
-          } catch {
-            // Fall back to default provider
+          } catch (haikuErr) {
+            console.warn(`[${callId}] Haiku provider creation failed, using default model:`, (haikuErr as Error).message);
           }
         }
 
         aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
-        console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, (aiError as Error).message);
+        const errMsg = (aiError as Error).message || "";
+        const isParseFailure = errMsg.includes("malformed JSON") || errMsg.includes("did not contain valid JSON") || errMsg.includes("failed schema validation");
+        if (isParseFailure) {
+          console.error(`[${callId}] AI returned unparseable response (continuing with defaults):`, errMsg);
+          captureException(aiError as Error, { callId, errorType: "ai_parse_failure" });
+        } else {
+          console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, errMsg);
+          captureException(aiError as Error, { callId, errorType: "ai_unavailable" });
+        }
       }
     } else if (!aiProvider.isAvailable) {
       console.log(`[${callId}] Step 4/6: AI provider not configured, using transcript-based defaults.`);
@@ -422,10 +430,11 @@ export async function processAudioFile(
 
     // Auto-categorize if no category was provided at upload and AI returned one
     if (!callCategory && aiAnalysis?.call_category) {
-      const validCategories = ["inbound", "outbound", "internal", "vendor"];
-      if (validCategories.includes(aiAnalysis.call_category)) {
+      const validCategories = ["inbound", "outbound", "internal", "vendor"] as const;
+      type ValidCategory = typeof validCategories[number];
+      if (validCategories.includes(aiAnalysis.call_category as ValidCategory)) {
         try {
-          await storage.updateCall(callId, { callCategory: aiAnalysis.call_category });
+          await storage.updateCall(callId, { callCategory: aiAnalysis.call_category as ValidCategory });
           console.log(`[${callId}] Auto-categorized as: ${aiAnalysis.call_category}`);
         } catch (catErr) {
           console.warn(`[${callId}] Failed to auto-categorize (non-blocking):`, (catErr as Error).message);
@@ -457,9 +466,10 @@ export async function processAudioFile(
       ].filter(Boolean).join(". ");
 
       if (embeddingText.length > 20) {
-        generateCallEmbedding(callId, embeddingText).catch(err =>
-          console.warn(`[${callId}] Embedding generation failed (non-blocking):`, err.message)
-        );
+        generateCallEmbedding(callId, embeddingText).catch(err => {
+          console.warn(`[${callId}] Embedding generation failed (non-blocking):`, err.message);
+          captureException(err as Error, { callId, errorType: "embedding_generation" });
+        });
       }
     }
 
@@ -484,6 +494,7 @@ export async function processAudioFile(
       const callSummary = (analysis.summary as string) || "";
       checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
+        captureException(err as Error, { callId, errorType: "coaching_alert" });
       });
 
       // Gamification: evaluate badges (non-blocking)
@@ -491,10 +502,12 @@ export async function processAudioFile(
         const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
         evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
           console.warn(`[${callId}] Badge evaluation failed (non-blocking):`, (err as Error).message);
+          captureException(err as Error, { callId, errorType: "badge_evaluation" });
         });
       }
     } catch (alertErr) {
       console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);
+      captureException(alertErr as Error, { callId, errorType: "coaching_alert_setup" });
     }
 
     // Trigger webhooks (non-blocking)
@@ -520,7 +533,10 @@ export async function processAudioFile(
         duration: callDurationSeconds,
         employee: employeeName || undefined,
         fileName: originalName,
-      }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
+      }).catch(err => {
+        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        captureException(err as Error, { callId, errorType: "webhook_delivery" });
+      });
 
       // score.low (score <= 4)
       if (performanceScoreNum > 0 && performanceScoreNum <= 4) {
@@ -529,7 +545,10 @@ export async function processAudioFile(
           score: performanceScoreNum,
           employee: employeeName || undefined,
           fileName: originalName,
-        }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
+        }).catch(err => {
+        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        captureException(err as Error, { callId, errorType: "webhook_delivery" });
+      });
       }
 
       // score.exceptional (score >= 9)
@@ -539,7 +558,10 @@ export async function processAudioFile(
           score: performanceScoreNum,
           employee: employeeName || undefined,
           fileName: originalName,
-        }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
+        }).catch(err => {
+        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        captureException(err as Error, { callId, errorType: "webhook_delivery" });
+      });
       }
     } catch (webhookErr) {
       console.warn(`[${callId}] Webhook trigger failed (non-blocking):`, (webhookErr as Error).message);
@@ -596,7 +618,10 @@ export async function processAudioFile(
       callId,
       error: (error as Error).message,
       fileName: originalName,
-    }).catch(err => console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message));
+    }).catch(err => {
+        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        captureException(err as Error, { callId, errorType: "webhook_delivery" });
+      });
   } finally {
     // Always attempt file cleanup, even if error handling itself fails
     await cleanupFile(filePath);
