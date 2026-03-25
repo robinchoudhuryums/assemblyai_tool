@@ -62,14 +62,14 @@ export type UpdateDbUser = z.infer<typeof updateDbUserSchema>;
 
 // --- EMPLOYEE SCHEMAS ---
 export const insertEmployeeSchema = z.object({
-  name: z.string(),
-  role: z.string().optional(),
-  email: z.string(),
+  name: z.string().min(1).max(255),
+  role: z.string().max(100).optional(),
+  email: z.string().email("Invalid email address"),
   initials: z.string().max(2).optional(),
-  status: z.string().default("Active").optional(),
-  subTeam: z.string().optional(),
-  pseudonym: z.string().optional(), // Display name with pseudonym, e.g. "Camila (Cheshta) Bhutani"
-  extension: z.string().optional(), // 8x8 direct extension number
+  status: z.enum(["Active", "Inactive"]).default("Active").optional(),
+  subTeam: z.string().max(100).optional(),
+  pseudonym: z.string().max(255).optional(), // Display name with pseudonym, e.g. "Camila (Cheshta) Bhutani"
+  extension: z.string().max(20).optional(), // 8x8 direct extension number
 });
 
 export const employeeSchema = insertEmployeeSchema.extend({
@@ -329,6 +329,11 @@ export const analysisEditSchema = z.object({
 
 export type AnalysisEdit = z.infer<typeof analysisEditSchema>;
 
+// --- CALL ASSIGNMENT SCHEMA (shared between call and employee routes) ---
+export const assignCallSchema = z.object({
+  employeeId: z.string().optional(),
+}).strict();
+
 // --- LOGIN SCHEMA (client-side validation) ---
 export const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -387,8 +392,8 @@ export const insertCoachingSessionSchema = z.object({
   employeeId: z.string(),
   callId: z.string().optional(),
   assignedBy: z.string(),
-  category: z.string().default("general"),
-  title: z.string(),
+  category: z.enum(["compliance", "customer_experience", "communication", "resolution", "general", "performance", "recognition"]).default("general"),
+  title: z.string().min(1).max(500),
   notes: z.string().optional(),
   actionPlan: z.array(z.object({
     task: z.string(),

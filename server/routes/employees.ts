@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
-import { insertEmployeeSchema } from "@shared/schema";
+import { insertEmployeeSchema, assignCallSchema } from "@shared/schema";
 import { z } from "zod";
 import csv from "csv-parser";
 import fs from "fs";
@@ -35,12 +35,12 @@ export function register(router: Router) {
 
   // HIPAA: Only managers and admins can update employees
   const updateEmployeeSchema = z.object({
-    name: z.string().min(1).optional(),
+    name: z.string().min(1).max(255).optional(),
     email: z.string().email().optional(),
-    role: z.string().optional(),
-    status: z.string().optional(),
+    role: z.string().max(100).optional(),
+    status: z.enum(["Active", "Inactive"]).optional(),
     initials: z.string().max(2).optional(),
-    subTeam: z.string().optional(),
+    subTeam: z.string().max(100).optional(),
   }).strict();
 
   router.patch("/api/employees/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
@@ -63,9 +63,7 @@ export function register(router: Router) {
   });
 
   // Assign/reassign employee to a call (managers and admins only)
-  const assignCallSchema = z.object({
-    employeeId: z.string().optional(),
-  }).strict();
+  // assignCallSchema imported from @shared/schema
 
   router.patch("/api/calls/:id/assign", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
