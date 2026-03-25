@@ -207,6 +207,24 @@ export function registerContentRoutes(
         res.status(400).json({ message: "Invalid webhook config", errors: parsed.error.flatten() });
         return;
       }
+      // SSRF protection: reject webhook URLs targeting internal/private networks
+      try {
+        const webhookUrl = new URL(parsed.data.url);
+        const hostname = webhookUrl.hostname.toLowerCase();
+        const blockedHosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "169.254.169.254", "metadata.google.internal"];
+        const isPrivateIP = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(hostname);
+        if (blockedHosts.includes(hostname) || isPrivateIP || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
+          res.status(400).json({ message: "Webhook URL cannot target localhost, private IPs, or internal networks" });
+          return;
+        }
+        if (!["https:", "http:"].includes(webhookUrl.protocol)) {
+          res.status(400).json({ message: "Webhook URL must use http:// or https://" });
+          return;
+        }
+      } catch {
+        res.status(400).json({ message: "Invalid webhook URL format" });
+        return;
+      }
       const invalidEvents = parsed.data.events.filter(e => !WEBHOOK_EVENTS.includes(e as any));
       if (invalidEvents.length > 0) {
         res.status(400).json({ message: `Invalid events: ${invalidEvents.join(", ")}. Valid events: ${WEBHOOK_EVENTS.join(", ")}` });

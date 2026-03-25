@@ -82,7 +82,7 @@ export default function CallsTable() {
     employee: employeeFilter === "all" ? "" : employeeFilter,
   }), [statusFilter, sentimentFilter, employeeFilter]);
 
-  const { data: callsResponse, isLoading: isLoadingCalls, isFetching } = useQuery<PaginatedCalls>({
+  const { data: callsResponse, isLoading: isLoadingCalls, isFetching, error: callsError } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { ...filterParams, cursor, mode: "cursor" }],
   });
 
@@ -315,6 +315,18 @@ export default function CallsTable() {
               <Skeleton className="h-8 w-24" />
             </div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (callsError) {
+    return (
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="text-center py-8">
+          <Warning className="w-8 h-8 text-destructive mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">Failed to load calls. Please try again.</p>
+          <p className="text-xs text-muted-foreground mt-1">{(callsError as Error).message}</p>
         </div>
       </div>
     );

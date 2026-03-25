@@ -100,7 +100,7 @@ export default function ReportsPage() {
 
   // Comparison data
   const compareQueryKey = ["/api/reports/filtered", buildParams(compareDateRange), "compare"];
-  const { data: compareReport, isLoading: isCompareLoading } = useQuery<FilteredReportData>({
+  const { data: compareReport, isLoading: isCompareLoading, error: compareError } = useQuery<FilteredReportData>({
     queryKey: compareQueryKey,
     queryFn: async () => {
       const res = await fetch(`/api/reports/filtered?${buildParams(compareDateRange)}`, { credentials: "include" });
@@ -111,7 +111,7 @@ export default function ReportsPage() {
   });
 
   // Agent profile (only for employee report type)
-  const { data: agentProfile } = useQuery<AgentProfileData>({
+  const { data: agentProfile, error: agentProfileError } = useQuery<AgentProfileData>({
     queryKey: ["/api/reports/agent-profile", selectedEmployee, dateRange.from, dateRange.to],
     queryFn: async () => {
       const params = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
@@ -611,6 +611,18 @@ export default function ReportsPage() {
             </ul>
           </div>
         </div>
+
+        {/* Error banners for secondary queries */}
+        {compareError && compareEnabled && (
+          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+            Failed to load comparison data: {(compareError as Error).message}
+          </div>
+        )}
+        {agentProfileError && reportType === "employee" && selectedEmployee && (
+          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+            Failed to load agent profile: {(agentProfileError as Error).message}
+          </div>
+        )}
 
         {/* Agent Profile Section (employee reports only) */}
         {reportType === "employee" && selectedEmployee && agentProfile && (

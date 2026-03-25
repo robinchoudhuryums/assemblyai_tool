@@ -8,7 +8,7 @@ import { requireAuth, requireRole } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
-import { CALL_CATEGORIES, analysisEditSchema } from "@shared/schema";
+import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
 import { cleanupFile, TaskQueue } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
@@ -29,9 +29,7 @@ export type ProcessAudioFn = (
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 const audioProcessingQueue = new TaskQueue(3);
 
-const assignCallSchema = z.object({
-  employeeId: z.string().optional(),
-}).strict();
+// assignCallSchema imported from @shared/schema
 
 /**
  * Register all call-related API routes.

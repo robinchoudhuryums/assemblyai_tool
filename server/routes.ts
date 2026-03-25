@@ -73,9 +73,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AssemblyAI webhook endpoint (no auth — verified by shared secret)
   // This receives transcript completion callbacks when APP_BASE_URL is configured
   router.post("/api/webhooks/assemblyai", (req, res) => {
-    // Verify webhook secret if configured (timing-safe to prevent side-channel leaks)
+    // Verify webhook secret (timing-safe to prevent side-channel leaks)
     const secret = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
-    if (secret) {
+    if (!secret) {
+      // HIPAA: In production, reject unverified webhooks to prevent spoofed transcript injections
+      if (process.env.NODE_ENV === "production") {
+        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook in production");
+        return res.status(500).json({ message: "Webhook secret not configured" });
+      }
+      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev only)");
+    } else {
       const provided = String(req.headers["x-webhook-secret"] || "");
       const secretBuf = Buffer.from(secret, "utf8");
       const providedBuf = Buffer.from(provided, "utf8");

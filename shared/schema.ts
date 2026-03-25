@@ -62,14 +62,14 @@ export type UpdateDbUser = z.infer<typeof updateDbUserSchema>;
 
 // --- EMPLOYEE SCHEMAS ---
 export const insertEmployeeSchema = z.object({
-  name: z.string(),
-  role: z.string().optional(),
-  email: z.string(),
+  name: z.string().min(1).max(255),
+  role: z.string().max(100).optional(),
+  email: z.string().email("Invalid email address"),
   initials: z.string().max(2).optional(),
-  status: z.string().default("Active").optional(),
-  subTeam: z.string().optional(),
-  pseudonym: z.string().optional(), // Display name with pseudonym, e.g. "Camila (Cheshta) Bhutani"
-  extension: z.string().optional(), // 8x8 direct extension number
+  status: z.enum(["Active", "Inactive"]).default("Active").optional(),
+  subTeam: z.string().max(100).optional(),
+  pseudonym: z.string().max(255).optional(), // Display name with pseudonym, e.g. "Camila (Cheshta) Bhutani"
+  extension: z.string().max(20).optional(), // 8x8 direct extension number
 });
 
 export const employeeSchema = insertEmployeeSchema.extend({
@@ -101,6 +101,8 @@ export const CALL_CATEGORIES = [
 export type CallCategory = typeof CALL_CATEGORIES[number]["value"];
 
 // --- CALL SCHEMAS ---
+export const CALL_CATEGORY_VALUES = CALL_CATEGORIES.map(c => c.value);
+
 export const insertCallSchema = z.object({
   employeeId: z.string().optional(),
   fileName: z.string().optional(),
@@ -108,7 +110,7 @@ export const insertCallSchema = z.object({
   status: z.string().default("pending"),
   duration: z.number().optional(),
   assemblyAiId: z.string().optional(),
-  callCategory: z.string().optional(),
+  callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
   contentHash: z.string().optional(),
 });
 
@@ -181,7 +183,9 @@ export const sentimentAnalysisSchema = insertSentimentAnalysisSchema.extend({
 // --- CALL ANALYSIS SCHEMAS ---
 export const insertCallAnalysisSchema = z.object({
   callId: z.string(),
-  performanceScore: z.string().optional(),
+  performanceScore: z.union([z.string(), z.number()])
+    .transform(v => typeof v === "number" ? v.toString() : v)
+    .optional(),
   talkTimeRatio: z.string().optional(),
   responseTime: z.string().optional(),
   keywords: aiStringArray,
@@ -194,7 +198,7 @@ export const insertCallAnalysisSchema = z.object({
   }).optional(),
   lemurResponse: lemurResponseSchema,
   callPartyType: z.string().optional(),
-  flags: z.array(z.string()).optional(),
+  flags: z.array(aiStringOrObject).optional(),
   manualEdits: z.array(z.object({
     editedBy: z.string().optional(),
     editedAt: z.string().optional(),
@@ -305,6 +309,7 @@ export const analysisEditSchema = z.object({
     performanceScore: z.union([z.string(), z.number()])
       .transform(v => typeof v === "string" ? parseFloat(v) : v)
       .pipe(z.number().min(0).max(10))
+      .transform(v => v.toString())
       .optional(),
     topics: z.array(z.string()).optional(),
     actionItems: z.array(z.string()).optional(),
@@ -323,6 +328,11 @@ export const analysisEditSchema = z.object({
 });
 
 export type AnalysisEdit = z.infer<typeof analysisEditSchema>;
+
+// --- CALL ASSIGNMENT SCHEMA (shared between call and employee routes) ---
+export const assignCallSchema = z.object({
+  employeeId: z.string().optional(),
+}).strict();
 
 // --- LOGIN SCHEMA (client-side validation) ---
 export const loginSchema = z.object({
@@ -382,8 +392,8 @@ export const insertCoachingSessionSchema = z.object({
   employeeId: z.string(),
   callId: z.string().optional(),
   assignedBy: z.string(),
-  category: z.string().default("general"),
-  title: z.string(),
+  category: z.enum(["compliance", "customer_experience", "communication", "resolution", "general", "performance", "recognition"]).default("general"),
+  title: z.string().min(1).max(500),
   notes: z.string().optional(),
   actionPlan: z.array(z.object({
     task: z.string(),

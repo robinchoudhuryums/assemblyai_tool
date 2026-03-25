@@ -18,17 +18,17 @@ export default function SearchPage() {
   const searchParams = useSearch();
   const urlParams = new URLSearchParams(searchParams);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(urlParams.get("q") || "");
   const [sentimentFilter, setSentimentFilter] = useState(urlParams.get("sentiment") || "all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [employeeFilter, setEmployeeFilter] = useState("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [minScore, setMinScore] = useState("");
-  const [maxScore, setMaxScore] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState(urlParams.get("status") || "all");
+  const [employeeFilter, setEmployeeFilter] = useState(urlParams.get("employee") || "all");
+  const [dateFrom, setDateFrom] = useState(urlParams.get("from") || "");
+  const [dateTo, setDateTo] = useState(urlParams.get("to") || "");
+  const [minScore, setMinScore] = useState(urlParams.get("minScore") || "");
+  const [maxScore, setMaxScore] = useState(urlParams.get("maxScore") || "");
+  const [debouncedQuery, setDebouncedQuery] = useState(urlParams.get("q") || "");
   const [showAdvanced, setShowAdvanced] = useState(
-    !!urlParams.get("sentiment") || false
+    !!(urlParams.get("sentiment") || urlParams.get("from") || urlParams.get("minScore") || urlParams.get("status") || urlParams.get("employee"))
   );
   const { toast } = useToast();
 
@@ -38,6 +38,22 @@ export default function SearchPage() {
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Sync filter state to URL params for bookmarkable/shareable filters
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set("q", searchQuery);
+    if (sentimentFilter !== "all") params.set("sentiment", sentimentFilter);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (employeeFilter !== "all") params.set("employee", employeeFilter);
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    if (minScore) params.set("minScore", minScore);
+    if (maxScore) params.set("maxScore", maxScore);
+    const qs = params.toString();
+    const newPath = qs ? `/search?${qs}` : "/search";
+    window.history.replaceState(null, "", newPath);
+  }, [searchQuery, sentimentFilter, statusFilter, employeeFilter, dateFrom, dateTo, minScore, maxScore]);
 
   // Build search query params with filters
   const searchQueryParams: Record<string, string> = { q: debouncedQuery };
@@ -105,6 +121,7 @@ export default function SearchPage() {
     setMinScore("");
     setMaxScore("");
     setDebouncedQuery("");
+    window.history.replaceState(null, "", "/search");
   };
 
   const hasActiveFilters = sentimentFilter !== "all" || statusFilter !== "all" || employeeFilter !== "all" || dateFrom || dateTo || minScore || maxScore;
