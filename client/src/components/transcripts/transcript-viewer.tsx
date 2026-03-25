@@ -161,6 +161,43 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     }
   }, [call?.analysis?.topics]);
 
+  // Build transcript segments from word-level data
+  // MUST be called before early returns to respect Rules of Hooks
+  const transcriptSegments = useMemo(() => {
+    if (call?.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0) {
+      return generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+    }
+    return [];
+  }, [call?.transcript?.words]);
+
+  // Compute search matches across segments
+  // MUST be called before early returns to respect Rules of Hooks
+  const searchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    const matches: { segmentIndex: number; charIndex: number }[] = [];
+    transcriptSegments.forEach((seg, segIdx) => {
+      const text = seg.text.toLowerCase();
+      let pos = 0;
+      while ((pos = text.indexOf(q, pos)) !== -1) {
+        matches.push({ segmentIndex: segIdx, charIndex: pos });
+        pos += 1;
+      }
+    });
+    return matches;
+  }, [searchQuery, transcriptSegments]);
+
+  // Navigate between search matches
+  // MUST be called before early returns to respect Rules of Hooks
+  const goToMatch = useCallback((idx: number) => {
+    if (searchMatches.length === 0) return;
+    const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    setSearchMatchIdx(wrapped);
+    const segIdx = searchMatches[wrapped].segmentIndex;
+    const el = transcriptContainerRef.current?.querySelector(`[data-testid="transcript-segment-${segIdx}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [searchMatches]);
+
   // Sync audio time with transcript highlight
   useEffect(() => {
     const audio = audioRef.current;
@@ -265,13 +302,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     }
   };
 
-  const transcriptSegments = useMemo(() => {
-    if (call.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0) {
-      return generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
-    }
-    return [];
-  }, [call.transcript?.words]);
-
   interface TranscriptSegment {
     start: number;
     end: number;
@@ -317,32 +347,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     segments.push(currentSegment);
     return segments;
   }
-
-  // Compute search matches across segments
-  const searchMatches = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    const matches: { segmentIndex: number; charIndex: number }[] = [];
-    transcriptSegments.forEach((seg, segIdx) => {
-      const text = seg.text.toLowerCase();
-      let pos = 0;
-      while ((pos = text.indexOf(q, pos)) !== -1) {
-        matches.push({ segmentIndex: segIdx, charIndex: pos });
-        pos += 1;
-      }
-    });
-    return matches;
-  }, [searchQuery, transcriptSegments]);
-
-  // Navigate between search matches
-  const goToMatch = useCallback((idx: number) => {
-    if (searchMatches.length === 0) return;
-    const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
-    setSearchMatchIdx(wrapped);
-    const segIdx = searchMatches[wrapped].segmentIndex;
-    const el = transcriptContainerRef.current?.querySelector(`[data-testid="transcript-segment-${segIdx}"]`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [searchMatches]);
 
   const jumpToTime = (timeMs: number) => {
     const audio = audioRef.current;
