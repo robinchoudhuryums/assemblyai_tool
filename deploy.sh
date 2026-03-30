@@ -108,6 +108,6 @@ echo ""
 # Log this deploy
 echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') | $BRANCH | ${PREV_COMMIT:0:12} -> ${NEW_COMMIT:0:12}" >> "$DEPLOY_LOG"
 
-# Show logs to verify startup
+# Show logs to verify startup (don't fail deploy if log viewing errors)
 sleep 2
-pm2 logs callanalyzer --lines 10 --nostream
+pm2 logs callanalyzer --lines 10 --nostream || true
