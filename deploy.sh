@@ -28,6 +28,9 @@ echo ""
 
 cd "$APP_DIR"
 
+# Prevent OOM on memory-constrained EC2 instances (applies to tsc, tests, and build)
+export NODE_OPTIONS="--max-old-space-size=1024"
+
 # Save current commit for rollback
 PREV_COMMIT=$(git rev-parse HEAD)
 echo "$PREV_COMMIT" > "$BACKUP_MARKER"
@@ -87,7 +90,6 @@ fi
 
 # [4/5] Build
 echo "[4/5] Building..."
-export NODE_OPTIONS="--max-old-space-size=1024"
 if ! npm run build; then
   rollback "Production build failed"
 fi

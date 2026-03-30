@@ -211,6 +211,20 @@ export async function setupAuth(app: Express) {
   });
   app.use(sessionMiddleware);
 
+  // Passport 0.7+ calls req.session.regenerate() and req.session.save() after login.
+  // connect-pg-simple may not have the session fully initialized when passport calls these,
+  // causing "Cannot read properties of undefined (reading 'regenerate')".
+  // This middleware ensures these methods exist as no-ops if not yet initialized.
+  app.use((req, _res, next) => {
+    if (req.session && !req.session.regenerate) {
+      (req.session as any).regenerate = (cb: (err?: Error) => void) => cb();
+    }
+    if (req.session && !req.session.save) {
+      (req.session as any).save = (cb: (err?: Error) => void) => cb();
+    }
+    next();
+  });
+
   app.use(passport.initialize());
   app.use(passport.session());
 
