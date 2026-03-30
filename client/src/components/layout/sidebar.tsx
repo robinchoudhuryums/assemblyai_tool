@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -54,6 +54,10 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const [location, navigate] = useLocation();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [adminExpanded, setAdminExpanded] = useState(() => {
+    // Auto-expand if user is currently on an admin page
+    return location.startsWith("/admin");
+  });
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { theme, setTheme } = useAppearance();
@@ -310,87 +314,99 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           );
         })}
 
-        {/* Admin-only link */}
+        {/* Admin section — collapsible */}
         {user?.role === "admin" && (
           <>
-            <div className="pt-2 pb-1 px-1">
+            <button
+              onClick={() => setAdminExpanded(prev => !prev)}
+              className="w-full flex items-center justify-between pt-2 pb-1 px-1 group"
+              aria-expanded={adminExpanded}
+              aria-label="Toggle admin section"
+            >
               <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{t("section.admin")}</p>
-            </div>
-            <Link
-              href="/admin"
-              className={cn(
-                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
-                location === "/admin"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-              data-testid="nav-link-admin"
-            >
-              <Shield className="w-5 h-5" />
-              <span>{t("nav.admin")}</span>
-              {pendingRequestCount > 0 && (
-                <span className={cn(
-                  "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
-                  location === "/admin"
-                    ? "bg-yellow-500 text-white"
-                    : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
-                )}>
-                  {pendingRequestCount}
-                </span>
-              )}
-            </Link>
-            <Link
-              href="/admin/templates"
-              className={cn(
-                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
-                location === "/admin/templates"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-              data-testid="nav-link-templates"
-            >
-              <Sliders className="w-5 h-5" />
-              <span>{t("nav.promptTemplates")}</span>
-            </Link>
-            <Link
-              href="/admin/ab-testing"
-              className={cn(
-                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
-                location === "/admin/ab-testing"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-              data-testid="nav-link-ab-testing"
-            >
-              <Flask className="w-5 h-5" />
-              <span>{t("nav.modelTesting")}</span>
-            </Link>
-            <Link
-              href="/admin/spend"
-              className={cn(
-                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
-                location === "/admin/spend"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-              data-testid="nav-link-spend"
-            >
-              <CurrencyDollar className="w-5 h-5" />
-              <span>{t("nav.spendTracking")}</span>
-            </Link>
-            <Link
-              href="/admin/security"
-              className={cn(
-                "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
-                location === "/admin/security"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-              data-testid="nav-link-security"
-            >
-              <ShieldWarning className="w-5 h-5" />
-              <span>{t("nav.security")}</span>
-            </Link>
+              <span className="text-muted-foreground group-hover:text-foreground transition-colors">
+                {adminExpanded ? <CaretUp className="w-3 h-3" /> : <CaretDown className="w-3 h-3" />}
+              </span>
+            </button>
+            {adminExpanded && (
+              <>
+                <Link
+                  href="/admin"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-admin"
+                >
+                  <Shield className="w-5 h-5" />
+                  <span>{t("nav.admin")}</span>
+                  {pendingRequestCount > 0 && (
+                    <span className={cn(
+                      "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
+                      location === "/admin"
+                        ? "bg-yellow-500 text-white"
+                        : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
+                    )}>
+                      {pendingRequestCount}
+                    </span>
+                  )}
+                </Link>
+                <Link
+                  href="/admin/templates"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/templates"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-templates"
+                >
+                  <Sliders className="w-5 h-5" />
+                  <span>{t("nav.promptTemplates")}</span>
+                </Link>
+                <Link
+                  href="/admin/ab-testing"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/ab-testing"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-ab-testing"
+                >
+                  <Flask className="w-5 h-5" />
+                  <span>{t("nav.modelTesting")}</span>
+                </Link>
+                <Link
+                  href="/admin/spend"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/spend"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-spend"
+                >
+                  <CurrencyDollar className="w-5 h-5" />
+                  <span>{t("nav.spendTracking")}</span>
+                </Link>
+                <Link
+                  href="/admin/security"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/security"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-security"
+                >
+                  <ShieldWarning className="w-5 h-5" />
+                  <span>{t("nav.security")}</span>
+                </Link>
+              </>
+            )}
           </>
         )}
       </nav>
