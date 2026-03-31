@@ -24,7 +24,7 @@ export default function ABTestingPage() {
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const { data: tests = [], isLoading } = useQuery<ABTest[]>({
+  const { data: tests = [], isLoading, error: testsError } = useQuery<ABTest[]>({
     queryKey: ["/api/ab-tests"],
     // Only poll while tests are actively processing — stop once all are done
     refetchInterval: (query) => {
@@ -245,6 +245,13 @@ export default function ABTestingPage() {
               <div className="flex items-center justify-center py-12">
                 <SpinnerGap className="w-6 h-6 animate-spin text-muted-foreground" />
               </div>
+            ) : testsError ? (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <p className="font-medium">Failed to load A/B tests</p>
+                  <p className="text-sm">{testsError.message}</p>
+                </CardContent>
+              </Card>
             ) : tests.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">

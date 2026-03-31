@@ -38,7 +38,9 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run tests (tsx --test tests/*.test.ts)
+npm run test         # Run backend tests (tsx --test tests/*.test.ts — 559 tests)
+npm run test:client  # Run frontend tests (Vitest + React Testing Library)
+npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
 npx vite build       # Frontend-only build (useful for quick verification)
 ```
 
@@ -67,6 +69,9 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/retention.test.ts` — Data retention (cutoff calculation, purgeExpiredCalls, cascade deletion, boundary edge cases)
   - `tests/webhook-delivery.test.ts` — Webhook delivery (HMAC signature generation/verification, event filtering, payload structure, retry logic)
   - `tests/pipeline-errors.test.ts` — Pipeline error handling (AI error classification, parseJsonResponse edge cases, quality gates, null-AI fallback, prompt building)
+  - `tests/audit-log.test.ts` — HIPAA audit log (entry format, auditContext extraction, retry config, event taxonomy)
+  - `tests/security-monitor.test.ts` — Security monitor (brute-force detection thresholds, credential stuffing, bulk access, severity classification, window expiration)
+  - `tests/aws-credentials.test.ts` — AWS credentials (env var resolution, IMDS caching, refresh buffer timing, priority order)
 
 ## Architecture
 
@@ -513,7 +518,7 @@ S3 and Bedrock traffic can be routed through AWS's private network instead of th
 
 **CI Pipeline** (`.github/workflows/ci.yml`):
 Runs on every push to `main` and every PR. Two parallel jobs:
-1. **Test & Build** — type check (`tsc`), unit tests (`npm test`), production build
+1. **Test & Build** — type check (`tsc`), backend unit tests (`npm test`), frontend unit tests (`npm run test:client`), production build
 2. **Dependency Audit** — `npm audit` for vulnerabilities; blocks on critical severity
 
 **Deploy Pipeline** (`.github/workflows/deploy.yml`):
@@ -589,3 +594,9 @@ CallAnalyzer will integrate with the **ums-knowledge-reference** repository to g
 - `AUTH_USERS` password complexity is enforced at startup — if a password fails validation (12+ chars, upper/lower/digit/special), the user is **silently skipped** with a `[SECURITY] Rejecting AUTH_USERS entry` log message
 - Employee schema validates email format (`.email()`), status is enum (`Active`/`Inactive`), coaching category is enum (not freeform string)
 - Search page filters sync to URL params — all filters are bookmarkable and restored on page load
+- Scoring thresholds (LOW_SCORE 4.0, HIGH_SCORE 9.0, STREAK 8.0) are centralized in `server/constants.ts` — LOW/HIGH are env-configurable via `SCORE_LOW_THRESHOLD` / `SCORE_HIGH_THRESHOLD`
+- Password complexity is enforced in Zod schemas (`createDbUserSchema`, `resetPasswordSchema`, `changePasswordSchema`) — 12+ chars, uppercase, lowercase, digit, special character
+
+## Long-Term Improvement Roadmap
+
+See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full multi-sprint improvement plan covering testing, security hardening, code quality, accessibility, and infrastructure.

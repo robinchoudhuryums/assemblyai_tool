@@ -19,13 +19,7 @@ import type {
   Badge, InsertBadge,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient } from "./storage";
-
-/** Safe parseFloat that returns fallback on NaN. */
-function safeFloat(value: string | undefined | null, fallback = 0): number {
-  if (!value) return fallback;
-  const n = parseFloat(value);
-  return Number.isNaN(n) ? fallback : n;
-}
+import { safeFloat } from "./routes/utils";
 
 /**
  * Maps a database row (snake_case) to the application model (camelCase).
@@ -955,6 +949,9 @@ export class PostgresStorage implements IStorage {
         ])
       );
     }
+
+    // HIPAA audit: log which call IDs are being purged by retention policy
+    console.log(`[HIPAA_AUDIT] retention_purge: ${callIds.length} calls purged (IDs: ${callIds.join(", ")})`);
 
     // Delete the DB records (cascading deletes handle transcripts, sentiments, analyses)
     const { rowCount } = await this.db.query(

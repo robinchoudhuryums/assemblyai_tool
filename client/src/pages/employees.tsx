@@ -327,12 +327,12 @@ export default function EmployeesPage() {
       <td className="px-4 py-2.5 text-sm">
         <div className="flex items-center gap-1">
           <Link href={`/reports?employee=${emp.id}`}>
-            <Button size="sm" variant="ghost" title="View Agent Profile">
+            <Button size="sm" variant="ghost" title="View Agent Profile" aria-label="View agent profile">
               <Eye className="w-3.5 h-3.5" />
             </Button>
           </Link>
           <Link href={`/scorecard/${emp.id}`}>
-            <Button size="sm" variant="ghost" title="View Scorecard">
+            <Button size="sm" variant="ghost" title="View Scorecard" aria-label="View scorecard">
               <FileText className="w-3.5 h-3.5" />
             </Button>
           </Link>
@@ -340,12 +340,12 @@ export default function EmployeesPage() {
             size="sm"
             variant={compareIds.includes(emp.id) ? "default" : "ghost"}
             onClick={() => toggleCompare(emp.id)}
-            title="Compare"
+            title="Compare" aria-label="Compare agent"
             className="w-7 h-7 p-0"
           >
             <GitDiff className="w-3.5 h-3.5" />
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => openEditDialog(emp)}>
+          <Button size="sm" variant="ghost" aria-label="Edit agent" onClick={() => openEditDialog(emp)}>
             <PencilSimple className="w-3.5 h-3.5" />
           </Button>
         </div>

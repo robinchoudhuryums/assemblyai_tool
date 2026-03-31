@@ -86,18 +86,24 @@ export function registerOperationsRoutes(
         employee: employee as string,
       });
 
+      // Sanitize CSV values to prevent formula injection (=, +, -, @, tab, CR)
+      const sanitizeCsvVal = (val: string) => /^[=+\-@\t\r]/.test(val) ? "'" + val : val;
+      const escapeCsv = (val: string) => {
+        const s = sanitizeCsvVal(val);
+        return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+      };
       const header = "Date,Employee,Duration (s),Sentiment,Score,Party Type,Status,Flags,Summary\n";
       const rows = calls.map(c => {
         const date = c.uploadedAt ? new Date(c.uploadedAt).toISOString() : "";
-        const employee = (c.employee?.name || "Unassigned").replace(/"/g, '""');
-        const duration = c.duration || "";
+        const employee = c.employee?.name || "Unassigned";
+        const duration = String(c.duration || "");
         const sentiment = c.sentiment?.overallSentiment || "";
-        const score = c.analysis?.performanceScore || "";
+        const score = String(c.analysis?.performanceScore || "");
         const party = c.analysis?.callPartyType || "";
         const status = c.status || "";
         const flags = Array.isArray(c.analysis?.flags) ? (c.analysis.flags as string[]).join("; ") : "";
-        const summary = (typeof c.analysis?.summary === "string" ? c.analysis.summary : "").replace(/"/g, '""').replace(/\n/g, " ");
-        return `"${date}","${employee}","${duration}","${sentiment}","${score}","${party}","${status}","${flags}","${summary}"`;
+        const summary = (typeof c.analysis?.summary === "string" ? c.analysis.summary : "").replace(/\n/g, " ");
+        return [date, employee, duration, sentiment, score, party, status, flags, summary].map(escapeCsv).join(",");
       }).join("\n");
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");

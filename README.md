@@ -669,7 +669,7 @@ assemblyai_tool/
 │       └── logger.ts               # Structured logging utility
 ├── shared/
 │   └── schema.ts                   # Zod schemas shared between client and server
-├── tests/
+├── tests/                           # 559 tests across 24 files
 │   ├── schema.test.ts              # Schema validation tests
 │   ├── ai-provider.test.ts         # AI provider utility tests
 │   ├── auth.test.ts                # Authentication + role-based access tests
@@ -681,7 +681,20 @@ assemblyai_tool/
 │   ├── scoring-calibration.test.ts # Score calibration and normalization tests
 │   ├── validation.test.ts          # Input validation and sanitization tests
 │   ├── utils.test.ts               # Shared utility function tests
-│   └── waf.test.ts                 # WAF middleware tests
+│   ├── waf.test.ts                 # WAF middleware tests
+│   ├── sigv4.test.ts               # AWS Signature V4 signing tests
+│   ├── totp.test.ts                # TOTP/MFA tests
+│   ├── gamification.test.ts        # Gamification (points, streaks, badges) tests
+│   ├── assemblyai-metrics.test.ts  # Speech metrics tests
+│   ├── webhooks.test.ts            # Webhook CRUD + HMAC tests
+│   ├── webhook-delivery.test.ts    # Webhook delivery + retry tests
+│   ├── batch-inference.test.ts     # Bedrock batch inference tests
+│   ├── mfa-enforcement.test.ts     # MFA enforcement tests
+│   ├── retention.test.ts           # Data retention + purge tests
+│   ├── pipeline-errors.test.ts     # Pipeline error classification tests
+│   ├── audit-log.test.ts           # HIPAA audit log format + context tests
+│   ├── security-monitor.test.ts    # Security monitor threshold + alert tests
+│   └── aws-credentials.test.ts     # AWS credential resolution + caching tests
 ├── deploy/
 │   └── ec2/                        # EC2 deployment configs (Caddyfile, systemd, user-data)
 ├── .github/
@@ -785,7 +798,9 @@ npm run dev          # Dev server with hot reload (tsx watch + Vite HMR)
 npm run build        # Production build (Vite frontend → dist/client/, esbuild backend → dist/index.js)
 npm run start        # Production server (NODE_ENV=production)
 npm run check        # TypeScript type check
-npm run test         # Run unit tests (Node.js test runner via tsx)
+npm run test         # Run backend unit tests (Node.js test runner via tsx — 559 tests)
+npm run test:client  # Run frontend unit tests (Vitest + React Testing Library)
+npm run test:e2e     # Run E2E tests (Playwright, requires dev server running)
 ```
 
 ---

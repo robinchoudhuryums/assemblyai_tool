@@ -4,15 +4,10 @@
  */
 import { Router } from "express";
 import { storage } from "../storage";
+import { requireAuth } from "../auth";
 import { getLeaderboard, computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
-
-function requireAuth(req: any, res: any, next: any) {
-  if (!req.isAuthenticated?.() || !req.user) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-  next();
-}
+import { STREAK_SCORE_THRESHOLD } from "../constants";
 
 export function registerGamificationRoutes(router: Router): void {
   // GET /api/gamification/leaderboard — ranked list of employees with points, badges, streaks
@@ -79,7 +74,7 @@ export function registerGamificationRoutes(router: Router): void {
       let currentStreak = 0;
       for (const call of completedCalls) {
         const score = parseFloat(call.analysis?.performanceScore || "0");
-        if (score >= 8.0) currentStreak++;
+        if (score >= STREAK_SCORE_THRESHOLD) currentStreak++;
         else break;
       }
 

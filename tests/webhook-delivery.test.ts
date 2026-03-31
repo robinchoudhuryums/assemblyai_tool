@@ -198,18 +198,21 @@ describe("Webhook events", () => {
 // ── Retry Logic ─────────────────────────────────
 
 describe("Webhook retry logic", () => {
-  it("retry strategy: single retry with delay", () => {
+  it("retry strategy: exponential backoff with 4 retries", () => {
     // Verify constants match expected behavior
     const WEBHOOK_TIMEOUT_MS = 5_000;
-    const WEBHOOK_RETRY_DELAY_MS = 3_000;
+    const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
+    const WEBHOOK_MAX_RETRIES = 4;
 
     assert.equal(WEBHOOK_TIMEOUT_MS, 5000, "Timeout should be 5 seconds");
-    assert.equal(WEBHOOK_RETRY_DELAY_MS, 3000, "Retry delay should be 3 seconds");
+    assert.equal(WEBHOOK_RETRY_BASE_DELAY_MS, 2000, "Base retry delay should be 2 seconds");
+    assert.equal(WEBHOOK_MAX_RETRIES, 4, "Should retry up to 4 times");
   });
 
-  it("total max time per delivery: timeout + retry_delay + timeout", () => {
-    const maxTime = 5000 + 3000 + 5000; // first attempt + delay + retry
-    assert.equal(maxTime, 13000, "Max delivery time should be 13 seconds");
+  it("total max time per delivery: 5 attempts with exponential backoff", () => {
+    // 5 attempts × 5s timeout + delays (2s + 4s + 8s + 16s)
+    const maxTime = 5 * 5000 + 2000 + 4000 + 8000 + 16000;
+    assert.equal(maxTime, 55000, "Max delivery time should be 55 seconds");
   });
 
   interface DeliveryAttempt {

@@ -45,8 +45,11 @@ jobs:
       - name: Type check
         run: npm run check
 
-      - name: Run unit tests
+      - name: Run backend unit tests
         run: npm run test
+
+      - name: Run frontend unit tests
+        run: npm run test:client
 
       - name: Build production bundle
         run: npm run build

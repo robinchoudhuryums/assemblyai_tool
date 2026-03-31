@@ -32,13 +32,7 @@ import { S3Client } from "./services/s3";
 import { getPool } from "./db/pool";
 import { PostgresStorage } from "./storage-postgres";
 import { randomUUID } from "crypto";
-
-/** Safe parseFloat that returns fallback on NaN. */
-function safeFloat(value: string | undefined | null, fallback = 0): number {
-  if (!value) return fallback;
-  const n = parseFloat(value);
-  return Number.isNaN(n) ? fallback : n;
-}
+import { safeFloat } from "./routes/utils";
 
 /** Common interface for S3 object storage client */
 export interface ObjectStorageClient {

@@ -21,6 +21,7 @@
 import { randomUUID } from "crypto";
 import { getPool } from "../db/pool";
 import { logPhiAccess } from "./audit-log";
+import { safeFloat, safeJsonParse } from "../routes/utils";
 
 // --- Types ---
 
@@ -211,18 +212,6 @@ interface CallData {
   };
 }
 
-function safeFloat(val: string | number | undefined | null, fallback = 0): number {
-  if (val === null || val === undefined) return fallback;
-  const n = typeof val === "number" ? val : parseFloat(val);
-  return Number.isNaN(n) ? fallback : n;
-}
-
-function safeJsonParse<T>(val: unknown, fallback: T): T {
-  if (typeof val === "string") {
-    try { return JSON.parse(val) as T; } catch { return fallback; }
-  }
-  return (val as T) || fallback;
-}
 
 /**
  * Aggregate performance metrics from a set of calls.
