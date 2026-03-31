@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ArrowsDownUp, BookmarkSimple, CaretLeft, CaretRight, CheckSquare, DownloadSimple, Eye, FileArrowDown, FileAudio, Play, ShieldStar, Square, Star, Trash, Trophy, UserCheck, Warning, Waveform, X } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, ArrowDown, ArrowUp, ArrowsDownUp, BookmarkSimple, CaretLeft, CaretRight, CheckSquare, DownloadSimple, Eye, FileArrowDown, FileAudio, Play, ShieldStar, Square, Star, Trash, Trophy, UserCheck, Warning, Waveform, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -82,7 +82,7 @@ export default function CallsTable() {
     employee: employeeFilter === "all" ? "" : employeeFilter,
   }), [statusFilter, sentimentFilter, employeeFilter]);
 
-  const { data: callsResponse, isLoading: isLoadingCalls, isFetching, error: callsError } = useQuery<PaginatedCalls>({
+  const { data: callsResponse, isLoading: isLoadingCalls, isFetching, error: callsError, refetch: refetchCalls } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { ...filterParams, cursor, mode: "cursor" }],
   });
 
@@ -326,7 +326,11 @@ export default function CallsTable() {
         <div className="text-center py-8">
           <Warning className="w-8 h-8 text-destructive mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">Failed to load calls. Please try again.</p>
-          <p className="text-xs text-muted-foreground mt-1">{(callsError as Error).message}</p>
+          <p className="text-xs text-muted-foreground mt-1 mb-3">{(callsError as Error).message}</p>
+          <Button variant="outline" size="sm" onClick={() => refetchCalls()}>
+            <ArrowCounterClockwise className="w-3.5 h-3.5 mr-1.5" />
+            Retry
+          </Button>
         </div>
       </div>
     );

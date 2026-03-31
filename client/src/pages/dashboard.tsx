@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import { ArrowCounterClockwise, CaretDown, CaretUp, Eye, EyeSlash, GearSix, MagnifyingGlass, Plus, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, CaretDown, CaretUp, Eye, EyeSlash, GearSix, MagnifyingGlass, Plus, TrendUp, Trophy, UploadSimple, Warning } from "@phosphor-icons/react";
 import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -242,6 +242,21 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Empty state for new users */}
+        {calls && calls.length === 0 && (
+          <div className="bg-card rounded-xl border border-border p-8 text-center">
+            <UploadSimple className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <h3 className="text-lg font-semibold text-foreground mb-1">No calls analyzed yet</h3>
+            <p className="text-sm text-muted-foreground mb-4">Upload your first call recording to get started with AI-powered analysis.</p>
+            <Link href="/upload">
+              <Button>
+                <Plus className="w-4 h-4 mr-2" />
+                Upload Your First Call
+              </Button>
+            </Link>
           </div>
         )}
 

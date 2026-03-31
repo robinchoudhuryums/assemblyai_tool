@@ -133,6 +133,7 @@ function Router() {
       switch (e.key) {
         case "Escape":
           setShowShortcuts(false);
+          setSidebarOpen(false);
           // Broadcast escape to child components (edit modes, panels, etc.)
           window.dispatchEvent(new CustomEvent("app:escape"));
           break;
