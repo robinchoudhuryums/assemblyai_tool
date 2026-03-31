@@ -98,6 +98,24 @@ fi
 echo "[5/5] Restarting pm2..."
 pm2 restart all
 
+# Wait for app to pass health check (up to 30 seconds)
+echo "Waiting for app to start..."
+APP_PORT="${PORT:-5000}"
+HEALTHY=false
+for i in $(seq 1 30); do
+  if curl -sf "http://localhost:${APP_PORT}/api/health" > /dev/null 2>&1; then
+    echo "App healthy after ${i}s"
+    HEALTHY=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HEALTHY" != "true" ]; then
+  echo "WARNING: App did not respond to health check within 30s."
+  echo "Check logs: pm2 logs callanalyzer --lines 50"
+fi
+
 echo ""
 echo "=== Deploy complete ==="
 echo "Previous: ${PREV_COMMIT:0:12}"
@@ -108,6 +126,5 @@ echo ""
 # Log this deploy
 echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') | $BRANCH | ${PREV_COMMIT:0:12} -> ${NEW_COMMIT:0:12}" >> "$DEPLOY_LOG"
 
-# Show logs to verify startup (don't fail deploy if log viewing errors)
-sleep 2
+# Show recent logs to verify startup
 pm2 logs callanalyzer --lines 10 --nostream || true
