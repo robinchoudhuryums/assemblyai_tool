@@ -96,15 +96,22 @@ fi
 
 # [5/5] Restart
 echo "[5/5] Restarting pm2..."
-pm2 restart all
+# Try restart first; if no processes exist, start fresh
+if ! pm2 restart all 2>/dev/null; then
+  echo "No existing pm2 processes — starting fresh..."
+  pm2 start dist/index.js --name callanalyzer
+fi
+pm2 save 2>/dev/null || true
 
 # Wait for app to pass health check (up to 30 seconds)
 echo "Waiting for app to start..."
 APP_PORT="${PORT:-5000}"
 HEALTHY=false
-for i in $(seq 1 30); do
+TRIES=0
+while [ "$TRIES" -lt 30 ]; do
+  TRIES=$((TRIES + 1))
   if curl -sf "http://localhost:${APP_PORT}/api/health" > /dev/null 2>&1; then
-    echo "App healthy after ${i}s"
+    echo "App healthy after ${TRIES}s"
     HEALTHY=true
     break
   fi
@@ -113,7 +120,7 @@ done
 
 if [ "$HEALTHY" != "true" ]; then
   echo "WARNING: App did not respond to health check within 30s."
-  echo "Check logs: pm2 logs callanalyzer --lines 50"
+  echo "Check logs with: pm2 logs --lines 50"
 fi
 
 echo ""
