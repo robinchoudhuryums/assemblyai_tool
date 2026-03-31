@@ -150,9 +150,10 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.uploaded_at >= NOW() - INTERVAL '${months} months'
+             WHERE c.status = 'completed' AND c.uploaded_at >= NOW() - make_interval(months => $1)
              GROUP BY date_trunc('month', c.uploaded_at)
-             ORDER BY period_start`
+             ORDER BY period_start`,
+          [months]
           );
           periods = result.rows;
         } else {
@@ -167,9 +168,10 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.uploaded_at >= NOW() - INTERVAL '${weeks} weeks'
+             WHERE c.status = 'completed' AND c.uploaded_at >= NOW() - make_interval(weeks => $1)
              GROUP BY date_trunc('week', c.uploaded_at)
-             ORDER BY period_start`
+             ORDER BY period_start`,
+          [weeks]
           );
           periods = result.rows;
         }
@@ -200,8 +202,9 @@ export function register(router: Router) {
       let periods: any[];
 
       if (pool) {
+        // Whitelist truncUnit to prevent SQL injection (not parameterizable in date_trunc)
         const truncUnit = period === "monthly" ? "month" : "week";
-        const intervalValue = period === "monthly" ? `${months} months` : `${weeks} weeks`;
+        const intervalUnit = period === "monthly" ? months : weeks;
 
         const result = await pool.query(
           `SELECT
@@ -216,10 +219,10 @@ export function register(router: Router) {
            LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
            WHERE c.status = 'completed'
              AND c.employee_id = $1
-             AND c.uploaded_at >= NOW() - INTERVAL '${intervalValue}'
+             AND c.uploaded_at >= NOW() - make_interval(${truncUnit === "month" ? "months" : "weeks"} => $2)
            GROUP BY date_trunc('${truncUnit}', c.uploaded_at)
            ORDER BY period_start`,
-          [employeeId]
+          [employeeId, intervalUnit]
         );
         periods = result.rows;
       } else {
@@ -285,7 +288,9 @@ export function register(router: Router) {
       const csvRows = [headers.join(",")];
       for (const r of rows) {
         const escapeCsv = (val: any) => {
-          const s = String(val ?? "");
+          let s = String(val ?? "");
+          // Prevent CSV formula injection (Excel/LibreOffice execute =, +, -, @, tab, CR as formulas)
+          if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
           return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
         };
         csvRows.push([
@@ -329,7 +334,11 @@ export function register(router: Router) {
       const headers = ["Team", "Employee", "Call Count", "Avg Score", "Avg Duration (sec)"];
       const csvRows = [headers.join(",")];
       for (const r of result.rows) {
-        csvRows.push([r.team, r.employee_name, r.call_count, r.avg_score, r.avg_duration].map((v) => String(v ?? "")).join(","));
+        csvRows.push([r.team, r.employee_name, r.call_count, r.avg_score, r.avg_duration].map((v) => {
+          let s = String(v ?? "");
+          if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
+          return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(","));
       }
 
       logPhiAccess({ ...auditContext(req as any), timestamp: new Date().toISOString(), event: "export_team_csv", resourceType: "export" });

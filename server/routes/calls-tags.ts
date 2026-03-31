@@ -11,6 +11,9 @@ export function registerCallTagRoutes(router: Router) {
   router.get("/api/calls/:id/tags", requireAuth, async (req, res) => {
     try {
       const callId = req.params.id;
+      // Verify call exists and user has access
+      const call = await storage.getCall(callId);
+      if (!call) return res.status(404).json({ message: "Call not found" });
       const pool = getPool();
       if (pool) {
         const result = await pool.query(
