@@ -243,6 +243,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/admin/incident-response-plan` | admin | Get escalation contacts and response procedures |
 | GET | `/api/admin/calibration` | admin | Latest score calibration snapshot |
 | POST | `/api/admin/calibration/analyze` | admin | Trigger manual calibration analysis (query: `days`) |
+| POST | `/api/admin/calibration/apply` | admin | Apply recommended calibration values (guard rail: ±0.5 max shift) |
 | GET | `/api/admin/telephony/status` | admin | 8x8 telephony integration status |
 
 ### User Management (admin only)
@@ -596,6 +597,7 @@ CallAnalyzer will integrate with the **ums-knowledge-reference** repository to g
 - Search page filters sync to URL params — all filters are bookmarkable and restored on page load
 - Scoring thresholds (LOW_SCORE 4.0, HIGH_SCORE 9.0, STREAK 8.0) are centralized in `server/constants.ts` — LOW/HIGH are env-configurable via `SCORE_LOW_THRESHOLD` / `SCORE_HIGH_THRESHOLD`
 - Password complexity is enforced in Zod schemas (`createDbUserSchema`, `resetPasswordSchema`, `changePasswordSchema`) — 12+ chars, uppercase, lowercase, digit, special character
+- Auto-calibration: admin can apply recommended values via `POST /api/admin/calibration/apply`. Runtime overrides are persisted to S3 (`calibration/active-config.json`) and loaded on startup. Guard rail: max ±0.5 shift per application. History tracked under `calibration/history/`.
 
 ## Long-Term Improvement Roadmap
 

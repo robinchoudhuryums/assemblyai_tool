@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { metrics } from "../services/logger";
-import { logPhiAccess } from "../services/audit-log";
+import { logPhiAccess, auditContext } from "../services/audit-log";
 import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../services/auto-calibration";
 import { is8x8Enabled } from "../services/telephony-8x8";
 
@@ -206,6 +206,60 @@ export function registerOperationsRoutes(
     } catch (error) {
       console.error("Calibration analysis error:", (error as Error).message);
       res.status(500).json({ message: "Failed to run calibration analysis" });
+    }
+  });
+
+  // POST /api/admin/calibration/apply — apply recommended calibration values
+  router.post("/api/admin/calibration/apply", requireRole("admin"), async (req, res) => {
+    try {
+      const { aiModelMean, center, spread } = req.body;
+      if (typeof aiModelMean !== "number" || typeof spread !== "number") {
+        return res.status(400).json({ message: "aiModelMean and spread are required numbers" });
+      }
+
+      // Guard rails: max shift ±0.5 per application from current values
+      const { getCalibrationConfig, setRuntimeCalibration } = await import("../services/scoring-calibration");
+      const current = getCalibrationConfig();
+      const MAX_SHIFT = 0.5;
+      if (Math.abs(aiModelMean - current.aiModelMean) > MAX_SHIFT) {
+        return res.status(400).json({ message: `aiModelMean shift exceeds ±${MAX_SHIFT} guard rail (current: ${current.aiModelMean}, requested: ${aiModelMean})` });
+      }
+      if (Math.abs(spread - current.spread) > MAX_SHIFT) {
+        return res.status(400).json({ message: `spread shift exceeds ±${MAX_SHIFT} guard rail (current: ${current.spread}, requested: ${spread})` });
+      }
+
+      const overrides = {
+        enabled: true,
+        aiModelMean,
+        center: typeof center === "number" ? center : current.center,
+        spread,
+      };
+      setRuntimeCalibration(overrides);
+
+      // Persist to S3
+      const s3Client = storage.getObjectStorageClient();
+      if (s3Client) {
+        await s3Client.uploadJson("calibration/active-config.json", overrides);
+        await s3Client.uploadJson(`calibration/history/${new Date().toISOString().replace(/[:.]/g, "-")}.json`, {
+          ...overrides,
+          appliedAt: new Date().toISOString(),
+          appliedBy: (req as any).user?.username,
+          previousConfig: current,
+        });
+      }
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "calibration_applied",
+        resourceType: "calibration",
+        detail: JSON.stringify(overrides),
+      });
+
+      res.json({ message: "Calibration applied", config: getCalibrationConfig() });
+    } catch (error) {
+      console.error("Calibration apply error:", (error as Error).message);
+      res.status(500).json({ message: "Failed to apply calibration" });
     }
   });
 

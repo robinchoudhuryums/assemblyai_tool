@@ -35,15 +35,41 @@ function safeParseFloat(envVal: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-/** Default calibration config — loaded from env vars */
+/**
+ * Runtime overrides applied via admin calibration UI.
+ * Persisted to S3 (`calibration/active-config.json`) and loaded on startup.
+ * Takes precedence over env vars when set.
+ */
+let runtimeOverrides: Partial<ScoringCalibration> | null = null;
+
+/** Apply runtime overrides (called from admin calibration endpoint). */
+export function setRuntimeCalibration(overrides: Partial<ScoringCalibration>): void {
+  runtimeOverrides = overrides;
+}
+
+/** Load runtime overrides from S3 on startup. */
+export async function loadPersistedCalibration(s3Client: { downloadJson<T>(key: string): Promise<T | undefined> } | undefined): Promise<void> {
+  if (!s3Client) return;
+  try {
+    const stored = await s3Client.downloadJson<Partial<ScoringCalibration>>("calibration/active-config.json");
+    if (stored) {
+      runtimeOverrides = stored;
+      console.log("[CALIBRATION] Loaded persisted calibration overrides:", JSON.stringify(stored));
+    }
+  } catch {
+    // No persisted config — use env vars
+  }
+}
+
+/** Default calibration config — runtime overrides > env vars > defaults */
 export function getCalibrationConfig(): ScoringCalibration {
   return {
-    enabled: process.env.SCORE_CALIBRATION_ENABLED === "true",
-    center: safeParseFloat(process.env.SCORE_CALIBRATION_CENTER, 5.5),
-    spread: safeParseFloat(process.env.SCORE_CALIBRATION_SPREAD, 1.2),
-    aiModelMean: safeParseFloat(process.env.SCORE_AI_MODEL_MEAN, 7.0),
-    lowThreshold: safeParseFloat(process.env.SCORE_LOW_THRESHOLD, 4.0),
-    highThreshold: safeParseFloat(process.env.SCORE_HIGH_THRESHOLD, 9.0),
+    enabled: runtimeOverrides?.enabled ?? (process.env.SCORE_CALIBRATION_ENABLED === "true"),
+    center: runtimeOverrides?.center ?? safeParseFloat(process.env.SCORE_CALIBRATION_CENTER, 5.5),
+    spread: runtimeOverrides?.spread ?? safeParseFloat(process.env.SCORE_CALIBRATION_SPREAD, 1.2),
+    aiModelMean: runtimeOverrides?.aiModelMean ?? safeParseFloat(process.env.SCORE_AI_MODEL_MEAN, 7.0),
+    lowThreshold: runtimeOverrides?.lowThreshold ?? safeParseFloat(process.env.SCORE_LOW_THRESHOLD, 4.0),
+    highThreshold: runtimeOverrides?.highThreshold ?? safeParseFloat(process.env.SCORE_HIGH_THRESHOLD, 9.0),
   };
 }
 
