@@ -38,6 +38,17 @@ export function useWebSocket() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const mountedRef = useRef(true);
 
+  const scheduleReconnect = useCallback(() => {
+    if (!mountedRef.current || attemptRef.current >= MAX_RECONNECT_ATTEMPTS) return;
+    if (reconnectTimer.current) return; // Already scheduled
+    const delay = backoffWithJitter(attemptRef.current);
+    attemptRef.current++;
+    reconnectTimer.current = setTimeout(() => {
+      reconnectTimer.current = undefined;
+      connect();
+    }, delay);
+  }, []);
+
   const connect = useCallback(() => {
     // Don't connect if unmounted
     if (!mountedRef.current) return;
@@ -97,27 +108,19 @@ export function useWebSocket() {
 
         setConnectionState("disconnected");
         window.dispatchEvent(new CustomEvent("ws:state", { detail: { state: "disconnected" } }));
-
-        if (attemptRef.current < MAX_RECONNECT_ATTEMPTS) {
-          const delay = backoffWithJitter(attemptRef.current);
-          attemptRef.current++;
-          reconnectTimer.current = setTimeout(connect, delay);
-        }
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
-        ws.close();
+        // Schedule reconnect before close — onclose may not fire reliably after error in all browsers
+        scheduleReconnect();
+        try { ws.close(); } catch { /* already closed */ }
       };
     } catch {
       if (!mountedRef.current) return;
-      // WebSocket not available, retry with backoff
-      if (attemptRef.current < MAX_RECONNECT_ATTEMPTS) {
-        const delay = backoffWithJitter(attemptRef.current);
-        attemptRef.current++;
-        reconnectTimer.current = setTimeout(connect, delay);
-      }
+      scheduleReconnect();
     }
-  }, [toast, t, queryClient]);
+  }, [toast, t, queryClient, scheduleReconnect]);
 
   useEffect(() => {
     mountedRef.current = true;

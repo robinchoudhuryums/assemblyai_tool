@@ -35,7 +35,7 @@ export default function PromptTemplatesPage() {
   const [showNewForm, setShowNewForm] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const { data: templates, isLoading } = useQuery<PromptTemplate[]>({
+  const { data: templates, isLoading, error: templatesError } = useQuery<PromptTemplate[]>({
     queryKey: ["/api/prompt-templates"],
   });
 
@@ -133,7 +133,12 @@ export default function PromptTemplatesPage() {
         )}
 
         {/* Existing templates */}
-        {isLoading ? (
+        {templatesError ? (
+          <Card><CardContent className="pt-6 text-center text-muted-foreground">
+            <p className="font-medium">Failed to load templates</p>
+            <p className="text-sm">{templatesError.message}</p>
+          </CardContent></Card>
+        ) : isLoading ? (
           <div className="space-y-4">
             {Array.from({ length: 2 }).map((_, i) => (
               <Card key={i}><CardContent className="pt-6"><Skeleton className="h-32 w-full" /></CardContent></Card>

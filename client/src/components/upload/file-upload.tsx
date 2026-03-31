@@ -323,7 +323,7 @@ export default function FileUpload() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </>
                 )}
 
@@ -331,7 +331,7 @@ export default function FileUpload() {
                   <div className="flex items-center gap-2 text-green-600">
                     <CheckCircle className="w-5 h-5" />
                     <span className="text-sm font-medium">Complete</span>
-                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>
                 )}
 
@@ -339,7 +339,7 @@ export default function FileUpload() {
                   <div className="flex items-center gap-2 text-red-600">
                     <XCircle className="w-5 h-5" />
                     <span className="text-sm">{fileData.error}</span>
-                    <Button size="sm" variant="ghost" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>
                 )}
               </div>

@@ -67,7 +67,7 @@ function StreakIndicator({ streak }: { streak: number }) {
 export default function Leaderboard() {
   const [period, setPeriod] = useState<string>("all");
 
-  const { data, isLoading } = useQuery<{ leaderboard: LeaderboardEntry[]; period: string }>({
+  const { data, isLoading, error } = useQuery<{ leaderboard: LeaderboardEntry[]; period: string }>({
     queryKey: ["/api/gamification/leaderboard", period],
     queryFn: async () => {
       const res = await fetch(`/api/gamification/leaderboard?period=${period}`, { credentials: "include" });
@@ -82,6 +82,15 @@ export default function Leaderboard() {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingIndicator text="Loading leaderboard..." />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+        <p className="text-lg font-medium">Failed to load leaderboard</p>
+        <p className="text-sm">{error.message}</p>
       </div>
     );
   }

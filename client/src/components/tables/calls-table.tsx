@@ -646,15 +646,15 @@ export default function CallsTable() {
                 <td className="py-3 px-2">
                   <div className="flex items-center space-x-2">
                     <Link href={`/transcripts/${call.id}`}>
-                      <Button size="sm" variant="ghost" disabled={call.status !== 'completed'}>
+                      <Button size="sm" variant="ghost" aria-label="View transcript" disabled={call.status !== 'completed'}>
                         <Eye className="w-4 h-4" />
                       </Button>
                     </Link>
-                    <Button size="sm" variant="ghost"><Play className="w-4 h-4" /></Button>
-                    <Button size="sm" variant="ghost" disabled={call.status !== 'completed'}><DownloadSimple className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" aria-label="Play audio"><Play className="w-4 h-4" /></Button>
+                    <Button size="sm" variant="ghost" aria-label="Download audio" disabled={call.status !== 'completed'}><DownloadSimple className="w-4 h-4" /></Button>
                     <Button
                       size="sm" variant="ghost" className="text-red-500 hover:text-red-600"
-                      onClick={() => handleDelete(call.id)} disabled={deleteMutation.isPending}
+                      aria-label="Delete call" onClick={() => handleDelete(call.id)} disabled={deleteMutation.isPending}
                     >
                       <Trash className="w-4 h-4" />
                     </Button>
@@ -689,7 +689,7 @@ export default function CallsTable() {
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+            <Button size="sm" variant="ghost" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
               <CaretLeft className="w-4 h-4" />
             </Button>
             {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
@@ -706,7 +706,7 @@ export default function CallsTable() {
                 </Button>
               );
             })}
-            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+            <Button size="sm" variant="ghost" aria-label="Next page" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
               <CaretRight className="w-4 h-4" />
             </Button>
             {hasMore && (
