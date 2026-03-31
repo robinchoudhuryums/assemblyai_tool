@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Clock, Heart, Phone, Star, Warning } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Clock, Heart, Phone, Star, Warning } from "@phosphor-icons/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnimatedNumber } from "@/components/ui/animated-number";
+import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
 import { useTranslation } from "@/lib/i18n";
 import type { DashboardMetrics } from "@shared/schema";
@@ -9,7 +10,7 @@ import type { DashboardMetrics } from "@shared/schema";
 export default function MetricsOverview() {
   const [, navigate] = useLocation();
   const { t } = useTranslation();
-  const { data: metrics, isLoading, error } = useQuery<DashboardMetrics>({
+  const { data: metrics, isLoading, error, refetch } = useQuery<DashboardMetrics>({
     queryKey: ["/api/dashboard/metrics"],
   });
 
@@ -18,7 +19,11 @@ export default function MetricsOverview() {
       <div className="bg-card rounded-lg border border-destructive/30 p-6 text-center">
         <Warning className="w-6 h-6 text-destructive mx-auto mb-2" />
         <p className="text-sm font-medium text-destructive">{t("metrics.failedToLoad")}</p>
-        <p className="text-xs text-muted-foreground">{error.message}</p>
+        <p className="text-xs text-muted-foreground mb-3">{error.message}</p>
+        <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <ArrowCounterClockwise className="w-3.5 h-3.5 mr-1.5" />
+          Retry
+        </Button>
       </div>
     );
   }

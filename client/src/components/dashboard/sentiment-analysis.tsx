@@ -1,15 +1,31 @@
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { useLocation } from "wouter";
+import { ArrowCounterClockwise, Warning } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import type { SentimentDistribution } from "@shared/schema";
 
 export default function SentimentAnalysis() {
   const [, navigate] = useLocation();
   const { t } = useTranslation();
-  const { data: sentimentData, isLoading } = useQuery<SentimentDistribution>({
+  const { data: sentimentData, isLoading, error, refetch } = useQuery<SentimentDistribution>({
     queryKey: ["/api/dashboard/sentiment"],
   });
+
+  if (error) {
+    return (
+      <div className="bg-card rounded-lg border border-destructive/30 p-6 text-center">
+        <Warning className="w-6 h-6 text-destructive mx-auto mb-2" />
+        <p className="text-sm font-medium text-destructive">Failed to load sentiment data</p>
+        <p className="text-xs text-muted-foreground mb-3">{error.message}</p>
+        <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <ArrowCounterClockwise className="w-3.5 h-3.5 mr-1.5" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
