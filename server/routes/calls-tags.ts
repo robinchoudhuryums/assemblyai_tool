@@ -89,6 +89,7 @@ export function registerCallTagRoutes(router: Router) {
       const pool = getPool();
       if (!pool) return res.json([]);
       const tag = req.params.tag.toLowerCase();
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "search_calls_by_tag", resourceType: "call", detail: tag });
       const result = await pool.query(
         `SELECT c.id, c.file_name, c.status, c.duration, c.call_category, c.uploaded_at, c.employee_id,
                 e.name as employee_name
@@ -114,6 +115,7 @@ export function registerCallTagRoutes(router: Router) {
 
   router.get("/api/calls/:id/annotations", requireAuth, async (req, res) => {
     try {
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "view_annotations", resourceType: "annotation", resourceId: req.params.id });
       const pool = getPool();
       if (!pool) {
         res.json([]);

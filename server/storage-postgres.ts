@@ -956,6 +956,9 @@ export class PostgresStorage implements IStorage {
       );
     }
 
+    // HIPAA audit: log which call IDs are being purged by retention policy
+    console.log(`[HIPAA_AUDIT] retention_purge: ${callIds.length} calls purged (IDs: ${callIds.join(", ")})`);
+
     // Delete the DB records (cascading deletes handle transcripts, sentiments, analyses)
     const { rowCount } = await this.db.query(
       "DELETE FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",

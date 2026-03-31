@@ -14,19 +14,13 @@
  * Requires IAM permissions: bedrock:CreateModelInvocationJob, bedrock:GetModelInvocationJob
  * Uses the Converse API format for batch input/output.
  */
-import { createHmac, createHash } from "crypto";
 import { randomUUID } from "crypto";
 import { parseJsonResponse } from "./ai-provider";
 import type { CallAnalysis } from "./ai-provider";
+import { signRequest, sha256, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
+import type { AwsCredentials } from "./aws-credentials.js";
 
 const BATCH_TIMEOUT_MS = 30_000; // 30s for batch management API calls
-
-interface AwsCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-  region: string;
-}
 
 export interface PendingBatchItem {
   callId: string;
@@ -123,7 +117,7 @@ export class BedrockBatchService {
       modelInvocationType: "Converse",
     });
 
-    const headers = this.signRequest("POST", host, path, body, region, "bedrock");
+    const headers = signRequest({ method: "POST", host, rawPath: path, service: "bedrock", region, creds: this.credentials!, body, extraHeaders: [["content-type", "application/json"]] });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
@@ -170,7 +164,7 @@ export class BedrockBatchService {
     const jobId = jobArn.split("/").pop();
     const path = `/model-invocation-job/${jobId}`;
 
-    const headers = this.signRequest("GET", host, path, "", region, "bedrock");
+    const headers = signRequest({ method: "GET", host, rawPath: path, service: "bedrock", region, creds: this.credentials!, extraHeaders: [["content-type", "application/json"]] });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
@@ -246,13 +240,32 @@ export class BedrockBatchService {
 
   // --- S3 helpers (reuse credentials, minimal implementation) ---
 
+  // --- S3 helpers using shared sigv4 signing ---
+
+  private signS3Headers(
+    method: string, host: string, rawPath: string, region: string,
+    body?: Buffer, contentType?: string, queryString?: string,
+  ): Record<string, string> {
+    const creds = this.credentials!;
+    const payloadHash = body ? sha256Buffer(body) : EMPTY_PAYLOAD_HASH;
+
+    const extraHeaders: [string, string][] = [["x-amz-content-sha256", payloadHash]];
+    if (contentType) extraHeaders.push(["content-type", contentType]);
+    if (method === "PUT") extraHeaders.push(["x-amz-server-side-encryption", "AES256"]);
+
+    const headers = signRequest({ method, host, rawPath, queryString, service: "s3", region, creds, payloadHash, body, extraHeaders });
+    headers["X-Amz-Content-Sha256"] = payloadHash;
+    if (method === "PUT") headers["X-Amz-Server-Side-Encryption"] = "AES256";
+    return headers;
+  }
+
   private async s3Put(key: string, body: Buffer, contentType: string): Promise<void> {
     if (!this.credentials) throw new Error("Not configured");
     const region = this.credentials.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
     const path = `/${key}`;
 
-    const headers = this.signS3Request("PUT", host, path, region, body, contentType);
+    const headers = this.signS3Headers("PUT", host, path, region, body, contentType);
     const response = await fetch(`https://${host}${path}`, { method: "PUT", headers, body });
     if (!response.ok) {
       throw new Error(`S3 PUT failed for ${key}: ${await response.text()}`);
@@ -265,7 +278,7 @@ export class BedrockBatchService {
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
     const path = `/${key}`;
 
-    const headers = this.signS3Request("GET", host, path, region);
+    const headers = this.signS3Headers("GET", host, path, region);
     const response = await fetch(`https://${host}${path}`, { method: "GET", headers });
     if (response.status === 404) return undefined;
     if (!response.ok) throw new Error(`S3 GET failed for ${key}: ${await response.text()}`);
@@ -278,7 +291,7 @@ export class BedrockBatchService {
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
     const qs = `list-type=2&prefix=${encodeURIComponent(prefix)}`;
 
-    const headers = this.signS3Request("GET", host, "/", region, undefined, undefined, qs);
+    const headers = this.signS3Headers("GET", host, "/", region, undefined, undefined, qs);
     const response = await fetch(`https://${host}/?${qs}`, { method: "GET", headers });
     if (!response.ok) throw new Error(`S3 LIST failed: ${await response.text()}`);
 
@@ -288,107 +301,6 @@ export class BedrockBatchService {
     for (const m of matches) keys.push(m[1]);
     return keys;
   }
-
-  // --- SigV4 signing ---
-
-  private signRequest(
-    method: string, host: string, rawPath: string, body: string,
-    region: string, service: string,
-  ): Record<string, string> {
-    const creds = this.credentials!;
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const dateStamp = amzDate.slice(0, 8);
-    const payloadHash = sha256(body);
-
-    const canonicalUri = rawPath.split("/").map(seg => encodeURIComponent(seg)).join("/");
-
-    const canonicalHeaders =
-      `content-type:application/json\nhost:${host}\nx-amz-date:${amzDate}\n` +
-      (creds.sessionToken ? `x-amz-security-token:${creds.sessionToken}\n` : "");
-
-    const signedHeaders = creds.sessionToken
-      ? "content-type;host;x-amz-date;x-amz-security-token"
-      : "content-type;host;x-amz-date";
-
-    const canonicalRequest = [method, canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
-    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256(canonicalRequest)].join("\n");
-    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, region, service);
-    const signature = hmacHex(signingKey, stringToSign);
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "Host": host,
-      "X-Amz-Date": amzDate,
-      "Authorization": `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-    };
-    if (creds.sessionToken) headers["X-Amz-Security-Token"] = creds.sessionToken;
-    return headers;
-  }
-
-  private signS3Request(
-    method: string, host: string, rawPath: string, region: string,
-    body?: Buffer, contentType?: string, queryString?: string,
-  ): Record<string, string> {
-    const creds = this.credentials!;
-    const now = new Date();
-    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const dateStamp = amzDate.slice(0, 8);
-
-    const payloadHash = body
-      ? createHash("sha256").update(body).digest("hex")
-      : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-    const canonicalUri = rawPath.split("/").map(seg => encodeURIComponent(seg)).join("/");
-
-    const headerEntries: [string, string][] = [
-      ["host", host],
-      ["x-amz-content-sha256", payloadHash],
-      ["x-amz-date", amzDate],
-    ];
-    if (contentType) headerEntries.push(["content-type", contentType]);
-    if (creds.sessionToken) headerEntries.push(["x-amz-security-token", creds.sessionToken]);
-    if (method === "PUT") headerEntries.push(["x-amz-server-side-encryption", "AES256"]);
-    headerEntries.sort((a, b) => a[0].localeCompare(b[0]));
-
-    const canonicalHeaders = headerEntries.map(([k, v]) => `${k}:${v}\n`).join("");
-    const signedHeaders = headerEntries.map(([k]) => k).join(";");
-
-    const canonicalRequest = [method, canonicalUri, queryString || "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
-    const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
-    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256(canonicalRequest)].join("\n");
-    const signingKey = getSignatureKey(creds.secretAccessKey, dateStamp, region, "s3");
-    const signature = hmacHex(signingKey, stringToSign);
-
-    const result: Record<string, string> = {
-      "Host": host,
-      "X-Amz-Content-Sha256": payloadHash,
-      "X-Amz-Date": amzDate,
-      "Authorization": `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-    };
-    if (contentType) result["Content-Type"] = contentType;
-    if (creds.sessionToken) result["X-Amz-Security-Token"] = creds.sessionToken;
-    if (method === "PUT") result["X-Amz-Server-Side-Encryption"] = "AES256";
-    return result;
-  }
-}
-
-// --- Crypto helpers ---
-function sha256(data: string): string {
-  return createHash("sha256").update(data, "utf8").digest("hex");
-}
-function hmac(key: Buffer | string, data: string): Buffer {
-  return createHmac("sha256", key).update(data, "utf8").digest();
-}
-function hmacHex(key: Buffer | string, data: string): string {
-  return createHmac("sha256", key).update(data, "utf8").digest("hex");
-}
-function getSignatureKey(key: string, dateStamp: string, region: string, service: string): Buffer {
-  const kDate = hmac(`AWS4${key}`, dateStamp);
-  const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, service);
-  return hmac(kService, "aws4_request");
 }
 
 export const bedrockBatchService = new BedrockBatchService();

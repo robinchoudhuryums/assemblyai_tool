@@ -6,6 +6,13 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
 import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
 
+/** Validate an ISO date string; returns undefined if invalid. */
+function validateDate(val: string | undefined): string | undefined {
+  if (!val) return undefined;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? undefined : val;
+}
+
 export function register(router: Router) {
   // ==================== TEAM ANALYTICS ROUTES ====================
 
@@ -34,8 +41,8 @@ export function register(router: Router) {
       }
 
       // PostgreSQL: rich analytics with sub-scores
-      const dateFrom = req.query.from as string | undefined;
-      const dateTo = req.query.to as string | undefined;
+      const dateFrom = validateDate(req.query.from as string | undefined);
+      const dateTo = validateDate(req.query.to as string | undefined);
 
       let dateFilter = "";
       const params: any[] = [];
@@ -86,8 +93,8 @@ export function register(router: Router) {
       if (!pool) return res.json([]);
 
       const teamName = decodeURIComponent(req.params.teamName);
-      const dateFrom = req.query.from as string | undefined;
-      const dateTo = req.query.to as string | undefined;
+      const dateFrom = validateDate(req.query.from as string | undefined);
+      const dateTo = validateDate(req.query.to as string | undefined);
 
       const params: any[] = [teamName === "Unassigned" ? null : teamName];
       let dateFilter = "";
@@ -245,8 +252,8 @@ export function register(router: Router) {
   router.get("/api/export/calls", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       const pool = getPool();
-      const dateFrom = req.query.from as string | undefined;
-      const dateTo = req.query.to as string | undefined;
+      const dateFrom = validateDate(req.query.from as string | undefined);
+      const dateTo = validateDate(req.query.to as string | undefined);
       const employeeId = req.query.employee as string | undefined;
 
       let rows: any[];

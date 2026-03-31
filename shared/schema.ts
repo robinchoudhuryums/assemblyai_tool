@@ -29,10 +29,16 @@ export const dbUserSchema = z.object({
 /** User object without password_hash — safe for API responses */
 export const dbUserResponseSchema = dbUserSchema.omit({ passwordHash: true, mfaSecret: true });
 
+/** Password complexity: 12+ chars, uppercase, lowercase, digit, special char (HIPAA) */
+const passwordSchema = z.string().min(12).refine(
+  (pwd) => /[A-Z]/.test(pwd) && /[a-z]/.test(pwd) && /[0-9]/.test(pwd) && /[^A-Za-z0-9]/.test(pwd),
+  { message: "Password must contain uppercase, lowercase, digit, and special character" },
+);
+
 /** Schema for POST /api/users (admin creating a new user) */
 export const createDbUserSchema = z.object({
   username: z.string().min(1).max(255),
-  password: z.string().min(12),
+  password: passwordSchema,
   role: z.enum(["viewer", "manager", "admin"]).default("viewer"),
   displayName: z.string().min(1).max(255),
 });
@@ -46,13 +52,13 @@ export const updateDbUserSchema = z.object({
 
 /** Schema for POST /api/users/:id/reset-password (admin resetting password) */
 export const resetPasswordSchema = z.object({
-  newPassword: z.string().min(12),
+  newPassword: passwordSchema,
 });
 
 /** Schema for PATCH /api/users/me/password (self-service password change) */
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(12),
+  newPassword: passwordSchema,
 });
 
 export type DbUser = z.infer<typeof dbUserSchema>;
