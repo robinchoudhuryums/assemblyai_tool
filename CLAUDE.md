@@ -62,6 +62,11 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/gamification.test.ts` — Gamification logic (points computation, streak detection, badge eligibility)
   - `tests/assemblyai-metrics.test.ts` — AssemblyAI utilities (utterance metrics, speaker-labeled transcripts, interruption/monologue detection)
   - `tests/webhooks.test.ts` — Webhook service (HMAC signatures, config CRUD, event filtering, S3 client fallback)
+  - `tests/batch-inference.test.ts` — Batch inference (JSONL input/output format, output parsing, job status, orphan recovery, scheduling thresholds, time-of-day windows)
+  - `tests/mfa-enforcement.test.ts` — MFA enforcement (REQUIRE_MFA logic, role-based MFA, challenge flow, TOTP verification, OTPAuth URI, secret generation)
+  - `tests/retention.test.ts` — Data retention (cutoff calculation, purgeExpiredCalls, cascade deletion, boundary edge cases)
+  - `tests/webhook-delivery.test.ts` — Webhook delivery (HMAC signature generation/verification, event filtering, payload structure, retry logic)
+  - `tests/pipeline-errors.test.ts` — Pipeline error handling (AI error classification, parseJsonResponse edge cases, quality gates, null-AI fallback, prompt building)
 
 ## Architecture
 
@@ -374,7 +379,7 @@ VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (opt
 
 # AssemblyAI Webhooks (faster than polling)
 APP_BASE_URL                    # Public URL of the app (e.g. https://umscallanalyzer.com) — enables webhook mode for AssemblyAI
-ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (optional but recommended)
+ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (REQUIRED in production if APP_BASE_URL is set)
 
 # RAG Knowledge Base (planned — ums-knowledge-reference integration)
 RAG_SERVICE_URL                 # URL of the knowledge reference API
@@ -416,7 +421,10 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Error logging** | `server/routes.ts` | Logs error messages only, never full stacks (avoids PHI leakage) |
 | **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); timing-safe code verification via `timingSafeEqual`; enforced via `REQUIRE_MFA=true` |
 | **Password complexity** | `server/auth.ts` | Rejects weak passwords (12+ chars, uppercase, lowercase, digit, special char) — enforcement on AUTH_USERS, DB user creation, and password reset |
-| **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language + IP hash; set on first authenticated request; destroys session on mismatch |
+| **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language (IP intentionally excluded to avoid false kills on mobile/VPN); set on first authenticated request; destroys session on mismatch |
+| **Webhook secret enforcement** | `server/routes.ts` | AssemblyAI webhook endpoint rejects unverified payloads in production when `ASSEMBLYAI_WEBHOOK_SECRET` is not set |
+| **SSRF protection** | `server/routes/admin-content.ts` | Webhook URL registration blocks localhost, private IPs, .local/.internal hostnames, AWS metadata endpoint |
+| **Startup env validation** | `server/index.ts` | Critical config (`SESSION_SECRET`, API keys, `DATABASE_URL`) validated at boot with clear warnings/errors |
 | **CSRF protection** | `server/index.ts` | JSON requests require `Content-Type: application/json`; file uploads require `X-Requested-With` header; both prevent cross-origin form submissions |
 | **Admin action audit** | `server/routes/admin-*.ts` | WAF IP block/unblock and dead-job retry actions logged to HIPAA audit trail |
 | **Error sanitization** | `server/services/bedrock.ts` | Bedrock API errors logged server-side with details; client receives sanitized category only (no AWS account IDs, ARNs, or model details) |
@@ -434,8 +442,15 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 - **Durable job queue**: PostgreSQL-backed with `SELECT ... FOR UPDATE SKIP LOCKED` — survives restarts, supports concurrent workers, auto-retry with dead-letter
 - **Custom prompt templates**: Per-call-category evaluation criteria, required phrases, scoring weights
 - **Dark mode**: Toggle in settings; chart text fixed via global CSS in index.css (.dark .recharts-*)
-- **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards)
+- **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards) — `transcriptSegments`, `searchMatches`, and `goToMatch` are above the guards
 - **A/B test isolation**: Test calls stored under `ab-tests/` S3 prefix, completely separate from production `calls/`, `analyses/`, etc. — no risk of contaminating metrics
+- **Passport 0.7 compatibility**: `server/auth.ts` includes a middleware polyfill for `session.regenerate()` and `session.save()` — required because `connect-pg-simple` 10.x may not have the session initialized when Passport calls these after login
+- **Collapsible admin sidebar**: Admin nav section collapses/expands via caret toggle; auto-expands on `/admin/*` pages
+- **Glass effect CSS**: Glass intensity (subtle/medium/strong) works by overriding `--card` and `--sidebar` CSS variables with different alpha values per level in `index.css`; requires a background pattern to be visible
+- **Schema validation**: `insertEmployeeSchema` enforces `.email()`, status enum (`Active`/`Inactive`), length limits; `insertCoachingSessionSchema` uses category enum; `callCategory` is enum-validated; `assignCallSchema` is shared from `shared/schema.ts` (not duplicated in routes)
+- **performanceScore type**: Schema accepts both string and number, normalizes to string via `.transform()` — consistent with DB VARCHAR column and all `parseFloat()` usage
+- **AI error classification**: Pipeline distinguishes parse failures (malformed JSON) from provider unavailability — different Sentry tags and log levels
+- **Fire-and-forget Sentry**: Background tasks (embeddings, coaching alerts, badges, webhooks) report errors to Sentry via `captureException()`, not just `console.warn`
 
 ## Deployment
 
@@ -480,12 +495,16 @@ pm2 restart all
 
 #### Updating Environment Variables
 ```bash
-nano .env                   # Edit the file
-pm2 restart all             # Restart to pick up changes
+nano .env                   # Edit the file (DO NOT use quotes around values unless needed for #)
+unset DATABASE_URL          # Clear any shell overrides (dotenv won't overwrite existing env vars)
+pm2 delete callanalyzer     # Delete old process (pm2 restart caches env vars)
+pm2 start dist/index.js --name callanalyzer  # Start fresh
+pm2 save                    # Save process list for auto-restart on reboot
 pm2 logs --lines 20         # Verify startup — look for:
-                            #   [STORAGE] Using S3 (bucket: ums-call-archive)
-                            #   NOT: "S3 authentication not configured"
+                            #   [AUTH] Using PostgreSQL session store
+                            #   NOT: "password authentication failed"
 ```
+**Important**: `dotenv` does NOT override existing shell environment variables. If you `export DATABASE_URL=...` in your shell, that takes precedence over `.env`. Always `unset` first, then `pm2 delete` + `pm2 start` (not `pm2 restart`).
 
 ### VPC Endpoints (Recommended)
 S3 and Bedrock traffic can be routed through AWS's private network instead of the public internet using VPC endpoints. This improves HIPAA posture by eliminating internet traversal for PHI. The S3 Gateway endpoint is free. No application code changes required. See [`docs/vpc-endpoints.md`](docs/vpc-endpoints.md) for setup instructions.
@@ -564,3 +583,9 @@ CallAnalyzer will integrate with the **ums-knowledge-reference** repository to g
 - AssemblyAI costs: $0.15/hr base + $0.02/hr sentiment = $0.17/hr ($0.0000472/sec)
 - AssemblyAI uses `speech_models: ["universal-3-pro", "universal-2"]` — Universal-3 Pro is the highest accuracy model with fallback to Universal-2 for unsupported languages
 - Bedrock Batch Mode (`BEDROCK_BATCH_MODE=true`) saves 50% on AI analysis costs but results are delayed (up to 24 hours). Calls show as "awaiting_analysis" until batch completes.
+- `DATABASE_URL` in `.env` must NOT use double quotes around the value (dotenv includes the literal `"` characters). URL-encode special chars in the password instead (e.g. `!` → `%21`, `@` → `%40`, `#` → `%23`)
+- `deploy.sh` sets `NODE_OPTIONS="--max-old-space-size=1024"` to prevent OOM on memory-constrained EC2 instances (applies to tsc, tests, and build)
+- When changing `.env` on EC2, use `pm2 delete` + `pm2 start` (not `pm2 restart`) — pm2 caches environment variables from the original process. Also `unset` any shell-exported overrides first.
+- `AUTH_USERS` password complexity is enforced at startup — if a password fails validation (12+ chars, upper/lower/digit/special), the user is **silently skipped** with a `[SECURITY] Rejecting AUTH_USERS entry` log message
+- Employee schema validates email format (`.email()`), status is enum (`Active`/`Inactive`), coaching category is enum (not freeform string)
+- Search page filters sync to URL params — all filters are bookmarkable and restored on page load
