@@ -94,6 +94,46 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 
 ## Infrastructure & Observability
 
+### Blue-green deployment (HIGH PRIORITY — next sprint)
+
+**Goal**: Zero-downtime deploys with instant rollback. Currently, `pm2 reload` provides near-zero-downtime, but a failed deploy still requires a full rebuild + restart cycle.
+
+**Architecture**:
+```
+/home/ec2-user/
+├── callanalyzer-blue/          # Live (serves traffic)
+│   ├── dist/                   # Built artifacts
+│   └── .env → ../shared/.env
+├── callanalyzer-green/         # Staging (built and verified before swap)
+│   ├── dist/
+│   └── .env → ../shared/.env
+├── shared/
+│   └── .env                    # Single source of truth for config
+└── active → callanalyzer-blue  # Symlink: which dir is live
+```
+
+**Deploy flow** (`deploy-bluegreen.sh`):
+1. Determine which slot is live (blue) and which is staging (green)
+2. `git pull` + `npm install` + `npm run build` in green directory
+3. Start green on a different port (e.g., `PORT=5001 pm2 start dist/index.js --name callanalyzer-green`)
+4. Health-check green on port 5001 (`curl -sf http://localhost:5001/api/health`)
+5. If healthy: update Caddy upstream to port 5001 via admin API (`curl localhost:2019/config/...`)
+6. Stop blue process (`pm2 delete callanalyzer-blue`)
+7. Update `active` symlink to point to green
+8. If unhealthy: kill green, blue stays live — **zero user impact**
+
+**Required changes**:
+- `deploy-bluegreen.sh` — new script (~80 lines), replaces `deploy.sh` for production
+- `Caddyfile` — enable Caddy admin API (`admin localhost:2019`), use upstreams block
+- pm2 ecosystem file (`ecosystem.config.cjs`) — manage named processes per slot
+- Shared `.env` via symlink — both slots read same config
+- GitHub Actions deploy workflow — point to new script
+- Port allocation: blue=5000, green=5001 (configurable)
+
+**Rollback**: Instant — just swap Caddy back to the old port. Old process is still running.
+
+**Estimated effort**: 2-3 hours for full implementation + testing.
+
 ### Secret management
 - Move from `.env` files to AWS Secrets Manager or SSM Parameter Store
 - Benefits: automatic rotation, audit trail, no secrets on disk

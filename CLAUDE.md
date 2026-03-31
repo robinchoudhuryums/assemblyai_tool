@@ -525,7 +525,7 @@ Runs on every push to `main` and every PR. Two parallel jobs:
 **Deploy Pipeline** (`.github/workflows/deploy.yml`):
 Triggers automatically **after CI passes** on `main` (via `workflow_run`). SSHs into EC2 and runs `deploy.sh`. Manual `workflow_dispatch` is available for hotfixes (bypasses CI gate). Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
 
-**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 restart). On any failure, `deploy.sh` auto-rolls back to the previous commit.
+**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 reload → health check). Uses `pm2 reload` for zero-downtime (new process starts before old one dies). Post-deploy health gate: if `/api/health` doesn't respond within 30s, auto-rollback to previous commit. On build/test failure, also auto-rolls back.
 
 Additional workflows:
 - `.github/workflows/error-monitor.yml` — Checks pm2 status, HTTP health, error logs, disk/memory usage every 4 hours. Creates GitHub Issues on failure with deduplication (adds comments to existing open alerts within 24 hours instead of creating duplicates).
