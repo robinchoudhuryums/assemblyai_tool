@@ -94,17 +94,23 @@ if ! npm run build; then
   rollback "Production build failed"
 fi
 
-# [5/5] Restart
-echo "[5/5] Restarting pm2..."
-# Try restart first; if no processes exist, start fresh
-if ! pm2 restart all 2>/dev/null; then
+# [5/5] Zero-downtime reload
+echo "[5/5] Reloading app (zero-downtime)..."
+# pm2 reload starts a new process before killing the old one — no gap.
+# Falls back to restart if reload not supported, or start if no process exists.
+if pm2 reload callanalyzer 2>/dev/null; then
+  echo "Reloaded callanalyzer (zero-downtime)"
+elif pm2 restart all 2>/dev/null; then
+  echo "Restarted all pm2 processes"
+else
   echo "No existing pm2 processes — starting fresh..."
   pm2 start dist/index.js --name callanalyzer
 fi
 pm2 save 2>/dev/null || true
 
-# Wait for app to pass health check (up to 30 seconds)
-echo "Waiting for app to start..."
+# Post-deploy health gate — verify app is responding before declaring success.
+# If health check fails, auto-rollback to the previous commit.
+echo "Verifying deploy health..."
 APP_PORT="${PORT:-5000}"
 HEALTHY=false
 TRIES=0
@@ -119,8 +125,11 @@ while [ "$TRIES" -lt 30 ]; do
 done
 
 if [ "$HEALTHY" != "true" ]; then
-  echo "WARNING: App did not respond to health check within 30s."
-  echo "Check logs with: pm2 logs --lines 50"
+  echo ""
+  echo "!!! HEALTH CHECK FAILED after 30s — rolling back !!!"
+  echo "Recent logs:"
+  pm2 logs callanalyzer --lines 20 --nostream 2>/dev/null || true
+  rollback "App failed to respond to /api/health within 30 seconds"
 fi
 
 echo ""
