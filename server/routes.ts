@@ -152,7 +152,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Start batch inference scheduler (extracted to services/batch-scheduler.ts)
   startBatchScheduler();
 
-  // Start auto-calibration analysis (runs daily by default)
+  // Load persisted calibration overrides from S3, then start auto-calibration scheduler
+  import("./services/scoring-calibration").then(({ loadPersistedCalibration }) =>
+    loadPersistedCalibration(storage.getObjectStorageClient())
+  ).catch(() => {});
   startCalibrationScheduler();
 
   // Start 8x8 telephony auto-ingestion (if configured)

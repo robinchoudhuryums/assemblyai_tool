@@ -23,6 +23,10 @@ export function resetSessionExpired() {
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    // Server-side errors (502/503/504) — app is down or restarting, not a session issue
+    if (res.status >= 502 && res.status <= 504) {
+      throw new Error("Server is temporarily unavailable. Please try again in a moment.");
+    }
     // On 401, clear auth cache so AuthenticatedApp renders login page.
     // No full page reload — just invalidate the auth query.
     if (res.status === 401) {
