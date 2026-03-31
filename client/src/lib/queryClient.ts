@@ -16,9 +16,13 @@ export class SessionExpiredError extends Error {
  */
 let sessionExpired = false;
 
+/** Tracks whether we've ever had an authenticated session in this page load. */
+let hadSession = false;
+
 /** Called after successful login to reset the flag. */
 export function resetSessionExpired() {
   sessionExpired = false;
+  hadSession = true;
 }
 
 async function throwIfResNotOk(res: Response) {
@@ -34,11 +38,15 @@ async function throwIfResNotOk(res: Response) {
         sessionExpired = true;
         queryClient.setQueryData(["/api/auth/me"], null);
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-        toast({
-          title: "Session Expired",
-          description: "You've been signed out due to inactivity. Please log in again.",
-          variant: "destructive",
-        });
+        // Only show "Session Expired" toast if user was previously logged in.
+        // On fresh page load with no session, just silently show login page.
+        if (hadSession) {
+          toast({
+            title: "Session Expired",
+            description: "You've been signed out due to inactivity. Please log in again.",
+            variant: "destructive",
+          });
+        }
       }
       throw new SessionExpiredError();
     }
