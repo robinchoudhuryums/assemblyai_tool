@@ -9,7 +9,8 @@
 import { createHmac } from "crypto";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
-const WEBHOOK_RETRY_DELAY_MS = 3_000;
+const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
+const WEBHOOK_MAX_RETRIES = 4;
 
 // --- Types ---
 
@@ -121,16 +122,19 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
 }
 
 async function deliverWithRetry(config: WebhookConfig, event: string, body: string): Promise<void> {
-  try {
-    await deliverWebhook(config, event, body);
-  } catch (firstErr) {
-    console.warn(`[Webhooks] First attempt failed for ${config.url} (event: ${event}):`, (firstErr as Error).message);
-    // Retry once after delay
-    await new Promise(resolve => setTimeout(resolve, WEBHOOK_RETRY_DELAY_MS));
+  for (let attempt = 0; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
     try {
       await deliverWebhook(config, event, body);
-    } catch (retryErr) {
-      console.error(`[Webhooks] Retry failed for ${config.url} (event: ${event}):`, (retryErr as Error).message);
+      return;
+    } catch (err) {
+      if (attempt === WEBHOOK_MAX_RETRIES) {
+        console.error(`[Webhooks] All ${WEBHOOK_MAX_RETRIES + 1} attempts failed for ${config.url} (event: ${event}):`, (err as Error).message);
+        return;
+      }
+      // Exponential backoff: 2s, 4s, 8s, 16s
+      const delay = WEBHOOK_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+      console.warn(`[Webhooks] Attempt ${attempt + 1} failed for ${config.url} (event: ${event}), retrying in ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 }

@@ -21,8 +21,9 @@
 import { storage } from "../storage";
 import { broadcastCallUpdate } from "./websocket";
 import type { Badge, InsertBadge, LeaderboardEntry } from "@shared/schema";
+import { STREAK_SCORE_THRESHOLD } from "../constants";
 
-const STREAK_THRESHOLD = 8.0; // Score >= 8.0 counts toward a streak
+const STREAK_THRESHOLD = STREAK_SCORE_THRESHOLD;
 
 interface SubScores {
   compliance?: number;

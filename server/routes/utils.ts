@@ -28,10 +28,10 @@ export function parseDate(value: string | undefined): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-/** Safe parseFloat that returns fallback on NaN. */
-export function safeFloat(value: string | undefined | null, fallback = 0): number {
-  if (!value) return fallback;
-  const n = parseFloat(value);
+/** Safe parseFloat that returns fallback on NaN. Accepts string or number input. */
+export function safeFloat(value: string | number | undefined | null, fallback = 0): number {
+  if (value === null || value === undefined) return fallback;
+  const n = typeof value === "number" ? value : parseFloat(value);
   return Number.isNaN(n) ? fallback : n;
 }
 

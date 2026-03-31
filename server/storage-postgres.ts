@@ -19,13 +19,7 @@ import type {
   Badge, InsertBadge,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient } from "./storage";
-
-/** Safe parseFloat that returns fallback on NaN. */
-function safeFloat(value: string | undefined | null, fallback = 0): number {
-  if (!value) return fallback;
-  const n = parseFloat(value);
-  return Number.isNaN(n) ? fallback : n;
-}
+import { safeFloat } from "./routes/utils";
 
 /**
  * Maps a database row (snake_case) to the application model (camelCase).

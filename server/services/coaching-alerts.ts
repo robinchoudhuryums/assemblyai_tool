@@ -11,12 +11,7 @@ import { storage } from "../storage";
 import { broadcastCallUpdate } from "./websocket";
 import { aiProvider } from "./ai-factory";
 import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
-
-const LOW_SCORE_THRESHOLD = 4.0;
-const HIGH_SCORE_THRESHOLD = 9.0;
-const WEAKNESS_CALL_THRESHOLD = 3; // 3+ low sub-scores triggers a coaching plan
-const WEAKNESS_SCORE_THRESHOLD = 5.0; // sub-score considered weak
-const LOOKBACK_CALLS = 10; // analyze last N calls
+import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
 
 interface SubScores {
   compliance?: number;
