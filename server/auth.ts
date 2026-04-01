@@ -215,11 +215,15 @@ export async function setupAuth(app: Express) {
   // connect-pg-simple may not have the session fully initialized when passport calls these,
   // causing "Cannot read properties of undefined (reading 'regenerate')".
   // This middleware ensures these methods exist as no-ops if not yet initialized.
+  // IMPORTANT: must handle req.session being entirely undefined (not just missing methods).
   app.use((req, _res, next) => {
-    if (req.session && !req.session.regenerate) {
+    if (!req.session) {
+      (req as any).session = {};
+    }
+    if (!req.session.regenerate) {
       (req.session as any).regenerate = (cb: (err?: Error) => void) => cb();
     }
-    if (req.session && !req.session.save) {
+    if (!req.session.save) {
       (req.session as any).save = (cb: (err?: Error) => void) => cb();
     }
     next();
