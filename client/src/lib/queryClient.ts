@@ -19,10 +19,17 @@ let sessionExpired = false;
 /** Tracks whether we've ever had an authenticated session in this page load. */
 let hadSession = false;
 
+/** Timestamp of last successful login — used to suppress transient 401s during login transition. */
+let lastLoginAt = 0;
+
+/** Grace period after login during which transient 401s don't trigger "session expired" toast. */
+const LOGIN_GRACE_MS = 5000;
+
 /** Called after successful login to reset the flag. */
 export function resetSessionExpired() {
   sessionExpired = false;
   hadSession = true;
+  lastLoginAt = Date.now();
 }
 
 async function throwIfResNotOk(res: Response) {
@@ -34,6 +41,12 @@ async function throwIfResNotOk(res: Response) {
     // On 401, clear auth cache so AuthenticatedApp renders login page.
     // No full page reload — just invalidate the auth query.
     if (res.status === 401) {
+      // Skip session-expired handling during the grace period after login —
+      // queries that fire immediately after login may get transient 401s
+      // before the session cookie fully propagates.
+      if (lastLoginAt && Date.now() - lastLoginAt < LOGIN_GRACE_MS) {
+        throw new SessionExpiredError();
+      }
       if (!sessionExpired) {
         sessionExpired = true;
         queryClient.setQueryData(["/api/auth/me"], null);
