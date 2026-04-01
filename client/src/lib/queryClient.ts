@@ -91,11 +91,21 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
-// Replace your old getQueryFn with this new one
+
+/**
+ * Create a queryFn for TanStack Query with configurable 401 handling.
+ *
+ * IMPORTANT: The default is "returnNull" — background data queries silently return
+ * null on 401 instead of triggering session expiry. Only the auth check in
+ * AuthenticatedApp should use "throw" (and it uses on401: "returnNull" anyway).
+ *
+ * This default prevents any single query from killing the user's session.
+ * Session expiry is handled exclusively by the /api/auth/me query.
+ */
 export const getQueryFn: <T>(options?: {
-  on401?: "returnNull" | "throw";
+  on401?: UnauthorizedBehavior;
 }) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior = "throw" } = {}) =>
+  ({ on401: unauthorizedBehavior = "returnNull" } = {}) =>
   async ({ queryKey }) => {
     // The first part of the key is always the base URL
     let url = queryKey[0] as string;
@@ -135,7 +145,7 @@ export const getQueryFn: <T>(options?: {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
+      queryFn: getQueryFn({ on401: "returnNull" }),
       refetchOnWindowFocus: true,
       staleTime: DEFAULT_STALE_TIME_MS, // Data considered fresh for 1 minute
       retry: (failureCount, error) => {

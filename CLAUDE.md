@@ -451,7 +451,6 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 - **Hooks ordering**: All React hooks in transcript-viewer.tsx MUST be called before early returns (isLoading/!call guards) — `transcriptSegments`, `searchMatches`, and `goToMatch` are above the guards
 - **A/B test isolation**: Test calls stored under `ab-tests/` S3 prefix, completely separate from production `calls/`, `analyses/`, etc. — no risk of contaminating metrics
 - **Passport 0.7 compatibility**: `server/auth.ts` patches `Session.prototype.regenerate` to a no-op (connect-pg-simple's implementation crashes Passport). All `req.login()` calls use `{ keepSessionInfo: true }` to preserve session data. `session.save()` is left alone (real save persists to PostgreSQL).
-- **Session fingerprint**: `getSessionFingerprint()` in `server/auth.ts` is the **single source of truth** — both login (`routes/auth.ts:bindSessionFingerprint`) and verification (`auth.ts:requireAuth`) must use the same function. Uses `hash(ua + lang)` — IP intentionally excluded (mobile/VPN rotation)
 - **Collapsible admin sidebar**: Admin nav section collapses/expands via caret toggle; auto-expands on `/admin/*` pages
 - **Glass effect CSS**: Glass intensity (subtle/medium/strong) works by overriding `--card` and `--sidebar` CSS variables with different alpha values per level in `index.css`; requires a background pattern to be visible
 - **Schema validation**: `insertEmployeeSchema` enforces `.email()`, status enum (`Active`/`Inactive`), length limits; `insertCoachingSessionSchema` uses category enum; `callCategory` is enum-validated; `assignCallSchema` is shared from `shared/schema.ts` (not duplicated in routes)
@@ -584,6 +583,8 @@ CallAnalyzer will integrate with the **ums-knowledge-reference** repository to g
 - The same IAM user is shared across 3 projects (CallAnalyzer, RAG Tool, PMD Questionnaire) — IAM policy covers S3, Bedrock, and Textract
 - Recharts uses inline styles that override CSS; dark mode fixes use `!important`
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
+- **Query 401 handling**: The default `queryFn` uses `on401: "returnNull"` — background queries silently return null on 401 instead of killing the session. **Never change the default to "throw"** — this causes any single failed query (sidebar, background refetch, stale tab) to destroy the user's session. Session expiry is handled exclusively by the `/api/auth/me` query in `AuthenticatedApp`. See `tests/session-integration.test.ts` for the rationale.
+- **Session fingerprint**: `getSessionFingerprint()` in `server/auth.ts` is the **single source of truth** — both login (`routes/auth.ts:bindSessionFingerprint`) and verification (`auth.ts:requireAuth`) must use the same exported function. Uses `hash(ua + lang)` — IP intentionally excluded (mobile/VPN rotation). Test coverage in `tests/auth.test.ts` and `tests/session-integration.test.ts`.
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
 - Without `DATABASE_URL`, sessions use memorystore (lost on restart) and job queue falls back to in-memory TaskQueue (no retry on crash)
 - PostgreSQL schema auto-initializes on startup (`server/db/pool.ts:initializeDatabase`) — no manual migration step needed
