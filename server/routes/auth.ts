@@ -47,7 +47,7 @@ export function registerAuthRoutes(router: Router) {
             return res.status(401).json({ message: "Invalid verification code" });
           }
           mfaPendingTokens.delete(mfaToken);
-          req.login(pending.user, (loginErr) => {
+          req.login(pending.user, { keepSessionInfo: true } as any, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
             res.json({ id: pending.user.id, username: pending.user.username, name: pending.user.name, role: pending.user.role });
@@ -79,7 +79,7 @@ export function registerAuthRoutes(router: Router) {
         // Check if MFA is required (globally or by role) but not set up
         if ((isMFARequired() || isMFARoleRequired(user.role)) && !mfaRecord?.enabled) {
           // Let them in but flag that MFA setup is needed
-          req.login(user, (loginErr) => {
+          req.login(user, { keepSessionInfo: true } as any, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
             res.json({ id: user.id, username: user.username, name: user.name, role: user.role, mfaSetupRequired: true });
@@ -88,7 +88,7 @@ export function registerAuthRoutes(router: Router) {
         }
 
         // No MFA — standard login
-        req.login(user, (loginErr) => {
+        req.login(user, { keepSessionInfo: true } as any, (loginErr) => {
           if (loginErr) return next(loginErr);
           bindSessionFingerprint(req);
           res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
