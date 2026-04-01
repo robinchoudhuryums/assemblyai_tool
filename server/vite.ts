@@ -110,12 +110,23 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // Static assets (JS/CSS) have content hashes — cache aggressively.
+  // index.html must NOT be cached — it references the hashed assets.
+  app.use(express.static(distPath, {
+    maxAge: "1y",
+    immutable: true,
+    setHeaders(res, filePath) {
+      // index.html must always be revalidated so browsers get new chunk references after deploys
+      if (filePath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "no-cache");
+      }
+    },
+  }));
 
   // fall through to index.html if the file doesn't exist — inject CSP nonce
   const indexHtml = fs.readFileSync(path.resolve(distPath, "index.html"), "utf-8");
   app.use("*", (_req, res) => {
     const html = injectCspNonce(indexHtml, res, false);
-    res.status(200).set({ "Content-Type": "text/html" }).end(html);
+    res.status(200).set({ "Content-Type": "text/html", "Cache-Control": "no-cache" }).end(html);
   });
 }
