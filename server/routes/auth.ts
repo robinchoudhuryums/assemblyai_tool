@@ -8,13 +8,13 @@ import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, gen
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { insertAccessRequestSchema } from "@shared/schema";
 
-/** Set session fingerprint on login to bind session to user-agent + accept-language + IP.
- *  Must match getSessionFingerprint() in auth.ts for HIPAA session binding. */
+/** Set session fingerprint on login to bind session to user-agent + accept-language.
+ *  Must match getSessionFingerprint() in auth.ts for HIPAA session binding.
+ *  IP is intentionally excluded — mobile networks and VPNs rotate IPs frequently. */
 function bindSessionFingerprint(req: import("express").Request): void {
   const ua = req.headers["user-agent"] || "";
   const lang = req.headers["accept-language"] || "";
-  const ip = req.ip || req.socket.remoteAddress || "";
-  (req.session as any).fingerprint = createHash("sha256").update(`${ua}|${lang}|${ip}`).digest("hex").slice(0, 16);
+  (req.session as any).fingerprint = createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
 }
 
 export function registerAuthRoutes(router: Router) {
