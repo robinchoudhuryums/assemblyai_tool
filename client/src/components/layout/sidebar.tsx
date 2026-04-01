@@ -109,6 +109,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   // Fetch calls for flagged count badge
   const { data: callsResponse } = useQuery<PaginatedCalls>({
     queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
+    queryFn: getQueryFn({ on401: "returnNull" }),
     staleTime: CALLS_STALE_TIME_MS,
   });
   const calls = callsResponse?.calls;
@@ -116,12 +117,14 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   // Fetch employees for quick-switch
   const { data: employees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
     staleTime: EMPLOYEES_STALE_TIME_MS,
   });
 
   // Fetch access requests for admin badge count
   const { data: accessRequests } = useQuery<AccessRequest[]>({
     queryKey: ["/api/access-requests"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
     staleTime: 60000,
     enabled: user?.role === "admin",
   });

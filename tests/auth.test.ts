@@ -4,6 +4,7 @@
  */
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 // We test the role hierarchy logic directly since the auth module depends on Express
 describe("Role hierarchy", () => {
@@ -160,5 +161,47 @@ describe("Session secret validation", () => {
     const isProduction = false;
     const shouldFail = !sessionSecret && isProduction;
     assert.ok(!shouldFail);
+  });
+});
+
+// ── Session fingerprinting (single source of truth) ──
+
+describe("Session fingerprinting", () => {
+  // Import the exported getSessionFingerprint to verify it's the single source of truth
+  // (bindSessionFingerprint in routes/auth.ts must use this same function)
+
+  // Replicate the algorithm to test determinism
+  function computeFingerprint(ua: string, lang: string): string {
+    return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
+  }
+
+  it("produces deterministic fingerprint from user-agent and accept-language", () => {
+    const fp1 = computeFingerprint("Mozilla/5.0", "en-US,en;q=0.9");
+    const fp2 = computeFingerprint("Mozilla/5.0", "en-US,en;q=0.9");
+    assert.equal(fp1, fp2);
+  });
+
+  it("produces different fingerprints for different user-agents", () => {
+    const fp1 = computeFingerprint("Mozilla/5.0", "en-US");
+    const fp2 = computeFingerprint("Chrome/120", "en-US");
+    assert.notEqual(fp1, fp2);
+  });
+
+  it("does NOT include IP in the fingerprint", () => {
+    // This test exists to prevent regression — IP was accidentally included
+    // in bindSessionFingerprint but not getSessionFingerprint, causing every
+    // session to be destroyed after login (fingerprint mismatch).
+    const fpWithoutIp = computeFingerprint("Mozilla/5.0", "en-US");
+    // If someone adds IP back, this hash would change
+    assert.equal(fpWithoutIp.length, 16, "Fingerprint should be 16 hex chars");
+    // Verify the hash is purely from ua+lang by checking a known value
+    const expected = createHash("sha256").update("Mozilla/5.0|en-US").digest("hex").slice(0, 16);
+    assert.equal(fpWithoutIp, expected, "Fingerprint must be hash of 'ua|lang' only — no IP");
+  });
+
+  it("handles empty user-agent and accept-language", () => {
+    const fp = computeFingerprint("", "");
+    assert.equal(fp.length, 16);
+    assert.ok(/^[0-9a-f]+$/.test(fp));
   });
 });

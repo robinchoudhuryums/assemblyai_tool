@@ -213,15 +213,23 @@ export async function setupAuth(app: Express) {
 
   // Passport 0.7 + connect-pg-simple compatibility:
   // connect-pg-simple's regenerate() leaves req.session undefined in its async
-  // callback, crashing Passport's logIn flow. Patching the instance property
-  // doesn't survive session reconstruction by connect-pg-simple, so we patch
-  // the Session prototype directly — this affects ALL session objects.
+  // callback, crashing Passport's logIn flow. We must patch the Session prototype
+  // so ALL session objects (including those reconstructed by connect-pg-simple)
+  // inherit the safe no-op.
+  // Patch is applied eagerly on first request that has a session, then the
+  // prototype is permanently fixed for all future sessions.
+  let sessionPrototypePatched = false;
   app.use((req, _res, next) => {
-    if (req.session) {
+    if (!sessionPrototypePatched && req.session) {
       const proto = Object.getPrototypeOf(req.session);
-      if (proto && proto.regenerate) {
+      if (proto) {
         proto.regenerate = function (cb: (err?: Error) => void) { cb(); };
+        sessionPrototypePatched = true;
       }
+    }
+    // Fallback: if session exists but prototype wasn't patchable, patch instance
+    if (req.session && typeof req.session.regenerate === "function" && !sessionPrototypePatched) {
+      (req.session as any).regenerate = (cb: (err?: Error) => void) => cb();
     }
     next();
   });
@@ -382,7 +390,7 @@ export async function setupAuth(app: Express) {
  * HIPAA: Session fingerprinting — bind sessions to user-agent to detect hijacking.
  * If the user-agent changes mid-session, destroy the session and force re-login.
  */
-function getSessionFingerprint(req: import("express").Request): string {
+export function getSessionFingerprint(req: import("express").Request): string {
   // HIPAA: Bind session to browser characteristics to detect hijacking.
   // Uses user-agent + accept-language (stable across requests).
   // IP is intentionally excluded: mobile networks and VPNs rotate IPs frequently,

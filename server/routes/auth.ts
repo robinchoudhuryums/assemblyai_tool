@@ -3,18 +3,15 @@ import passport from "passport";
 import { z } from "zod";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { insertAccessRequestSchema } from "@shared/schema";
 
-/** Set session fingerprint on login to bind session to user-agent + accept-language.
- *  Must match getSessionFingerprint() in auth.ts for HIPAA session binding.
- *  IP is intentionally excluded — mobile networks and VPNs rotate IPs frequently. */
+/** Stamp session with fingerprint at login — uses the shared getSessionFingerprint() to guarantee
+ *  the same hash is computed at login and verification time (single source of truth). */
 function bindSessionFingerprint(req: import("express").Request): void {
-  const ua = req.headers["user-agent"] || "";
-  const lang = req.headers["accept-language"] || "";
-  (req.session as any).fingerprint = createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
+  (req.session as any).fingerprint = getSessionFingerprint(req);
 }
 
 export function registerAuthRoutes(router: Router) {
