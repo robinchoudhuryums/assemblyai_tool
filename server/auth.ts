@@ -212,17 +212,19 @@ export async function setupAuth(app: Express) {
   app.use(sessionMiddleware);
 
   // Passport 0.7 + connect-pg-simple compatibility:
-  // connect-pg-simple's regenerate()/save() can crash when the session isn't
-  // fully initialized. All req.login() calls use { keepSessionInfo: true } to
-  // skip regenerate entirely. This middleware is a safety net for edge cases
-  // where req.session is undefined (e.g., session store connection lag).
+  // Passport always calls req.session.regenerate() during login (even with
+  // keepSessionInfo). connect-pg-simple's regenerate() leaves req.session
+  // undefined in its async callback, crashing the login flow.
+  // Fix: ALWAYS override regenerate with a no-op. Combined with
+  // keepSessionInfo: true on req.login(), Passport will merge the old
+  // session data back after our no-op regenerate. save() is left alone
+  // so the session is properly persisted to PostgreSQL.
   app.use((req, _res, next) => {
     if (!req.session) {
       (req as any).session = {};
     }
-    if (!req.session.regenerate) {
-      (req.session as any).regenerate = (cb: (err?: Error) => void) => cb();
-    }
+    // Always override — the real regenerate from connect-pg-simple is broken
+    (req.session as any).regenerate = (cb: (err?: Error) => void) => cb();
     if (!req.session.save) {
       (req.session as any).save = (cb: (err?: Error) => void) => cb();
     }
