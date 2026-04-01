@@ -382,7 +382,7 @@ export async function setupAuth(app: Express) {
  * HIPAA: Session fingerprinting — bind sessions to user-agent to detect hijacking.
  * If the user-agent changes mid-session, destroy the session and force re-login.
  */
-function getSessionFingerprint(req: import("express").Request): string {
+export function getSessionFingerprint(req: import("express").Request): string {
   // HIPAA: Bind session to browser characteristics to detect hijacking.
   // Uses user-agent + accept-language (stable across requests).
   // IP is intentionally excluded: mobile networks and VPNs rotate IPs frequently,
