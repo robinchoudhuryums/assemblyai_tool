@@ -5,6 +5,7 @@ import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
 import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
+import { escapeCsvValue } from "./utils";
 
 /** Validate an ISO date string; returns undefined if invalid. */
 function validateDate(val: string | undefined): string | undefined {
@@ -294,17 +295,11 @@ export function register(router: Router) {
       const headers = ["Call ID", "File Name", "Status", "Duration (sec)", "Category", "Uploaded At", "Employee", "Sub-Team", "Score", "Sentiment", "Summary"];
       const csvRows = [headers.join(",")];
       for (const r of rows) {
-        const escapeCsv = (val: any) => {
-          let s = String(val ?? "");
-          // Prevent CSV formula injection (Excel/LibreOffice execute =, +, -, @, tab, CR as formulas)
-          if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
-          return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
-        };
         csvRows.push([
           r.id, r.file_name, r.status, r.duration, r.call_category, r.uploaded_at,
           r.employee_name, r.sub_team, r.performance_score, r.overall_sentiment,
           r.summary ? r.summary.substring(0, 200) : "",
-        ].map(escapeCsv).join(","));
+        ].map(escapeCsvValue).join(","));
       }
 
       logPhiAccess({ ...auditContext(req as any), timestamp: new Date().toISOString(), event: "export_calls_csv", resourceType: "export", detail: `${rows.length} calls exported` });
@@ -341,11 +336,7 @@ export function register(router: Router) {
       const headers = ["Team", "Employee", "Call Count", "Avg Score", "Avg Duration (sec)"];
       const csvRows = [headers.join(",")];
       for (const r of result.rows) {
-        csvRows.push([r.team, r.employee_name, r.call_count, r.avg_score, r.avg_duration].map((v) => {
-          let s = String(v ?? "");
-          if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
-          return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-        }).join(","));
+        csvRows.push([r.team, r.employee_name, r.call_count, r.avg_score, r.avg_duration].map(escapeCsvValue).join(","));
       }
 
       logPhiAccess({ ...auditContext(req as any), timestamp: new Date().toISOString(), event: "export_team_csv", resourceType: "export" });

@@ -62,35 +62,8 @@ export function register(router: Router) {
     }
   });
 
-  // Assign/reassign employee to a call (managers and admins only)
-  // assignCallSchema imported from @shared/schema
-
-  router.patch("/api/calls/:id/assign", requireAuth, requireRole("manager", "admin"), async (req, res) => {
-    try {
-      const parsed = assignCallSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ message: "Invalid request data", errors: parsed.error.flatten() });
-        return;
-      }
-      const { employeeId } = parsed.data;
-      const call = await storage.getCall(req.params.id);
-      if (!call) {
-        res.status(404).json({ message: "Call not found" });
-        return;
-      }
-      if (employeeId) {
-        const employee = await storage.getEmployee(employeeId);
-        if (!employee) {
-          res.status(404).json({ message: "Employee not found" });
-          return;
-        }
-      }
-      const updated = await storage.updateCall(req.params.id, { employeeId: employeeId || undefined });
-      res.json(updated);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to assign employee to call" });
-    }
-  });
+  // NOTE: Call assignment (PATCH /api/calls/:id/assign) is handled in calls.ts.
+  // Previously duplicated here — removed to maintain single source of truth.
 
   // HIPAA: Only admins can bulk import employees
   router.post("/api/employees/import-csv", requireAuth, requireRole("admin"), async (req, res) => {
