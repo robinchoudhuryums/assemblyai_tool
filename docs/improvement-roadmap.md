@@ -41,10 +41,9 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 
 ## Security Hardening
 
-### SSRF protection gaps (`server/routes/admin-content.ts`)
-- Current webhook URL validation blocks `169.254.169.254` but not all metadata endpoints
-- Add: DNS resolution check (reject URLs that resolve to private IP ranges at registration time)
-- Add: enforce `https://` for production webhook URLs
+### ~~SSRF protection gaps~~ ✅ COMPLETED
+- Shared URL validator (`server/services/url-validator.ts`) with DNS resolution check, expanded blocklist, IPv6-mapped IPv4 support, HTTPS enforcement
+- Applied to webhook create, update (was unvalidated), and delivery (runtime check)
 - Add: block `169.254.169.250`, `100.100.100.200` (other cloud metadata endpoints)
 
 ### WAF slow-attack resilience (`server/middleware/waf.ts`)
@@ -94,7 +93,9 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 
 ## Infrastructure & Observability
 
-### Blue-green deployment (HIGH PRIORITY — next sprint)
+### ~~Blue-green deployment~~ ✅ IMPLEMENTED
+
+**Status**: Script, pm2 ecosystem config, and Caddy config created. To enable on EC2: replace Caddyfile with `Caddyfile.bluegreen`, reload Caddy, use `deploy-bluegreen.sh`.
 
 **Goal**: Zero-downtime deploys with instant rollback. Currently, `pm2 reload` provides near-zero-downtime, but a failed deploy still requires a full rebuild + restart cycle.
 

@@ -38,7 +38,7 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run backend tests (tsx --test tests/*.test.ts — 559 tests)
+npm run test         # Run backend tests (tsx --test tests/*.test.ts — 643 tests)
 npm run test:client  # Run frontend tests (Vitest + React Testing Library)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
 npx vite build       # Frontend-only build (useful for quick verification)
@@ -72,6 +72,9 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/audit-log.test.ts` — HIPAA audit log (entry format, auditContext extraction, retry config, event taxonomy)
   - `tests/security-monitor.test.ts` — Security monitor (brute-force detection thresholds, credential stuffing, bulk access, severity classification, window expiration)
   - `tests/aws-credentials.test.ts` — AWS credentials (env var resolution, IMDS caching, refresh buffer timing, priority order)
+  - `tests/session-integration.test.ts` — Session/login flow (fingerprint consistency, keepSessionInfo, query 401 defaults)
+  - `tests/routes.test.ts` — Route endpoint integration tests (HTTP-level auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD)
+  - `tests/ssrf.test.ts` — SSRF protection (blocked hostnames, private IPs, metadata endpoints, DNS resolution, IPv6-mapped IPv4, protocol enforcement)
 
 ## Architecture
 
@@ -429,7 +432,7 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Password complexity** | `server/auth.ts` | Rejects weak passwords (12+ chars, uppercase, lowercase, digit, special char) — enforcement on AUTH_USERS, DB user creation, and password reset |
 | **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language (IP intentionally excluded to avoid false kills on mobile/VPN); set on first authenticated request; destroys session on mismatch |
 | **Webhook secret enforcement** | `server/routes.ts` | AssemblyAI webhook endpoint rejects unverified payloads in production when `ASSEMBLYAI_WEBHOOK_SECRET` is not set |
-| **SSRF protection** | `server/routes/admin-content.ts` | Webhook URL registration blocks localhost, private IPs, .local/.internal hostnames, AWS metadata endpoint |
+| **SSRF protection** | `server/services/url-validator.ts` | Shared URL validator: blocks localhost, private/reserved IPs (RFC 1918/6598), cloud metadata endpoints (AWS/GCP/Azure/Alibaba), .local/.internal hostnames, IPv6-mapped IPv4, DNS resolution to private IPs; enforces HTTPS in production; applied to webhook create, update, and delivery |
 | **Startup env validation** | `server/index.ts` | Critical config (`SESSION_SECRET`, API keys, `DATABASE_URL`) validated at boot with clear warnings/errors |
 | **CSRF protection** | `server/index.ts` | JSON requests require `Content-Type: application/json`; file uploads require `X-Requested-With` header; both prevent cross-origin form submissions |
 | **Admin action audit** | `server/routes/admin-*.ts` | WAF IP block/unblock and dead-job retry actions logged to HIPAA audit trail |
@@ -536,6 +539,14 @@ Additional workflows:
 - Also accepts an explicit commit SHA: `./deploy-rollback.sh <commit-sha>`
 - Preserves `.env` across checkout to avoid losing credentials
 - Deploy history logged to `.deploy-last.log`
+
+**Blue-Green Deployment** (optional, zero-downtime):
+- `deploy-bluegreen.sh` — builds and starts the inactive slot, health-checks, then swaps Caddy upstream
+- Two pm2 process slots defined in `ecosystem.config.cjs`: blue (port 5000), green (port 5001)
+- Caddy admin API (`localhost:2019`) enables hot upstream swap without restart — see `deploy/ec2/Caddyfile.bluegreen`
+- If Caddy admin API isn't available, falls back to pm2 port swap (brief interruption)
+- Failed health check → new slot is killed, old slot stays live — zero user impact
+- To enable: replace Caddyfile with `Caddyfile.bluegreen`, reload Caddy, use `deploy-bluegreen.sh` instead of `deploy.sh`
 
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):

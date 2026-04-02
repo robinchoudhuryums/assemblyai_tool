@@ -52,6 +52,76 @@ export async function cleanupFile(filePath: string) {
   }
 }
 
+// --- Shared Route Helpers ---
+// Extracted from duplicate implementations across routes to ensure consistency.
+
+/**
+ * Escape a value for CSV output, preventing formula injection.
+ * Prefixes formula-triggering characters (=, +, -, @, tab, CR) with a single quote,
+ * then wraps in double quotes if the value contains commas, quotes, or newlines.
+ */
+export function escapeCsvValue(val: unknown): string {
+  let s = String(val ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) { s = "'" + s; }
+  return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Filter calls by date range (in-memory). Adjusts `to` date to end-of-day.
+ * Used by reports, snapshots, and search — the single source of truth for date filtering.
+ */
+export function filterCallsByDateRange<T extends { uploadedAt?: string | null }>(
+  calls: T[],
+  from?: string | Date,
+  to?: string | Date,
+): T[] {
+  let result = calls;
+  const fromDate = from ? (from instanceof Date ? from : parseDate(from as string)) : undefined;
+  const toDate = to ? (to instanceof Date ? to : parseDate(to as string)) : undefined;
+
+  if (fromDate) {
+    result = result.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
+  }
+  if (toDate) {
+    const endOfDay = new Date(toDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    result = result.filter(c => new Date(c.uploadedAt || 0) <= endOfDay);
+  }
+  return result;
+}
+
+/** Count frequency of items in a string array. Returns top N entries sorted by count. */
+export function countFrequency(arr: string[], limit = 10): Array<{ text: string; count: number }> {
+  const freq = new Map<string, number>();
+  for (const item of arr) {
+    const normalized = item.trim().toLowerCase();
+    if (normalized) freq.set(normalized, (freq.get(normalized) || 0) + 1);
+  }
+  return Array.from(freq.entries())
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([text, count]) => ({ text, count }));
+}
+
+/** Calculate sentiment breakdown from an array of calls with sentiment data. */
+export function calculateSentimentBreakdown(calls: Array<{ sentiment?: { overallSentiment?: string } | null }>): { positive: number; neutral: number; negative: number } {
+  const result = { positive: 0, neutral: 0, negative: 0 };
+  for (const c of calls) {
+    const s = c.sentiment?.overallSentiment as keyof typeof result | undefined;
+    if (s && s in result) result[s]++;
+  }
+  return result;
+}
+
+/** Calculate average score from an array of values, with configurable decimal places. Returns null if no valid scores. */
+export function calculateAvgScore(scores: number[], decimals = 2): number | null {
+  const valid = scores.filter(s => Number.isFinite(s) && s > 0);
+  if (valid.length === 0) return null;
+  const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+  const factor = Math.pow(10, decimals);
+  return Math.round(avg * factor) / factor;
+}
+
 // --- Confidence Score Calculation ---
 // Shared formula used by both real-time pipeline and batch inference.
 // Weights: transcript accuracy (40%) + word density (20%) + call duration (15%) + AI completeness (25%)

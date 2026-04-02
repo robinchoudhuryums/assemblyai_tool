@@ -5,7 +5,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
-import { clampInt, parseDate, safeFloat, safeJsonParse } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore } from "./utils";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -38,15 +38,7 @@ export function registerReportRoutes(router: Router) {
       if (!isNaN(maxScore)) {
         filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "10") <= maxScore);
       }
-      const fromDate = parseDate(req.query.from as string);
-      const toDate = parseDate(req.query.to as string);
-      if (fromDate) {
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate!);
-      }
-      if (toDate) {
-        toDate.setHours(23, 59, 59, 999);
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate!);
-      }
+      filtered = filterCallsByDateRange(filtered, req.query.from as string, req.query.to as string);
 
       res.json(filtered);
     } catch (error) {
@@ -96,19 +88,8 @@ router.get("/api/performance", requireAuth, async (req, res) => {
       // Build employee lookup maps
       const employeeMap = new Map(employees.map(e => [e.id, e]));
 
-      // Filter by date range (validate dates)
-      let filtered = allCalls;
-      const fromDate = parseDate(from as string | undefined);
-      if (fromDate) {
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
-      }
-      const toDate = parseDate(to as string | undefined);
-      if (toDate) {
-        toDate.setHours(23, 59, 59, 999);
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
-      }
-
-      // Filter by employee
+      // Filter by date range and employee
+      let filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
       if (employeeId) {
         filtered = filtered.filter(c => c.employeeId === employeeId);
       }
@@ -260,17 +241,8 @@ router.get("/api/performance", requireAuth, async (req, res) => {
 
       const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
 
-      // Apply optional date filters (validate dates)
-      let filtered = allCalls;
-      const fromDate = parseDate(from as string | undefined);
-      if (fromDate) {
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
-      }
-      const toDate = parseDate(to as string | undefined);
-      if (toDate) {
-        toDate.setHours(23, 59, 59, 999);
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
-      }
+      // Apply optional date filters
+      const filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
 
       // Aggregate all analysis feedback
       const allStrengths: string[] = [];
@@ -350,22 +322,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         }
       }
 
-      // Count frequency of strengths, suggestions, topics
-      const countFrequency = (arr: string[]) => {
-        const freq = new Map<string, number>();
-        for (const item of arr) {
-          const normalized = item.trim().toLowerCase();
-          freq.set(normalized, (freq.get(normalized) || 0) + 1);
-        }
-        return Array.from(freq.entries())
-          .sort(([, a], [, b]) => b - a)
-          .slice(0, 10)
-          .map(([text, count]) => ({ text, count }));
-      };
-
-      const avgScore = scores.length > 0
-        ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100
-        : null;
+      const avgScore = calculateAvgScore(scores);
       const highScore = scores.length > 0 ? Math.max(...scores) : null;
       const lowScore = scores.length > 0 ? Math.min(...scores) : null;
 
@@ -415,16 +372,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
 
       const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
 
-      let filtered = allCalls;
-      if (from) {
-        const fromDate = new Date(from);
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
-      }
-      if (to) {
-        const toDate = new Date(to);
-        toDate.setHours(23, 59, 59, 999);
-        filtered = filtered.filter(c => new Date(c.uploadedAt || 0) <= toDate);
-      }
+      const filtered = filterCallsByDateRange(allCalls, from, to);
 
       if (filtered.length === 0) {
         res.json({ summary: "No analyzed calls found for this employee in the selected period." });
@@ -465,20 +413,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         }
       }
 
-      const countFreq = (arr: string[]) => {
-        const freq = new Map<string, number>();
-        for (const item of arr) {
-          const n = item.trim().toLowerCase();
-          freq.set(n, (freq.get(n) || 0) + 1);
-        }
-        return Array.from(freq.entries())
-          .sort(([, a], [, b]) => b - a)
-          .slice(0, 10)
-          .map(([text, count]) => ({ text, count }));
-      };
-
-      const avgScore = scores.length > 0
-        ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+      const avgScore = calculateAvgScore(scores);
 
       const dateRange = `${from || "all time"} to ${to || "present"}`;
 
@@ -505,9 +440,9 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         highScore: scores.length > 0 ? Math.max(...scores) : null,
         lowScore: scores.length > 0 ? Math.min(...scores) : null,
         sentimentBreakdown: sentimentCounts,
-        topStrengths: countFreq(allStrengths),
-        topSuggestions: countFreq(allSuggestions),
-        commonTopics: countFreq(allTopics),
+        topStrengths: countFrequency(allStrengths),
+        topSuggestions: countFrequency(allSuggestions),
+        commonTopics: countFrequency(allTopics),
         dateRange,
       }) + priorContext;
 

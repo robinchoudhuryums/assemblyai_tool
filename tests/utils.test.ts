@@ -15,6 +15,11 @@ import {
   TaskQueue,
   computeConfidenceScore,
   autoAssignEmployee,
+  escapeCsvValue,
+  filterCallsByDateRange,
+  countFrequency,
+  calculateSentimentBreakdown,
+  calculateAvgScore,
 } from "../server/routes/utils.js";
 
 describe("estimateBedrockCost", () => {
@@ -270,5 +275,130 @@ describe("autoAssignEmployee (shared utility)", () => {
     };
     await autoAssignEmployee("call-1", "  Sarah  ", mockStorage);
     assert.equal(searchedName, "Sarah");
+  });
+});
+
+// ── Shared Route Helpers ──
+
+describe("escapeCsvValue", () => {
+  it("returns plain values unchanged", () => {
+    assert.equal(escapeCsvValue("hello"), "hello");
+    assert.equal(escapeCsvValue(42), "42");
+  });
+
+  it("wraps values with commas in quotes", () => {
+    assert.equal(escapeCsvValue("hello, world"), '"hello, world"');
+  });
+
+  it("escapes double quotes", () => {
+    assert.equal(escapeCsvValue('say "hi"'), '"say ""hi"""');
+  });
+
+  it("prefixes formula-triggering characters", () => {
+    assert.equal(escapeCsvValue("=SUM(A1)"), "'=SUM(A1)");
+    assert.equal(escapeCsvValue("+cmd"), "'+cmd");
+    assert.equal(escapeCsvValue("-exec"), "'-exec");
+    assert.equal(escapeCsvValue("@import"), "'@import");
+  });
+
+  it("handles null/undefined", () => {
+    assert.equal(escapeCsvValue(null), "");
+    assert.equal(escapeCsvValue(undefined), "");
+  });
+});
+
+describe("filterCallsByDateRange", () => {
+  const calls = [
+    { id: "1", uploadedAt: "2026-01-15T10:00:00Z" },
+    { id: "2", uploadedAt: "2026-02-15T10:00:00Z" },
+    { id: "3", uploadedAt: "2026-03-15T10:00:00Z" },
+  ];
+
+  it("returns all calls when no date range", () => {
+    assert.equal(filterCallsByDateRange(calls).length, 3);
+  });
+
+  it("filters by from date", () => {
+    const result = filterCallsByDateRange(calls, "2026-02-01");
+    assert.equal(result.length, 2);
+    assert.equal(result[0].id, "2");
+  });
+
+  it("filters by to date (inclusive end-of-day)", () => {
+    const result = filterCallsByDateRange(calls, undefined, "2026-02-15");
+    assert.equal(result.length, 2);
+    assert.equal(result[1].id, "2");
+  });
+
+  it("filters by both from and to", () => {
+    const result = filterCallsByDateRange(calls, "2026-02-01", "2026-02-28");
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, "2");
+  });
+
+  it("ignores invalid date strings", () => {
+    const result = filterCallsByDateRange(calls, "not-a-date", "also-bad");
+    assert.equal(result.length, 3);
+  });
+});
+
+describe("countFrequency", () => {
+  it("counts and sorts by frequency", () => {
+    const result = countFrequency(["a", "b", "a", "c", "a", "b"]);
+    assert.equal(result[0].text, "a");
+    assert.equal(result[0].count, 3);
+    assert.equal(result[1].text, "b");
+    assert.equal(result[1].count, 2);
+  });
+
+  it("normalizes to lowercase and trims", () => {
+    const result = countFrequency(["Hello", "  hello  ", "HELLO"]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].count, 3);
+  });
+
+  it("respects limit parameter", () => {
+    const items = Array.from({ length: 20 }, (_, i) => `item${i}`);
+    assert.equal(countFrequency(items, 5).length, 5);
+  });
+
+  it("skips empty strings", () => {
+    const result = countFrequency(["a", "", "  ", "a"]);
+    assert.equal(result.length, 1);
+  });
+});
+
+describe("calculateSentimentBreakdown", () => {
+  it("counts sentiment categories", () => {
+    const calls = [
+      { sentiment: { overallSentiment: "positive" } },
+      { sentiment: { overallSentiment: "positive" } },
+      { sentiment: { overallSentiment: "negative" } },
+      { sentiment: { overallSentiment: "neutral" } },
+      { sentiment: null },
+    ];
+    const result = calculateSentimentBreakdown(calls);
+    assert.equal(result.positive, 2);
+    assert.equal(result.negative, 1);
+    assert.equal(result.neutral, 1);
+  });
+});
+
+describe("calculateAvgScore", () => {
+  it("calculates average with default precision", () => {
+    assert.equal(calculateAvgScore([8, 6, 7]), 7);
+  });
+
+  it("returns null for empty array", () => {
+    assert.equal(calculateAvgScore([]), null);
+  });
+
+  it("filters out zero and non-finite values", () => {
+    assert.equal(calculateAvgScore([0, 8, 0, 6, NaN]), 7);
+  });
+
+  it("respects decimal places", () => {
+    assert.equal(calculateAvgScore([7, 8, 9], 1), 8);
+    assert.equal(calculateAvgScore([7.33, 8.67], 2), 8);
   });
 });
