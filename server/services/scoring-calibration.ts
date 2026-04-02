@@ -61,15 +61,20 @@ export async function loadPersistedCalibration(s3Client: { downloadJson<T>(key: 
   }
 }
 
+/** Clamp a value to [min, max] range. */
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 /** Default calibration config — runtime overrides > env vars > defaults */
 export function getCalibrationConfig(): ScoringCalibration {
   return {
     enabled: runtimeOverrides?.enabled ?? (process.env.SCORE_CALIBRATION_ENABLED === "true"),
-    center: runtimeOverrides?.center ?? safeParseFloat(process.env.SCORE_CALIBRATION_CENTER, 5.5),
-    spread: runtimeOverrides?.spread ?? safeParseFloat(process.env.SCORE_CALIBRATION_SPREAD, 1.2),
-    aiModelMean: runtimeOverrides?.aiModelMean ?? safeParseFloat(process.env.SCORE_AI_MODEL_MEAN, 7.0),
-    lowThreshold: runtimeOverrides?.lowThreshold ?? safeParseFloat(process.env.SCORE_LOW_THRESHOLD, 4.0),
-    highThreshold: runtimeOverrides?.highThreshold ?? safeParseFloat(process.env.SCORE_HIGH_THRESHOLD, 9.0),
+    center: clamp(runtimeOverrides?.center ?? safeParseFloat(process.env.SCORE_CALIBRATION_CENTER, 5.5), 0, 10),
+    spread: clamp(runtimeOverrides?.spread ?? safeParseFloat(process.env.SCORE_CALIBRATION_SPREAD, 1.2), 0.1, 5.0),
+    aiModelMean: clamp(runtimeOverrides?.aiModelMean ?? safeParseFloat(process.env.SCORE_AI_MODEL_MEAN, 7.0), 0, 10),
+    lowThreshold: clamp(runtimeOverrides?.lowThreshold ?? safeParseFloat(process.env.SCORE_LOW_THRESHOLD, 4.0), 0, 10),
+    highThreshold: clamp(runtimeOverrides?.highThreshold ?? safeParseFloat(process.env.SCORE_HIGH_THRESHOLD, 9.0), 0, 10),
   };
 }
 

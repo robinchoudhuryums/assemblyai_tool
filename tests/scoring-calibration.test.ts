@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { calibrateScore, calibrateSubScores, getScoreFlags } from "../server/services/scoring-calibration.js";
+import { calibrateScore, calibrateSubScores, getScoreFlags, getCalibrationConfig, setRuntimeCalibration } from "../server/services/scoring-calibration.js";
 import type { ScoringCalibration } from "../server/services/scoring-calibration.js";
 
 const enabledConfig: ScoringCalibration = {
@@ -97,5 +97,48 @@ describe("getScoreFlags", () => {
     assert.ok(lowFlags.includes("low_score"));
     const highFlags = getScoreFlags(9.0, enabledConfig);
     assert.ok(highFlags.includes("exceptional_call"));
+  });
+});
+
+describe("getCalibrationConfig clamping", () => {
+  it("clamps spread to [0.1, 5.0] range", () => {
+    // Set extreme spread values via runtime overrides
+    setRuntimeCalibration({ spread: 50.0 });
+    const configHigh = getCalibrationConfig();
+    assert.equal(configHigh.spread, 5.0, "spread should be clamped to 5.0 max");
+
+    setRuntimeCalibration({ spread: 0.0 });
+    const configLow = getCalibrationConfig();
+    assert.equal(configLow.spread, 0.1, "spread should be clamped to 0.1 min");
+
+    setRuntimeCalibration({ spread: -5 });
+    const configNeg = getCalibrationConfig();
+    assert.equal(configNeg.spread, 0.1, "negative spread should be clamped to 0.1");
+
+    // Reset
+    setRuntimeCalibration({});
+  });
+
+  it("clamps center to [0, 10] range", () => {
+    setRuntimeCalibration({ center: 15.0 });
+    const config = getCalibrationConfig();
+    assert.equal(config.center, 10, "center should be clamped to 10 max");
+
+    setRuntimeCalibration({ center: -3.0 });
+    const config2 = getCalibrationConfig();
+    assert.equal(config2.center, 0, "center should be clamped to 0 min");
+
+    // Reset
+    setRuntimeCalibration({});
+  });
+
+  it("clamps thresholds to [0, 10] range", () => {
+    setRuntimeCalibration({ lowThreshold: -1, highThreshold: 12 });
+    const config = getCalibrationConfig();
+    assert.equal(config.lowThreshold, 0);
+    assert.equal(config.highThreshold, 10);
+
+    // Reset
+    setRuntimeCalibration({});
   });
 });
