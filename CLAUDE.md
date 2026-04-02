@@ -38,7 +38,7 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run backend tests (tsx --test tests/*.test.ts — 559 tests)
+npm run test         # Run backend tests (tsx --test tests/*.test.ts — 598 tests)
 npm run test:client  # Run frontend tests (Vitest + React Testing Library)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
 npx vite build       # Frontend-only build (useful for quick verification)
@@ -72,6 +72,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/audit-log.test.ts` — HIPAA audit log (entry format, auditContext extraction, retry config, event taxonomy)
   - `tests/security-monitor.test.ts` — Security monitor (brute-force detection thresholds, credential stuffing, bulk access, severity classification, window expiration)
   - `tests/aws-credentials.test.ts` — AWS credentials (env var resolution, IMDS caching, refresh buffer timing, priority order)
+  - `tests/session-integration.test.ts` — Session/login flow (fingerprint consistency, keepSessionInfo, query 401 defaults)
+  - `tests/routes.test.ts` — Route endpoint integration tests (HTTP-level auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD)
 
 ## Architecture
 
