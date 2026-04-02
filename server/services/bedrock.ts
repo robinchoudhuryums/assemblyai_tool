@@ -71,8 +71,10 @@ export class BedrockProvider implements AIAnalysisProvider {
   }
 
   get isAvailable(): boolean {
-    // Synchronous check: env vars set OR IMDS credentials already cached
-    return this.credentials !== null || (!process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_SECRET_ACCESS_KEY && !this.initialized);
+    // Synchronous check: credentials already loaded, env vars present, or IMDS not yet tried
+    return this.credentials !== null
+      || !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+      || !this.initialized; // optimistic: IMDS may succeed on first request
   }
 
   async generateText(prompt: string): Promise<string> {
