@@ -540,6 +540,14 @@ Additional workflows:
 - Preserves `.env` across checkout to avoid losing credentials
 - Deploy history logged to `.deploy-last.log`
 
+**Blue-Green Deployment** (optional, zero-downtime):
+- `deploy-bluegreen.sh` — builds and starts the inactive slot, health-checks, then swaps Caddy upstream
+- Two pm2 process slots defined in `ecosystem.config.cjs`: blue (port 5000), green (port 5001)
+- Caddy admin API (`localhost:2019`) enables hot upstream swap without restart — see `deploy/ec2/Caddyfile.bluegreen`
+- If Caddy admin API isn't available, falls back to pm2 port swap (brief interruption)
+- Failed health check → new slot is killed, old slot stays live — zero user impact
+- To enable: replace Caddyfile with `Caddyfile.bluegreen`, reload Caddy, use `deploy-bluegreen.sh` instead of `deploy.sh`
+
 #### AWS Credential Rotation on EC2
 When IAM keys are rotated (shared across CallAnalyzer, RAG Tool, PMD Questionnaire):
 1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in `.env`

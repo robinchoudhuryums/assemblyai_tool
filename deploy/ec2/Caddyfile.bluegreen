@@ -1,0 +1,54 @@
+# CallAnalyzer — Caddy reverse proxy with blue-green deployment support
+# Replace YOUR_DOMAIN with your actual domain (e.g., umscallanalyzer.com)
+#
+# Blue-green support:
+#   - Admin API enabled on localhost:2019 (not exposed externally)
+#   - deploy-bluegreen.sh uses the admin API to hot-swap the upstream port
+#   - No Caddy restart needed during deploys
+#
+# To switch manually:
+#   curl -X PATCH http://localhost:2019/config/apps/http/servers/srv0/routes/0/handle/0/upstreams/0/dial \
+#     -H "Content-Type: application/json" -d '"localhost:5001"'
+
+{
+    # Enable admin API for blue-green deploys (only accessible from localhost)
+    admin localhost:2019
+}
+
+YOUR_DOMAIN {
+    # Reverse proxy to the active app slot (blue=5000, green=5001)
+    reverse_proxy localhost:5000 {
+        # Health check — Caddy stops routing to unhealthy backends
+        health_uri /api/health
+        health_interval 10s
+        health_timeout 5s
+    }
+
+    # Security headers (supplement what Express already sets)
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        -Server
+    }
+
+    # Access logging for HIPAA audit trail
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 50mb
+            roll_keep 10
+            roll_keep_for 90d
+        }
+        format json
+    }
+
+    # Request size limit (50MB for audio uploads)
+    request_body {
+        max_size 50MB
+    }
+}
+
+# HTTP → HTTPS redirect
+http://YOUR_DOMAIN {
+    redir https://YOUR_DOMAIN{uri} permanent
+}
