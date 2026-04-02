@@ -7,6 +7,7 @@
  * HMAC-SHA256 signatures are included for payload verification.
  */
 import { createHmac } from "crypto";
+import { isUrlSafe } from "./url-validator";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
@@ -140,6 +141,13 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
 }
 
 async function deliverWebhook(config: WebhookConfig, event: string, body: string): Promise<void> {
+  // Runtime SSRF check — prevents delivery to private/reserved IPs even if the URL
+  // was changed directly in storage (bypassing API validation)
+  if (!isUrlSafe(config.url)) {
+    console.error(`[Webhooks] SSRF blocked: refusing to deliver to ${config.url}`);
+    return;
+  }
+
   const signature = createHmac("sha256", config.secret).update(body).digest("hex");
 
   const controller = new AbortController();

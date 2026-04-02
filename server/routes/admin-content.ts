@@ -8,6 +8,7 @@ import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
 import { insertPromptTemplateSchema, insertWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
+import { validateUrlForSSRF } from "../services/url-validator";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
 import {
   getAllWebhookConfigs,
@@ -208,21 +209,9 @@ export function registerContentRoutes(
         return;
       }
       // SSRF protection: reject webhook URLs targeting internal/private networks
-      try {
-        const webhookUrl = new URL(parsed.data.url);
-        const hostname = webhookUrl.hostname.toLowerCase();
-        const blockedHosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "169.254.169.254", "metadata.google.internal"];
-        const isPrivateIP = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(hostname);
-        if (blockedHosts.includes(hostname) || isPrivateIP || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
-          res.status(400).json({ message: "Webhook URL cannot target localhost, private IPs, or internal networks" });
-          return;
-        }
-        if (!["https:", "http:"].includes(webhookUrl.protocol)) {
-          res.status(400).json({ message: "Webhook URL must use http:// or https://" });
-          return;
-        }
-      } catch {
-        res.status(400).json({ message: "Invalid webhook URL format" });
+      const urlCheck = await validateUrlForSSRF(parsed.data.url);
+      if (!urlCheck.valid) {
+        res.status(400).json({ message: urlCheck.error || "Invalid webhook URL" });
         return;
       }
       const invalidEvents = parsed.data.events.filter(e => !WEBHOOK_EVENTS.includes(e as any));
@@ -245,6 +234,14 @@ export function registerContentRoutes(
 
   router.patch("/api/admin/webhooks/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      // SSRF protection: validate URL if being updated
+      if (req.body.url) {
+        const urlCheck = await validateUrlForSSRF(req.body.url);
+        if (!urlCheck.valid) {
+          res.status(400).json({ message: urlCheck.error || "Invalid webhook URL" });
+          return;
+        }
+      }
       const updated = await updateWebhookConfig(req.params.id, req.body);
       if (!updated) {
         res.status(404).json({ message: "Webhook config not found" });
