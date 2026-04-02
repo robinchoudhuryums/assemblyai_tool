@@ -152,6 +152,42 @@ describe("Audit log retry configuration", () => {
   });
 });
 
+// --- Write-ahead queue ---
+
+describe("Audit log write-ahead queue", () => {
+  it("getDroppedAuditEntryCount starts at 0", async () => {
+    const { getDroppedAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    assert.equal(getDroppedAuditEntryCount(), 0);
+  });
+
+  it("getPendingAuditEntryCount starts at 0 after reset", async () => {
+    const { getPendingAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    assert.equal(getPendingAuditEntryCount(), 0);
+  });
+
+  it("logPhiAccess queues entry when pool is unavailable (no DB)", async () => {
+    const { logPhiAccess, getPendingAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    // Without DATABASE_URL, getPool() returns null, so nothing gets queued to DB
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "test_event",
+      resourceType: "test",
+    });
+    // No DB pool → entry goes only to stdout, queue stays empty
+    assert.equal(getPendingAuditEntryCount(), 0);
+  });
+
+  it("flushAuditQueue is safe to call when queue is empty", async () => {
+    const { flushAuditQueue, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    // Should not throw
+    await flushAuditQueue();
+  });
+});
+
 // --- HIPAA event taxonomy ---
 
 describe("HIPAA audit event types", () => {

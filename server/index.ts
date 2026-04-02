@@ -12,6 +12,7 @@ import { startScheduledScans } from "./services/vulnerability-scanner";
 import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
+import { flushAuditQueue } from "./services/audit-log";
 
 // Initialize Sentry early (before Express setup) so it catches startup errors
 initSentry();
@@ -262,6 +263,15 @@ app.get("/api/health", async (_req, res) => {
     heap_used_mb: Math.round(mem.heapUsed / 1048576),
   };
 
+  // HIPAA: Surface audit log queue health
+  const { getDroppedAuditEntryCount, getPendingAuditEntryCount } = await import("./services/audit-log");
+  const droppedAudit = getDroppedAuditEntryCount();
+  const pendingAudit = getPendingAuditEntryCount();
+  if (droppedAudit > 0 || pendingAudit > 0) {
+    health.audit_log = { pending: pendingAudit, dropped: droppedAudit };
+    if (droppedAudit > 0) health.status = "degraded";
+  }
+
   res.json(health);
 });
 
@@ -391,5 +401,19 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     setTimeout(runRetention, 30_000);
     // Then run daily (every 24 hours)
     setInterval(runRetention, 24 * 60 * 60 * 1000);
+
+    // HIPAA: Flush audit log queue on graceful shutdown (pm2 sends SIGINT)
+    const gracefulShutdown = async (signal: string) => {
+      log(`${signal} received — flushing audit log queue...`);
+      try {
+        await flushAuditQueue();
+        log("Audit log queue flushed successfully.");
+      } catch (err) {
+        console.error("[HIPAA_AUDIT] Failed to flush audit queue on shutdown:", (err as Error).message);
+      }
+      process.exit(0);
+    };
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   });
 })();
