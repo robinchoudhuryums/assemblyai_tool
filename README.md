@@ -669,7 +669,7 @@ assemblyai_tool/
 │       └── logger.ts               # Structured logging utility
 ├── shared/
 │   └── schema.ts                   # Zod schemas shared between client and server
-├── tests/                           # 559 tests across 24 files
+├── tests/                           # 643 tests across 28 files
 │   ├── schema.test.ts              # Schema validation tests
 │   ├── ai-provider.test.ts         # AI provider utility tests
 │   ├── auth.test.ts                # Authentication + role-based access tests
@@ -694,16 +694,22 @@ assemblyai_tool/
 │   ├── pipeline-errors.test.ts     # Pipeline error classification tests
 │   ├── audit-log.test.ts           # HIPAA audit log format + context tests
 │   ├── security-monitor.test.ts    # Security monitor threshold + alert tests
-│   └── aws-credentials.test.ts     # AWS credential resolution + caching tests
+│   ├── aws-credentials.test.ts     # AWS credential resolution + caching tests
+│   ├── session-integration.test.ts # Session/login flow + fingerprint tests
+│   ├── routes.test.ts              # Route endpoint integration tests
+│   └── ssrf.test.ts                # SSRF protection tests (45 tests)
 ├── deploy/
 │   └── ec2/                        # EC2 deployment configs (Caddyfile, systemd, user-data)
 ├── .github/
 │   └── workflows/
 │       ├── deploy.yml              # Auto-deploy to EC2 on push to main
+│       ├── deploy-bluegreen.yml    # Manual blue-green deploy (zero-downtime)
 │       ├── error-monitor.yml       # Error monitoring workflow
 │       └── view-logs.yml           # Log viewing workflow
 ├── deploy.sh                       # EC2 deploy script (pull, build, restart)
+├── deploy-bluegreen.sh             # Blue-green deploy (zero-downtime, manual)
 ├── deploy-rollback.sh              # Rollback to previous build
+├── ecosystem.config.cjs            # PM2 blue/green process config
 ├── CLAUDE.md                       # Development reference (for AI assistants)
 ├── SECURITY.md                     # HIPAA security summary
 └── package.json                    # Dependencies and scripts
@@ -798,7 +804,7 @@ npm run dev          # Dev server with hot reload (tsx watch + Vite HMR)
 npm run build        # Production build (Vite frontend → dist/client/, esbuild backend → dist/index.js)
 npm run start        # Production server (NODE_ENV=production)
 npm run check        # TypeScript type check
-npm run test         # Run backend unit tests (Node.js test runner via tsx — 559 tests)
+npm run test         # Run backend unit tests (Node.js test runner via tsx — 643 tests)
 npm run test:client  # Run frontend unit tests (Vitest + React Testing Library)
 npm run test:e2e     # Run E2E tests (Playwright, requires dev server running)
 ```
