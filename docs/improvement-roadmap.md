@@ -6,16 +6,16 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 
 ## Testing & Coverage (Target: 70%+ backend, 40%+ frontend)
 
-**Current state**: 559 tests across 24 files. Backend services: ~62% covered. Frontend: ~3% covered. No integration tests, no route endpoint tests, no E2E user workflows.
+**Current state**: 643 tests across 28 files. Backend services: ~70% covered. Frontend: ~3% covered. Route endpoint tests and session integration tests added. No E2E user workflows yet.
 
-### Sprint 1 — Route endpoint tests (HIGH PRIORITY)
-- Add HTTP-level integration tests for the most critical API routes:
+### Sprint 1 — Route endpoint tests (PARTIALLY DONE)
+- ✅ Test app factory and `request()` helper created (`tests/routes.test.ts`)
+- ✅ Auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD tests
+- Remaining: add route-specific tests using the factory for:
   - `calls.ts` — upload, get, list, assign, delete
-  - `analytics.ts` — team analytics, trends, exports (validates the SQL injection fixes)
+  - `analytics.ts` — team analytics, trends, exports
   - `admin-security.ts` — WAF stats, IP blocking, vulnerability scans
   - `users.ts` — CRUD, password reset, role changes
-- Use `supertest` or direct Express `app.request()` with a test MemStorage instance
-- These should run in CI without DATABASE_URL
 
 ### Sprint 2 — Frontend component tests
 - Priority pages: `dashboard.tsx`, `search.tsx`, `transcripts.tsx`, `reports.tsx`, `employees.tsx`
@@ -42,9 +42,9 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 ## Security Hardening
 
 ### ~~SSRF protection gaps~~ ✅ COMPLETED
-- Shared URL validator (`server/services/url-validator.ts`) with DNS resolution check, expanded blocklist, IPv6-mapped IPv4 support, HTTPS enforcement
-- Applied to webhook create, update (was unvalidated), and delivery (runtime check)
-- Add: block `169.254.169.250`, `100.100.100.200` (other cloud metadata endpoints)
+- Shared URL validator (`server/services/url-validator.ts`) with DNS resolution check, expanded blocklist (all cloud metadata endpoints including 169.254.169.250 and 100.100.100.200), IPv6-mapped IPv4 support, HTTPS enforcement
+- Applied to webhook create, update (was unvalidated — critical fix), and delivery (runtime check)
+- 45 SSRF tests covering blocked hostnames, private IPs, DNS resolution, IPv6, protocol enforcement
 
 ### WAF slow-attack resilience (`server/middleware/waf.ts`)
 - Anomaly scoring can be bypassed by very slow attacks (1 req/min stays below window)
@@ -65,16 +65,15 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
 - Eliminates structural SQL injection risk and simplifies complex dynamic WHERE clauses
 - Estimated: 2-3 sprints for full migration (can be incremental, route-by-route)
 
-### Auto-calibration completion (`server/services/auto-calibration.ts`)
-- Currently analyzes score distributions and logs recommendations but never applies them
-- Add: admin API endpoint to review and approve recommended calibration values
-- Add: optional auto-apply mode with guardrails (max shift ±0.5 per cycle)
-- Add: calibration history tracking for audit trail
+### ~~Auto-calibration completion~~ ✅ COMPLETED
+- `POST /api/admin/calibration/apply` endpoint with ±0.5 guard rail per application
+- Runtime overrides persisted to S3 (`calibration/active-config.json`), loaded on startup
+- Calibration history tracked under `calibration/history/` with appliedBy and previousConfig
 
-### Remaining code duplication
-- Employee assignment logic exists in both `calls.ts` and `employees.ts` routes
-- Date range filtering code is repeated across `analytics.ts`, `reports.ts`, `snapshots.ts`
-- Extract shared route helpers: `validateDateRange()`, `assignEmployeeToCall()`
+### ~~Remaining code duplication~~ ✅ COMPLETED
+- Removed duplicate `PATCH /api/calls/:id/assign` from employees.ts (calls.ts is single source)
+- Extracted 5 shared helpers to `server/routes/utils.ts`: `escapeCsvValue()`, `filterCallsByDateRange()`, `countFrequency()`, `calculateSentimentBreakdown()`, `calculateAvgScore()`
+- Applied across analytics.ts, admin-operations.ts, reports.ts (replaced 125 lines of duplicates)
 
 ---
 
