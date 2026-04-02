@@ -1,0 +1,69 @@
+# CallAnalyzer — Blue-Green Deploy to EC2
+# Manual trigger only — for high-risk deploys (major updates, schema changes, hotfixes).
+# Normal deploys use the standard deploy.yml (automatic on push to main).
+#
+# Blue-green guarantees zero user impact: the old process keeps serving traffic
+# until the new one passes health checks. If the new build fails at runtime,
+# it's killed and the old process stays live.
+#
+# Required GitHub Secrets (same as deploy.yml):
+#   EC2_SSH_KEY, EC2_HOST, EC2_USER, EC2_APP_DIR
+#
+# Prerequisites on EC2:
+#   - Caddy running with admin API enabled (Caddyfile.bluegreen)
+#   - ecosystem.config.cjs in project root
+
+name: Blue-Green Deploy to EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy (default: main)'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Blue-Green Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "::error::EC2_HOST or EC2_SSH_KEY secrets not set."
+            exit 1
+          fi
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -e
+            cd ${{ secrets.EC2_APP_DIR }}
+            echo "=== GitHub Actions Blue-Green Deploy ==="
+            echo "Branch: ${{ github.event.inputs.branch }}"
+            echo "Triggered by: ${{ github.actor }}"
+            ./deploy-bluegreen.sh ${{ github.event.inputs.branch }}
+
+      - name: Post deploy summary
+        if: always()
+        run: |
+          echo "### Blue-Green Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.event.inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Blue-green deploys keep the old process running until the new one passes health checks." >> $GITHUB_STEP_SUMMARY
