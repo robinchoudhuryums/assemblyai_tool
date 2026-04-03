@@ -58,10 +58,11 @@ export default function MyPerformancePage() {
 
   const toggleActionItem = useMutation({
     mutationFn: async ({ sessionId, index }: { sessionId: string; index: number }) => {
+      const { getCsrfToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/coaching/${sessionId}/action-item/${index}`, {
         method: "PATCH",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}) },
       });
       if (!res.ok) throw new Error("Failed to toggle action item");
       return res.json();

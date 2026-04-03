@@ -214,7 +214,47 @@ app.use((req, res, next) => {
   next();
 });
 
-// CSRF protection: Require proof that the request originates from our app.
+// CSRF protection: Double-submit cookie pattern (defense-in-depth).
+// On every response, set a random CSRF token cookie. State-changing requests
+// must echo the token in the X-CSRF-Token header. Since the cookie uses
+// SameSite=Strict, cross-origin attackers cannot read it to include in headers.
+// This supplements the existing Content-Type/X-Requested-With checks below.
+const CSRF_COOKIE = "csrf_token";
+const CSRF_HEADER = "x-csrf-token";
+const CSRF_EXEMPT = ["/api/auth/login", "/api/auth/logout", "/api/access-requests", "/api/health", "/api/webhooks/assemblyai"];
+
+function getCookieValue(req: Request, name: string): string | undefined {
+  const raw = req.headers.cookie;
+  if (!raw) return undefined;
+  const match = raw.split(";").map(s => s.trim()).find(s => s.startsWith(name + "="));
+  return match ? match.slice(name.length + 1) : undefined;
+}
+
+app.use((req, res, next) => {
+  let csrfToken = getCookieValue(req, CSRF_COOKIE);
+  if (!csrfToken) {
+    csrfToken = crypto.randomBytes(32).toString("hex");
+  }
+  res.cookie(CSRF_COOKIE, csrfToken, {
+    httpOnly: false,  // Frontend JS needs to read this
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 24 * 60 * 60 * 1000,
+  });
+
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method) && req.path.startsWith("/api")) {
+    if (!CSRF_EXEMPT.some(p => req.path === p || req.path.startsWith(p + "/"))) {
+      const headerToken = req.headers[CSRF_HEADER] as string | undefined;
+      if (!headerToken || headerToken !== csrfToken) {
+        return res.status(403).json({ message: "CSRF token missing or invalid" });
+      }
+    }
+  }
+  next();
+});
+
+// CSRF protection (legacy): Require proof that the request originates from our app.
 // For JSON requests: Content-Type: application/json (browsers won't send this cross-origin without CORS preflight).
 // For multipart uploads: Require a custom X-Requested-With header (same CORS protection mechanism).
 // Exempt: login, logout, access-requests (unauthenticated public endpoints).

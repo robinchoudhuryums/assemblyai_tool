@@ -70,9 +70,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   const editMutation = useMutation({
     mutationFn: async (payload: { updates: Record<string, string | number>; reason: string }) => {
+      const { getCsrfToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/calls/${callId}/analysis`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}) },
         credentials: "include",
         body: JSON.stringify(payload),
       });
@@ -1031,9 +1032,10 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
 
   const addMutation = useMutation({
     mutationFn: async (payload: { timestampMs: number; text: string }) => {
+      const { getCsrfToken: getToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/calls/${callId}/annotations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(getToken() ? { "x-csrf-token": getToken()! } : {}) },
         credentials: "include",
         body: JSON.stringify(payload),
       });
@@ -1048,7 +1050,8 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include" });
+      const { getCsrfToken: csrf } = await import("@/lib/queryClient");
+      await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include", headers: csrf() ? { "x-csrf-token": csrf()! } : {} });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
   });
