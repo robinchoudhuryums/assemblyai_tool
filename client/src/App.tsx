@@ -1,16 +1,18 @@
-import { useEffect, useState, lazy, Suspense } from "react";
+import { useEffect, useState, lazy, Suspense, useCallback } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient, getQueryFn, resetSessionExpired } from "./lib/queryClient";
+import { queryClient, getQueryFn, resetSessionExpired, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import I18nProvider from "@/components/i18n-provider";
 import AppearanceProvider from "@/components/appearance-provider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogAction } from "@/components/ui/alert-dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
+import { useIdleTimeout } from "@/hooks/use-idle-timeout";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAppearance } from "@/components/appearance-provider";
 import HexBackground from "@/components/hex-background";
@@ -236,6 +238,15 @@ function AuthenticatedApp() {
     refetchOnWindowFocus: true,
   });
 
+  // HIPAA: Auto-logout after 15 minutes of inactivity with 2-minute warning
+  const handleIdleLogout = useCallback(async () => {
+    try { await apiRequest("POST", "/api/auth/logout"); } catch { /* ignore */ }
+    queryClient.clear();
+    window.location.href = "/";
+  }, []);
+
+  const { showWarning, remainingSeconds } = useIdleTimeout(handleIdleLogout, !!user);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -260,6 +271,21 @@ function AuthenticatedApp() {
   return (
     <ErrorBoundary>
       <Router />
+      {/* HIPAA idle timeout warning — appears 2 minutes before auto-logout */}
+      <AlertDialog open={showWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Session Expiring</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your session will expire in <strong>{remainingSeconds}</strong> seconds due to inactivity.
+              Move your mouse or press any key to stay logged in.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>Stay Logged In</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ErrorBoundary>
   );
 }
