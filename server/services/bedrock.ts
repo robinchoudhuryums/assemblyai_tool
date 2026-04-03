@@ -15,6 +15,7 @@ import { createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
+import { CircuitBreaker } from "./resilience";
 import { signRequest, sha256Buffer } from "./sigv4.js";
 
 // LRU cache for embeddings — avoids redundant Bedrock calls on re-analysis/retries.
@@ -30,6 +31,10 @@ const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 const DEFAULT_REGION = "us-east-1";
 const BEDROCK_TIMEOUT_MS = 120_000; // 2 minutes — prevents indefinite hangs
+
+// Shared circuit breaker for all Bedrock instances — prevents cascading failures
+// when Bedrock is down. 5 failures → open for 30s → half-open test → close on success.
+const bedrockCircuitBreaker = new CircuitBreaker("bedrock", 5, 30_000);
 
 export class BedrockProvider implements AIAnalysisProvider {
   readonly name = "bedrock";
@@ -101,27 +106,30 @@ export class BedrockProvider implements AIAnalysisProvider {
     });
 
     const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
-    try {
-      const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        // HIPAA: Log full error server-side, throw sanitized message to prevent
-        // AWS internals (account IDs, ARNs, model details) from reaching clients.
-        console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
-        const statusCategory = response.status >= 500 ? "service unavailable" :
-          response.status === 429 ? "rate limited" :
-          response.status === 403 ? "access denied" : "request failed";
-        throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
+    return bedrockCircuitBreaker.execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          // HIPAA: Log full error server-side, throw sanitized message to prevent
+          // AWS internals (account IDs, ARNs, model details) from reaching clients.
+          console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+          const statusCategory = response.status >= 500 ? "service unavailable" :
+            response.status === 429 ? "rate limited" :
+            response.status === 403 ? "access denied" : "request failed";
+          throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
+        }
+
+        const result = await response.json();
+        return result.output?.message?.content?.[0]?.text || "";
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const result = await response.json();
-      return result.output?.message?.content?.[0]?.text || "";
-    } finally {
-      clearTimeout(timeout);
-    }
+    });
   }
 
   async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis> {
@@ -150,32 +158,32 @@ export class BedrockProvider implements AIAnalysisProvider {
     console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
 
     const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
-    let result: any;
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: controller.signal,
-      });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        // HIPAA: Log full error server-side, throw sanitized message to prevent
-        // AWS internals (account IDs, ARNs, model details) from reaching clients.
-        console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
-        const statusCategory = response.status >= 500 ? "service unavailable" :
-          response.status === 429 ? "rate limited" :
-          response.status === 403 ? "access denied" : "request failed";
-        throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
+    const result = await bedrockCircuitBreaker.execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), BEDROCK_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+          const statusCategory = response.status >= 500 ? "service unavailable" :
+            response.status === 429 ? "rate limited" :
+            response.status === 403 ? "access denied" : "request failed";
+          throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
+        }
+
+        return await response.json();
+      } finally {
+        clearTimeout(timeout);
       }
-
-      result = await response.json();
-    } finally {
-      clearTimeout(timeout);
-    }
+    });
 
     // Converse API response shape:
     // { output: { message: { role: "assistant", content: [{ text: "..." }] } } }
@@ -215,29 +223,31 @@ export class BedrockProvider implements AIAnalysisProvider {
       });
 
       const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout for embeddings
-      try {
-        const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.warn(`Embedding API error (${response.status}): ${errorText.substring(0, 200)}`);
-          return null;
-        }
-        const result = await response.json();
-        const embedding = result.embedding || null;
-        if (embedding) {
-          // LRU eviction: delete oldest entry if at capacity
-          if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
-            const oldest = embeddingCache.keys().next().value;
-            if (oldest) embeddingCache.delete(oldest);
+
+      return bedrockCircuitBreaker.execute(async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout for embeddings
+        try {
+          const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.warn(`Embedding API error (${response.status}): ${errorText.substring(0, 200)}`);
+            return null;
           }
-          embeddingCache.set(cacheKey, embedding);
+          const result = await response.json();
+          const embedding = result.embedding || null;
+          if (embedding) {
+            if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
+              const oldest = embeddingCache.keys().next().value;
+              if (oldest) embeddingCache.delete(oldest);
+            }
+            embeddingCache.set(cacheKey, embedding);
+          }
+          return embedding;
+        } finally {
+          clearTimeout(timeout);
         }
-        return embedding;
-      } finally {
-        clearTimeout(timeout);
-      }
+      });
     } catch (error) {
       // Non-critical — clustering falls back to TF-IDF
       console.warn("Embedding generation failed (non-critical):", (error as Error).message);
