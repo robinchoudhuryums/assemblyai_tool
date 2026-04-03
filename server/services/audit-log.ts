@@ -15,7 +15,14 @@
  * - Entries that exhaust retries remain in stdout logs (manual reconciliation)
  * - A dropped entry counter is exposed for health check monitoring
  * - flushAuditQueue() can be called on graceful shutdown to drain pending entries
+ *
+ * Integrity guarantee (HIPAA §164.312(b)):
+ * - Each stdout log entry includes an HMAC-SHA256 integrity hash
+ * - The hash is computed over the entry content + previous entry's hash (chain)
+ * - If any entry is modified, deleted, or reordered, the chain breaks
+ * - Verification: walk entries sequentially, recompute each hash from content + prev hash
  */
+import { createHmac } from "crypto";
 import { getPool } from "../db/pool";
 
 export interface AuditEntry {
@@ -32,6 +39,21 @@ export interface AuditEntry {
 }
 
 const AUDIT_PREFIX = "[HIPAA_AUDIT]";
+
+// --- HMAC Integrity Chain ---
+// Each entry's hash = HMAC-SHA256(entry_content + previous_hash, secret).
+// The chain makes it detectable if any log entry is modified, deleted, or reordered.
+const AUDIT_HMAC_SECRET = process.env.SESSION_SECRET || "audit-log-integrity-key";
+let previousHash = "genesis"; // seed value for the first entry in the chain
+
+function computeIntegrityHash(content: string): string {
+  const hmac = createHmac("sha256", AUDIT_HMAC_SECRET);
+  hmac.update(content);
+  hmac.update(previousHash);
+  const hash = hmac.digest("hex").slice(0, 16); // truncate to 16 chars for readability
+  previousHash = hash;
+  return hash;
+}
 
 const MAX_AUDIT_RETRIES = 3;
 const FLUSH_INTERVAL_MS = 2_000;  // flush every 2 seconds
@@ -143,8 +165,12 @@ export function logPhiAccess(entry: AuditEntry): void {
     timestamp: entry.timestamp || new Date().toISOString(),
   };
 
-  // Always write to stdout (primary log sink)
-  console.log(`${AUDIT_PREFIX} ${JSON.stringify(line)}`);
+  // Compute integrity hash (chained HMAC — detects tampering/deletion)
+  const content = JSON.stringify(line);
+  const integrity = computeIntegrityHash(content);
+
+  // Always write to stdout with integrity hash (primary log sink)
+  console.log(`${AUDIT_PREFIX} ${content} [h:${integrity}]`);
 
   // Queue DB write if PostgreSQL is available
   const pool = getPool();

@@ -188,6 +188,36 @@ describe("Audit log write-ahead queue", () => {
   });
 });
 
+// --- Integrity hash chain ---
+
+describe("Audit log integrity hash", () => {
+  it("computeIntegrityHash returns consistent 16-char hex string", async () => {
+    // The hash function is not exported, but we can verify the chain behavior via logPhiAccess stdout
+    // by checking that repeated calls produce different hashes (chained)
+    const { logPhiAccess, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+
+    // Capture console.log output
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(String(args[0])); };
+
+    logPhiAccess({ timestamp: "2026-04-03T00:00:00Z", event: "test_1", resourceType: "test" });
+    logPhiAccess({ timestamp: "2026-04-03T00:00:01Z", event: "test_2", resourceType: "test" });
+
+    console.log = originalLog;
+
+    // Both entries should have [h:...] integrity hashes
+    assert.equal(logs.length, 2);
+    const hash1Match = logs[0].match(/\[h:([0-9a-f]{16})\]$/);
+    const hash2Match = logs[1].match(/\[h:([0-9a-f]{16})\]$/);
+    assert.ok(hash1Match, "First entry should have integrity hash");
+    assert.ok(hash2Match, "Second entry should have integrity hash");
+    // Chain: hashes should be different (second depends on first)
+    assert.notEqual(hash1Match![1], hash2Match![1], "Chained hashes should differ");
+  });
+});
+
 // --- HIPAA event taxonomy ---
 
 describe("HIPAA audit event types", () => {
