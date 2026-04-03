@@ -282,11 +282,42 @@ export function parseJsonResponse(text: string, callId: string, callDurationSeco
   const result = CallAnalysisSchema.safeParse(raw);
   if (!result.success) {
     console.warn(`[${callId}] AI response failed Zod validation:`, result.error.issues.slice(0, 5));
-    // Fall back to raw parse — the .catch() defaults in the schema handle most cases
-    // but if the top-level structure is completely wrong, we cast with defaults
     throw new Error("AI response failed schema validation");
   }
 
-  const analysis = result.data as CallAnalysis;
+  let analysis = result.data as CallAnalysis;
+
+  // Quality gate: if all fields are at defaults, the AI likely returned garbage
+  // that was silently defaulted by Zod .catch() handlers. Try to recover by
+  // unwrapping a nested wrapper (e.g. { analysis: { ... } } or { result: { ... } }).
+  const isAllDefaults = analysis.summary === "No summary available"
+    && analysis.sub_scores.compliance === 5.0
+    && analysis.sub_scores.customer_experience === 5.0
+    && analysis.sub_scores.communication === 5.0
+    && analysis.sub_scores.resolution === 5.0;
+
+  if (isAllDefaults && raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const values = Object.values(raw as Record<string, unknown>);
+    for (const nested of values) {
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        const retry = CallAnalysisSchema.safeParse(nested);
+        if (retry.success) {
+          const retryData = retry.data as CallAnalysis;
+          // Only use the nested result if it's NOT all-defaults too
+          if (retryData.summary !== "No summary available") {
+            console.log(`[${callId}] Recovered AI response from nested wrapper object`);
+            analysis = retryData;
+            break;
+          }
+        }
+      }
+    }
+
+    // If still all-defaults after unwrap attempts, log the warning
+    if (analysis.summary === "No summary available") {
+      console.warn(`[${callId}] AI response quality gate: all fields at defaults — AI likely returned unusable output`);
+    }
+  }
+
   return validateTimestamps(analysis, callDurationSeconds);
 }

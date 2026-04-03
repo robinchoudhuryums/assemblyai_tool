@@ -94,6 +94,23 @@ describe("parseJsonResponse error handling", () => {
     const result = parseJsonResponse(response, "test-call");
     assert.ok(result.performance_score >= 0, `Score ${result.performance_score} should be clamped to 0`);
   });
+
+  it("recovers analysis from nested wrapper object", () => {
+    // Some AI models may wrap the response in { analysis: { ... } } or { result: { ... } }
+    const inner = '{"summary":"Nested test","topics":[],"sentiment":"neutral","sentiment_score":0.5,"performance_score":7.0,"sub_scores":{"compliance":7,"customer_experience":7,"communication":7,"resolution":7},"action_items":[],"feedback":{"strengths":[],"suggestions":[]},"flags":[]}';
+    const wrapped = `{"analysis": ${inner}}`;
+    const result = parseJsonResponse(wrapped, "test-nested");
+    assert.equal(result.summary, "Nested test");
+    assert.equal(result.performance_score, 7.0);
+  });
+
+  it("returns defaults for completely invalid structure (no usable fields)", () => {
+    // Zod .catch() handlers provide defaults for every field, so even garbage JSON
+    // doesn't throw — it just returns all-defaults
+    const result = parseJsonResponse('{"data": [1, 2, 3]}', "test-call");
+    assert.equal(result.summary, "No summary available");
+    assert.equal(result.performance_score, 5.0);
+  });
 });
 
 // ── Empty Transcript Guard ─────────────────────────────

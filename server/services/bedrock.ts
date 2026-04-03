@@ -11,10 +11,20 @@
  *
  * Uses the Bedrock "Converse" API (no SDK needed, plain fetch + SigV4).
  */
+import { createHash } from "crypto";
 import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { signRequest, sha256Buffer } from "./sigv4.js";
+
+// LRU cache for embeddings — avoids redundant Bedrock calls on re-analysis/retries.
+// Keyed by content hash (SHA-256 of input text). Max 200 entries (~50KB per 256-dim vector).
+const EMBEDDING_CACHE_MAX = 200;
+const embeddingCache = new Map<string, number[]>();
+
+function getEmbeddingCacheKey(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
@@ -183,6 +193,11 @@ export class BedrockProvider implements AIAnalysisProvider {
    */
   async generateEmbedding(text: string): Promise<number[] | null> {
     try {
+      // Check LRU cache first (avoids redundant Bedrock calls on re-analysis)
+      const cacheKey = getEmbeddingCacheKey(text);
+      const cached = embeddingCache.get(cacheKey);
+      if (cached) return cached;
+
       const creds = await this.ensureCredentials();
       const region = creds.region;
       const host = `bedrock-runtime.${region}.amazonaws.com`;
@@ -210,7 +225,16 @@ export class BedrockProvider implements AIAnalysisProvider {
           return null;
         }
         const result = await response.json();
-        return result.embedding || null;
+        const embedding = result.embedding || null;
+        if (embedding) {
+          // LRU eviction: delete oldest entry if at capacity
+          if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
+            const oldest = embeddingCache.keys().next().value;
+            if (oldest) embeddingCache.delete(oldest);
+          }
+          embeddingCache.set(cacheKey, embedding);
+        }
+        return embedding;
       } finally {
         clearTimeout(timeout);
       }
