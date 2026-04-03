@@ -22,6 +22,8 @@ import {
   type SnapshotLevel,
 } from "../services/performance-snapshots";
 
+const COMPANY_NAME = process.env.COMPANY_NAME || "UMS (United Medical Supply)";
+
 export function registerSnapshotRoutes(router: Router) {
 
   // ==================== GENERATE SNAPSHOTS ====================
@@ -357,7 +359,7 @@ export function registerSnapshotRoutes(router: Router) {
     if (aiProvider.isAvailable && aiProvider.generateText && metrics.totalCalls > 0) {
       const prompt = buildSnapshotSummaryPrompt({
         level: "company",
-        targetName: "UMS (United Medical Supply)",
+        targetName: COMPANY_NAME,
         periodLabel: `${from} to ${to}`,
         metrics,
         priorSnapshots,
@@ -374,7 +376,7 @@ export function registerSnapshotRoutes(router: Router) {
       id: randomUUID(),
       level: "company",
       targetId: "company",
-      targetName: "UMS (United Medical Supply)",
+      targetName: COMPANY_NAME,
       periodStart: from,
       periodEnd: to,
       metrics,

@@ -169,9 +169,16 @@ function Router() {
 
   return (
     <div className="flex h-screen">
+      {/* Accessibility: skip-to-content link for keyboard users */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none"
+      >
+        Skip to content
+      </a>
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
-      <main className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 relative">
+      <main id="main-content" className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 relative">
         {/* Background pattern (selected via Settings page) */}
         <BackgroundLayer />
         {/* Mobile hamburger button */}
