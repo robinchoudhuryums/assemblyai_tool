@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
-import { validateIdParam, validateParams } from "./utils";
+import { validateIdParam, validateParams, sendValidationError } from "./utils";
 
 export function register(router: Router) {
   // ==================== COACHING ROUTES ====================
@@ -46,7 +46,7 @@ export function register(router: Router) {
         assignedBy: req.user?.name || req.user?.username || "Unknown",
       });
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid coaching data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid coaching data", parsed.error);
         return;
       }
       const session = await storage.createCoachingSession(parsed.data);
@@ -85,7 +85,7 @@ export function register(router: Router) {
     try {
       const parsed = updateCoachingSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid update data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid update data", parsed.error);
         return;
       }
       const updates: Record<string, any> = { ...parsed.data };

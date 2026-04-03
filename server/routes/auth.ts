@@ -1,6 +1,7 @@
 import { Router } from "express";
 import passport from "passport";
 import { z } from "zod";
+import { sendValidationError } from "./utils";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
@@ -216,7 +217,7 @@ export function registerAuthRoutes(router: Router) {
     try {
       const parsed = insertAccessRequestSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid request data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid request data", parsed.error);
         return;
       }
       const request = await storage.createAccessRequest(parsed.data);

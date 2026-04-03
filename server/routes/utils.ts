@@ -44,6 +44,23 @@ export function validateParams(
 /** Shorthand: validate that :id is a valid UUID. */
 export const validateIdParam = validateParams({ id: "uuid" });
 
+// ── Standardized Error Responses ─────────────────────────────────────
+// All API error responses follow a consistent shape:
+//   { message: string, errors?: unknown }
+// This makes client-side error handling predictable.
+
+import { type ZodError } from "zod";
+
+/** Send a JSON error response with a consistent shape. */
+export function sendError(res: Response, status: number, message: string): void {
+  res.status(status).json({ message });
+}
+
+/** Send a 400 with Zod validation errors (always uses .flatten() for consistency). */
+export function sendValidationError(res: Response, message: string, zodError: ZodError): void {
+  res.status(400).json({ message, errors: zodError.flatten() });
+}
+
 /**
  * Wrap an async route handler so unhandled promise rejections are forwarded
  * to Express error middleware. Express 4 doesn't do this natively.

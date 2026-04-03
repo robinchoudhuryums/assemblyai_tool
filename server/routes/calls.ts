@@ -10,7 +10,7 @@ import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
 import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
-import { cleanupFile, TaskQueue, validateIdParam, validateParams } from "./utils";
+import { cleanupFile, TaskQueue, validateIdParam, validateParams, sendError, sendValidationError } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
 /** Type for the processAudioFile function passed from the main routes module. */
@@ -385,7 +385,7 @@ export function registerCallRoutes(
 
       const parsed = analysisEditSchema.safeParse({ updates, reason });
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid edit data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid edit data", parsed.error);
         return;
       }
 
@@ -441,7 +441,7 @@ export function registerCallRoutes(
     try {
       const parsed = assignCallSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid request data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid request data", parsed.error);
         return;
       }
       const { employeeId } = parsed.data;

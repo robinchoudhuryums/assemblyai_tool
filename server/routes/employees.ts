@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { insertEmployeeSchema, assignCallSchema } from "@shared/schema";
 import { z } from "zod";
+import { sendError, sendValidationError } from "./utils";
 import csv from "csv-parser";
 import fs from "fs";
 import path from "path";
@@ -26,9 +27,9 @@ export function register(router: Router) {
       res.status(201).json(employee);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        res.status(400).json({ message: "Invalid employee data", errors: error.errors });
+        sendValidationError(res, "Invalid employee data", error);
       } else {
-        res.status(500).json({ message: "Failed to create employee" });
+        sendError(res, 500, "Failed to create employee");
       }
     }
   });
@@ -47,12 +48,12 @@ export function register(router: Router) {
     try {
       const parsed = updateEmployeeSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid update data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid update data", parsed.error);
         return;
       }
       const employee = await storage.getEmployee(req.params.id);
       if (!employee) {
-        res.status(404).json({ message: "Employee not found" });
+        sendError(res, 404, "Employee not found");
         return;
       }
       const updated = await storage.updateEmployee(req.params.id, parsed.data);
