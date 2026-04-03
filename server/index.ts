@@ -12,6 +12,7 @@ import { startScheduledScans } from "./services/vulnerability-scanner";
 import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
+import { runWithCorrelationId } from "./services/correlation-id";
 import { flushAuditQueue } from "./services/audit-log";
 
 // Initialize Sentry early (before Express setup) so it catches startup errors
@@ -87,6 +88,14 @@ app.use((req, _res, next) => {
     }
   }
   next();
+});
+
+// Request correlation ID — unique per request, auto-injected into all structured log entries.
+// Enables tracing a single request across all log lines in CloudWatch/Datadog/etc.
+app.use((req, res, next) => {
+  const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+  res.setHeader("X-Request-Id", correlationId);
+  runWithCorrelationId(correlationId, () => next());
 });
 
 // HIPAA: Enforce HTTPS in production (redirect HTTP → HTTPS)

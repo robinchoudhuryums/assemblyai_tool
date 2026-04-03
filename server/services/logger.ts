@@ -4,9 +4,14 @@
  * Outputs newline-delimited JSON to stdout/stderr, compatible with CloudWatch,
  * Datadog, Splunk, ELK, and any log aggregator that parses JSON lines.
  *
+ * Automatically includes correlation ID (per-request) and call ID (per-pipeline)
+ * from AsyncLocalStorage context, enabling trace-level filtering across all log lines.
+ *
  * HIPAA: Never logs PHI (transcript content, audio data, patient names).
  * Only logs metadata: IDs, timestamps, durations, counts, status codes.
  */
+
+import { getCorrelationId, getCallId } from "./correlation-id";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -24,6 +29,8 @@ interface LogEntry {
   level: LogLevel;
   message: string;
   service: string;
+  correlationId?: string;
+  callId?: string;
   [key: string]: unknown;
 }
 
@@ -35,8 +42,15 @@ function emit(level: LogLevel, message: string, meta?: Record<string, unknown>):
     level,
     message,
     service: "callanalyzer",
-    ...meta,
   };
+
+  // Inject correlation/call IDs from AsyncLocalStorage context
+  const correlationId = getCorrelationId();
+  if (correlationId) entry.correlationId = correlationId;
+  const callId = getCallId();
+  if (callId) entry.callId = callId;
+
+  if (meta) Object.assign(entry, meta);
 
   const line = JSON.stringify(entry);
   if (level === "error") {
