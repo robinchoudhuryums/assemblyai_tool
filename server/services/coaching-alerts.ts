@@ -174,6 +174,8 @@ Flags: ${flags.join(", ") || "none"}`;
     try {
       const ragResult = await fetchRagContext(
         `Coaching and training guidance for call center agents who scored low on: ${analysisContext.slice(0, 200)}`,
+        undefined,
+        "rag:coaching",
       );
       if (ragResult) {
         ragCoachingContext = `\nCOMPANY COACHING GUIDELINES:\n${ragResult.context.slice(0, 800)}\n`;

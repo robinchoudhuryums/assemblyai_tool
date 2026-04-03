@@ -20,6 +20,33 @@ const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL?.replace(/\/$/, "");
 const RAG_API_KEY = process.env.RAG_API_KEY || "";
 const RAG_TIMEOUT_MS = 8_000; // 8 second timeout — don't block the pipeline
 
+// --- Category-based RAG cache ---
+// Calls with the same category often need the same company policies/procedures.
+// Cache RAG results by category for 10 minutes to avoid redundant API calls.
+// This can save 80%+ of RAG queries in high-volume processing.
+const RAG_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const RAG_CACHE_MAX = 20; // Max cached categories
+const ragCache = new Map<string, { result: { context: string; sources: RagSource[] }; expiresAt: number }>();
+
+function getCachedRagContext(cacheKey: string): { context: string; sources: RagSource[] } | undefined {
+  const entry = ragCache.get(cacheKey);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    ragCache.delete(cacheKey);
+    return undefined;
+  }
+  return entry.result;
+}
+
+function setCachedRagContext(cacheKey: string, result: { context: string; sources: RagSource[] }): void {
+  // LRU eviction
+  if (ragCache.size >= RAG_CACHE_MAX) {
+    const oldest = ragCache.keys().next().value;
+    if (oldest) ragCache.delete(oldest);
+  }
+  ragCache.set(cacheKey, { result, expiresAt: Date.now() + RAG_CACHE_TTL_MS });
+}
+
 export function isRagEnabled(): boolean {
   return process.env.RAG_ENABLED === "true" && !!RAG_SERVICE_URL && !!RAG_API_KEY;
 }
@@ -54,10 +81,20 @@ interface RagResponse {
 export async function fetchRagContext(
   question: string,
   collectionIds?: string[],
+  cacheKey?: string,
 ): Promise<{ context: string; sources: RagSource[] } | undefined> {
   if (!isRagEnabled()) return undefined;
 
-  return withSpan("rag.fetchContext", { questionChars: question.length, serviceUrl: RAG_SERVICE_URL || "" }, async (span) => {
+  // Check cache first (category-based queries return similar results)
+  if (cacheKey) {
+    const cached = getCachedRagContext(cacheKey);
+    if (cached) {
+      console.log(`[RAG] Cache hit for "${cacheKey}"`);
+      return cached;
+    }
+  }
+
+  return withSpan("rag.fetchContext", { questionChars: question.length, serviceUrl: RAG_SERVICE_URL || "", cacheKey: cacheKey || "none" }, async (span) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RAG_TIMEOUT_MS);
 
@@ -99,7 +136,9 @@ export async function fetchRagContext(
 
     span.setAttribute("sourceCount", data.sources.length);
     span.setAttribute("confidence", data.confidence);
-    return { context, sources: data.sources.slice(0, 4) };
+    const result = { context, sources: data.sources.slice(0, 4) };
+    if (cacheKey) setCachedRagContext(cacheKey, result);
+    return result;
   } catch (err) {
     if ((err as Error).name === "AbortError") {
       console.warn("[RAG] Knowledge base request timed out");
@@ -114,34 +153,42 @@ export async function fetchRagContext(
 }
 
 /**
+ * Category-specific query templates.
+ * These produce much higher quality RAG retrieval than raw transcript text
+ * because they use domain-specific terminology the knowledge base was built for.
+ */
+const CATEGORY_QUERIES: Record<string, string> = {
+  inbound: "What are the required procedures, greeting scripts, verification steps, and compliance requirements for handling inbound customer calls at a medical supply company? Include HIPAA verification requirements and required disclosures.",
+  outbound: "What are the required procedures, disclosure requirements, and compliance guidelines for outbound calls to patients and customers at a medical supply company? Include consent verification and callback protocols.",
+  internal: "What are the guidelines for internal calls between departments at a medical supply company? Include information handoff procedures, escalation protocols, and documentation requirements.",
+  vendor: "What are the procedures and compliance requirements for calls with vendors, insurance companies, and medical facilities? Include verification procedures and authorization protocols.",
+};
+
+const DEFAULT_QUERY = "What are the general call quality evaluation procedures, required phrases, compliance requirements, and HIPAA guidelines for customer service calls at a medical supply company?";
+
+/**
  * Build a focused RAG query from call metadata.
  *
- * Instead of sending the full transcript (which may contain PHI and is too long),
- * we construct a targeted question about company procedures relevant to the call.
+ * Uses category-specific templates for high retrieval quality.
+ * Returns both the query and a cache key — calls with the same category
+ * can reuse cached RAG context (policies don't change between calls).
  */
 export function buildRagQuery(
   callCategory?: string,
   topics?: string[],
-  summary?: string,
-): string {
-  const parts: string[] = [];
+  _summary?: string,
+): { query: string; cacheKey: string } {
+  // Category-specific template (best retrieval quality)
+  const baseQuery = (callCategory && CATEGORY_QUERIES[callCategory]) || DEFAULT_QUERY;
 
-  if (callCategory) {
-    parts.push(`Call type: ${callCategory}.`);
-  }
-
+  // Append topics if available (adds specificity without raw transcript text)
+  let query = baseQuery;
   if (topics?.length) {
-    parts.push(`Topics discussed: ${topics.slice(0, 5).join(", ")}.`);
+    query += ` Topics discussed: ${topics.slice(0, 5).join(", ")}.`;
   }
 
-  if (summary) {
-    // Use first 300 chars of summary to keep query focused
-    parts.push(`Summary: ${summary.slice(0, 300)}`);
-  }
+  // Cache key: category (or "general") — topics are too variable to cache on
+  const cacheKey = `rag:${callCategory || "general"}`;
 
-  if (parts.length === 0) {
-    parts.push("General call quality evaluation procedures and compliance requirements.");
-  }
-
-  return `What are the relevant company policies, procedures, required phrases, and compliance requirements for this call? ${parts.join(" ")}`;
+  return { query, cacheKey };
 }

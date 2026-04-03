@@ -246,11 +246,12 @@ export async function processAudioFile(
     }
 
     // Fetch RAG context from knowledge base (non-blocking — graceful fallback)
+    // Uses category-based caching: calls with the same category share cached context.
     let ragContext: string | undefined;
     if (isRagEnabled() && speakerLabeledText) {
       try {
-        const ragQuery = buildRagQuery(callCategory, undefined, speakerLabeledText.slice(0, 500));
-        const ragResult = await fetchRagContext(ragQuery);
+        const { query: ragQuery, cacheKey } = buildRagQuery(callCategory);
+        const ragResult = await fetchRagContext(ragQuery, undefined, cacheKey);
         if (ragResult) {
           ragContext = ragResult.context;
           console.log(`[${callId}] RAG context retrieved (${ragContext.length} chars, ${ragResult.sources.length} sources)`);
