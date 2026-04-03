@@ -36,7 +36,7 @@ function extractTerms(call: CallWithDetails): string[] {
   if (call.analysis?.topics && Array.isArray(call.analysis.topics)) {
     for (const topic of call.analysis.topics) {
       const text = typeof topic === "string" ? topic
-        : (topic && typeof topic === "object") ? ((topic as any).text || (topic as any).name || "") : "";
+        : (topic && typeof topic === "object") ? (String((topic as Record<string, unknown>).text || (topic as Record<string, unknown>).name || "")) : "";
       if (text) {
         // Split multi-word topics into individual terms + keep full phrase
         const normalized = text.toLowerCase().trim();
@@ -295,10 +295,13 @@ export async function getCallClusters(options: {
 
   // Check how many calls have embeddings
   const callsWithEmbeddings = calls
-    .filter(c => (c.analysis as any)?.embedding && Array.isArray((c.analysis as any).embedding))
+    .filter(c => {
+      const a = c.analysis as Record<string, unknown> | undefined;
+      return a?.embedding && Array.isArray(a.embedding);
+    })
     .map(c => ({
       callId: c.id,
-      embedding: (c.analysis as any).embedding as number[],
+      embedding: (c.analysis as Record<string, unknown>).embedding as number[],
       uploadedAt: c.uploadedAt || "",
     }));
 

@@ -19,6 +19,7 @@
  */
 
 import { randomUUID } from "crypto";
+import type { CallWithDetails } from "../../shared/schema";
 import { getPool } from "../db/pool";
 import { logPhiAccess } from "./audit-log";
 import { safeFloat, safeJsonParse } from "../routes/utils";
@@ -199,24 +200,11 @@ export async function resetSnapshotContext(
 
 // --- Metrics Aggregation ---
 
-interface CallData {
-  analysis?: {
-    performanceScore?: string;
-    subScores?: string | { compliance?: number; customer_experience?: number; communication?: number; resolution?: number };
-    feedback?: string | { strengths?: Array<string | { text: string }>; suggestions?: Array<string | { text: string }> };
-    topics?: string | string[];
-    flags?: string | string[];
-  };
-  sentiment?: {
-    overallSentiment?: string;
-  };
-}
-
-
 /**
  * Aggregate performance metrics from a set of calls.
+ * Accepts CallWithDetails[] (from storage) — uses analysis and sentiment fields.
  */
-export function aggregateMetrics(calls: CallData[]): PerformanceMetrics {
+export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sentiment">[]): PerformanceMetrics {
   const scores: number[] = [];
   const allStrengths: string[] = [];
   const allSuggestions: string[] = [];

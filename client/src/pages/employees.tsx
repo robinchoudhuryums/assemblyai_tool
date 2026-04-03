@@ -44,7 +44,7 @@ function groupByDepartment(employees: Employee[]): DepartmentGroup[] {
       const unassigned: Employee[] = [];
 
       for (const emp of deptEmployees) {
-        if (emp.subTeam && subTeamDefs.includes(emp.subTeam as any)) {
+        if (emp.subTeam && (subTeamDefs as readonly string[]).includes(emp.subTeam)) {
           if (!subTeamMap.has(emp.subTeam)) subTeamMap.set(emp.subTeam, []);
           subTeamMap.get(emp.subTeam)!.push(emp);
         } else {

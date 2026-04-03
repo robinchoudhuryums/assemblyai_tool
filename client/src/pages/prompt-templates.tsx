@@ -189,7 +189,7 @@ export default function PromptTemplatesPage() {
 
 function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate; onEdit: () => void; onDelete: () => void }) {
   const category = CALL_CATEGORIES.find(c => c.value === template.callCategory);
-  const weights = template.scoringWeights as any;
+  const weights = template.scoringWeights;
   const phrases = (template.requiredPhrases as PhraseEntry[]) || [];
 
   return (
@@ -302,7 +302,7 @@ function TemplateForm({
   const [additionalInstructions, setAdditionalInstructions] = useState(initial?.additionalInstructions || "");
   const [isActive, setIsActive] = useState(initial?.isActive !== false);
   const [weights, setWeights] = useState<ScoringWeights>(
-    (initial?.scoringWeights as any) || { ...DEFAULT_WEIGHTS }
+    initial?.scoringWeights || { ...DEFAULT_WEIGHTS }
   );
   const [phrases, setPhrases] = useState<PhraseEntry[]>(
     (initial?.requiredPhrases as PhraseEntry[]) || []
@@ -422,7 +422,7 @@ function TemplateForm({
               <div className="space-y-2">
                 {phrases.map((p, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <Select value={p.severity} onValueChange={v => updatePhrase(i, { severity: v as any })}>
+                    <Select value={p.severity} onValueChange={v => updatePhrase(i, { severity: v as "required" | "recommended" })}>
                       <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="required">Required</SelectItem>

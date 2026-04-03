@@ -188,7 +188,7 @@ export function registerCallRoutes(
       });
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
-      const uploadUser = (req.user as any)?.username || "unknown";
+      const uploadUser = req.user?.username || "unknown";
 
       try {
         await storage.uploadAudio(call.id, originalName, audioBuffer, mimeType);
@@ -395,7 +395,7 @@ export function registerCallRoutes(
         return;
       }
 
-      const user = (req as any).user;
+      const user = req.user;
       const editedBy = user?.name || user?.username || "Unknown User";
 
       const previousEdits = Array.isArray(existing.manualEdits) ? existing.manualEdits : [];
@@ -408,7 +408,7 @@ export function registerCallRoutes(
       };
 
       for (const key of Object.keys(updates)) {
-        editRecord.previousValues[key] = (existing as any)[key];
+        editRecord.previousValues[key] = (existing as Record<string, unknown>)[key];
       }
 
       const updatedAnalysis = {
@@ -529,7 +529,7 @@ export function registerCallRoutes(
 
         await storage.updateCall(callId, { status: "processing" });
 
-        const uploadUser = (req as any).user?.username || "admin";
+        const uploadUser = req.user?.username || "admin";
 
         if (jobQueue) {
           await jobQueue.enqueue("process_audio", {

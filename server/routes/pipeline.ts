@@ -643,7 +643,7 @@ async function generateCallEmbedding(callId: string, text: string): Promise<void
   if (embedding && embedding.length > 0) {
     const existing = await storage.getCallAnalysis(callId);
     if (existing) {
-      await storage.updateCallAnalysis(callId, { embedding } as any);
+      await storage.updateCallAnalysis(callId, { embedding });
       console.log(`[${callId}] Embedding stored (${embedding.length}-dim)`);
     }
   }

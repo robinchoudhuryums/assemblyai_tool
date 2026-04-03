@@ -160,7 +160,7 @@ async function generateAICoachingPlan(
       const strengths = feedback?.strengths || [];
       const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
       analysisContext = `
-Sub-scores: Compliance ${(analysis.subScores as any)?.compliance ?? "N/A"}/10, Customer Experience ${(analysis.subScores as any)?.customerExperience ?? "N/A"}/10, Communication ${(analysis.subScores as any)?.communication ?? "N/A"}/10, Resolution ${(analysis.subScores as any)?.resolution ?? "N/A"}/10
+Sub-scores: Compliance ${analysis.subScores?.compliance ?? "N/A"}/10, Customer Experience ${analysis.subScores?.customerExperience ?? "N/A"}/10, Communication ${analysis.subScores?.communication ?? "N/A"}/10, Resolution ${analysis.subScores?.resolution ?? "N/A"}/10
 Suggestions from AI: ${suggestions.slice(0, 4).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Strengths observed: ${strengths.slice(0, 3).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Flags: ${flags.join(", ") || "none"}`;

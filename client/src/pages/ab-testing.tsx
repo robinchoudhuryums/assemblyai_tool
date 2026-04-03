@@ -291,9 +291,9 @@ export default function ABTestingPage() {
                             <span className="text-xs text-muted-foreground">
                               {new Date(test.createdAt || "").toLocaleDateString()}
                             </span>
-                            {test.status === "completed" && test.baselineAnalysis && test.testAnalysis && !(test.baselineAnalysis as any).error && !(test.testAnalysis as any).error && (
+                            {test.status === "completed" && test.baselineAnalysis && test.testAnalysis && !test.baselineAnalysis.error && !test.testAnalysis.error && (
                               <span className="text-xs font-medium">
-                                {(test.baselineAnalysis as any).performance_score?.toFixed(1)} vs {(test.testAnalysis as any).performance_score?.toFixed(1)}
+                                {(test.baselineAnalysis.performance_score as number | undefined)?.toFixed(1)} vs {(test.testAnalysis.performance_score as number | undefined)?.toFixed(1)}
                               </span>
                             )}
                           </div>

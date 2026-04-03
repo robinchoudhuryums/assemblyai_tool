@@ -186,7 +186,7 @@ export function registerSnapshotRoutes(router: Router) {
       return d >= fromDate && d <= toDate;
     });
 
-    const metrics = aggregateMetrics(filtered as any[]);
+    const metrics = aggregateMetrics(filtered);
     const priorSnapshots = await getSnapshots("employee", employeeId, 6);
 
     let aiSummary: string | null = null;
@@ -242,7 +242,7 @@ export function registerSnapshotRoutes(router: Router) {
       return d >= fromDate && d <= toDate;
     });
 
-    const metrics = aggregateMetrics(filtered as any[]);
+    const metrics = aggregateMetrics(filtered);
     const priorSnapshots = await getSnapshots("team", teamName, 6);
 
     let aiSummary: string | null = null;
@@ -298,7 +298,7 @@ export function registerSnapshotRoutes(router: Router) {
       return d >= fromDate && d <= toDate;
     });
 
-    const metrics = aggregateMetrics(filtered as any[]);
+    const metrics = aggregateMetrics(filtered);
     const priorSnapshots = await getSnapshots("department", department, 6);
 
     let aiSummary: string | null = null;
@@ -352,7 +352,7 @@ export function registerSnapshotRoutes(router: Router) {
     const employees = await storage.getAllEmployees();
     const activeCount = employees.filter(e => e.status === "Active").length;
 
-    const metrics = aggregateMetrics(filtered as any[]);
+    const metrics = aggregateMetrics(filtered);
     const priorSnapshots = await getSnapshots("company", "company", 6);
 
     let aiSummary: string | null = null;

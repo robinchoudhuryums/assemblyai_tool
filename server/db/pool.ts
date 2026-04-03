@@ -168,7 +168,7 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
       await db.query(sql);
     } catch (err) {
       // Ignore "column already exists" errors
-      if (!(err as any)?.message?.includes("already exists")) {
+      if (!(err as Error)?.message?.includes("already exists")) {
         console.warn("[DB] Migration warning:", (err as Error).message);
       }
     }

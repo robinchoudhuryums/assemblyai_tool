@@ -426,10 +426,11 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   // HIPAA: Session fingerprinting — bind sessions to browser characteristics.
   // Set fingerprint on first authenticated request; reject mismatches thereafter.
   const currentFp = getSessionFingerprint(req);
-  const sessionFp = (req.session as any)?.fingerprint;
+  const sess = req.session as typeof req.session & { fingerprint?: string };
+  const sessionFp = sess.fingerprint;
   if (!sessionFp) {
     // First request with this session — stamp the fingerprint
-    (req.session as any).fingerprint = currentFp;
+    sess.fingerprint = currentFp;
   } else if (sessionFp !== currentFp) {
     // Fingerprint changed mid-session — possible session hijacking
     logPhiAccess({
