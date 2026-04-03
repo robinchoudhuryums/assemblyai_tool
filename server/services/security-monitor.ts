@@ -14,7 +14,8 @@ interface ActivityRecord {
   count: number;
   firstSeen: number;
   lastSeen: number;
-  ips: Set<string>;
+  /** Tracks unique actors: IPs when tracking by username, usernames when tracking by IP */
+  actors: Set<string>;
 }
 
 // Track failed logins by username (for distributed brute-force detection)
@@ -64,47 +65,47 @@ export function recordFailedLogin(username: string, ip: string): void {
   const now = Date.now();
 
   // Track by username (distributed brute-force detection)
-  const userRecord = failedLoginsByUser.get(username) || { count: 0, firstSeen: now, lastSeen: now, ips: new Set() };
+  const userRecord = failedLoginsByUser.get(username) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
   if (now - userRecord.firstSeen > ALERT_THRESHOLDS.DISTRIBUTED_BRUTE_FORCE_WINDOW_MS) {
     userRecord.count = 0;
     userRecord.firstSeen = now;
-    userRecord.ips.clear();
+    userRecord.actors.clear();
   }
   userRecord.count++;
   userRecord.lastSeen = now;
-  userRecord.ips.add(ip);
+  userRecord.actors.add(ip);
   failedLoginsByUser.set(username, userRecord);
 
   // Check: distributed brute-force (many IPs targeting one user)
   if (
-    userRecord.ips.size >= ALERT_THRESHOLDS.DISTRIBUTED_BRUTE_FORCE_IPS &&
+    userRecord.actors.size >= ALERT_THRESHOLDS.DISTRIBUTED_BRUTE_FORCE_IPS &&
     userRecord.count >= ALERT_THRESHOLDS.DISTRIBUTED_BRUTE_FORCE_ATTEMPTS
   ) {
     raiseSecurityAlert("distributed_brute_force", {
       username,
       attemptCount: userRecord.count,
-      uniqueIPs: userRecord.ips.size,
+      uniqueIPs: userRecord.actors.size,
       window: "1 hour",
     });
   }
 
   // Track by IP (credential stuffing detection)
-  const ipRecord = failedLoginsByIP.get(ip) || { count: 0, firstSeen: now, lastSeen: now, ips: new Set() };
+  const ipRecord = failedLoginsByIP.get(ip) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
   if (now - ipRecord.firstSeen > ALERT_THRESHOLDS.CREDENTIAL_STUFFING_WINDOW_MS) {
     ipRecord.count = 0;
     ipRecord.firstSeen = now;
-    ipRecord.ips.clear();
+    ipRecord.actors.clear();
   }
   ipRecord.count++;
   ipRecord.lastSeen = now;
-  ipRecord.ips.add(username); // "ips" used as "usernames" here
+  ipRecord.actors.add(username);
   failedLoginsByIP.set(ip, ipRecord);
 
   // Check: credential stuffing (one IP trying many usernames)
-  if (ipRecord.ips.size >= ALERT_THRESHOLDS.CREDENTIAL_STUFFING_USERNAMES) {
+  if (ipRecord.actors.size >= ALERT_THRESHOLDS.CREDENTIAL_STUFFING_USERNAMES) {
     raiseSecurityAlert("credential_stuffing", {
       ip,
-      usernamesTried: ipRecord.ips.size,
+      usernamesTried: ipRecord.actors.size,
       totalAttempts: ipRecord.count,
       window: "15 minutes",
     });
@@ -117,7 +118,7 @@ export function recordFailedLogin(username: string, ip: string): void {
 export function recordDataAccess(username: string, resourceType: string): void {
   const now = Date.now();
   const key = `${username}:${resourceType}`;
-  const record = bulkAccessByUser.get(key) || { count: 0, firstSeen: now, lastSeen: now, ips: new Set() };
+  const record = bulkAccessByUser.get(key) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
 
   if (now - record.firstSeen > ALERT_THRESHOLDS.BULK_ACCESS_WINDOW_MS) {
     record.count = 0;

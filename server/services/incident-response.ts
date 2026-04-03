@@ -89,6 +89,8 @@ export interface Incident {
 }
 
 // --- In-Memory Store ---
+// Capped to prevent unbounded memory growth. Oldest closed incidents are evicted first.
+const MAX_IN_MEMORY_INCIDENTS = 500;
 
 const incidents: Incident[] = [];
 
@@ -244,6 +246,17 @@ export async function declareIncident(params: {
   };
 
   incidents.push(incident);
+
+  // Evict oldest closed incidents if at capacity
+  if (incidents.length > MAX_IN_MEMORY_INCIDENTS) {
+    const closedIdx = incidents.findIndex(i => i.currentPhase === "closed");
+    if (closedIdx >= 0) {
+      incidents.splice(closedIdx, 1);
+    } else {
+      // All incidents are open — evict the oldest
+      incidents.shift();
+    }
+  }
 
   // Persist to database if available
   await persistIncident(incident);

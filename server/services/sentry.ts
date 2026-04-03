@@ -13,7 +13,11 @@ const PHI_PATTERNS = [
   /\b\d{3}-\d{2}-\d{4}\b/g,          // SSN
   /\b\d{10,11}\b/g,                    // Phone numbers
   /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, // Email
-  /\b(?:patient|member|subscriber)\s*(?:name|id)?[\s:]+\S+/gi, // Patient references
+  /\b(?:patient|member|subscriber|caller|agent)\s*(?:name|id)?[\s:]+\S+/gi, // Patient/caller references
+  /\b(?:MRN|mrn|acct|account)[:\s#]*[A-Z0-9]{4,20}\b/gi,    // Medical record / account numbers
+  /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g,                     // Date patterns (DOB, etc.)
+  /\b\d{1,5}\s+\w+\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Ln|Lane|Ct|Way)\b/gi, // Street addresses
+  /\b(?:DOB|dob|date of birth)[:\s]+\S+/gi,                  // Explicit DOB references
 ];
 
 function scrubPHI(text: string): string {
@@ -59,13 +63,27 @@ export function initSentry(): void {
           event.request.query_string = "[REDACTED]";
         }
       }
-      // Remove breadcrumb messages that might contain PHI
+      // Remove breadcrumb messages and data that might contain PHI
       if (event.breadcrumbs) {
         for (const crumb of event.breadcrumbs) {
           if (crumb.message) {
             crumb.message = scrubPHI(crumb.message);
           }
+          // Scrub breadcrumb data values (e.g., fetch URLs, SQL queries)
+          if (crumb.data && typeof crumb.data === "object") {
+            for (const [key, value] of Object.entries(crumb.data)) {
+              if (typeof value === "string") {
+                (crumb.data as Record<string, unknown>)[key] = scrubPHI(value);
+              }
+            }
+          }
         }
+      }
+      // Scrub URL paths that may reference specific calls/patients
+      if (event.request?.url) {
+        event.request.url = event.request.url.replace(
+          /\/api\/calls\/[0-9a-f-]+/gi, "/api/calls/[REDACTED]"
+        );
       }
       return event;
     },

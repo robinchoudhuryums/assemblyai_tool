@@ -76,8 +76,11 @@ app.use((req, _res, next) => {
   if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-for"]) {
     const forwarded = (req.headers["x-forwarded-for"] as string).split(",").map(s => s.trim());
     // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6)
-    const ipPattern = /^[\da-fA-F.:]+$/;
-    const validIPs = forwarded.filter(ip => ipPattern.test(ip) && ip.length <= 45);
+    // IPv4: 1-3 digits separated by dots (e.g. 192.168.1.1)
+    // IPv6: hex groups separated by colons, optionally with :: compression
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+    const ipv6 = /^[0-9a-fA-F:]{2,45}$/; // coarse IPv6 check (must contain colons, hex digits only)
+    const validIPs = forwarded.filter(ip => ip.length <= 45 && (ipv4.test(ip) || (ip.includes(":") && ipv6.test(ip))));
     if (validIPs.length !== forwarded.length) {
       // Sanitize the header to only contain valid IPs
       req.headers["x-forwarded-for"] = validIPs.join(", ");

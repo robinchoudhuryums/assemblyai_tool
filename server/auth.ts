@@ -104,7 +104,12 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function comparePasswords(supplied: string, stored: string): Promise<boolean> {
-  const [hashedPassword, salt] = stored.split(".");
+  const parts = stored.split(".");
+  if (parts.length !== 2) {
+    console.error("[AUTH] Corrupted password hash format (expected hash.salt)");
+    return false;
+  }
+  const [hashedPassword, salt] = parts;
   const hashedPasswordBuf = Buffer.from(hashedPassword, "hex");
   const suppliedPasswordBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
   return timingSafeEqual(hashedPasswordBuf, suppliedPasswordBuf);
@@ -125,12 +130,12 @@ async function loadUsersFromEnv(): Promise<void> {
 
   for (const entry of userEntries) {
     const parts = entry.split(":");
-    if (parts.length < 2) {
-      console.warn(`Skipping malformed AUTH_USERS entry: ${entry}`);
+    if (parts.length < 3) {
+      console.warn(`Skipping malformed AUTH_USERS entry (expected username:password:role[:displayName]): ${parts[0] || entry}`);
       continue;
     }
 
-    const [username, password, role = "viewer", ...nameParts] = parts;
+    const [username, password, role, ...nameParts] = parts;
     const displayName = nameParts.length > 0 ? nameParts.join(":") : username;
 
     // HIPAA: Enforce password complexity — reject weak passwords in ALL environments.
@@ -435,7 +440,11 @@ export const requireAuth: RequestHandler = (req, res, next) => {
       detail: "Session destroyed: user-agent fingerprint mismatch",
     });
     req.logout(() => {});
-    req.session.destroy(() => {});
+    req.session.destroy((err) => {
+      if (err) {
+        console.error("[AUTH] Failed to destroy hijacked session:", (err as Error).message);
+      }
+    });
     return res.status(401).json({ message: "Session expired. Please log in again." });
   }
 
