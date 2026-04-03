@@ -124,10 +124,10 @@ export class BedrockProvider implements AIAnalysisProvider {
     }
   }
 
-  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string, callDurationSeconds?: number, hasFlags?: boolean): Promise<CallAnalysis> {
+  async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis> {
     const creds = await this.ensureCredentials();
 
-    const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate, language);
+    const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate, language, ragContext);
     const region = creds.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
     // Raw path for the HTTP request (no encoding — colons in model IDs are fine)

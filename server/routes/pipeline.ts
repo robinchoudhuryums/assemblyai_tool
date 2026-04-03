@@ -5,6 +5,7 @@ import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetri
 import { aiProvider } from "../services/ai-factory";
 import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
+import { fetchRagContext, buildRagQuery, isRagEnabled } from "../services/rag-client";
 import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
 import { type UsageRecord } from "@shared/schema";
@@ -243,9 +244,24 @@ export async function processAudioFile(
       }
     }
 
+    // Fetch RAG context from knowledge base (non-blocking — graceful fallback)
+    let ragContext: string | undefined;
+    if (isRagEnabled() && speakerLabeledText) {
+      try {
+        const ragQuery = buildRagQuery(callCategory, undefined, speakerLabeledText.slice(0, 500));
+        const ragResult = await fetchRagContext(ragQuery);
+        if (ragResult) {
+          ragContext = ragResult.context;
+          console.log(`[${callId}] RAG context retrieved (${ragContext.length} chars, ${ragResult.sources.length} sources)`);
+        }
+      } catch (ragErr) {
+        console.warn(`[${callId}] RAG context fetch failed (non-blocking):`, (ragErr as Error).message);
+      }
+    }
+
     // Batch mode: defer AI analysis for 50% cost savings
     if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && speakerLabeledText) {
-      const prompt = buildAnalysisPrompt(speakerLabeledText, callCategory, promptTemplate, language);
+      const prompt = buildAnalysisPrompt(speakerLabeledText, callCategory, promptTemplate, language, ragContext);
       const pendingItem: PendingBatchItem = {
         callId,
         prompt,
@@ -351,7 +367,7 @@ export async function processAudioFile(
           }
         }
 
-        aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds);
+        aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         const errMsg = (aiError as Error).message || "";

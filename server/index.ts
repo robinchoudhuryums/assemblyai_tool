@@ -368,6 +368,17 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     }
   });
 
+  // RAG Knowledge Base integration
+  if (process.env.RAG_ENABLED === "true") {
+    if (!process.env.RAG_SERVICE_URL) {
+      console.warn("[STARTUP] RAG_ENABLED is true but RAG_SERVICE_URL is not set — RAG context injection disabled.");
+    } else if (!process.env.RAG_API_KEY) {
+      console.warn("[STARTUP] RAG_ENABLED is true but RAG_API_KEY is not set — RAG context injection disabled.");
+    } else {
+      console.log(`[STARTUP] RAG enabled — knowledge base at ${process.env.RAG_SERVICE_URL}`);
+    }
+  }
+
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
