@@ -1,4 +1,8 @@
 import "dotenv/config";
+
+// OpenTelemetry must be initialized before any other imports so auto-instrumentation
+// hooks are registered before Express, HTTP, and AWS SDK modules load.
+import "./services/tracing";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
