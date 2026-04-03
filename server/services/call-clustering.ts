@@ -282,6 +282,14 @@ export async function getCallClusters(options: {
 
   if (calls.length < 2) return [];
 
+  // Cap input size to prevent O(n²) clustering from consuming too much CPU.
+  // Use the most recent calls if over the limit.
+  const MAX_CLUSTER_INPUT = 500;
+  if (calls.length > MAX_CLUSTER_INPUT) {
+    calls.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+    calls.length = MAX_CLUSTER_INPUT;
+  }
+
   // Build call lookup for enrichment
   const callMap = new Map(calls.map(c => [c.id, c]));
 

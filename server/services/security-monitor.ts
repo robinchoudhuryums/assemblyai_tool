@@ -25,6 +25,17 @@ const failedLoginsByIP = new Map<string, ActivityRecord>();
 // Track unusual access patterns (e.g., bulk data access)
 const bulkAccessByUser = new Map<string, ActivityRecord>();
 
+// Cap all tracking Maps to prevent unbounded memory growth under distributed attacks.
+// When at capacity, evict the oldest entry (by insertion order) before adding new ones.
+const MAX_TRACKING_ENTRIES = 10_000;
+
+function evictOldestIfFull(map: Map<string, ActivityRecord>): void {
+  if (map.size >= MAX_TRACKING_ENTRIES) {
+    const oldest = map.keys().next().value;
+    if (oldest) map.delete(oldest);
+  }
+}
+
 const ALERT_THRESHOLDS = {
   // Multiple IPs trying same username = potential targeted attack
   DISTRIBUTED_BRUTE_FORCE_IPS: 3,
@@ -65,6 +76,7 @@ export function recordFailedLogin(username: string, ip: string): void {
   const now = Date.now();
 
   // Track by username (distributed brute-force detection)
+  if (!failedLoginsByUser.has(username)) evictOldestIfFull(failedLoginsByUser);
   const userRecord = failedLoginsByUser.get(username) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
   if (now - userRecord.firstSeen > ALERT_THRESHOLDS.DISTRIBUTED_BRUTE_FORCE_WINDOW_MS) {
     userRecord.count = 0;
@@ -90,6 +102,7 @@ export function recordFailedLogin(username: string, ip: string): void {
   }
 
   // Track by IP (credential stuffing detection)
+  if (!failedLoginsByIP.has(ip)) evictOldestIfFull(failedLoginsByIP);
   const ipRecord = failedLoginsByIP.get(ip) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
   if (now - ipRecord.firstSeen > ALERT_THRESHOLDS.CREDENTIAL_STUFFING_WINDOW_MS) {
     ipRecord.count = 0;
@@ -118,6 +131,7 @@ export function recordFailedLogin(username: string, ip: string): void {
 export function recordDataAccess(username: string, resourceType: string): void {
   const now = Date.now();
   const key = `${username}:${resourceType}`;
+  if (!bulkAccessByUser.has(key)) evictOldestIfFull(bulkAccessByUser);
   const record = bulkAccessByUser.get(key) || { count: 0, firstSeen: now, lastSeen: now, actors: new Set() };
 
   if (now - record.firstSeen > ALERT_THRESHOLDS.BULK_ACCESS_WINDOW_MS) {

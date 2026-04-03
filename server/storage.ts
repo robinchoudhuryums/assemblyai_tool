@@ -268,7 +268,12 @@ export class MemStorage implements IStorage {
   async getCallsWithDetails(
     filters: { status?: string; sentiment?: string; employee?: string } = {}
   ): Promise<CallWithDetails[]> {
-    const calls = await this.getAllCalls();
+    let calls = await this.getAllCalls();
+
+    // Pre-filter on call-level fields BEFORE loading details (avoids unnecessary joins)
+    if (filters.status) calls = calls.filter((c) => c.status === filters.status);
+    if (filters.employee) calls = calls.filter((c) => c.employeeId === filters.employee);
+
     let results: CallWithDetails[] = await Promise.all(
       calls.map(async (call) => {
         const [employee, transcript, sentiment, analysis] = await Promise.all([
@@ -280,9 +285,9 @@ export class MemStorage implements IStorage {
         return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
       })
     );
-    if (filters.status) results = results.filter((c) => c.status === filters.status);
+
+    // Sentiment filter requires the joined data (can't pre-filter)
     if (filters.sentiment) results = results.filter((c) => c.sentiment?.overallSentiment === filters.sentiment);
-    if (filters.employee) results = results.filter((c) => c.employeeId === filters.employee);
     return results;
   }
 
