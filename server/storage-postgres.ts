@@ -195,12 +195,38 @@ export class PostgresStorage implements IStorage {
     return rows[0] ? mapDbUser(rows[0]) : undefined;
   }
 
-  async updateDbUserPassword(id: string, passwordHash: string): Promise<boolean> {
-    const { rowCount } = await this.db.query(
-      `UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`,
-      [id, passwordHash],
+  async getDbUserPasswordHistory(id: string): Promise<string[]> {
+    const { rows } = await this.db.query(
+      `SELECT password_history FROM users WHERE id = $1`,
+      [id],
     );
-    return (rowCount ?? 0) > 0;
+    if (!rows[0]) return [];
+    const history = rows[0].password_history;
+    return Array.isArray(history) ? history : [];
+  }
+
+  async updateDbUserPassword(id: string, passwordHash: string, oldPasswordHash?: string): Promise<boolean> {
+    // Push old password hash onto history (FIFO, max 5 entries) if provided
+    if (oldPasswordHash) {
+      await this.db.query(
+        `UPDATE users SET
+          password_history = (
+            SELECT jsonb_agg(h) FROM (
+              SELECT h FROM jsonb_array_elements_text($2::jsonb || password_history) WITH ORDINALITY AS t(h, ord)
+              LIMIT 5
+            ) sub
+          ),
+          password_hash = $3, updated_at = NOW()
+        WHERE id = $1`,
+        [id, JSON.stringify([oldPasswordHash]), passwordHash],
+      );
+    } else {
+      await this.db.query(
+        `UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`,
+        [id, passwordHash],
+      );
+    }
+    return true;
   }
 
   // ── Employees ─────────────────────────────────────────────

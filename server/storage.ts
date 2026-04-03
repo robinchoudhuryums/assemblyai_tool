@@ -60,7 +60,8 @@ export interface IStorage {
   getAllDbUsers(): Promise<DbUser[]>;
   createDbUser(user: { username: string; passwordHash: string; role: string; displayName: string }): Promise<DbUser>;
   updateDbUser(id: string, updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined>;
-  updateDbUserPassword(id: string, passwordHash: string): Promise<boolean>;
+  getDbUserPasswordHistory(id: string): Promise<string[]>;
+  updateDbUserPassword(id: string, passwordHash: string, oldPasswordHash?: string): Promise<boolean>;
 
   // Employee operations
   getEmployee(id: string): Promise<Employee | undefined>;
@@ -192,7 +193,10 @@ export class MemStorage implements IStorage {
   async updateDbUser(_id: string, _updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined> {
     throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
-  async updateDbUserPassword(_id: string, _passwordHash: string): Promise<boolean> {
+  async getDbUserPasswordHistory(_id: string): Promise<string[]> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUserPassword(_id: string, _passwordHash: string, _oldPasswordHash?: string): Promise<boolean> {
     throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
 
@@ -607,7 +611,10 @@ export class CloudStorage implements IStorage {
   async updateDbUser(_id: string, _updates: { role?: string; displayName?: string; active?: boolean }): Promise<DbUser | undefined> {
     throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
-  async updateDbUserPassword(_id: string, _passwordHash: string): Promise<boolean> {
+  async getDbUserPasswordHistory(_id: string): Promise<string[]> {
+    throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
+  }
+  async updateDbUserPassword(_id: string, _passwordHash: string, _oldPasswordHash?: string): Promise<boolean> {
     throw new Error("DB user management requires PostgreSQL (DATABASE_URL)");
   }
 
