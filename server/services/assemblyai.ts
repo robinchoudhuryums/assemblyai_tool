@@ -105,7 +105,7 @@ export class AssemblyAIService {
     const response = await fetch(`${this.config.baseUrl}/upload`, {
       method: 'POST',
       headers: { 'Authorization': this.config.apiKey, 'Content-Type': 'application/octet-stream' },
-      body: audioBuffer
+      body: new Uint8Array(audioBuffer)
     });
     if (!response.ok) throw new Error(`Failed to upload audio file: ${await response.text()}`);
     return (await response.json()).upload_url;
