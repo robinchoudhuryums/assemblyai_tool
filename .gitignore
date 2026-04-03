@@ -15,6 +15,9 @@ uploads/
 # Build output
 dist/
 
+# Coverage reports
+coverage/
+
 # IDE
 .vscode/
 .idea/
