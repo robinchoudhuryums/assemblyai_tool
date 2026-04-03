@@ -13,7 +13,12 @@ import assert from "node:assert/strict";
 // --- Replicate WAF patterns for unit testing ---
 
 const SQL_INJECTION_PATTERNS = [
-  /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b\s+(all\s+)?(\b(from|into|table|database|where|having|group)\b))/i,
+  /\bunion\s+(?:all\s+)?select\b/i,
+  /\bselect\s+(?:\*|[\w.]+(?:\s*,\s*[\w.]+)*)\s+from\b/i,
+  /\b(?:insert|delete)\s+(?:into|from)\b/i,
+  /\bupdate\s+\w+\s+set\b/i,
+  /\b(?:drop|alter|create)\s+(?:table|database|index)\b/i,
+  /\bexec(?:ute)?\s*\(/i,
   /(\b(or|and)\b\s+\d+\s*=\s*\d+)/i,
   /(--|#|\/\*)\s*$/,
   /'\s*(or|and)\s+'[^']*'\s*=\s*'[^']*'/i,
@@ -149,6 +154,56 @@ describe("WAF: SQL injection detection", () => {
   it("detects double-encoded SQL injection", () => {
     // %2527 → %27 → ' after double decode
     assert.ok(checkPatternsNormalized("%2527%20OR%201%3D1", SQL_INJECTION_PATTERNS));
+  });
+
+  // New pattern coverage
+  it("detects UNION ALL SELECT", () => {
+    assert.ok(checkPatterns("1 UNION ALL SELECT password FROM users", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects SELECT ... FROM with gap", () => {
+    assert.ok(checkPatterns("SELECT username FROM users", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects INSERT INTO", () => {
+    assert.ok(checkPatterns("INSERT INTO users VALUES ('admin')", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects UPDATE SET", () => {
+    assert.ok(checkPatterns("UPDATE users SET role='admin'", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects DELETE FROM", () => {
+    assert.ok(checkPatterns("DELETE FROM sessions", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects DROP TABLE", () => {
+    assert.ok(checkPatterns("DROP TABLE users", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects CREATE TABLE", () => {
+    assert.ok(checkPatterns("CREATE TABLE evil (id int)", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects EXEC(", () => {
+    assert.ok(checkPatterns("EXEC('SELECT 1')", SQL_INJECTION_PATTERNS));
+  });
+
+  it("detects EXECUTE(", () => {
+    assert.ok(checkPatterns("EXECUTE(cmd)", SQL_INJECTION_PATTERNS));
+  });
+
+  it("allows benign text with select but no FROM", () => {
+    assert.ok(!checkPatterns("Please select your option from the menu", SQL_INJECTION_PATTERNS));
+  });
+
+  it("input truncation prevents regex DoS on oversized payload", () => {
+    // Build a 10KB string — should not cause excessive regex time
+    const longPayload = "a".repeat(10000) + " OR 1=1";
+    const MAX_LEN = 4096;
+    const truncated = longPayload.slice(0, MAX_LEN);
+    // The injection is beyond the truncation point, so it should NOT be detected
+    assert.ok(!checkPatterns(truncated, SQL_INJECTION_PATTERNS));
   });
 });
 

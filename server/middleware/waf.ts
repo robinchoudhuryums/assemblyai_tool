@@ -82,8 +82,9 @@ function isIPBlocked(ip: string): boolean {
 // Each pattern matches a specific attack shape without nested alternations.
 const SQL_INJECTION_PATTERNS = [
   /\bunion\s+(?:all\s+)?select\b/i,              // UNION SELECT
-  /\bselect\b.{0,40}\bfrom\b/i,                  // SELECT ... FROM (bounded gap)
-  /\b(?:insert|update|delete)\s+(?:into|from|set)\b/i, // INSERT INTO / DELETE FROM / UPDATE SET
+  /\bselect\s+(?:\*|[\w.]+(?:\s*,\s*[\w.]+)*)\s+from\b/i, // SELECT */cols FROM (comma-separated identifiers, not prose)
+  /\b(?:insert|delete)\s+(?:into|from)\b/i,       // INSERT INTO / DELETE FROM
+  /\bupdate\s+\w+\s+set\b/i,                      // UPDATE table SET (allows table name)
   /\b(?:drop|alter|create)\s+(?:table|database|index)\b/i, // DDL statements
   /\bexec(?:ute)?\s*\(/i,                         // EXEC( / EXECUTE(
   /(\b(or|and)\b\s+\d+\s*=\s*\d+)/i,             // OR 1=1, AND 1=1
