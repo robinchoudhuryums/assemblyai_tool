@@ -5,7 +5,7 @@ import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
 import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
-import { escapeCsvValue } from "./utils";
+import { escapeCsvValue, validateParams } from "./utils";
 
 /** Validate an ISO date string; returns undefined if invalid. */
 function validateDate(val: string | undefined): string | undefined {
@@ -88,7 +88,7 @@ export function register(router: Router) {
   });
 
   // Individual employee comparison within a team
-  router.get("/api/analytics/team/:teamName", requireAuth, async (req, res) => {
+  router.get("/api/analytics/team/:teamName", requireAuth, validateParams({ teamName: "safeName" }), async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.json([]);
@@ -198,7 +198,7 @@ export function register(router: Router) {
   });
 
   // Per-agent trends
-  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const period = (req.query.period as string) || "weekly";
@@ -460,7 +460,7 @@ export function register(router: Router) {
   // ==================== SPEECH ANALYTICS ====================
 
   // GET /api/analytics/speech/:callId — speech metrics for a single call
-  router.get("/api/analytics/speech/:callId", requireAuth, async (req, res) => {
+  router.get("/api/analytics/speech/:callId", requireAuth, validateParams({ callId: "uuid" }), async (req, res) => {
     try {
       const callId = req.params.callId;
       const transcript = await storage.getTranscript(callId);

@@ -10,7 +10,7 @@ import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
 import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
-import { cleanupFile, TaskQueue } from "./utils";
+import { cleanupFile, TaskQueue, validateIdParam, validateParams } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
 /** Type for the processAudioFile function passed from the main routes module. */
@@ -90,7 +90,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.get("/api/calls/:id", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id", requireAuth, validateIdParam, async (req, res) => {
     try {
       const call = await storage.getCall(req.params.id);
       if (!call) {
@@ -228,7 +228,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.get("/api/calls/:id/audio", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/audio", requireAuth, validateIdParam, async (req, res) => {
     try {
       const call = await storage.getCall(req.params.id);
       if (!call) {
@@ -305,7 +305,7 @@ export function registerCallRoutes(
 
   // ==================== TRANSCRIPT & ANALYSIS ====================
 
-  router.get("/api/calls/:id/transcript", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/transcript", requireAuth, validateIdParam, async (req, res) => {
     try {
       logPhiAccess({
         ...auditContext(req),
@@ -327,7 +327,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.get("/api/calls/:id/sentiment", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/sentiment", requireAuth, validateIdParam, async (req, res) => {
     try {
       logPhiAccess({
         ...auditContext(req),
@@ -348,7 +348,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.get("/api/calls/:id/analysis", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/analysis", requireAuth, validateIdParam, async (req, res) => {
     try {
       logPhiAccess({
         ...auditContext(req),
@@ -369,7 +369,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.patch("/api/calls/:id/analysis", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.patch("/api/calls/:id/analysis", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
       const { updates, reason } = req.body;
@@ -437,7 +437,7 @@ export function registerCallRoutes(
 
   // ==================== ASSIGN & DELETE ====================
 
-  router.patch("/api/calls/:id/assign", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.patch("/api/calls/:id/assign", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = assignCallSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -464,7 +464,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.delete("/api/calls/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.delete("/api/calls/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
 

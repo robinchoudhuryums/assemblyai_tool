@@ -8,6 +8,11 @@ import {
   updateIncidentDetails, getAllIncidents, getIncident, getEscalationContacts, getResponseProcedures,
 } from "../services/incident-response";
 import { logPhiAccess } from "../services/audit-log";
+import { validateParams } from "./utils";
+
+const validateSafeId = validateParams({ id: "safeId" });
+const validateIncidentParams = validateParams({ incidentId: "safeId", itemId: "safeId" });
+const validateFindingId = validateParams({ findingId: "safeId" });
 
 export function registerSecurityRoutes(router: Router) {
 
@@ -21,7 +26,7 @@ export function registerSecurityRoutes(router: Router) {
     res.json(getRecentAlerts());
   });
 
-  router.patch("/api/admin/security-alerts/:id", requireAuth, requireRole("admin"), (req, res) => {
+  router.patch("/api/admin/security-alerts/:id", requireAuth, requireRole("admin"), validateSafeId, (req, res) => {
     const success = acknowledgeAlert(req.params.id, req.user!.username);
     if (!success) return res.status(404).json({ message: "Alert not found" });
     res.json({ message: "Alert acknowledged" });
@@ -57,7 +62,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.patch("/api/admin/breach-reports/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.patch("/api/admin/breach-reports/:id", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const { status, action } = req.body;
       if (!status || !action) {
@@ -134,7 +139,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.post("/api/admin/vuln-scan/accept/:findingId", requireAuth, requireRole("admin"), (req, res) => {
+  router.post("/api/admin/vuln-scan/accept/:findingId", requireAuth, requireRole("admin"), validateFindingId, (req, res) => {
     acceptFinding(req.params.findingId);
     res.json({ message: "Finding accepted as risk" });
   });
@@ -150,7 +155,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.get("/api/admin/incidents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.get("/api/admin/incidents/:id", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const incident = await getIncident(req.params.id);
       if (!incident) return res.status(404).json({ message: "Incident not found" });
@@ -177,7 +182,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.post("/api/admin/incidents/:id/advance", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/admin/incidents/:id/advance", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const { phase, action } = req.body;
       if (!phase || !action) return res.status(400).json({ message: "Phase and action description are required" });
@@ -189,7 +194,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.post("/api/admin/incidents/:id/timeline", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/admin/incidents/:id/timeline", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const { action } = req.body;
       if (!action) return res.status(400).json({ message: "Action description is required" });
@@ -201,7 +206,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.patch("/api/admin/incidents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.patch("/api/admin/incidents/:id", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const { containmentActions, eradicationActions, recoveryActions, lessonsLearned, affectedUsers, severity } = req.body;
       const incident = await updateIncidentDetails(req.params.id,
@@ -214,7 +219,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.post("/api/admin/incidents/:id/action-items", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/admin/incidents/:id/action-items", requireAuth, requireRole("admin"), validateSafeId, async (req, res) => {
     try {
       const { description, assignee, dueDate } = req.body;
       if (!description || !assignee) return res.status(400).json({ message: "Description and assignee are required" });
@@ -226,7 +231,7 @@ export function registerSecurityRoutes(router: Router) {
     }
   });
 
-  router.patch("/api/admin/incidents/:incidentId/action-items/:itemId", requireAuth, requireRole("admin"), async (req, res) => {
+  router.patch("/api/admin/incidents/:incidentId/action-items/:itemId", requireAuth, requireRole("admin"), validateIncidentParams, async (req, res) => {
     try {
       const { status } = req.body;
       if (!status) return res.status(400).json({ message: "Status is required" });

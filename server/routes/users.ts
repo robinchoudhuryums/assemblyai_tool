@@ -8,6 +8,7 @@ import {
   resetPasswordSchema,
   changePasswordSchema,
 } from "@shared/schema";
+import { validateIdParam } from "./utils";
 
 /**
  * Strips password_hash and mfa_secret from a DB user object before returning to API clients.
@@ -87,6 +88,11 @@ export function registerUserRoutes(router: Router) {
       // Prevent route collision with /api/users/me/password
       if (req.params.id === "me") return;
 
+      // Validate UUID format (can't use middleware because "me" must pass through first)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) {
+        return res.status(400).json({ message: "Invalid id parameter" });
+      }
+
       const parsed = updateDbUserSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: "Invalid update data", errors: parsed.error.flatten() });
@@ -126,7 +132,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== DEACTIVATE USER (admin only, soft delete) ====================
-  router.delete("/api/users/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.delete("/api/users/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const targetUser = await storage.getDbUser(req.params.id);
       if (!targetUser) {
@@ -162,7 +168,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== ADMIN RESET PASSWORD (admin only) ====================
-  router.post("/api/users/:id/reset-password", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/users/:id/reset-password", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = resetPasswordSchema.safeParse(req.body);
       if (!parsed.success) {
