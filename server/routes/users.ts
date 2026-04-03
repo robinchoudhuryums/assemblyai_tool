@@ -1,6 +1,6 @@
 import type { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole, validatePasswordComplexity, hashPasswordForDb, comparePasswordsRaw } from "../auth";
+import { requireAuth, requireRole, validatePasswordComplexity, hashPasswordForDb, comparePasswordsRaw, isPasswordReused, PASSWORD_HISTORY_SIZE } from "../auth";
 import { logPhiAccess } from "../services/audit-log";
 import {
   createDbUserSchema,
@@ -191,8 +191,16 @@ export function registerUserRoutes(router: Router) {
         return res.status(404).json({ message: "User not found" });
       }
 
+      // HIPAA: Check password history (prevent reuse of last N passwords)
+      const history = await storage.getDbUserPasswordHistory(req.params.id);
+      if (await isPasswordReused(newPassword, targetUser.passwordHash, history)) {
+        return res.status(400).json({
+          message: `Cannot reuse any of the user's last ${PASSWORD_HISTORY_SIZE} passwords.`,
+        });
+      }
+
       const passwordHash = await hashPasswordForDb(newPassword);
-      const success = await storage.updateDbUserPassword(req.params.id, passwordHash);
+      const success = await storage.updateDbUserPassword(req.params.id, passwordHash, targetUser.passwordHash);
       if (!success) {
         return res.status(500).json({ message: "Failed to reset password" });
       }
@@ -248,8 +256,16 @@ export function registerUserRoutes(router: Router) {
         return res.status(401).json({ message: "Current password is incorrect" });
       }
 
+      // HIPAA: Check password history (prevent reuse of last N passwords)
+      const history = await storage.getDbUserPasswordHistory(dbUser.id);
+      if (await isPasswordReused(newPassword, dbUser.passwordHash, history)) {
+        return res.status(400).json({
+          message: `Cannot reuse any of your last ${PASSWORD_HISTORY_SIZE} passwords. Choose a different password.`,
+        });
+      }
+
       const passwordHash = await hashPasswordForDb(newPassword);
-      const success = await storage.updateDbUserPassword(dbUser.id, passwordHash);
+      const success = await storage.updateDbUserPassword(dbUser.id, passwordHash, dbUser.passwordHash);
       if (!success) {
         return res.status(500).json({ message: "Failed to change password" });
       }

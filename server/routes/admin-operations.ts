@@ -238,7 +238,7 @@ export function registerOperationsRoutes(
         await s3Client.uploadJson(`calibration/history/${new Date().toISOString().replace(/[:.]/g, "-")}.json`, {
           ...overrides,
           appliedAt: new Date().toISOString(),
-          appliedBy: (req as any).user?.username,
+          appliedBy: req.user?.username,
           previousConfig: current,
         });
       }

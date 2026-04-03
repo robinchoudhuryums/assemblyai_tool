@@ -12,7 +12,7 @@ import { insertAccessRequestSchema } from "@shared/schema";
 /** Stamp session with fingerprint at login — uses the shared getSessionFingerprint() to guarantee
  *  the same hash is computed at login and verification time (single source of truth). */
 function bindSessionFingerprint(req: import("express").Request): void {
-  (req.session as any).fingerprint = getSessionFingerprint(req);
+  (req.session as typeof req.session & { fingerprint?: string }).fingerprint = getSessionFingerprint(req);
 }
 
 export function registerAuthRoutes(router: Router) {
@@ -45,7 +45,7 @@ export function registerAuthRoutes(router: Router) {
             return res.status(401).json({ message: "Invalid verification code" });
           }
           mfaPendingTokens.delete(mfaToken);
-          req.login(pending.user, { keepSessionInfo: true } as any, (loginErr) => {
+          req.login(pending.user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
             res.json({ id: pending.user.id, username: pending.user.username, name: pending.user.name, role: pending.user.role });
@@ -77,7 +77,7 @@ export function registerAuthRoutes(router: Router) {
         // Check if MFA is required (globally or by role) but not set up
         if ((isMFARequired() || isMFARoleRequired(user.role)) && !mfaRecord?.enabled) {
           // Let them in but flag that MFA setup is needed
-          req.login(user, { keepSessionInfo: true } as any, (loginErr) => {
+          req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
             res.json({ id: user.id, username: user.username, name: user.name, role: user.role, mfaSetupRequired: true });
@@ -86,7 +86,7 @@ export function registerAuthRoutes(router: Router) {
         }
 
         // No MFA — standard login
-        req.login(user, { keepSessionInfo: true } as any, (loginErr) => {
+        req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
           if (loginErr) return next(loginErr);
           bindSessionFingerprint(req);
           res.json({ id: user.id, username: user.username, name: user.name, role: user.role });

@@ -24,6 +24,7 @@
  */
 import { createHmac } from "crypto";
 import { getPool } from "../db/pool";
+import { redactPhi } from "./phi-redactor";
 
 export interface AuditEntry {
   timestamp: string;
@@ -160,8 +161,12 @@ export async function flushAuditQueue(): Promise<void> {
 }
 
 export function logPhiAccess(entry: AuditEntry): void {
+  // Redact PHI from the detail field before persisting (defense-in-depth)
+  const redactedDetail = entry.detail ? redactPhi(entry.detail).text : entry.detail;
+
   const line = {
     ...entry,
+    detail: redactedDetail,
     timestamp: entry.timestamp || new Date().toISOString(),
   };
 

@@ -106,7 +106,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
       // Filter by call party type
       if (callPartyType) {
         filtered = filtered.filter(c => {
-          const partyType = (c.analysis as any)?.callPartyType;
+          const partyType = c.analysis?.callPartyType;
           return partyType === callPartyType;
         });
       }
@@ -189,7 +189,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
       // Aggregate sub-scores across all analyzed calls
       const subScoreTotals = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0, count: 0 };
       for (const call of filtered) {
-        const ss = (call.analysis as any)?.subScores;
+        const ss = call.analysis?.subScores;
         if (ss && (ss.compliance || ss.customerExperience || ss.communication || ss.resolution)) {
           subScoreTotals.compliance += ss.compliance || 0;
           subScoreTotals.customerExperience += ss.customerExperience || 0;
@@ -207,7 +207,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
       } : null;
 
       // Count auto-assigned calls
-      const autoAssignedCount = filtered.filter(c => (c.analysis as any)?.detectedAgentName).length;
+      const autoAssignedCount = filtered.filter(c => c.analysis?.detectedAgentName).length;
 
       res.json({
         metrics: {

@@ -12,6 +12,7 @@ import { broadcastCallUpdate } from "./websocket";
 import { aiProvider } from "./ai-factory";
 import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
 import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
+import { fetchRagContext, isRagEnabled } from "./rag-client";
 
 interface SubScores {
   compliance?: number;
@@ -160,18 +161,33 @@ async function generateAICoachingPlan(
       const strengths = feedback?.strengths || [];
       const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
       analysisContext = `
-Sub-scores: Compliance ${(analysis.subScores as any)?.compliance ?? "N/A"}/10, Customer Experience ${(analysis.subScores as any)?.customerExperience ?? "N/A"}/10, Communication ${(analysis.subScores as any)?.communication ?? "N/A"}/10, Resolution ${(analysis.subScores as any)?.resolution ?? "N/A"}/10
+Sub-scores: Compliance ${analysis.subScores?.compliance ?? "N/A"}/10, Customer Experience ${analysis.subScores?.customerExperience ?? "N/A"}/10, Communication ${analysis.subScores?.communication ?? "N/A"}/10, Resolution ${analysis.subScores?.resolution ?? "N/A"}/10
 Suggestions from AI: ${suggestions.slice(0, 4).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Strengths observed: ${strengths.slice(0, 3).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Flags: ${flags.join(", ") || "none"}`;
     }
   } catch {}
 
+  // Fetch relevant coaching materials from knowledge base
+  let ragCoachingContext = "";
+  if (isRagEnabled()) {
+    try {
+      const ragResult = await fetchRagContext(
+        `Coaching and training guidance for call center agents who scored low on: ${analysisContext.slice(0, 200)}`,
+      );
+      if (ragResult) {
+        ragCoachingContext = `\nCOMPANY COACHING GUIDELINES:\n${ragResult.context.slice(0, 800)}\n`;
+      }
+    } catch {
+      // Silent failure — coaching continues without RAG context
+    }
+  }
+
   const prompt = `You are a call center quality assurance coach for a medical supply company. An agent scored ${score.toFixed(1)}/10 on a recent call. Generate a specific, actionable coaching plan.
 
 AGENT: ${employeeName}
 CALL SUMMARY: ${callSummary.slice(0, 500)}
-${analysisContext}
+${analysisContext}${ragCoachingContext}
 
 Respond in this exact JSON format only, with no additional text:
 {

@@ -443,7 +443,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       lines.push(`Action Items`);
       lines.push(`------------`);
       call.analysis.actionItems.forEach((item: unknown, i: number) => {
-        const text = typeof item === "string" ? item : typeof item === "object" && item !== null ? ((item as any).text || (item as any).task || JSON.stringify(item)) : String(item);
+        const text = typeof item === "string" ? item : typeof item === "object" && item !== null ? ((item as Record<string, unknown>).text || (item as Record<string, unknown>).task || JSON.stringify(item)) : String(item);
         lines.push(`${i + 1}. ${text}`);
       });
     }

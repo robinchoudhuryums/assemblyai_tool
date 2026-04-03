@@ -315,7 +315,7 @@ export function register(router: Router) {
         ].map(escapeCsvValue).join(","));
       }
 
-      logPhiAccess({ ...auditContext(req as any), timestamp: new Date().toISOString(), event: "export_calls_csv", resourceType: "export", detail: `${rows.length} calls exported` });
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "export_calls_csv", resourceType: "export", detail: `${rows.length} calls exported` });
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="calls-export-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csvRows.join("\n"));
@@ -352,7 +352,7 @@ export function register(router: Router) {
         csvRows.push([r.team, r.employee_name, r.call_count, r.avg_score, r.avg_duration].map(escapeCsvValue).join(","));
       }
 
-      logPhiAccess({ ...auditContext(req as any), timestamp: new Date().toISOString(), event: "export_team_csv", resourceType: "export" });
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "export_team_csv", resourceType: "export" });
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="team-analytics-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csvRows.join("\n"));
@@ -515,7 +515,7 @@ export function register(router: Router) {
 
       for (const call of recentCalls) {
         if (!call.employeeId || !call.employee) continue;
-        const factors = call.analysis?.confidenceFactors as any;
+        const factors = call.analysis?.confidenceFactors;
         const um = factors?.utteranceMetrics;
         if (!um) continue;
 

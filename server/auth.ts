@@ -119,6 +119,19 @@ async function comparePasswords(supplied: string, stored: string): Promise<boole
 export const hashPasswordForDb = hashPassword;
 export const comparePasswordsRaw = comparePasswords;
 
+/** HIPAA: Password history — prevent reuse of last N passwords. */
+export const PASSWORD_HISTORY_SIZE = 5;
+
+export async function isPasswordReused(password: string, currentHash: string, history: string[]): Promise<boolean> {
+  // Check against current password
+  if (await comparePasswords(password, currentHash)) return true;
+  // Check against previous passwords
+  for (const oldHash of history) {
+    if (await comparePasswords(password, oldHash)) return true;
+  }
+  return false;
+}
+
 async function loadUsersFromEnv(): Promise<void> {
   const authUsersRaw = process.env.AUTH_USERS;
   if (!authUsersRaw) {
@@ -426,10 +439,11 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   // HIPAA: Session fingerprinting — bind sessions to browser characteristics.
   // Set fingerprint on first authenticated request; reject mismatches thereafter.
   const currentFp = getSessionFingerprint(req);
-  const sessionFp = (req.session as any)?.fingerprint;
+  const sess = req.session as typeof req.session & { fingerprint?: string };
+  const sessionFp = sess.fingerprint;
   if (!sessionFp) {
     // First request with this session — stamp the fingerprint
-    (req.session as any).fingerprint = currentFp;
+    sess.fingerprint = currentFp;
   } else if (sessionFp !== currentFp) {
     // Fingerprint changed mid-session — possible session hijacking
     logPhiAccess({

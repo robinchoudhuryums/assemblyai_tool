@@ -149,6 +149,8 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_badges_employee_id ON badges (employee_id)",
     "CREATE INDEX IF NOT EXISTS idx_badges_badge_type ON badges (badge_type)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_badges_unique_milestone ON badges (employee_id, badge_type) WHERE badge_type IN ('first_call', 'calls_25', 'calls_50', 'calls_100')",
+    // Password history for HIPAA compliance (prevents reuse of last 5 passwords)
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_history JSONB DEFAULT '[]'",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---
@@ -168,7 +170,7 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
       await db.query(sql);
     } catch (err) {
       // Ignore "column already exists" errors
-      if (!(err as any)?.message?.includes("already exists")) {
+      if (!(err as Error)?.message?.includes("already exists")) {
         console.warn("[DB] Migration warning:", (err as Error).message);
       }
     }

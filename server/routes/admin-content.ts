@@ -142,7 +142,7 @@ export function registerContentRoutes(
       const abValidCategories = CALL_CATEGORIES.map(c => c.value) as string[];
       const callCategory = abValidCategories.includes(req.body.callCategory) ? req.body.callCategory : undefined;
 
-      const user = req.user as any;
+      const user = req.user;
       const baselineModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
 
       const abTest = await storage.createABTest({
@@ -214,7 +214,7 @@ export function registerContentRoutes(
         res.status(400).json({ message: urlCheck.error || "Invalid webhook URL" });
         return;
       }
-      const invalidEvents = parsed.data.events.filter(e => !WEBHOOK_EVENTS.includes(e as any));
+      const invalidEvents = parsed.data.events.filter(e => !(WEBHOOK_EVENTS as readonly string[]).includes(e));
       if (invalidEvents.length > 0) {
         res.status(400).json({ message: `Invalid events: ${invalidEvents.join(", ")}. Valid events: ${WEBHOOK_EVENTS.join(", ")}` });
         return;

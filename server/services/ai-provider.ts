@@ -29,7 +29,7 @@ export interface CallAnalysis {
 export interface AIAnalysisProvider {
   readonly name: string;
   readonly isAvailable: boolean;
-  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean): Promise<CallAnalysis>;
+  analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis>;
   generateText?(prompt: string): Promise<string>;
 }
 
@@ -126,7 +126,7 @@ function smartTruncate(text: string, maxChars = 80000): string {
   ].join("");
 }
 
-export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig, language?: string): string {
+export function buildAnalysisPrompt(transcriptText: string, callCategory?: string, template?: PromptTemplateConfig, language?: string, ragContext?: string): string {
   const processedTranscript = smartTruncate(transcriptText);
 
   const categoryContext = callCategory && CATEGORY_CONTEXT[callCategory]
@@ -171,6 +171,12 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
     additionalSection = `\n- ADDITIONAL INSTRUCTIONS:\n${template.additionalInstructions}`;
   }
 
+  // RAG knowledge base context — company-specific policies, procedures, and standards
+  let ragSection = "";
+  if (ragContext) {
+    ragSection = `\n- COMPANY KNOWLEDGE BASE (use these to evaluate compliance and provide specific feedback):\n${ragContext}`;
+  }
+
   // Language instruction for non-English analysis
   let languageInstruction = "";
   if (language && language !== "en") {
@@ -191,7 +197,7 @@ Guidelines:
 - sentiment_score: 0.0-1.0 (1.0 = most positive)
 - performance_score: 0.0-10.0 (overall weighted score)
 - sub_scores (each 0.0-10.0): compliance (procedures, HIPAA, policies), customer_experience (empathy, patience, tone), communication (clarity, listening, completeness), resolution (issue resolution effectiveness)
-${evaluationCriteria}${scoringSection}${phrasesSection}${additionalSection}
+${evaluationCriteria}${scoringSection}${phrasesSection}${additionalSection}${ragSection}
 - For EACH strength/suggestion, include approximate timestamp (MM:SS) of the referenced moment
 - 2-4 concrete, actionable action items
 - Topics: specific (e.g. "order tracking", "billing dispute"), not generic
