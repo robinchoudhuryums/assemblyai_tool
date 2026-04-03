@@ -136,7 +136,7 @@ jobs:
           contains(steps.check.outputs.response, '::DISK_HIGH::') ||
           contains(steps.check.outputs.response, '::MEMORY_HIGH::')
         id: dedup
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             // Check if there's already an open alert issue from the last 24 hours
@@ -171,7 +171,7 @@ jobs:
           contains(steps.check.outputs.response, '::DB_UNREACHABLE::') ||
           contains(steps.check.outputs.response, '::DISK_HIGH::') ||
           contains(steps.check.outputs.response, '::MEMORY_HIGH::')
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const output = `${{ steps.check.outputs.response }}`.substring(0, 3000);
