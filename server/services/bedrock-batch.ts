@@ -266,7 +266,7 @@ export class BedrockBatchService {
     const path = `/${key}`;
 
     const headers = this.signS3Headers("PUT", host, path, region, body, contentType);
-    const response = await fetch(`https://${host}${path}`, { method: "PUT", headers, body });
+    const response = await fetch(`https://${host}${path}`, { method: "PUT", headers, body: new Uint8Array(body) });
     if (!response.ok) {
       throw new Error(`S3 PUT failed for ${key}: ${await response.text()}`);
     }
