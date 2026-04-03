@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -26,6 +26,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const totpInputRef = useRef<HTMLInputElement>(null);
 
   // Request access form state
   const [requestName, setRequestName] = useState("");
@@ -77,11 +78,15 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         description: message,
         variant: "destructive",
       });
-      // If session expired, go back to login
+      // Always clear code so user can retry immediately
+      setTotpCode("");
+      // If session expired, go back to login form entirely
       if (message?.includes("expired")) {
         setMfaRequired(false);
         setMfaToken("");
-        setTotpCode("");
+      } else {
+        // Re-focus the input for quick retry
+        setTimeout(() => totpInputRef.current?.focus(), 100);
       }
     } finally {
       setIsLoading(false);
@@ -156,6 +161,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     Verification Code
                   </label>
                   <Input
+                    ref={totpInputRef}
                     id="totp-code"
                     type="text"
                     inputMode="numeric"

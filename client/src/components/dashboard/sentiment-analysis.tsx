@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { useLocation } from "wouter";
@@ -6,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import type { SentimentDistribution } from "@shared/schema";
 
-export default function SentimentAnalysis() {
+export default memo(function SentimentAnalysis() {
   const [, navigate] = useLocation();
   const { t } = useTranslation();
   const { data: sentimentData, isLoading, error, refetch } = useQuery<SentimentDistribution>({
@@ -62,7 +63,10 @@ export default function SentimentAnalysis() {
         <h3 className="text-lg font-semibold text-foreground">{t("sentiment.title")}</h3>
       </div>
 
-      <div className="chart-container mb-4">
+      <p className="sr-only">
+        Sentiment breakdown: {pct(positive)}% positive, {pct(neutral)}% neutral, {pct(negative)}% negative out of {total} calls.
+      </p>
+      <div className="chart-container mb-4" aria-hidden="true">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -119,4 +123,4 @@ export default function SentimentAnalysis() {
       </div>
     </div>
   );
-}
+});

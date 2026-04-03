@@ -142,6 +142,19 @@
     font-family: var(--font-sans);
   }
 
+  /* Accessibility: visible focus indicators for keyboard navigation.
+     Uses :focus-visible so outlines only appear on keyboard focus, not mouse clicks. */
+  *:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  /* Avoid double outlines on elements that already have ring styles */
+  [class*="focus:ring"]:focus-visible,
+  [class*="focus-visible:ring"]:focus-visible {
+    outline: none;
+  }
+
   /* Global glassmorphism: all bg-card elements get frosted glass */
   .bg-card {
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
