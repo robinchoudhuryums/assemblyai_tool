@@ -93,7 +93,7 @@ export default function FileUpload() {
         method: 'POST',
         body: formData,
         credentials: 'include',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        headers: (() => { const h: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' }; const m = document.cookie.match(/csrf_token=([^;]+)/); if (m) h['x-csrf-token'] = m[1]; return h; })(),
       });
 
       if (!response.ok) {

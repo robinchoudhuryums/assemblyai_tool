@@ -16,6 +16,7 @@ import type { AIAnalysisProvider, CallAnalysis } from "./ai-provider";
 import { buildAnalysisPrompt, parseJsonResponse } from "./ai-provider";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { CircuitBreaker } from "./resilience";
+import { withSpan } from "./trace-span";
 import { signRequest, sha256Buffer } from "./sigv4.js";
 
 // LRU cache for embeddings — avoids redundant Bedrock calls on re-analysis/retries.
@@ -93,6 +94,7 @@ export class BedrockProvider implements AIAnalysisProvider {
   }
 
   async generateText(prompt: string): Promise<string> {
+    return withSpan("bedrock.generateText", { model: this.model, promptChars: prompt.length }, async () => {
     const creds = await this.ensureCredentials();
 
     const region = creds.region;
@@ -130,9 +132,11 @@ export class BedrockProvider implements AIAnalysisProvider {
         clearTimeout(timeout);
       }
     });
+    }); // end withSpan
   }
 
   async analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: any, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis> {
+    return withSpan("bedrock.analyze", { callId, model: this.model, transcriptChars: transcriptText.length, hasRagContext: !!ragContext }, async (span) => {
     const creds = await this.ensureCredentials();
 
     const prompt = buildAnalysisPrompt(transcriptText, callCategory, promptTemplate, language, ragContext);
@@ -190,8 +194,11 @@ export class BedrockProvider implements AIAnalysisProvider {
     const responseText = result.output?.message?.content?.[0]?.text || "";
 
     const analysis = parseJsonResponse(responseText, callId, callDurationSeconds);
+    span.setAttribute("score", analysis.performance_score || 0);
+    span.setAttribute("sentiment", analysis.sentiment || "unknown");
     console.log(`[${callId}] Bedrock analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);
     return analysis;
+    }); // end withSpan
   }
 
   /**

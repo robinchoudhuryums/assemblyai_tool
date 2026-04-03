@@ -2,6 +2,12 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 import { DEFAULT_STALE_TIME_MS } from "@/lib/constants";
 
+/** Read the CSRF token from the double-submit cookie set by the server. */
+export function getCsrfToken(): string | undefined {
+  const match = document.cookie.split(";").map(s => s.trim()).find(s => s.startsWith("csrf_token="));
+  return match ? match.slice("csrf_token=".length) : undefined;
+}
+
 /** Sentinel error so components can distinguish session expiry from real errors. */
 export class SessionExpiredError extends Error {
   constructor() {
@@ -79,9 +85,15 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (data) headers["Content-Type"] = "application/json";
+  // Double-submit CSRF: echo the server-set cookie value in a custom header
+  const csrf = getCsrfToken();
+  if (csrf) headers["x-csrf-token"] = csrf;
+
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

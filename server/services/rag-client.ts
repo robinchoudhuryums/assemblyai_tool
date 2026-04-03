@@ -14,6 +14,8 @@
  * without additional context (current behavior).
  */
 
+import { withSpan } from "./trace-span";
+
 const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL?.replace(/\/$/, "");
 const RAG_API_KEY = process.env.RAG_API_KEY || "";
 const RAG_TIMEOUT_MS = 8_000; // 8 second timeout — don't block the pipeline
@@ -55,6 +57,7 @@ export async function fetchRagContext(
 ): Promise<{ context: string; sources: RagSource[] } | undefined> {
   if (!isRagEnabled()) return undefined;
 
+  return withSpan("rag.fetchContext", { questionChars: question.length, serviceUrl: RAG_SERVICE_URL || "" }, async (span) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RAG_TIMEOUT_MS);
 
@@ -94,6 +97,8 @@ export async function fetchRagContext(
 
     const context = `${data.answer}\n\nRelevant source excerpts:\n${sourceRefs}`;
 
+    span.setAttribute("sourceCount", data.sources.length);
+    span.setAttribute("confidence", data.confidence);
     return { context, sources: data.sources.slice(0, 4) };
   } catch (err) {
     if ((err as Error).name === "AbortError") {
@@ -105,6 +110,7 @@ export async function fetchRagContext(
   } finally {
     clearTimeout(timeout);
   }
+  }); // end withSpan
 }
 
 /**

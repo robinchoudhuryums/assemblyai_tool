@@ -70,9 +70,10 @@ export default function ReportsPage() {
   // AI summary mutation
   const summaryMutation = useMutation({
     mutationFn: async () => {
+      const { getCsrfToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/reports/agent-summary/${selectedEmployee}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}) },
         credentials: "include",
         body: JSON.stringify({ from: dateRange.from, to: dateRange.to }),
       });
