@@ -7,6 +7,7 @@ import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-ic
 import { apiRequest } from "@/lib/queryClient";
 import { extractErrorMessage } from "@/lib/display-utils";
 import { USER_ROLES } from "@shared/schema";
+import { ROLE_CONFIG } from "@/lib/constants";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface AuthPageProps {
@@ -120,11 +121,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     }
   };
 
-  const roleIcons: Record<string, React.ReactNode> = {
-    viewer: <Eye className="w-4 h-4 text-blue-500" />,
-    manager: <Gear className="w-4 h-4 text-amber-500" />,
-    admin: <Shield className="w-4 h-4 text-purple-500" />,
-  };
+  const roleIconComponents: Record<string, typeof Eye> = { viewer: Eye, manager: Gear, admin: Shield };
+  const roleIcons: Record<string, React.ReactNode> = Object.fromEntries(
+    Object.entries(roleIconComponents).map(([role, Icon]) => [
+      role, <Icon key={role} className={`w-4 h-4 ${ROLE_CONFIG[role]?.color || "text-gray-500"}`} />,
+    ])
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
