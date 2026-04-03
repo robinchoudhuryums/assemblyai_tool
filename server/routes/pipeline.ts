@@ -6,6 +6,7 @@ import { aiProvider } from "../services/ai-factory";
 import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
 import { fetchRagContext, buildRagQuery, isRagEnabled } from "../services/rag-client";
+import { detectTranscriptInjection, detectOutputAnomaly } from "../services/prompt-guard";
 import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
 import { type UsageRecord } from "@shared/schema";
@@ -259,6 +260,18 @@ export async function processAudioFile(
       }
     }
 
+    // Prompt injection detection: scan transcript for manipulation attempts.
+    // Spoken injection is a real attack vector (caller says "ignore previous instructions").
+    // We don't block analysis — we flag it so reviewers know the AI output may be manipulated.
+    let injectionDetected = false;
+    if (speakerLabeledText) {
+      const injectionCheck = detectTranscriptInjection(speakerLabeledText);
+      if (injectionCheck.detected) {
+        injectionDetected = true;
+        console.warn(`[${callId}] ⚠ Prompt injection detected in transcript: ${injectionCheck.reasons.join("; ")}`);
+      }
+    }
+
     // Batch mode: defer AI analysis for 50% cost savings
     if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && speakerLabeledText) {
       const prompt = buildAnalysisPrompt(speakerLabeledText, callCategory, promptTemplate, language, ragContext);
@@ -466,6 +479,26 @@ export async function processAudioFile(
       const existingFlags = (analysis.flags as string[]) || [];
       existingFlags.push("low_confidence");
       analysis.flags = existingFlags;
+    }
+
+    // Prompt injection: flag if injection was detected in transcript
+    if (injectionDetected) {
+      const existingFlags = (analysis.flags as string[]) || [];
+      existingFlags.push("prompt_injection_detected");
+      analysis.flags = existingFlags;
+      console.warn(`[${callId}] Flagged: prompt injection detected in transcript`);
+    }
+
+    // Output anomaly: check if AI response shows signs of injection bypass
+    if (aiAnalysis && analysis.summary) {
+      const rawOutputText = `${analysis.summary || ""} ${(analysis.actionItems || []).join(" ")} ${(analysis.feedback?.strengths || []).join(" ")} ${(analysis.feedback?.suggestions || []).join(" ")}`;
+      const outputCheck = detectOutputAnomaly(rawOutputText);
+      if (outputCheck.anomaly) {
+        const existingFlags = (analysis.flags as string[]) || [];
+        existingFlags.push(`output_anomaly:${outputCheck.reason}`);
+        analysis.flags = existingFlags;
+        console.warn(`[${callId}] Flagged: output anomaly — ${outputCheck.reason}`);
+      }
     }
 
     console.log(`[${callId}] Step 5/6: Data processing complete. Confidence: ${(confidenceScore * 100).toFixed(0)}%`);
