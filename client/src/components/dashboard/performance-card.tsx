@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { ArrowCounterClockwise, Warning } from "@phosphor-icons/react";
@@ -11,7 +12,7 @@ type TopPerformer = Partial<Employee> & {
   totalCalls?: number | null;
 };
 
-export default function PerformanceCard() {
+export default memo(function PerformanceCard() {
   const [, navigate] = useLocation();
   const { data: performers, isLoading, error, refetch } = useQuery<TopPerformer[]>({
     queryKey: ["/api/dashboard/performers"],
@@ -107,4 +108,4 @@ export default function PerformanceCard() {
       </div>
     </div>
   );
-}
+});

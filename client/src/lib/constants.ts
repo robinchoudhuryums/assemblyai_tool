@@ -42,3 +42,11 @@ export const MAX_NOTIFICATIONS = 30;
 // ── Sentiment ─────────────────────────────────────────────
 /** Days lookback for the sentiment page */
 export const SENTIMENT_LOOKBACK_DAYS = 90;
+
+// ── Roles ─────────────────────────────────────────────────
+/** Role display configuration — single source of truth for colors and labels */
+export const ROLE_CONFIG: Record<string, { label: string; badgeClass: string; color: string }> = {
+  viewer: { label: "Viewer", badgeClass: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400", color: "text-blue-500" },
+  manager: { label: "Manager / QA", badgeClass: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400", color: "text-amber-500" },
+  admin: { label: "Admin", badgeClass: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400", color: "text-purple-500" },
+};

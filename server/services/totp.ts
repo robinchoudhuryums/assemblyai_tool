@@ -76,7 +76,28 @@ export function generateTOTP(secret: string, timeStep = 30, digits = 6, now?: nu
 }
 
 /**
+ * Replay protection: tracks recently used TOTP codes per secret to prevent
+ * a captured code from being reused within the same time window.
+ * Key: "secret:timeStep", auto-cleaned every 2 minutes.
+ */
+const usedTokens = new Map<string, number>(); // key → timestamp of use
+
+// Clean expired entries every 2 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 120_000; // codes expire after 2 min (covers ±1 window)
+  for (const [key, ts] of usedTokens) {
+    if (ts < cutoff) usedTokens.delete(key);
+  }
+}, 120_000).unref();
+
+/** Exported for testing only — clears the replay cache. */
+export function _resetReplayCache(): void {
+  usedTokens.clear();
+}
+
+/**
  * Verify a TOTP code with a ±1 time step window (±30 seconds).
+ * Includes replay protection: each code can only be used once per time window.
  */
 export function verifyTOTP(secret: string, token: string, window = 1): boolean {
   const now = Date.now();
@@ -84,9 +105,17 @@ export function verifyTOTP(secret: string, token: string, window = 1): boolean {
   // String comparison leaks code length via timing; timingSafeEqual does not.
   const tokenBuf = Buffer.from(token, "utf8");
   for (let i = -window; i <= window; i++) {
-    const expected = generateTOTP(secret, 30, 6, now + i * 30000);
+    const stepTime = now + i * 30000;
+    const expected = generateTOTP(secret, 30, 6, stepTime);
     const expectedBuf = Buffer.from(expected, "utf8");
-    if (tokenBuf.length === expectedBuf.length && timingSafeEqual(tokenBuf, expectedBuf)) return true;
+    if (tokenBuf.length === expectedBuf.length && timingSafeEqual(tokenBuf, expectedBuf)) {
+      // Replay protection: reject if this exact code was already used
+      const timeStep = Math.floor(stepTime / 1000 / 30);
+      const replayKey = `${secret}:${timeStep}`;
+      if (usedTokens.has(replayKey)) return false;
+      usedTokens.set(replayKey, now);
+      return true;
+    }
   }
   return false;
 }

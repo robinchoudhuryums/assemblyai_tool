@@ -155,7 +155,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Load persisted calibration overrides from S3, then start auto-calibration scheduler
   import("./services/scoring-calibration").then(({ loadPersistedCalibration }) =>
     loadPersistedCalibration(storage.getObjectStorageClient())
-  ).catch(() => {});
+  ).catch((err) => {
+    console.warn("[CALIBRATION] Failed to load persisted calibration:", (err as Error).message);
+  });
   startCalibrationScheduler();
 
   // Start 8x8 telephony auto-ingestion (if configured)

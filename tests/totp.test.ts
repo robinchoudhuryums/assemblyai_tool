@@ -12,6 +12,7 @@ import {
   generateOTPAuthURI,
   isMFARequired,
   isMFARoleRequired,
+  _resetReplayCache,
 } from "../server/services/totp.js";
 
 describe("base32Encode", () => {
@@ -191,6 +192,44 @@ describe("verifyTOTP", () => {
     const pastCode = generateTOTP(secret, 30, 6, now - 30000);
     if (currentCode !== pastCode) {
       assert.ok(!verifyTOTP(secret, pastCode, 0));
+    }
+  });
+});
+
+describe("TOTP replay protection", () => {
+  it("rejects the same code used twice with the same secret", () => {
+    _resetReplayCache();
+    const secret = generateSecret();
+    const code = generateTOTP(secret, 30, 6, Date.now());
+    assert.ok(verifyTOTP(secret, code), "first use should succeed");
+    assert.ok(!verifyTOTP(secret, code), "replay should be rejected");
+  });
+
+  it("allows the same code with a different secret", () => {
+    _resetReplayCache();
+    const secret1 = generateSecret();
+    const secret2 = generateSecret();
+    const now = Date.now();
+    const code1 = generateTOTP(secret1, 30, 6, now);
+    const code2 = generateTOTP(secret2, 30, 6, now);
+    assert.ok(verifyTOTP(secret1, code1), "first secret should work");
+    // code2 is different from code1 (different secrets), so it's not a replay
+    if (code1 !== code2) {
+      assert.ok(verifyTOTP(secret2, code2), "different secret should work");
+    }
+  });
+
+  it("allows code from a different time step (same secret)", () => {
+    _resetReplayCache();
+    const secret = generateSecret();
+    const now = Date.now();
+    // Use current step and the previous step — both within window=1 but different time steps
+    const currentCode = generateTOTP(secret, 30, 6, now);
+    const pastCode = generateTOTP(secret, 30, 6, now - 30000);
+    assert.ok(verifyTOTP(secret, currentCode), "current code should work");
+    // Past code is a different time step, so replay cache shouldn't block it
+    if (currentCode !== pastCode) {
+      assert.ok(verifyTOTP(secret, pastCode), "code from different step should work");
     }
   });
 });

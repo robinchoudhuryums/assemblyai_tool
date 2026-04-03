@@ -3,12 +3,16 @@ import { storage } from "../storage";
 import { requireAuth } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getPool } from "../db/pool";
+import { validateIdParam, validateParams } from "./utils";
+
+const validateIdAndTagId = validateParams({ id: "uuid", tagId: "uuid" });
+const validateIdAndAnnotationId = validateParams({ id: "uuid", annotationId: "uuid" });
 
 export function registerCallTagRoutes(router: Router) {
 
   // ==================== CALL TAGGING ROUTES ====================
 
-  router.get("/api/calls/:id/tags", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/tags", requireAuth, validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
       // Verify call exists and user has access
@@ -28,7 +32,7 @@ export function registerCallTagRoutes(router: Router) {
     }
   });
 
-  router.post("/api/calls/:id/tags", requireAuth, async (req, res) => {
+  router.post("/api/calls/:id/tags", requireAuth, validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
       const { tag } = req.body;
@@ -60,7 +64,7 @@ export function registerCallTagRoutes(router: Router) {
     }
   });
 
-  router.delete("/api/calls/:id/tags/:tagId", requireAuth, async (req, res) => {
+  router.delete("/api/calls/:id/tags/:tagId", requireAuth, validateIdAndTagId, async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.status(503).json({ message: "Tagging requires a database connection" });
@@ -113,7 +117,7 @@ export function registerCallTagRoutes(router: Router) {
 
   // ==================== ANNOTATIONS ====================
 
-  router.get("/api/calls/:id/annotations", requireAuth, async (req, res) => {
+  router.get("/api/calls/:id/annotations", requireAuth, validateIdParam, async (req, res) => {
     try {
       logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "view_annotations", resourceType: "annotation", resourceId: req.params.id });
       const pool = getPool();
@@ -138,7 +142,7 @@ export function registerCallTagRoutes(router: Router) {
     }
   });
 
-  router.post("/api/calls/:id/annotations", requireAuth, async (req, res) => {
+  router.post("/api/calls/:id/annotations", requireAuth, validateIdParam, async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) {
@@ -164,7 +168,7 @@ export function registerCallTagRoutes(router: Router) {
     }
   });
 
-  router.delete("/api/calls/:id/annotations/:annotationId", requireAuth, async (req, res) => {
+  router.delete("/api/calls/:id/annotations/:annotationId", requireAuth, validateIdAndAnnotationId, async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) {

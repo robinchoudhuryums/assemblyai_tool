@@ -152,6 +152,72 @@ describe("Audit log retry configuration", () => {
   });
 });
 
+// --- Write-ahead queue ---
+
+describe("Audit log write-ahead queue", () => {
+  it("getDroppedAuditEntryCount starts at 0", async () => {
+    const { getDroppedAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    assert.equal(getDroppedAuditEntryCount(), 0);
+  });
+
+  it("getPendingAuditEntryCount starts at 0 after reset", async () => {
+    const { getPendingAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    assert.equal(getPendingAuditEntryCount(), 0);
+  });
+
+  it("logPhiAccess queues entry when pool is unavailable (no DB)", async () => {
+    const { logPhiAccess, getPendingAuditEntryCount, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    // Without DATABASE_URL, getPool() returns null, so nothing gets queued to DB
+    logPhiAccess({
+      timestamp: new Date().toISOString(),
+      event: "test_event",
+      resourceType: "test",
+    });
+    // No DB pool → entry goes only to stdout, queue stays empty
+    assert.equal(getPendingAuditEntryCount(), 0);
+  });
+
+  it("flushAuditQueue is safe to call when queue is empty", async () => {
+    const { flushAuditQueue, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+    // Should not throw
+    await flushAuditQueue();
+  });
+});
+
+// --- Integrity hash chain ---
+
+describe("Audit log integrity hash", () => {
+  it("computeIntegrityHash returns consistent 16-char hex string", async () => {
+    // The hash function is not exported, but we can verify the chain behavior via logPhiAccess stdout
+    // by checking that repeated calls produce different hashes (chained)
+    const { logPhiAccess, _resetAuditQueue } = await import("../server/services/audit-log.js");
+    _resetAuditQueue();
+
+    // Capture console.log output
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(String(args[0])); };
+
+    logPhiAccess({ timestamp: "2026-04-03T00:00:00Z", event: "test_1", resourceType: "test" });
+    logPhiAccess({ timestamp: "2026-04-03T00:00:01Z", event: "test_2", resourceType: "test" });
+
+    console.log = originalLog;
+
+    // Both entries should have [h:...] integrity hashes
+    assert.equal(logs.length, 2);
+    const hash1Match = logs[0].match(/\[h:([0-9a-f]{16})\]$/);
+    const hash2Match = logs[1].match(/\[h:([0-9a-f]{16})\]$/);
+    assert.ok(hash1Match, "First entry should have integrity hash");
+    assert.ok(hash2Match, "Second entry should have integrity hash");
+    // Chain: hashes should be different (second depends on first)
+    assert.notEqual(hash1Match![1], hash2Match![1], "Chained hashes should differ");
+  });
+});
+
 // --- HIPAA event taxonomy ---
 
 describe("HIPAA audit event types", () => {

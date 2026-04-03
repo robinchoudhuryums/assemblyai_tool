@@ -614,12 +614,12 @@ export default function ReportsPage() {
 
         {/* Error banners for secondary queries */}
         {compareError && compareEnabled && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
             Failed to load comparison data: {(compareError as Error).message}
           </div>
         )}
         {agentProfileError && reportType === "employee" && selectedEmployee && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
             Failed to load agent profile: {(agentProfileError as Error).message}
           </div>
         )}

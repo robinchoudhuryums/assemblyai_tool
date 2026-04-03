@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "NODE_OPTIONS='--max-old-space-size=1536' vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && cp server/db/schema.sql dist/schema.sql",
     "start": "NODE_ENV=production node dist/index.js",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test --test-force-exit tests/*.test.ts",
+    "test:coverage": "c8 --reporter=text --reporter=text-summary --include='server/**/*.ts' --exclude='server/**/*.test.ts' tsx --test --test-force-exit tests/*.test.ts",
     "test:client": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "check": "tsc",
@@ -98,6 +102,7 @@
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
+    "c8": "^11.0.0",
     "esbuild": "^0.25.0",
     "jsdom": "^29.0.0",
     "postcss": "^8.4.47",

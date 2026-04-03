@@ -5,7 +5,7 @@ import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
 import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
-import { escapeCsvValue } from "./utils";
+import { escapeCsvValue, validateParams } from "./utils";
 
 /** Validate an ISO date string; returns undefined if invalid. */
 function validateDate(val: string | undefined): string | undefined {
@@ -88,7 +88,7 @@ export function register(router: Router) {
   });
 
   // Individual employee comparison within a team
-  router.get("/api/analytics/team/:teamName", requireAuth, async (req, res) => {
+  router.get("/api/analytics/team/:teamName", requireAuth, validateParams({ teamName: "safeName" }), async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.json([]);
@@ -198,7 +198,7 @@ export function register(router: Router) {
   });
 
   // Per-agent trends
-  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const period = (req.query.period as string) || "weekly";
@@ -210,28 +210,41 @@ export function register(router: Router) {
       let periods: any[];
 
       if (pool) {
-        // Whitelist truncUnit to prevent SQL injection (not parameterizable in date_trunc)
-        const truncUnit = period === "monthly" ? "month" : "week";
+        // Use separate branches to avoid template-literal SQL (date_trunc unit is not parameterizable)
         const intervalUnit = period === "monthly" ? months : weeks;
+        const trendQuery = period === "monthly"
+          ? `SELECT
+               date_trunc('month', c.uploaded_at) as period_start,
+               COUNT(c.id) as call_count,
+               ROUND(AVG(NULLIF(ca.performance_score, '')::numeric), 2) as avg_score,
+               COUNT(CASE WHEN sa.overall_sentiment = 'positive' THEN 1 END) as positive_count,
+               COUNT(CASE WHEN sa.overall_sentiment = 'negative' THEN 1 END) as negative_count,
+               ROUND(AVG(c.duration), 0) as avg_duration
+             FROM calls c
+             LEFT JOIN call_analyses ca ON ca.call_id = c.id
+             LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
+             WHERE c.status = 'completed'
+               AND c.employee_id = $1
+               AND c.uploaded_at >= NOW() - make_interval(months => $2)
+             GROUP BY date_trunc('month', c.uploaded_at)
+             ORDER BY period_start`
+          : `SELECT
+               date_trunc('week', c.uploaded_at) as period_start,
+               COUNT(c.id) as call_count,
+               ROUND(AVG(NULLIF(ca.performance_score, '')::numeric), 2) as avg_score,
+               COUNT(CASE WHEN sa.overall_sentiment = 'positive' THEN 1 END) as positive_count,
+               COUNT(CASE WHEN sa.overall_sentiment = 'negative' THEN 1 END) as negative_count,
+               ROUND(AVG(c.duration), 0) as avg_duration
+             FROM calls c
+             LEFT JOIN call_analyses ca ON ca.call_id = c.id
+             LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
+             WHERE c.status = 'completed'
+               AND c.employee_id = $1
+               AND c.uploaded_at >= NOW() - make_interval(weeks => $2)
+             GROUP BY date_trunc('week', c.uploaded_at)
+             ORDER BY period_start`;
 
-        const result = await pool.query(
-          `SELECT
-             date_trunc('${truncUnit}', c.uploaded_at) as period_start,
-             COUNT(c.id) as call_count,
-             ROUND(AVG(NULLIF(ca.performance_score, '')::numeric), 2) as avg_score,
-             COUNT(CASE WHEN sa.overall_sentiment = 'positive' THEN 1 END) as positive_count,
-             COUNT(CASE WHEN sa.overall_sentiment = 'negative' THEN 1 END) as negative_count,
-             ROUND(AVG(c.duration), 0) as avg_duration
-           FROM calls c
-           LEFT JOIN call_analyses ca ON ca.call_id = c.id
-           LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-           WHERE c.status = 'completed'
-             AND c.employee_id = $1
-             AND c.uploaded_at >= NOW() - make_interval(${truncUnit === "month" ? "months" : "weeks"} => $2)
-           GROUP BY date_trunc('${truncUnit}', c.uploaded_at)
-           ORDER BY period_start`,
-          [employeeId, intervalUnit]
-        );
+        const result = await pool.query(trendQuery, [employeeId, intervalUnit]);
         periods = result.rows;
       } else {
         const calls = await storage.getCallsWithDetails();
@@ -447,7 +460,7 @@ export function register(router: Router) {
   // ==================== SPEECH ANALYTICS ====================
 
   // GET /api/analytics/speech/:callId — speech metrics for a single call
-  router.get("/api/analytics/speech/:callId", requireAuth, async (req, res) => {
+  router.get("/api/analytics/speech/:callId", requireAuth, validateParams({ callId: "uuid" }), async (req, res) => {
     try {
       const callId = req.params.callId;
       const transcript = await storage.getTranscript(callId);

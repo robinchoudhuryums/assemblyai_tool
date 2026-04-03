@@ -9,7 +9,7 @@ import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
 import { insertPromptTemplateSchema, insertWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { validateUrlForSSRF } from "../services/url-validator";
-import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue } from "./utils";
+import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, sendError, sendValidationError } from "./utils";
 import {
   getAllWebhookConfigs,
   getWebhookConfig,
@@ -43,7 +43,7 @@ export function registerContentRoutes(
     try {
       const parsed = insertPromptTemplateSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid template data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid template data", parsed.error);
         return;
       }
       const template = await storage.createPromptTemplate({
@@ -61,7 +61,7 @@ export function registerContentRoutes(
       const { updatedBy: _ignore, id: _ignoreId, ...bodyWithoutMeta } = req.body;
       const templateUpdateParsed = insertPromptTemplateSchema.partial().safeParse(bodyWithoutMeta);
       if (!templateUpdateParsed.success) {
-        res.status(400).json({ message: "Invalid template data", errors: templateUpdateParsed.error.flatten() });
+        sendValidationError(res, "Invalid template data", templateUpdateParsed.error);
         return;
       }
       const updated = await storage.updatePromptTemplate(req.params.id, {
@@ -205,7 +205,7 @@ export function registerContentRoutes(
     try {
       const parsed = insertWebhookConfigSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid webhook config", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid webhook config", parsed.error);
         return;
       }
       // SSRF protection: reject webhook URLs targeting internal/private networks

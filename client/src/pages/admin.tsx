@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
 import type { AccessRequest } from "@shared/schema";
+import { ROLE_CONFIG } from "@/lib/constants";
 
 type TabView = "requests" | "roles";
 
@@ -63,13 +64,8 @@ export default function AdminPage() {
   };
 
   const roleBadge = (role: string) => {
-    const colors: Record<string, string> = {
-      viewer: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-      manager: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-      admin: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
-    };
-    const labels: Record<string, string> = { viewer: "Viewer", manager: "Manager / QA", admin: "Admin" };
-    return <Badge className={colors[role] || "bg-gray-100 text-gray-800"}>{labels[role] || role}</Badge>;
+    const config = ROLE_CONFIG[role];
+    return <Badge className={config?.badgeClass || "bg-gray-100 text-gray-800"}>{config?.label || role}</Badge>;
   };
 
   return (

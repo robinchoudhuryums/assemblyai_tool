@@ -119,7 +119,11 @@ export async function processAudioFile(
           }
         }
       }
-      nameWords.add("UMS");
+      // Boost company name/acronym for transcription accuracy
+      const companyName = process.env.COMPANY_NAME || "UMS";
+      for (const word of companyName.split(/[\s()]+/).filter(Boolean)) {
+        nameWords.add(word);
+      }
       if (nameWords.size > 0) {
         wordBoost = Array.from(nameWords).slice(0, 100);
       }

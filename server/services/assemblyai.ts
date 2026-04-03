@@ -317,7 +317,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
     }
 
     // Normalize array fields from AI — coerce any objects to strings
-    const normalizeStringArray = (arr: unknown): string[] => {
+    const normalizeStringArray = (arr: unknown, fieldName?: string): string[] => {
       if (!Array.isArray(arr)) return [];
       return arr.map((item: unknown) => {
         if (typeof item === "string") return item;
@@ -326,6 +326,8 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
           if (typeof obj.text === "string") return obj.text;
           if (typeof obj.name === "string") return obj.name;
           if (typeof obj.task === "string") return obj.task;
+          // Unknown object shape — log for debugging, stringify as fallback
+          console.warn(`[${callId}] Unexpected object shape in ${fieldName || "array"}: keys=[${Object.keys(obj).join(",")}]`);
           return JSON.stringify(item);
         }
         return String(item ?? "");
@@ -337,10 +339,10 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       performanceScore: performanceScore.toString(),
       talkTimeRatio: talkTimeRatio.toString(),
       responseTime: undefined,
-      keywords: normalizeStringArray(aiAnalysis?.topics),
-      topics: normalizeStringArray(aiAnalysis?.topics),
+      keywords: normalizeStringArray(aiAnalysis?.topics, "topics"),
+      topics: normalizeStringArray(aiAnalysis?.topics, "topics"),
       summary: typeof aiAnalysis?.summary === "string" ? aiAnalysis.summary : (aiAnalysis?.summary ? JSON.stringify(aiAnalysis.summary) : transcriptResponse.text?.slice(0, 500) || ''),
-      actionItems: normalizeStringArray(aiAnalysis?.action_items),
+      actionItems: normalizeStringArray(aiAnalysis?.action_items, "action_items"),
       feedback: aiAnalysis?.feedback
         ? {
             strengths: (aiAnalysis.feedback.strengths || []).map(

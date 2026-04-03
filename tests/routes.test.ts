@@ -205,4 +205,148 @@ describe("Storage integration (MemStorage)", () => {
     const fetched = await globalStorage.getCall(call.id);
     assert.equal(fetched?.fileName, "test-call.mp3");
   });
+
+  it("can paginate calls with cursor", async () => {
+    // Create several calls
+    for (let i = 0; i < 5; i++) {
+      await globalStorage.createCall({ fileName: `page-test-${i}.mp3`, duration: 60, status: "completed" });
+    }
+    const page1 = await globalStorage.getCallsPaginated({ limit: 2 });
+    assert.equal(page1.calls.length, 2);
+    assert.ok(page1.nextCursor, "should have a next cursor");
+    assert.ok(page1.total >= 5);
+
+    const page2 = await globalStorage.getCallsPaginated({ limit: 2, cursor: page1.nextCursor! });
+    assert.equal(page2.calls.length, 2);
+    // Pages should have different calls
+    assert.notEqual(page1.calls[0].id, page2.calls[0].id);
+  });
+
+  it("can filter calls by status", async () => {
+    await globalStorage.createCall({ fileName: "active.mp3", duration: 30, status: "processing" });
+    const completed = await globalStorage.getCallsWithDetails({ status: "completed" });
+    for (const c of completed) {
+      assert.equal(c.status, "completed");
+    }
+  });
+
+  it("can assign a call to an employee", async () => {
+    const emp = await globalStorage.createEmployee({ name: "Assignee", email: "assign@test.com", role: "Agent", status: "Active" });
+    const call = await globalStorage.createCall({ fileName: "assign-test.mp3", duration: 90, status: "completed" });
+    await globalStorage.updateCall(call.id, { employeeId: emp.id });
+
+    const updated = await globalStorage.getCall(call.id);
+    assert.equal(updated?.employeeId, emp.id);
+  });
+});
+
+describe("Storage: Transcript + Analysis lifecycle", () => {
+  it("creates transcript and analysis, then deletes call cascading", async () => {
+    const call = await globalStorage.createCall({ fileName: "lifecycle.mp3", duration: 120, status: "completed" });
+
+    await globalStorage.createTranscript({ callId: call.id, text: "Hello, how can I help?", confidence: 0.95 });
+    await globalStorage.createSentimentAnalysis({ callId: call.id, overallSentiment: "positive", overallScore: 0.8 });
+    await globalStorage.createCallAnalysis({
+      callId: call.id,
+      performanceScore: "8.5",
+      summary: "Good call",
+      topics: ["billing"],
+      actionItems: ["Follow up"],
+      feedback: { strengths: ["Professional"], suggestions: ["Faster resolution"] },
+      flags: [],
+    });
+
+    // Verify all created
+    assert.ok(await globalStorage.getTranscript(call.id));
+    assert.ok(await globalStorage.getSentimentAnalysis(call.id));
+    assert.ok(await globalStorage.getCallAnalysis(call.id));
+
+    // Delete call — should cascade
+    await globalStorage.deleteCall(call.id);
+    assert.equal(await globalStorage.getCall(call.id), undefined);
+    assert.equal(await globalStorage.getTranscript(call.id), undefined);
+    assert.equal(await globalStorage.getSentimentAnalysis(call.id), undefined);
+    assert.equal(await globalStorage.getCallAnalysis(call.id), undefined);
+  });
+});
+
+describe("Storage: Coaching sessions", () => {
+  it("creates and retrieves coaching session by employee", async () => {
+    const emp = await globalStorage.createEmployee({ name: "Coach Target", email: "coach@test.com", role: "Agent", status: "Active" });
+    const session = await globalStorage.createCoachingSession({
+      employeeId: emp.id,
+      category: "quality",
+      notes: "Needs improvement on empathy",
+      actionItems: [{ text: "Practice active listening", completed: false }],
+    });
+    assert.ok(session.id);
+
+    const sessions = await globalStorage.getCoachingSessionsByEmployee(emp.id);
+    assert.ok(sessions.length >= 1);
+    assert.equal(sessions[0].employeeId, emp.id);
+  });
+});
+
+describe("Storage: Top performers", () => {
+  it("returns performers sorted by score", async () => {
+    const performers = await globalStorage.getTopPerformers(5);
+    assert.ok(Array.isArray(performers));
+    // Scores should be descending
+    for (let i = 1; i < performers.length; i++) {
+      assert.ok((performers[i - 1].avgScore ?? 0) >= (performers[i].avgScore ?? 0));
+    }
+  });
+});
+
+describe("Route param validation pattern", () => {
+  it("rejects non-UUID :id with 400", async () => {
+    const app = createTestApp();
+    const { validateIdParam } = await import("../server/routes/utils.js");
+    app.get("/api/test/:id", validateIdParam, (_req, res) => res.json({ ok: true }));
+
+    const { status: bad } = await request(app, "GET", "/api/test/not-a-uuid");
+    assert.equal(bad, 400);
+
+    const { status: good } = await request(app, "GET", "/api/test/550e8400-e29b-41d4-a716-446655440000");
+    assert.equal(good, 200);
+  });
+
+  it("rejects SQL injection in :id", async () => {
+    const app = createTestApp();
+    const { validateIdParam } = await import("../server/routes/utils.js");
+    app.get("/api/test/:id", validateIdParam, (_req, res) => res.json({ ok: true }));
+
+    const { status } = await request(app, "GET", "/api/test/';DROP%20TABLE%20calls;--");
+    assert.equal(status, 400);
+  });
+});
+
+describe("sendError / sendValidationError helpers", () => {
+  it("sendError returns correct status and shape", async () => {
+    const { sendError } = await import("../server/routes/utils.js");
+    const app = createTestApp();
+    app.get("/api/test-error", (_req, res) => sendError(res, 404, "Not found"));
+    const { status, body } = await request(app, "GET", "/api/test-error");
+    assert.equal(status, 404);
+    assert.equal(body.message, "Not found");
+    assert.equal(Object.keys(body).length, 1); // only message, no errors
+  });
+
+  it("sendValidationError returns 400 with flattened errors", async () => {
+    const { sendValidationError } = await import("../server/routes/utils.js");
+    const { z } = await import("zod");
+    const app = createTestApp();
+    app.post("/api/test-validate", (req, res) => {
+      const schema = z.object({ name: z.string().min(1) });
+      const result = schema.safeParse(req.body);
+      if (!result.success) return sendValidationError(res, "Bad input", result.error);
+      res.json({ ok: true });
+    });
+
+    const { status, body } = await request(app, "POST", "/api/test-validate", {});
+    assert.equal(status, 400);
+    assert.equal(body.message, "Bad input");
+    assert.ok(body.errors); // flattened Zod errors present
+    assert.ok(body.errors.fieldErrors); // .flatten() produces fieldErrors
+  });
 });

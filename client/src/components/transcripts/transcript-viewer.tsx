@@ -916,7 +916,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               : "text-red-700 dark:text-red-400";
             const HeaderIcon = hasExceptional && !hasBad ? Trophy : Warning;
             return (
-              <div className={`rounded-lg p-4 border ${bgClass}`}>
+              <div role="alert" className={`rounded-lg p-4 border ${bgClass}`}>
                 <h4 className={`font-semibold mb-2 flex items-center gap-1.5 ${headerClass}`}>
                   <HeaderIcon className="w-4 h-4" /> Flags
                 </h4>

@@ -29,27 +29,29 @@ export class S3Client {
 
   /** Initialize credentials from env vars or IMDS. Called lazily on first operation. */
   private async ensureCredentials(): Promise<AwsCredentials> {
-    if (this.credentials && this.initialized) {
-      // Re-fetch to pick up refreshed IMDS credentials
+    if (this.initialized) {
+      // Re-fetch to pick up refreshed IMDS credentials (tokens expire)
       const creds = await getAwsCredentials();
       if (creds) {
         this.credentials = creds;
         return creds;
       }
-    }
-    if (!this.initialized) {
-      this.initialized = true;
-      const creds = await getAwsCredentials();
-      if (creds) {
-        this.credentials = creds;
-        return creds;
+      // Refresh failed — fall back to last known good credentials if available
+      if (this.credentials) {
+        console.warn("[S3] Credential refresh failed, using cached credentials");
+        return this.credentials;
       }
-      throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
+      throw new Error("S3 credentials expired and refresh failed. Check IAM instance profile or AWS env vars.");
     }
-    if (!this.credentials) {
-      throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
+
+    // First initialization
+    this.initialized = true;
+    const creds = await getAwsCredentials();
+    if (creds) {
+      this.credentials = creds;
+      return creds;
     }
-    return this.credentials;
+    throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
   }
 
   /** Upload a JSON object */

@@ -1,6 +1,66 @@
 import fs from "fs";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 
+// ── Path Parameter Validation ────────────────────────────────────────
+// Reusable middleware to reject malformed route params early, before they
+// reach database queries. Prevents timing attacks, confusing DB errors,
+// and potential injection via params that bypass body validation.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SAFE_ID_RE = /^[\w-]{1,255}$/; // alphanumeric, underscores, hyphens
+const SAFE_NAME_RE = /^[\w\s.'\-,&()]{1,255}$/; // team/employee names (allows spaces, punctuation)
+
+/** Validate that specific req.params match expected formats. */
+export function validateParams(
+  specs: Record<string, "uuid" | "safeId" | "safeName">
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    for (const [param, format] of Object.entries(specs)) {
+      const value = req.params[param];
+      if (value === undefined) continue; // optional param not present
+
+      let valid = false;
+      switch (format) {
+        case "uuid":
+          valid = UUID_RE.test(value);
+          break;
+        case "safeId":
+          valid = SAFE_ID_RE.test(value);
+          break;
+        case "safeName":
+          valid = SAFE_NAME_RE.test(decodeURIComponent(value));
+          break;
+      }
+
+      if (!valid) {
+        res.status(400).json({ message: `Invalid ${param} parameter` });
+        return;
+      }
+    }
+    next();
+  };
+}
+
+/** Shorthand: validate that :id is a valid UUID. */
+export const validateIdParam = validateParams({ id: "uuid" });
+
+// ── Standardized Error Responses ─────────────────────────────────────
+// All API error responses follow a consistent shape:
+//   { message: string, errors?: unknown }
+// This makes client-side error handling predictable.
+
+import { type ZodError } from "zod";
+
+/** Send a JSON error response with a consistent shape. */
+export function sendError(res: Response, status: number, message: string): void {
+  res.status(status).json({ message });
+}
+
+/** Send a 400 with Zod validation errors (always uses .flatten() for consistency). */
+export function sendValidationError(res: Response, message: string, zodError: ZodError): void {
+  res.status(400).json({ message, errors: zodError.flatten() });
+}
+
 /**
  * Wrap an async route handler so unhandled promise rejections are forwarded
  * to Express error middleware. Express 4 doesn't do this natively.

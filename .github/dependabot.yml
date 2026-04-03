@@ -1,0 +1,47 @@
+# Dependabot — Continuous Dependency Vulnerability Scanning
+#
+# Automatically creates PRs when dependencies have known vulnerabilities
+# or newer versions are available. Keeps the project secure without
+# manual `npm audit` runs.
+#
+# HIPAA: Timely patching of known vulnerabilities is a Security Rule
+# requirement (§164.308(a)(5)(ii)(B) — Protection from malicious software).
+
+version: 2
+updates:
+  # npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    # Limit to security updates only (avoid noisy version bumps)
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    # Group minor/patch updates to reduce PR noise
+    groups:
+      production-deps:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Ignore major version bumps (require manual review)
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions versions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"

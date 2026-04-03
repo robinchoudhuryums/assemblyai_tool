@@ -415,8 +415,14 @@ CallAnalyzer handles Protected Health Information (PHI) in audio recordings and 
 | **Error logging** | Messages only, no stacks | Prevents PHI leakage in log files |
 | **File cleanup** | Temp files deleted after S3 | No PHI persists on EC2 filesystem |
 | **Error tracking** | Sentry with PHI scrubbing | SSN, phone, email patterns stripped before data reaches Sentry |
-| **WAF** | Application-level firewall | SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring |
-| **Vulnerability scanning** | Automated daily scans | Env config, dependencies, database, auth checks; admin-triggered manual scans |
+| **WAF** | Application-level firewall | SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; input truncation prevents regex DoS |
+| **TOTP replay protection** | Used-token cache | Prevents same MFA code from being reused within the same time window |
+| **Audit log integrity** | HMAC-SHA256 chain | Each stdout entry includes hash of content + previous hash; tampering breaks chain |
+| **Audit log durability** | Write-ahead queue | Batch flush every 2s, retry with backoff, graceful shutdown flush |
+| **Route param validation** | UUID/ID format checks | 30+ routes validate param format before DB queries |
+| **SAST scanning** | CodeQL in CI | Scans for injection, XSS, prototype pollution, hardcoded credentials on every PR |
+| **Dependency scanning** | Dependabot | Weekly automated PRs for vulnerable npm packages |
+| **Vulnerability scanning** | Automated daily scans | Env config, dependencies (async, non-blocking), database, auth checks |
 | **Incident response** | Formal IRP | Severity classification, phase tracking, escalation contacts, action items |
 
 ### BAA Requirements
@@ -767,6 +773,9 @@ ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook
 RAG_SERVICE_URL                 # URL of the ums-knowledge-reference API
 RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
 
+# === Company Branding ===
+COMPANY_NAME                    # Company name for snapshots, coaching prompts, word boost (default: "UMS (United Medical Supply)")
+
 # === Optional ===
 PORT                            # Server port (default: 5000)
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
@@ -804,8 +813,9 @@ npm run dev          # Dev server with hot reload (tsx watch + Vite HMR)
 npm run build        # Production build (Vite frontend → dist/client/, esbuild backend → dist/index.js)
 npm run start        # Production server (NODE_ENV=production)
 npm run check        # TypeScript type check
-npm run test         # Run backend unit tests (Node.js test runner via tsx — 643 tests)
-npm run test:client  # Run frontend unit tests (Vitest + React Testing Library)
+npm run test         # Run backend unit tests (Node.js test runner via tsx — 726 tests)
+npm run test:coverage # Backend tests with c8 coverage report (~67% statements, ~85% branches)
+npm run test:client  # Run frontend unit tests (Vitest + React Testing Library — 124 tests)
 npm run test:e2e     # Run E2E tests (Playwright, requires dev server running)
 ```
 

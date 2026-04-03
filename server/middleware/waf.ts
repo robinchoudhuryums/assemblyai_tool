@@ -78,16 +78,22 @@ function isIPBlocked(ip: string): boolean {
 
 // --- Attack Pattern Detection ---
 
-// SQL injection patterns (common payloads)
+// SQL injection patterns — simplified to avoid catastrophic backtracking.
+// Each pattern matches a specific attack shape without nested alternations.
 const SQL_INJECTION_PATTERNS = [
-  /(\b(union|select|insert|update|delete|drop|alter|create|exec|execute)\b\s+(all\s+)?(\b(from|into|table|database|where|having|group)\b))/i,
-  /(\b(or|and)\b\s+\d+\s*=\s*\d+)/i,           // OR 1=1, AND 1=1
-  /(--|#|\/\*)\s*$/,                              // SQL comments at end
-  /'\s*(or|and)\s+'[^']*'\s*=\s*'[^']*'/i,       // ' OR 'x'='x'
-  /;\s*(drop|delete|insert|update|alter)\s+/i,    // ; DROP TABLE
-  /\bwaitfor\s+delay\b/i,                        // WAITFOR DELAY (time-based SQLi)
-  /\bbenchmark\s*\(/i,                            // BENCHMARK() (MySQL time-based)
-  /\bsleep\s*\(\s*\d+\s*\)/i,                    // SLEEP() injection
+  /\bunion\s+(?:all\s+)?select\b/i,              // UNION SELECT
+  /\bselect\s+(?:\*|[\w.]+(?:\s*,\s*[\w.]+)*)\s+from\b/i, // SELECT */cols FROM (comma-separated identifiers, not prose)
+  /\b(?:insert|delete)\s+(?:into|from)\b/i,       // INSERT INTO / DELETE FROM
+  /\bupdate\s+\w+\s+set\b/i,                      // UPDATE table SET (allows table name)
+  /\b(?:drop|alter|create)\s+(?:table|database|index)\b/i, // DDL statements
+  /\bexec(?:ute)?\s*\(/i,                         // EXEC( / EXECUTE(
+  /(\b(or|and)\b\s+\d+\s*=\s*\d+)/i,             // OR 1=1, AND 1=1
+  /(--|#|\/\*)\s*$/,                               // SQL comments at end
+  /'\s*(or|and)\s+'[^']*'\s*=\s*'[^']*'/i,        // ' OR 'x'='x'
+  /;\s*(drop|delete|insert|update|alter)\s+/i,     // ; DROP TABLE
+  /\bwaitfor\s+delay\b/i,                         // WAITFOR DELAY (time-based SQLi)
+  /\bbenchmark\s*\(/i,                             // BENCHMARK() (MySQL time-based)
+  /\bsleep\s*\(\s*\d+\s*\)/i,                     // SLEEP() injection
 ];
 
 // XSS patterns (includes SVG/XML vectors)
@@ -289,11 +295,15 @@ function checkPatterns(value: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(value));
 }
 
-/** Check patterns against both raw and decoded values. */
+/** Check patterns against both raw and decoded values.
+ *  Truncates input to MAX_PATTERN_INPUT_LEN to prevent regex DoS on oversized payloads. */
+const MAX_PATTERN_INPUT_LEN = 4096;
+
 function checkPatternsNormalized(value: string, patterns: RegExp[]): boolean {
-  if (checkPatterns(value, patterns)) return true;
-  const decoded = deepDecode(value);
-  if (decoded !== value && checkPatterns(decoded, patterns)) return true;
+  const truncated = value.length > MAX_PATTERN_INPUT_LEN ? value.slice(0, MAX_PATTERN_INPUT_LEN) : value;
+  if (checkPatterns(truncated, patterns)) return true;
+  const decoded = deepDecode(truncated);
+  if (decoded !== truncated && checkPatterns(decoded, patterns)) return true;
   return false;
 }
 

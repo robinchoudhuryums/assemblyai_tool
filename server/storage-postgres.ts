@@ -507,7 +507,7 @@ export class PostgresStorage implements IStorage {
     });
 
     const lastCall = calls[calls.length - 1];
-    const nextCursor = hasMore && lastCall
+    const nextCursor = hasMore && lastCall?.uploadedAt
       ? `${lastCall.uploadedAt}|${lastCall.id}`
       : null;
 

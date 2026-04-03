@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowCounterClockwise, Clock, Heart, Phone, Star, Warning } from "@phosphor-icons/react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,7 +8,7 @@ import { useLocation } from "wouter";
 import { useTranslation } from "@/lib/i18n";
 import type { DashboardMetrics } from "@shared/schema";
 
-export default function MetricsOverview() {
+export default memo(function MetricsOverview() {
   const [, navigate] = useLocation();
   const { t } = useTranslation();
   const { data: metrics, isLoading, error, refetch } = useQuery<DashboardMetrics>({
@@ -139,4 +140,4 @@ export default function MetricsOverview() {
       })}
     </div>
   );
-}
+});

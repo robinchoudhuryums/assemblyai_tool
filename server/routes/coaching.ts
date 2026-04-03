@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
+import { validateIdParam, validateParams, sendValidationError } from "./utils";
 
 export function register(router: Router) {
   // ==================== COACHING ROUTES ====================
@@ -28,7 +29,7 @@ export function register(router: Router) {
   });
 
   // Get coaching sessions for a specific employee
-  router.get("/api/coaching/employee/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/coaching/employee/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const sessions = await storage.getCoachingSessionsByEmployee(req.params.employeeId);
       res.json(sessions.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
@@ -45,7 +46,7 @@ export function register(router: Router) {
         assignedBy: req.user?.name || req.user?.username || "Unknown",
       });
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid coaching data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid coaching data", parsed.error);
         return;
       }
       const session = await storage.createCoachingSession(parsed.data);
@@ -80,11 +81,11 @@ export function register(router: Router) {
     dueDate: z.string().optional(),
   }).strict();
 
-  router.patch("/api/coaching/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.patch("/api/coaching/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = updateCoachingSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ message: "Invalid update data", errors: parsed.error.flatten() });
+        sendValidationError(res, "Invalid update data", parsed.error);
         return;
       }
       const updates: Record<string, any> = { ...parsed.data };
@@ -104,7 +105,7 @@ export function register(router: Router) {
 
   // Agent self-service: toggle a coaching action item's completed status.
   // Agents can only modify their OWN coaching sessions.
-  router.patch("/api/coaching/:id/action-item/:index", requireAuth, async (req, res) => {
+  router.patch("/api/coaching/:id/action-item/:index", requireAuth, validateIdParam, async (req, res) => {
     try {
       const sessionId = req.params.id;
       const itemIndex = parseInt(req.params.index, 10);

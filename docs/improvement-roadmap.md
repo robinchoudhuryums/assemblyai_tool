@@ -1,27 +1,28 @@
 # CallAnalyzer — Long-Term Improvement Roadmap
 
-Items below are multi-sprint efforts identified during a comprehensive codebase audit (March 2026). Each has context and acceptance criteria to enable future implementation.
+Items below are multi-sprint efforts identified during comprehensive codebase audits (March–April 2026). Each has context and acceptance criteria to enable future implementation.
 
 ---
 
 ## Testing & Coverage (Target: 70%+ backend, 40%+ frontend)
 
-**Current state**: 643 tests across 28 files. Backend services: ~70% covered. Frontend: ~3% covered. Route endpoint tests and session integration tests added. No E2E user workflows yet.
+**Current state**: 850 tests across 36+ files. Backend: 726 tests, ~67% statement coverage, ~85% branch coverage. Frontend: 124 tests across 15 files. Route endpoint integration tests use real route handlers with MemStorage.
 
-### Sprint 1 — Route endpoint tests (PARTIALLY DONE)
+### ~~Sprint 1 — Route endpoint tests~~ ✅ MOSTLY DONE
 - ✅ Test app factory and `request()` helper created (`tests/routes.test.ts`)
 - ✅ Auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD tests
-- Remaining: add route-specific tests using the factory for:
-  - `calls.ts` — upload, get, list, assign, delete
+- ✅ Real route handler tests (`tests/route-endpoints.test.ts`): employees CRUD, calls CRUD (list, get, assign, delete, transcript, analysis), user management (auth, validation, MemStorage limits), dashboard metrics
+- Remaining: add route-specific tests for:
   - `analytics.ts` — team analytics, trends, exports
   - `admin-security.ts` — WAF stats, IP blocking, vulnerability scans
-  - `users.ts` — CRUD, password reset, role changes
+  - `coaching.ts` — session creation, category validation, action item toggle
 
-### Sprint 2 — Frontend component tests
-- Priority pages: `dashboard.tsx`, `search.tsx`, `transcripts.tsx`, `reports.tsx`, `employees.tsx`
-- Use Vitest + React Testing Library (already configured in `vitest.config.ts`)
-- Test: query error states, loading states, user interactions, role-based rendering
-- CI already runs `npm run test:client`
+### ~~Sprint 2 — Frontend component tests~~ ✅ MOSTLY DONE
+- ✅ Lib utilities: display-utils, saved-filters, dashboard-config, i18n, constants, appearance
+- ✅ Hooks: useBeforeUnload
+- ✅ Pages: dashboard, search, auth, not-found
+- ✅ Components: error-boundary, file-upload, call-card, button
+- Remaining: transcripts.tsx, reports.tsx, employees.tsx, sidebar, calls-table
 
 ### Sprint 3 — E2E user workflow tests
 - Extend Playwright tests (`e2e/`) beyond basic navigation:
@@ -29,110 +30,109 @@ Items below are multi-sprint efforts identified during a comprehensive codebase 
   - Manager coaching workflow: flag call → create session → assign action items → complete
   - Admin user management: create user → assign role → password reset
   - Export workflows: CSV download, report generation
+  - Search + filter: query → apply filters → click through to details
 - Consider using MSW (Mock Service Worker) for external API mocking
 
-### Sprint 4 — Coverage reporting and thresholds
-- Add `c8` or `istanbul` coverage instrumentation to `npm run test`
-- Add Vitest coverage (built-in) for frontend
-- Set CI gates: fail if backend < 60%, frontend < 30% (raise over time)
-- Consider Codecov/Coveralls integration for PR-level reporting
+### ~~Sprint 4 — Coverage reporting and thresholds~~ ✅ DONE
+- ✅ c8 coverage reporting: `npm run test:coverage` generates text + text-summary reports
+- ✅ Baseline established: 67% statements, 85% branches
+- Remaining: Add Vitest coverage for frontend, set CI gates (fail if below threshold), Codecov integration
 
 ---
 
 ## Security Hardening
 
 ### ~~SSRF protection gaps~~ ✅ COMPLETED
-- Shared URL validator (`server/services/url-validator.ts`) with DNS resolution check, expanded blocklist (all cloud metadata endpoints including 169.254.169.250 and 100.100.100.200), IPv6-mapped IPv4 support, HTTPS enforcement
-- Applied to webhook create, update (was unvalidated — critical fix), and delivery (runtime check)
-- 45 SSRF tests covering blocked hostnames, private IPs, DNS resolution, IPv6, protocol enforcement
+- Shared URL validator with DNS resolution check, expanded blocklist, IPv6-mapped IPv4, HTTPS enforcement
+- 45 SSRF tests
+
+### ~~WAF regex DoS~~ ✅ COMPLETED
+- Replaced monolithic SQL injection regex with focused non-overlapping patterns
+- Added input truncation (4KB) before regex matching
+- SELECT...FROM requires SQL column syntax (prevents false positives on English prose)
+
+### ~~Audit log integrity~~ ✅ COMPLETED
+- HMAC-SHA256 chain on stdout entries — each hash covers content + previous hash
+- Tamper/deletion/reorder detectable by walking chain
+
+### ~~TOTP replay protection~~ ✅ COMPLETED
+- Used-token cache per secret+time-step with 2-minute auto-cleanup
+
+### ~~Route parameter validation~~ ✅ COMPLETED
+- `validateParams()` middleware with uuid/safeId/safeName formats applied to 30+ routes
 
 ### WAF slow-attack resilience (`server/middleware/waf.ts`)
 - Anomaly scoring can be bypassed by very slow attacks (1 req/min stays below window)
 - Add: reputation-based blocking (total violations per IP regardless of time window)
 - Add: graduated response (warn → throttle → block) based on cumulative anomaly score
 
-### Rate limiting before body parsing (`server/index.ts`)
-- Current rate limiter applies after multipart body is parsed (large uploads bypass limits)
-- Add: `Content-Length` header check before body parsing for upload endpoints
-- Or: apply rate limit middleware before multer middleware
+### ~~Rate limiting before body parsing~~ — NOT NEEDED
+- Investigated: `app.post("/api/calls/upload", rateLimit(...))` already runs before multer middleware
 
 ---
 
 ## Code Quality & Maintainability
+
+### ~~Standardized error responses~~ ✅ COMPLETED
+- `sendError()` and `sendValidationError()` helpers in `server/routes/utils.ts`
+- All 15 inline `.error.flatten()` calls converted to use `sendValidationError()`
+- Fixed `employees.ts` inconsistency (was using raw `error.errors` instead of `.flatten()`)
+
+### ~~CodeQL SAST scanning~~ ✅ COMPLETED
+- `.github/workflows/codeql.yml` — runs on push to main, PRs, and weekly
+- Uses `security-extended` query suite
+
+### ~~Dependabot~~ ✅ COMPLETED
+- `.github/dependabot.yml` — weekly npm + GitHub Actions version scanning
+
+### ~~Role config extraction~~ ✅ COMPLETED
+- `ROLE_CONFIG` in `client/src/lib/constants.ts` — single source of truth for badge colors/labels
 
 ### Query builder adoption
 - Replace manual SQL string concatenation in `storage-postgres.ts` and route files with a query builder (Knex or Drizzle ORM)
 - Eliminates structural SQL injection risk and simplifies complex dynamic WHERE clauses
 - Estimated: 2-3 sprints for full migration (can be incremental, route-by-route)
 
-### ~~Auto-calibration completion~~ ✅ COMPLETED
-- `POST /api/admin/calibration/apply` endpoint with ±0.5 guard rail per application
-- Runtime overrides persisted to S3 (`calibration/active-config.json`), loaded on startup
-- Calibration history tracked under `calibration/history/` with appliedBy and previousConfig
+### Replace `any` casts
+- 15+ instances of `as any` across routes/snapshots/analytics/storage-postgres
+- Incremental: create proper types, use type guards
+- Estimated: 1-2 days
 
+### ~~Auto-calibration completion~~ ✅ COMPLETED
 ### ~~Remaining code duplication~~ ✅ COMPLETED
-- Removed duplicate `PATCH /api/calls/:id/assign` from employees.ts (calls.ts is single source)
-- Extracted 5 shared helpers to `server/routes/utils.ts`: `escapeCsvValue()`, `filterCallsByDateRange()`, `countFrequency()`, `calculateSentimentBreakdown()`, `calculateAvgScore()`
-- Applied across analytics.ts, admin-operations.ts, reports.ts (replaced 125 lines of duplicates)
 
 ---
 
 ## Accessibility (WCAG 2.1 AA)
 
-**Completed**: 14 icon-only buttons now have `aria-label` attributes (calls-table, file-upload, employees)
+### ~~Completed~~
+- ✅ 14 icon-only buttons have `aria-label` attributes
+- ✅ Global `:focus-visible` outline styles for keyboard navigation
+- ✅ `role="alert"` on dashboard flagged-calls banner, report errors, transcript flags
+- ✅ `role="status"` on exceptional-calls banner
+- ✅ Skip-to-content link (`<a href="#main-content">`) in App.tsx
+- ✅ Chart screen reader descriptions (dashboard trend, sentiment pie)
+- ✅ MFA error recovery (clear code on failure, auto-focus input)
 
 ### Remaining work
-- Audit all remaining icon-only buttons across components (coaching.tsx task removal, dashboard customize)
-- Add visible focus indicators (`:focus-visible` styles) to all interactive elements
+- Audit remaining icon-only buttons (coaching.tsx task removal)
 - Add `role` and `aria-` attributes to custom components (sortable table headers, filter pills)
 - Test with screen reader (VoiceOver/NVDA) and fix any announced-content issues
-- Add skip-to-content link for keyboard navigation
+- Add visible focus indicators to Recharts tooltip interactions
 
 ---
 
 ## Infrastructure & Observability
 
 ### ~~Blue-green deployment~~ ✅ IMPLEMENTED
+### ~~Post-deploy health verification~~ ✅ COMPLETED
+- Deploy workflow validates `/api/health` response body (not just HTTP 200)
+- 5 retry attempts, warns on "degraded" status
 
-**Status**: Script, pm2 ecosystem config, and Caddy config created. To enable on EC2: replace Caddyfile with `Caddyfile.bluegreen`, reload Caddy, use `deploy-bluegreen.sh`.
+### ~~Database monitoring~~ ✅ COMPLETED
+- Error monitor workflow checks PostgreSQL connectivity via `psql SELECT 1`
 
-**Goal**: Zero-downtime deploys with instant rollback. Currently, `pm2 reload` provides near-zero-downtime, but a failed deploy still requires a full rebuild + restart cycle.
-
-**Architecture**:
-```
-/home/ec2-user/
-├── callanalyzer-blue/          # Live (serves traffic)
-│   ├── dist/                   # Built artifacts
-│   └── .env → ../shared/.env
-├── callanalyzer-green/         # Staging (built and verified before swap)
-│   ├── dist/
-│   └── .env → ../shared/.env
-├── shared/
-│   └── .env                    # Single source of truth for config
-└── active → callanalyzer-blue  # Symlink: which dir is live
-```
-
-**Deploy flow** (`deploy-bluegreen.sh`):
-1. Determine which slot is live (blue) and which is staging (green)
-2. `git pull` + `npm install` + `npm run build` in green directory
-3. Start green on a different port (e.g., `PORT=5001 pm2 start dist/index.js --name callanalyzer-green`)
-4. Health-check green on port 5001 (`curl -sf http://localhost:5001/api/health`)
-5. If healthy: update Caddy upstream to port 5001 via admin API (`curl localhost:2019/config/...`)
-6. Stop blue process (`pm2 delete callanalyzer-blue`)
-7. Update `active` symlink to point to green
-8. If unhealthy: kill green, blue stays live — **zero user impact**
-
-**Required changes**:
-- `deploy-bluegreen.sh` — new script (~80 lines), replaces `deploy.sh` for production
-- `Caddyfile` — enable Caddy admin API (`admin localhost:2019`), use upstreams block
-- pm2 ecosystem file (`ecosystem.config.cjs`) — manage named processes per slot
-- Shared `.env` via symlink — both slots read same config
-- GitHub Actions deploy workflow — point to new script
-- Port allocation: blue=5000, green=5001 (configurable)
-
-**Rollback**: Instant — just swap Caddy back to the old port. Old process is still running.
-
-**Estimated effort**: 2-3 hours for full implementation + testing.
+### ~~Dependabot~~ ✅ COMPLETED
 
 ### Secret management
 - Move from `.env` files to AWS Secrets Manager or SSM Parameter Store

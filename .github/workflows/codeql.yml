@@ -1,0 +1,60 @@
+# CallAnalyzer — CodeQL Static Application Security Testing (SAST)
+#
+# Scans JavaScript/TypeScript source code for security vulnerabilities:
+# - SQL injection, XSS, command injection, path traversal
+# - Insecure cryptographic usage, hardcoded credentials
+# - Prototype pollution, regex DoS, open redirects
+#
+# Runs on every push to main and weekly. Results appear in the
+# GitHub Security tab under "Code scanning alerts".
+#
+# HIPAA: This workflow does NOT access any PHI — it only analyzes source code.
+
+name: CodeQL SAST
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan (Sundays at 03:00 UTC) to catch new advisory patterns
+    - cron: '0 3 * * 0'
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      security-events: write  # Required to upload SARIF results
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use extended security queries for deeper analysis
+          queries: +security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

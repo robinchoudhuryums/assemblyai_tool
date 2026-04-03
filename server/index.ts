@@ -12,6 +12,7 @@ import { startScheduledScans } from "./services/vulnerability-scanner";
 import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
+import { flushAuditQueue } from "./services/audit-log";
 
 // Initialize Sentry early (before Express setup) so it catches startup errors
 initSentry();
@@ -75,8 +76,11 @@ app.use((req, _res, next) => {
   if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-for"]) {
     const forwarded = (req.headers["x-forwarded-for"] as string).split(",").map(s => s.trim());
     // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6)
-    const ipPattern = /^[\da-fA-F.:]+$/;
-    const validIPs = forwarded.filter(ip => ipPattern.test(ip) && ip.length <= 45);
+    // IPv4: 1-3 digits separated by dots (e.g. 192.168.1.1)
+    // IPv6: hex groups separated by colons, optionally with :: compression
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+    const ipv6 = /^[0-9a-fA-F:]{2,45}$/; // coarse IPv6 check (must contain colons, hex digits only)
+    const validIPs = forwarded.filter(ip => ip.length <= 45 && (ipv4.test(ip) || (ip.includes(":") && ipv6.test(ip))));
     if (validIPs.length !== forwarded.length) {
       // Sanitize the header to only contain valid IPs
       req.headers["x-forwarded-for"] = validIPs.join(", ");
@@ -262,6 +266,15 @@ app.get("/api/health", async (_req, res) => {
     heap_used_mb: Math.round(mem.heapUsed / 1048576),
   };
 
+  // HIPAA: Surface audit log queue health
+  const { getDroppedAuditEntryCount, getPendingAuditEntryCount } = await import("./services/audit-log");
+  const droppedAudit = getDroppedAuditEntryCount();
+  const pendingAudit = getPendingAuditEntryCount();
+  if (droppedAudit > 0 || pendingAudit > 0) {
+    health.audit_log = { pending: pendingAudit, dropped: droppedAudit };
+    if (droppedAudit > 0) health.status = "degraded";
+  }
+
   res.json(health);
 });
 
@@ -391,5 +404,19 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     setTimeout(runRetention, 30_000);
     // Then run daily (every 24 hours)
     setInterval(runRetention, 24 * 60 * 60 * 1000);
+
+    // HIPAA: Flush audit log queue on graceful shutdown (pm2 sends SIGINT)
+    const gracefulShutdown = async (signal: string) => {
+      log(`${signal} received — flushing audit log queue...`);
+      try {
+        await flushAuditQueue();
+        log("Audit log queue flushed successfully.");
+      } catch (err) {
+        console.error("[HIPAA_AUDIT] Failed to flush audit queue on shutdown:", (err as Error).message);
+      }
+      process.exit(0);
+    };
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   });
 })();

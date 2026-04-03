@@ -38,15 +38,17 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run backend tests (tsx --test tests/*.test.ts — 643 tests)
-npm run test:client  # Run frontend tests (Vitest + React Testing Library)
+npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.test.ts — 726 tests)
+npm run test:coverage # Backend tests with c8 coverage report (text + text-summary)
+npm run test:client  # Run frontend tests (Vitest + React Testing Library — 124 tests)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
 npx vite build       # Frontend-only build (useful for quick verification)
 ```
 
 ## Testing
-- **Framework**: Node.js built-in `test` module via `tsx`
-- **Location**: `tests/` directory
+- **Framework**: Node.js built-in `test` module via `tsx` (backend), Vitest + React Testing Library (frontend)
+- **Coverage**: Backend ~67% statements / ~85% branches (via `npm run test:coverage`). Frontend lib utilities fully covered.
+- **Location**: `tests/` directory (backend), `client/src/**/*.test.{ts,tsx}` (frontend)
   - `tests/schema.test.ts` — Zod schema validation for data integrity
   - `tests/ai-provider.test.ts` — AI provider utilities (parseJsonResponse, buildAnalysisPrompt, smartTruncate)
   - `tests/auth.test.ts` — Authentication, session management, and role-based access control
@@ -74,7 +76,24 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/aws-credentials.test.ts` — AWS credentials (env var resolution, IMDS caching, refresh buffer timing, priority order)
   - `tests/session-integration.test.ts` — Session/login flow (fingerprint consistency, keepSessionInfo, query 401 defaults)
   - `tests/routes.test.ts` — Route endpoint integration tests (HTTP-level auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD)
+  - `tests/route-endpoints.test.ts` — Real route handler integration tests (employees CRUD, calls CRUD, user management, dashboard metrics — mounts actual Express routes with MemStorage)
   - `tests/ssrf.test.ts` — SSRF protection (blocked hostnames, private IPs, metadata endpoints, DNS resolution, IPv6-mapped IPv4, protocol enforcement)
+- **Frontend test files** (`client/src/`):
+  - `lib/display-utils.test.ts` — toDisplayString (type coercion, XSS sanitization), extractErrorMessage
+  - `lib/saved-filters.test.ts` — localStorage CRUD for saved search filter presets
+  - `lib/dashboard-config.test.ts` — Widget config load/save/merge, moveWidget, toggleWidget
+  - `lib/i18n.test.ts` — Translation lookup, locale persistence, fallback behavior
+  - `lib/constants.test.ts` — ROLE_CONFIG completeness, pagination defaults
+  - `lib/appearance.test.ts` — Theme loading/saving, legacy migration, validation
+  - `hooks/use-before-unload.test.ts` — beforeunload listener lifecycle
+  - `pages/dashboard.test.tsx` — Dashboard rendering, widget config, empty state, flagged calls
+  - `pages/search.test.tsx` — Search input, filters, loading/empty states
+  - `pages/auth.test.tsx` — Login form rendering, MFA flow
+  - `pages/not-found.test.tsx` — 404 page rendering, accessibility
+  - `components/lib/error-boundary.test.tsx` — Error catch, retry, max retries, custom fallback
+  - `components/upload/file-upload.test.tsx` — Dropzone, format validation, upload states
+  - `components/search/call-card.test.tsx` — Employee display, badges, duration formatting, links
+  - `components/ui/button.test.tsx` — Button variants, click handling, disabled state
 
 ## Architecture
 
@@ -383,6 +402,9 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP using batch mode (24h form
 # MFA (Two-Factor Authentication)
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
 
+# Company Branding
+COMPANY_NAME                    # Company name for snapshots, coaching prompts, transcription word boost (default: "UMS (United Medical Supply)")
+
 # Sentry (Error Tracking)
 SENTRY_DSN                      # Sentry DSN for server-side error tracking (optional)
 VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (optional, set at build time)
@@ -441,7 +463,12 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
-| **WAF** | `server/middleware/waf.ts` | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking |
+| **WAF** | `server/middleware/waf.ts` | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking; input truncation (4KB) prevents regex DoS |
+| **Audit log integrity** | `server/services/audit-log.ts` | HMAC-SHA256 chain on stdout entries — each hash covers content + previous hash; tampering/deletion breaks the chain |
+| **TOTP replay protection** | `server/services/totp.ts` | Used-token cache prevents same TOTP code from being reused within the same time window |
+| **Route param validation** | `server/routes/utils.ts` | `validateParams()` middleware rejects malformed UUIDs, IDs, and names before they reach DB queries (30+ routes) |
+| **Audit log durability** | `server/services/audit-log.ts` | Write-ahead queue with batch flush (2s interval), retry with exponential backoff, graceful shutdown flush, health endpoint monitoring |
+| **Graceful shutdown** | `server/index.ts` | SIGINT/SIGTERM flush audit log queue before exit |
 | **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
 | **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
 | **Disaster recovery** | `docs/disaster-recovery.md` | DR plan: S3 CRR, RDS cross-region replica, AMI snapshots, Route 53 DNS failover |
@@ -529,11 +556,13 @@ Runs on every push to `main` and every PR. Two parallel jobs:
 **Deploy Pipeline** (`.github/workflows/deploy.yml`):
 Triggers automatically **after CI passes** on `main` (via `workflow_run`). SSHs into EC2 and runs `deploy.sh`. Manual `workflow_dispatch` is available for hotfixes (bypasses CI gate). Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
 
-**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 reload → health check). Uses `pm2 reload` for zero-downtime (new process starts before old one dies). Post-deploy health gate: if `/api/health` doesn't respond within 30s, auto-rollback to previous commit. On build/test failure, also auto-rolls back.
+**Deploy flow**: CI passes → deploy.yml triggers → SSH to EC2 → `deploy.sh` (pull → install → type check → test → build → pm2 reload → health check). Uses `pm2 reload` for zero-downtime (new process starts before old one dies). Post-deploy health gate: if `/api/health` doesn't respond within 30s, auto-rollback to previous commit. Deploy workflow also runs an independent post-deploy health verification (validates response body, not just HTTP 200). On build/test failure, also auto-rolls back.
 
 Additional workflows:
-- `.github/workflows/error-monitor.yml` — Checks pm2 status, HTTP health, error logs, disk/memory usage every 4 hours. Creates GitHub Issues on failure with deduplication (adds comments to existing open alerts within 24 hours instead of creating duplicates).
+- `.github/workflows/error-monitor.yml` — Checks pm2 status, HTTP health, error logs, disk space, **database connectivity** (PostgreSQL SELECT 1), and memory usage every 4 hours. Creates GitHub Issues on failure with deduplication (adds comments to existing open alerts within 24 hours instead of creating duplicates).
+- `.github/workflows/codeql.yml` — CodeQL SAST (Static Application Security Testing) scanning on push to main, PRs, and weekly. Scans JS/TS for SQL injection, XSS, command injection, path traversal, prototype pollution, regex DoS, hardcoded credentials. Results in GitHub Security tab.
 - `.github/workflows/view-logs.yml` — Manual trigger to view pm2 logs without SSH
+- `.github/dependabot.yml` — Dependabot: weekly npm security scans (Monday 06:00 ET) auto-create PRs for vulnerable deps. Groups minor/patch updates. Also monitors GitHub Actions versions.
 
 **Rollback**:
 - `deploy-rollback.sh` reverts to the pre-deploy commit (auto-saved by `deploy.sh`)
@@ -612,6 +641,17 @@ CallAnalyzer will integrate with the **ums-knowledge-reference** repository to g
 - Scoring thresholds (LOW_SCORE 4.0, HIGH_SCORE 9.0, STREAK 8.0) are centralized in `server/constants.ts` — LOW/HIGH are env-configurable via `SCORE_LOW_THRESHOLD` / `SCORE_HIGH_THRESHOLD`
 - Password complexity is enforced in Zod schemas (`createDbUserSchema`, `resetPasswordSchema`, `changePasswordSchema`) — 12+ chars, uppercase, lowercase, digit, special character
 - Auto-calibration: admin can apply recommended values via `POST /api/admin/calibration/apply`. Runtime overrides are persisted to S3 (`calibration/active-config.json`) and loaded on startup. Guard rail: max ±0.5 shift per application. History tracked under `calibration/history/`.
+- `AUTH_USERS` entries require at least 3 colon-separated parts (`username:password:role`) — 2-part entries (missing role) are now rejected with a warning instead of silently defaulting to "viewer"
+- Scoring calibration `spread` parameter is clamped to [0.1, 5.0] — extreme values can no longer distort all scores. `center` and thresholds clamped to [0, 10].
+- `npm test` uses `--test-force-exit` flag — imported modules (webhooks, audit-log) start `setInterval` timers that prevent Node from exiting naturally
+- Standardized error responses: all routes use `sendError(res, status, message)` and `sendValidationError(res, message, zodError)` from `server/routes/utils.ts` — Zod errors always use `.flatten()` format
+- Role badge colors/labels are centralized in `client/src/lib/constants.ts:ROLE_CONFIG` — used by admin.tsx and auth.tsx
+- `COMPANY_NAME` env var controls company name in snapshots, coaching prompts, and transcription word boost (default: "UMS (United Medical Supply)")
+- Bedrock embedding LRU cache (200 entries, keyed by content SHA-256) — avoids redundant API calls on re-analysis
+- `parseJsonResponse` attempts nested unwrap recovery when AI wraps response in `{ analysis: { ... } }` — detects all-defaults quality gate and extracts inner object
+- Security monitor tracking Maps (failedLoginsByUser, failedLoginsByIP, bulkAccessByUser) are capped at 10,000 entries with LRU eviction
+- In-memory incidents array capped at 500 (evicts oldest closed first)
+- `tsconfig.json` uses `target: "ES2022"` — do NOT add `downlevelIteration` or `baseUrl` (deprecated in TS 7.0)
 
 ## Long-Term Improvement Roadmap
 

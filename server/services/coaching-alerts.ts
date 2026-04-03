@@ -366,7 +366,8 @@ async function generateRecurringWeaknessAIPlan(
     ? `\nRecent low-scoring call summaries:\n${callSummaries.map((s, i) => `  ${i + 1}. ${s}`).join("\n")}`
     : "";
 
-  const prompt = `You are a call center quality assurance coach for a medical supply company (UMS). An agent has a recurring weakness pattern detected across their recent calls. Generate a targeted, multi-week coaching plan.
+  const companyName = process.env.COMPANY_NAME || "UMS (United Medical Supply)";
+  const prompt = `You are a call center quality assurance coach for a medical supply company (${companyName}). An agent has a recurring weakness pattern detected across their recent calls. Generate a targeted, multi-week coaching plan.
 
 AGENT: ${employeeName}
 PRIMARY WEAKNESS: ${primary.label}

@@ -18,6 +18,7 @@ import {
   escapeCsvValue,
   filterCallsByDateRange,
   countFrequency,
+  validateParams,
   calculateSentimentBreakdown,
   calculateAvgScore,
 } from "../server/routes/utils.js";
@@ -400,5 +401,76 @@ describe("calculateAvgScore", () => {
   it("respects decimal places", () => {
     assert.equal(calculateAvgScore([7, 8, 9], 1), 8);
     assert.equal(calculateAvgScore([7.33, 8.67], 2), 8);
+  });
+});
+
+// --- validateParams middleware ---
+
+describe("validateParams middleware", () => {
+  function runMiddleware(specs: Record<string, "uuid" | "safeId" | "safeName">, params: Record<string, string>): { status?: number; body?: any; nextCalled: boolean } {
+    const mw = validateParams(specs);
+    let result: { status?: number; body?: any; nextCalled: boolean } = { nextCalled: false };
+    const req = { params } as any;
+    const res = {
+      status(code: number) { result.status = code; return this; },
+      json(body: any) { result.body = body; },
+    } as any;
+    const next = () => { result.nextCalled = true; };
+    mw(req, res, next);
+    return result;
+  }
+
+  it("accepts valid UUID", () => {
+    const r = runMiddleware({ id: "uuid" }, { id: "550e8400-e29b-41d4-a716-446655440000" });
+    assert.ok(r.nextCalled);
+    assert.equal(r.status, undefined);
+  });
+
+  it("rejects invalid UUID", () => {
+    const r = runMiddleware({ id: "uuid" }, { id: "not-a-uuid" });
+    assert.ok(!r.nextCalled);
+    assert.equal(r.status, 400);
+  });
+
+  it("rejects UUID with SQL injection", () => {
+    const r = runMiddleware({ id: "uuid" }, { id: "'; DROP TABLE calls;--" });
+    assert.ok(!r.nextCalled);
+    assert.equal(r.status, 400);
+  });
+
+  it("accepts valid safeId", () => {
+    const r = runMiddleware({ id: "safeId" }, { id: "incident-2026-001" });
+    assert.ok(r.nextCalled);
+  });
+
+  it("rejects safeId with special chars", () => {
+    const r = runMiddleware({ id: "safeId" }, { id: "id; rm -rf /" });
+    assert.ok(!r.nextCalled);
+    assert.equal(r.status, 400);
+  });
+
+  it("accepts valid safeName", () => {
+    const r = runMiddleware({ teamName: "safeName" }, { teamName: "Sales Team (East)" });
+    assert.ok(r.nextCalled);
+  });
+
+  it("rejects safeName with control chars", () => {
+    const r = runMiddleware({ teamName: "safeName" }, { teamName: "team\x00name" });
+    assert.ok(!r.nextCalled);
+    assert.equal(r.status, 400);
+  });
+
+  it("skips missing optional params", () => {
+    const r = runMiddleware({ id: "uuid", tagId: "uuid" }, { id: "550e8400-e29b-41d4-a716-446655440000" });
+    assert.ok(r.nextCalled); // tagId not in params, should pass
+  });
+
+  it("validates multiple params at once", () => {
+    const r = runMiddleware(
+      { id: "uuid", tagId: "uuid" },
+      { id: "550e8400-e29b-41d4-a716-446655440000", tagId: "bad!" }
+    );
+    assert.ok(!r.nextCalled);
+    assert.equal(r.status, 400);
   });
 });

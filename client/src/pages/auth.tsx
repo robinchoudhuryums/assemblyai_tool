@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-ic
 import { apiRequest } from "@/lib/queryClient";
 import { extractErrorMessage } from "@/lib/display-utils";
 import { USER_ROLES } from "@shared/schema";
+import { ROLE_CONFIG } from "@/lib/constants";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface AuthPageProps {
@@ -26,6 +27,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const totpInputRef = useRef<HTMLInputElement>(null);
 
   // Request access form state
   const [requestName, setRequestName] = useState("");
@@ -77,11 +79,15 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         description: message,
         variant: "destructive",
       });
-      // If session expired, go back to login
+      // Always clear code so user can retry immediately
+      setTotpCode("");
+      // If session expired, go back to login form entirely
       if (message?.includes("expired")) {
         setMfaRequired(false);
         setMfaToken("");
-        setTotpCode("");
+      } else {
+        // Re-focus the input for quick retry
+        setTimeout(() => totpInputRef.current?.focus(), 100);
       }
     } finally {
       setIsLoading(false);
@@ -115,11 +121,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     }
   };
 
-  const roleIcons: Record<string, React.ReactNode> = {
-    viewer: <Eye className="w-4 h-4 text-blue-500" />,
-    manager: <Gear className="w-4 h-4 text-amber-500" />,
-    admin: <Shield className="w-4 h-4 text-purple-500" />,
-  };
+  const roleIconComponents: Record<string, typeof Eye> = { viewer: Eye, manager: Gear, admin: Shield };
+  const roleIcons: Record<string, React.ReactNode> = Object.fromEntries(
+    Object.entries(roleIconComponents).map(([role, Icon]) => [
+      role, <Icon key={role} className={`w-4 h-4 ${ROLE_CONFIG[role]?.color || "text-gray-500"}`} />,
+    ])
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -156,6 +163,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                     Verification Code
                   </label>
                   <Input
+                    ref={totpInputRef}
                     id="totp-code"
                     type="text"
                     inputMode="numeric"
