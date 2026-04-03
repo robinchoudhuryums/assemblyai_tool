@@ -22,11 +22,12 @@ export function getPool(): pg.Pool | null {
     // HIPAA: SSL with certificate verification for production.
     // RDS uses Amazon-issued certificates; rejectUnauthorized: true ensures
     // the server certificate is validated, preventing MITM attacks.
-    // Set DB_SSL_REJECT_UNAUTHORIZED=false only if using self-signed certs in staging.
+    // Production ALWAYS enforces cert validation (DB_SSL_REJECT_UNAUTHORIZED is ignored).
+    // Non-production allows self-signed certs for staging/dev with SSL.
     ssl: process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" }
+      ? { rejectUnauthorized: true }
       : process.env.DATABASE_URL?.includes("sslmode=require")
-        ? { rejectUnauthorized: false } // Local dev with SSL
+        ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" }
         : undefined,
   });
 
