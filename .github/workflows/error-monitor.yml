@@ -7,6 +7,8 @@
 #   2. HTTP health check (/api/health)
 #   3. Recent pm2 error logs (last 4 hours)
 #   4. Disk space check (warn if >85% used)
+#   5. Database connectivity (PostgreSQL SELECT 1, if DATABASE_URL configured)
+#   6. Memory usage check (warn if >90%)
 #
 # Required GitHub Secrets (same as deploy.yml):
 #   EC2_SSH_KEY, EC2_HOST, EC2_USER, EC2_APP_DIR
@@ -97,7 +99,21 @@ jobs:
               echo "::DISK_HIGH:: ${DISK_PCT}% used"
             fi
 
-            # --- 5. Memory check ---
+            # --- 5. Database connectivity check ---
+            # Parse DATABASE_URL from .env and test connection (if configured)
+            DB_URL=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+            if [ -n "$DB_URL" ]; then
+              DB_OK=$(timeout 10 psql "$DB_URL" -c "SELECT 1" -t -A 2>/dev/null || echo "FAIL")
+              echo "DB_CHECK=$DB_OK"
+              if [ "$DB_OK" != "1" ]; then
+                ISSUES="${ISSUES}DB_UNREACHABLE,"
+                echo "::DB_UNREACHABLE::"
+              fi
+            else
+              echo "::DB_NOT_CONFIGURED:: (skipping database check)"
+            fi
+
+            # --- 6. Memory check ---
             MEM_PCT=$(free | awk '/^Mem:/ {printf("%.0f", $3/$2 * 100)}' 2>/dev/null || echo "0")
             echo "MEMORY_USAGE=${MEM_PCT}%"
             if [ "$MEM_PCT" -gt 90 ] 2>/dev/null; then
@@ -116,6 +132,7 @@ jobs:
           contains(steps.check.outputs.response, '::ERRORS_FOUND::') ||
           contains(steps.check.outputs.response, '::PROCESS_DOWN::') ||
           contains(steps.check.outputs.response, '::HEALTH_FAILED::') ||
+          contains(steps.check.outputs.response, '::DB_UNREACHABLE::') ||
           contains(steps.check.outputs.response, '::DISK_HIGH::') ||
           contains(steps.check.outputs.response, '::MEMORY_HIGH::')
         id: dedup
@@ -151,6 +168,7 @@ jobs:
           contains(steps.check.outputs.response, '::ERRORS_FOUND::') ||
           contains(steps.check.outputs.response, '::PROCESS_DOWN::') ||
           contains(steps.check.outputs.response, '::HEALTH_FAILED::') ||
+          contains(steps.check.outputs.response, '::DB_UNREACHABLE::') ||
           contains(steps.check.outputs.response, '::DISK_HIGH::') ||
           contains(steps.check.outputs.response, '::MEMORY_HIGH::')
         uses: actions/github-script@v7
@@ -176,6 +194,7 @@ jobs:
             const checks = [];
             if (output.includes('::PROCESS_DOWN::')) checks.push('- **pm2 process down or errored**');
             if (output.includes('::HEALTH_FAILED::')) checks.push('- **HTTP health check failed**');
+            if (output.includes('::DB_UNREACHABLE::')) checks.push('- **Database connectivity failed** (PostgreSQL unreachable)');
             if (output.includes('::ERRORS_FOUND::')) checks.push('- Recent error log entries detected');
             if (output.includes('::DISK_HIGH::')) checks.push('- Disk usage above 85%');
             if (output.includes('::MEMORY_HIGH::')) checks.push('- Memory usage above 90%');
