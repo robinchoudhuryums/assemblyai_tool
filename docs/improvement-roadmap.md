@@ -69,6 +69,42 @@ Items below are multi-sprint efforts identified during comprehensive codebase au
 ### ~~Rate limiting before body parsing~~ — NOT NEEDED
 - Investigated: `app.post("/api/calls/upload", rateLimit(...))` already runs before multer middleware
 
+### ~~Prompt injection detection~~ ✅ COMPLETED (ported from KB)
+- 16 input patterns + output anomaly detection in `server/services/prompt-guard.ts`
+- Scans transcripts before Bedrock analysis; adds flags for reviewer visibility
+
+### ~~PHI redaction in audit logs~~ ✅ COMPLETED (ported from KB)
+- 14 HIPAA identifier patterns in `server/services/phi-redactor.ts`
+- Auto-redacts `detail` field in all audit entries before persistence
+
+### ~~Circuit breaker for Bedrock~~ ✅ COMPLETED (ported from KB)
+- `server/services/resilience.ts` — 5 failures → open 30s → half-open test
+- Wraps all 3 Bedrock methods (generateText, analyzeCallTranscript, generateEmbedding)
+
+### ~~Password history~~ ✅ COMPLETED (ported from KB)
+- Prevents reuse of last 5 passwords on self-service change and admin reset
+
+### ~~Double-submit CSRF~~ ✅ COMPLETED (ported from KB)
+- SameSite=Strict cookie + X-CSRF-Token header on all state-changing requests
+
+### ~~Idle timeout warning~~ ✅ COMPLETED (ported from KB)
+- 2-minute countdown dialog before auto-logout at 15 min idle
+
+### ~~Correlation IDs + structured logging~~ ✅ COMPLETED (ported from KB)
+- AsyncLocalStorage per-request UUID, auto-injected into all JSON log entries
+
+### ~~OpenTelemetry tracing~~ ✅ COMPLETED (ported from KB)
+- Spans on bedrock.analyze, bedrock.generateText, rag.fetchContext
+- Compatible with Jaeger, Grafana Tempo, Datadog, AWS X-Ray
+
+### ~~SSL hardening~~ ✅ COMPLETED
+- Production always enforces `rejectUnauthorized: true` regardless of env var
+
+### ~~RAG knowledge base integration~~ ✅ COMPLETED
+- `server/services/rag-client.ts` — queries ums-knowledge-reference with X-API-Key auth
+- LFU cache (50 entries, 30min TTL), confidence filtering, source storage
+- Coaching alerts reuse sources from analysis (no duplicate API call)
+
 ---
 
 ## Code Quality & Maintainability
@@ -93,10 +129,10 @@ Items below are multi-sprint efforts identified during comprehensive codebase au
 - Eliminates structural SQL injection risk and simplifies complex dynamic WHERE clauses
 - Estimated: 2-3 sprints for full migration (can be incremental, route-by-route)
 
-### Replace `any` casts
-- 15+ instances of `as any` across routes/snapshots/analytics/storage-postgres
-- Incremental: create proper types, use type guards
-- Estimated: 1-2 days
+### ~~Replace `any` casts~~ ✅ MOSTLY DONE
+- Reduced from 33 to 7 `as any` casts across 17 files
+- Added Express.User type augmentation, SessionData.fingerprint typing
+- Remaining 7 are at type system boundaries (WebSocket, Passport 0.7 compat)
 
 ### ~~Auto-calibration completion~~ ✅ COMPLETED
 ### ~~Remaining code duplication~~ ✅ COMPLETED

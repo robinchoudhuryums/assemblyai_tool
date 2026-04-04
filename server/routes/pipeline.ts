@@ -5,7 +5,7 @@ import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetri
 import { aiProvider } from "../services/ai-factory";
 import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
-import { fetchRagContext, buildRagQuery, isRagEnabled } from "../services/rag-client";
+import { fetchRagContext, buildRagQuery, isRagEnabled, type RagSource } from "../services/rag-client";
 import { detectTranscriptInjection, detectOutputAnomaly } from "../services/prompt-guard";
 import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
@@ -245,25 +245,30 @@ export async function processAudioFile(
       }
     }
 
-    // Fetch RAG context from knowledge base (non-blocking — graceful fallback)
+    // Parallelize RAG fetch + injection detection (both are independent).
+    // RAG fetch is the bottleneck on uncached calls (up to 8s timeout).
+    // Running injection detection concurrently saves 1-2ms (fast) but more importantly
+    // the RAG result is ready sooner when the AI analysis step needs it.
     let ragContext: string | undefined;
-    if (isRagEnabled() && speakerLabeledText) {
+    let ragSources: RagSource[] = [];
+    let injectionDetected = false;
+
+    const ragPromise = (async () => {
+      if (!isRagEnabled() || !speakerLabeledText) return;
       try {
-        const ragQuery = buildRagQuery(callCategory, undefined, speakerLabeledText.slice(0, 500));
-        const ragResult = await fetchRagContext(ragQuery);
+        const { query: ragQuery, cacheKey } = buildRagQuery(callCategory);
+        const ragResult = await fetchRagContext(ragQuery, undefined, cacheKey);
         if (ragResult) {
           ragContext = ragResult.context;
-          console.log(`[${callId}] RAG context retrieved (${ragContext.length} chars, ${ragResult.sources.length} sources)`);
+          ragSources = ragResult.sources;
+          console.log(`[${callId}] RAG context retrieved (${ragContext.length} chars, ${ragSources.length} sources, confidence: ${ragResult.confidence})`);
         }
       } catch (ragErr) {
         console.warn(`[${callId}] RAG context fetch failed (non-blocking):`, (ragErr as Error).message);
       }
-    }
+    })();
 
-    // Prompt injection detection: scan transcript for manipulation attempts.
-    // Spoken injection is a real attack vector (caller says "ignore previous instructions").
-    // We don't block analysis — we flag it so reviewers know the AI output may be manipulated.
-    let injectionDetected = false;
+    // Injection detection runs in parallel with RAG fetch
     if (speakerLabeledText) {
       const injectionCheck = detectTranscriptInjection(speakerLabeledText);
       if (injectionCheck.detected) {
@@ -271,6 +276,9 @@ export async function processAudioFile(
         console.warn(`[${callId}] ⚠ Prompt injection detected in transcript: ${injectionCheck.reasons.join("; ")}`);
       }
     }
+
+    // Wait for RAG to complete before AI analysis needs it
+    await ragPromise;
 
     // Batch mode: defer AI analysis for 50% cost savings
     if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && speakerLabeledText) {
@@ -461,6 +469,18 @@ export async function processAudioFile(
       };
     }
 
+    // Store RAG sources with analysis for reviewer visibility
+    if (ragSources.length > 0) {
+      if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
+      (analysis.confidenceFactors as Record<string, unknown>).ragSources = ragSources.map(s => ({
+        documentName: s.documentName,
+        pageNumber: s.pageNumber,
+        sectionHeader: s.sectionHeader,
+        score: s.score,
+        text: s.text.slice(0, 300),
+      }));
+    }
+
     // Auto-categorize if no category was provided at upload and AI returned one
     if (!callCategory && aiAnalysis?.call_category) {
       const validCategories = ["inbound", "outbound", "internal", "vendor"] as const;
@@ -545,7 +565,7 @@ export async function processAudioFile(
       const completedCall = await storage.getCall(callId);
       const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
-      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary).catch(err => {
+      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
         captureException(err as Error, { callId, errorType: "coaching_alert" });
       });

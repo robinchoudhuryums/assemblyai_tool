@@ -102,7 +102,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger
+server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger, RAG client, prompt guard, PHI redactor, resilience (circuit breaker), correlation ID, tracing (OpenTelemetry), trace spans
 server/constants.ts      # Centralized scoring thresholds (LOW_SCORE, HIGH_SCORE, STREAK, etc.)
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
@@ -413,9 +413,18 @@ VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (opt
 APP_BASE_URL                    # Public URL of the app (e.g. https://umscallanalyzer.com) — enables webhook mode for AssemblyAI
 ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (REQUIRED in production if APP_BASE_URL is set)
 
-# RAG Knowledge Base (planned — ums-knowledge-reference integration)
-RAG_SERVICE_URL                 # URL of the knowledge reference API
+# RAG Knowledge Base (ums-knowledge-reference integration)
+RAG_SERVICE_URL                 # URL of the knowledge reference API (e.g., http://localhost:3001)
 RAG_ENABLED                     # Set to "true" to enable RAG context injection (default: disabled)
+RAG_API_KEY                     # API key for service-to-service auth (X-API-Key header, min 32 chars)
+RAG_CACHE_TTL_MIN               # RAG cache TTL in minutes (default: 30)
+RAG_CACHE_SIZE                  # Max RAG cache entries (default: 50)
+
+# OpenTelemetry Distributed Tracing
+OTEL_ENABLED                    # Set to "true" to enable tracing (default: disabled)
+OTEL_EXPORTER_OTLP_ENDPOINT    # OTLP collector endpoint (default: http://localhost:4318)
+OTEL_SERVICE_NAME               # Service name in traces (default: callanalyzer)
+OTEL_ENVIRONMENT                # Deployment environment tag (default: NODE_ENV value)
 
 # Auto-Calibration
 CALIBRATION_INTERVAL_HOURS      # How often to run score distribution analysis (default: 24)
@@ -472,6 +481,15 @@ JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000
 | **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
 | **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
 | **Disaster recovery** | `docs/disaster-recovery.md` | DR plan: S3 CRR, RDS cross-region replica, AMI snapshots, Route 53 DNS failover |
+| **PHI redaction in logs** | `server/services/phi-redactor.ts` | 14 regex patterns (SSN, DOB, MRN, phone, email, address, Medicare/Medicaid IDs, names) auto-redact the `detail` field in all audit entries before persistence |
+| **Prompt injection detection** | `server/services/prompt-guard.ts` | 16 input patterns + output anomaly detection scan transcripts before Bedrock analysis; flags calls but doesn't block (spoken injection is a real attack vector) |
+| **Circuit breaker** | `server/services/resilience.ts` | Wraps all Bedrock calls; 5 failures → open for 30s → half-open test; prevents job queue from hammering a down service |
+| **Idle timeout warning** | `client/src/hooks/use-idle-timeout.ts` | 2-minute countdown dialog before auto-logout at 15 min idle; any activity resets timer |
+| **Double-submit CSRF** | `server/index.ts` | SameSite=Strict cookie + X-CSRF-Token header verification on state-changing requests; supplements Content-Type check |
+| **Password history** | `server/auth.ts`, `server/storage-postgres.ts` | Prevents reuse of last 5 passwords on self-service change and admin reset |
+| **Correlation IDs** | `server/services/correlation-id.ts` | AsyncLocalStorage per-request UUID auto-injected into all structured log entries; X-Request-Id header propagated |
+| **OpenTelemetry tracing** | `server/services/tracing.ts` | Distributed tracing with spans on Bedrock analysis, RAG fetch, and text generation; compatible with Jaeger/Tempo/Datadog |
+| **SSL hardening** | `server/db/pool.ts` | Production always enforces `rejectUnauthorized: true` regardless of env var override |
 
 ## Key Design Decisions
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
@@ -598,26 +616,37 @@ Keep `CLAUDE.md` updated when making structural changes. Specifically, update do
 - **Auth/RBAC** rules change → update Role-Based Access Control
 - **AI model** defaults change → update Environment Variables and Common Gotchas
 
-## Planned Integration: RAG Knowledge Base (ums-knowledge-reference)
+## RAG Knowledge Base Integration (ums-knowledge-reference)
 
-CallAnalyzer will integrate with the **ums-knowledge-reference** repository to ground AI analysis in company-specific documentation. This RAG (Retrieval-Augmented Generation) system will:
+CallAnalyzer integrates with the **ums-knowledge-reference** repository to ground AI analysis in company-specific documentation via RAG (Retrieval-Augmented Generation).
 
-1. **Ingest reference documents** (SOPs, compliance guides, product catalogs, scripts) from the UMS knowledge base
-2. **Retrieve relevant context** at analysis time — when Bedrock analyzes a call transcript, the system will query the knowledge base for relevant company policies, required phrases, and procedures
-3. **Improve scoring accuracy** by evaluating agents against actual company standards rather than generic best practices
-4. **Enhance coaching recommendations** with specific references to company training materials
+### What It Does
+1. **Retrieves relevant context** at analysis time — queries the knowledge base for company policies, required phrases, and procedures relevant to the call category
+2. **Injects context into the Bedrock prompt** as a "COMPANY KNOWLEDGE BASE" section — AI evaluates agents against actual company standards instead of generic best practices
+3. **Enhances coaching recommendations** with specific references to company training materials (sources reused from analysis, no duplicate API call)
+4. **Stores RAG sources** in `analysis.confidenceFactors.ragSources` so reviewers can see which documents influenced the AI's scoring
 
-### Integration Architecture
-- The `ums-knowledge-reference` repo provides a standalone RAG service (document ingestion, chunking, embedding, vector search)
-- CallAnalyzer will call the RAG service during the AI analysis step (Step 4 of the pipeline) to fetch relevant context
-- Retrieved context will be injected into the Bedrock analysis prompt alongside the transcript
-- Environment variables: `RAG_SERVICE_URL` (URL of the knowledge reference API), `RAG_ENABLED` (toggle, default false)
-- Graceful fallback: if RAG service is unavailable, analysis proceeds without additional context (current behavior)
+### Architecture
+- **Client**: `server/services/rag-client.ts` — queries the knowledge base API with `X-API-Key` auth
+- **Auth**: Service-to-service via `X-API-Key` header (timing-safe comparison on the KB side)
+- **Caching**: LFU (Least Frequently Used) cache, 50 entries, 30-min TTL — category-based queries hit the cache ~80% of the time
+- **Confidence filtering**: High-confidence results include 4 sources; partial includes 2 + disclaimer; low skipped entirely
+- **Prompt injection**: `buildRagQuery()` uses category-specific templates (not raw transcript text) to avoid sending PHI to the knowledge base
+- **Graceful fallback**: if RAG service is unavailable or slow (>8s timeout), analysis proceeds without additional context
+- **Parallelization**: RAG fetch runs concurrently with injection detection; pipeline awaits RAG completion before AI analysis
 
-### Integration Points in CallAnalyzer
-- `server/routes/pipeline.ts:processAudioFile()` — fetch RAG context before AI analysis
-- `server/services/ai-provider.ts:buildAnalysisPrompt()` — accept and inject RAG context into prompt
-- `server/services/coaching-alerts.ts` — reference knowledge base materials in coaching plans
+### Integration Points
+- `server/routes/pipeline.ts:processAudioFile()` — fetches RAG context before AI analysis (both batch and on-demand paths)
+- `server/services/ai-provider.ts:buildAnalysisPrompt()` — injects RAG context into prompt
+- `server/services/coaching-alerts.ts` — reuses RAG sources from analysis in coaching plans
+- `server/services/rag-client.ts:getRagCacheMetrics()` — cache hit/miss stats for admin monitoring
+
+### Configuration
+```
+RAG_ENABLED=true
+RAG_SERVICE_URL=http://localhost:3001    # Knowledge base API URL
+RAG_API_KEY=<64-char-shared-secret>      # Same key as SERVICE_API_KEY on the KB side
+```
 
 ## Common Gotchas
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data

@@ -12,7 +12,7 @@ import { broadcastCallUpdate } from "./websocket";
 import { aiProvider } from "./ai-factory";
 import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
 import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
-import { fetchRagContext, isRagEnabled } from "./rag-client";
+import { fetchRagContext, isRagEnabled, type RagSource } from "./rag-client";
 
 interface SubScores {
   compliance?: number;
@@ -60,6 +60,7 @@ export async function checkAndCreateCoachingAlert(
   score: number,
   employeeId: string | undefined,
   summary: string,
+  ragSources?: RagSource[],
 ): Promise<void> {
   if (!employeeId) return;
 
@@ -73,7 +74,7 @@ export async function checkAndCreateCoachingAlert(
 
     if (aiProvider.isAvailable && aiProvider.generateText) {
       try {
-        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score);
+        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score, ragSources);
         if (aiPlan) {
           actionPlan = aiPlan.tasks.map(t => ({ task: t, completed: false }));
           aiNotes = aiPlan.notes;
@@ -141,6 +142,7 @@ async function generateAICoachingPlan(
   callId: string,
   callSummary: string,
   score: number,
+  ragSources?: RagSource[],
 ): Promise<{ tasks: string[]; notes: string } | null> {
   if (!aiProvider.generateText) return null;
 
@@ -168,12 +170,17 @@ Flags: ${flags.join(", ") || "none"}`;
     }
   } catch {}
 
-  // Fetch relevant coaching materials from knowledge base
+  // Reuse RAG sources from the analysis (avoids duplicate API call)
+  // Falls back to fetching if sources weren't passed from the pipeline
   let ragCoachingContext = "";
-  if (isRagEnabled()) {
+  if (ragSources && ragSources.length > 0) {
+    ragCoachingContext = `\nCOMPANY COACHING GUIDELINES:\n${ragSources.slice(0, 2).map(s => `${s.sectionHeader || s.documentName}: ${s.text.slice(0, 400)}`).join("\n\n")}\n`;
+  } else if (isRagEnabled()) {
     try {
       const ragResult = await fetchRagContext(
         `Coaching and training guidance for call center agents who scored low on: ${analysisContext.slice(0, 200)}`,
+        undefined,
+        "rag:coaching",
       );
       if (ragResult) {
         ragCoachingContext = `\nCOMPANY COACHING GUIDELINES:\n${ragResult.context.slice(0, 800)}\n`;

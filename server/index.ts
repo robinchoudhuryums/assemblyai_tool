@@ -107,8 +107,8 @@ app.use((req, res, next) => {
   if (
     process.env.NODE_ENV === "production" &&
     req.headers["x-forwarded-proto"] !== "https" &&
-    !req.hostname.startsWith("localhost") &&
-    !req.hostname.startsWith("127.0.0.1")
+    !req.hostname?.startsWith("localhost") &&
+    !req.hostname?.startsWith("127.0.0.1")
   ) {
     return res.redirect(301, `https://${req.hostname}${req.originalUrl}`);
   }
@@ -120,7 +120,7 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin) {
     // Allow same-origin requests (browsers send Origin on fetch() even for same-origin)
-    const requestHost = req.hostname;
+    const requestHost = req.hostname || "";
     let originHost: string | null = null;
     try {
       originHost = new URL(origin).hostname;

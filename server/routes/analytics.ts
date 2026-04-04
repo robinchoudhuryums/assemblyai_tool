@@ -697,7 +697,7 @@ export function registerHeatmapRoutes(router: Router) {
             EXTRACT(DOW FROM c.uploaded_at) AS dow,
             EXTRACT(HOUR FROM c.uploaded_at) AS hour,
             COUNT(*)::int AS count,
-            AVG(a.performance_score)::float AS avg_score
+            AVG(a.performance_score::numeric)::float AS avg_score
           FROM calls c
           LEFT JOIN call_analyses a ON a.call_id = c.id
           WHERE c.uploaded_at >= NOW() - INTERVAL '1 day' * $1
