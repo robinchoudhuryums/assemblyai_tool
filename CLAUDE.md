@@ -445,6 +445,25 @@ PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
 JOB_CONCURRENCY                 # Max parallel audio processing jobs (default: 5, requires DATABASE_URL)
 JOB_POLL_INTERVAL_MS            # How often to check for new jobs (default: 5000, requires DATABASE_URL)
+
+# Logging & Observability
+LOG_LEVEL                       # Logging verbosity: debug, info, warn, error (default: info)
+
+# Database
+DB_SSL_REJECT_UNAUTHORIZED      # Set to "false" for self-signed certs in dev/staging (IGNORED in production — always true)
+STORAGE_BACKEND                 # Explicit backend: "s3", "postgres", "memory" (default: auto-detected from DATABASE_URL/S3_BUCKET)
+
+# Score Calibration
+SCORE_CALIBRATION_ENABLED       # Set to "true" to enable score distribution normalization (default: disabled)
+SCORE_CALIBRATION_CENTER        # Distribution center point (default: 5.5, range: 0-10)
+SCORE_CALIBRATION_SPREAD        # Distribution spread (default: 1.2, range: 0.1-5.0)
+SCORE_AI_MODEL_MEAN             # AI model's natural scoring mean (default: 7.0)
+
+# Redis (optional — enables distributed job queues)
+REDIS_URL                       # Redis connection string (e.g., redis://localhost:6379). Without Redis, falls back to PostgreSQL job queue.
+
+# AI Models
+BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: amazon.titan-embed-text-v2:0)
 ```
 
 ## HIPAA Compliance
