@@ -1,0 +1,217 @@
+/**
+ * Tests for patterns adapted from Observatory QA into Call Analyzer:
+ * - Structured error handling (AppError + asyncHandler)
+ * - Durable job queue
+ * - Enhanced MFA (backup codes, trusted devices, WebAuthn)
+ * - RAG hybrid search (semantic + BM25)
+ */
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+
+describe("Structured error handling", () => {
+  it("AppError has statusCode, code, and message", async () => {
+    const { AppError } = await import("../server/middleware/error-handler.js");
+    const err = new AppError(404, "NOT_FOUND", "Item not found");
+    assert.equal(err.statusCode, 404);
+    assert.equal(err.code, "NOT_FOUND");
+    assert.equal(err.message, "Item not found");
+    assert.ok(err instanceof Error);
+  });
+
+  it("AppError supports optional detail", async () => {
+    const { AppError } = await import("../server/middleware/error-handler.js");
+    const err = new AppError(400, "VALIDATION_ERROR", "Bad input", "Field 'name' is required");
+    assert.equal(err.detail, "Field 'name' is required");
+  });
+
+  it("ERROR_CODES contains expected keys", async () => {
+    const { ERROR_CODES } = await import("../server/middleware/error-handler.js");
+    assert.ok(ERROR_CODES.NOT_FOUND);
+    assert.ok(ERROR_CODES.UNAUTHORIZED);
+    assert.ok(ERROR_CODES.INTERNAL_ERROR);
+    assert.ok(ERROR_CODES.AI_UNAVAILABLE);
+  });
+});
+
+describe("Durable job queue", () => {
+  it("enqueueJob returns a job ID", async () => {
+    const { enqueueJob } = await import("../server/services/durable-queue.js");
+    const id = await enqueueJob("test-queue", { foo: "bar" });
+    assert.ok(id, "Should return a job ID");
+    assert.ok(id.startsWith("test-queue-"), "Job ID should include queue name");
+  });
+
+  it("getJobStatus returns the enqueued job", async () => {
+    const { enqueueJob, getJobStatus } = await import("../server/services/durable-queue.js");
+    const id = await enqueueJob("status-queue", { data: 1 });
+    const job = getJobStatus(id);
+    assert.ok(job, "Should find the job");
+    assert.equal(job!.status, "pending");
+    assert.equal(job!.queue, "status-queue");
+  });
+
+  it("completeJob marks job as completed", async () => {
+    const { enqueueJob, completeJob, getJobStatus } = await import("../server/services/durable-queue.js");
+    const id = await enqueueJob("complete-queue", {});
+    completeJob(id);
+    const job = getJobStatus(id);
+    assert.equal(job!.status, "completed");
+    assert.ok(job!.completedAt);
+  });
+
+  it("failJob moves to dead-letter after max attempts", async () => {
+    const { enqueueJob, failJob, getJobStatus, getDeadLetterJobs } = await import("../server/services/durable-queue.js");
+    const id = await enqueueJob("fail-queue", {}, { maxAttempts: 2 });
+    failJob(id, "Error 1"); // attempt 1
+    assert.equal(getJobStatus(id)?.status, "pending"); // still retryable
+    failJob(id, "Error 2"); // attempt 2 = max
+    assert.equal(getJobStatus(id), undefined); // moved to DLQ
+    const dlq = getDeadLetterJobs();
+    assert.ok(dlq.some((j) => j.id === id));
+  });
+
+  it("getQueueStats returns per-queue counts", async () => {
+    const { getQueueStats } = await import("../server/services/durable-queue.js");
+    const stats = getQueueStats();
+    assert.ok(typeof stats === "object");
+  });
+});
+
+describe("Enhanced MFA", () => {
+  describe("Backup codes", () => {
+    it("generates 10 backup codes", async () => {
+      const { generateBackupCodes } = await import("../server/services/mfa-enhanced.js");
+      const { plaintext, hashes } = generateBackupCodes();
+      assert.equal(plaintext.length, 10);
+      assert.equal(hashes.length, 10);
+    });
+
+    it("backup codes are formatted as XXXX-XXXX", async () => {
+      const { generateBackupCodes } = await import("../server/services/mfa-enhanced.js");
+      const { plaintext } = generateBackupCodes();
+      for (const code of plaintext) {
+        assert.match(code, /^[A-F0-9]{4}-[A-F0-9]{4}$/);
+      }
+    });
+
+    it("verifyBackupCode matches a valid code", async () => {
+      const { generateBackupCodes, verifyBackupCode } = await import("../server/services/mfa-enhanced.js");
+      const { plaintext, hashes } = generateBackupCodes();
+      const idx = verifyBackupCode(plaintext[3], hashes);
+      assert.equal(idx, 3);
+    });
+
+    it("verifyBackupCode rejects invalid code", async () => {
+      const { verifyBackupCode } = await import("../server/services/mfa-enhanced.js");
+      const idx = verifyBackupCode("XXXX-YYYY", ["abc123"]);
+      assert.equal(idx, -1);
+    });
+  });
+
+  describe("Trusted devices", () => {
+    it("createTrustedDevice returns token and device record", async () => {
+      const { createTrustedDevice } = await import("../server/services/mfa-enhanced.js");
+      const { token, device } = createTrustedDevice("Chrome on MacOS");
+      assert.ok(token.length > 0);
+      assert.equal(device.name, "Chrome on MacOS");
+      assert.ok(new Date(device.expiresAt) > new Date());
+    });
+
+    it("verifyTrustedDevice accepts valid token", async () => {
+      const { createTrustedDevice, verifyTrustedDevice } = await import("../server/services/mfa-enhanced.js");
+      const { token, device } = createTrustedDevice("Test Device");
+      assert.ok(verifyTrustedDevice(token, [device]));
+    });
+
+    it("verifyTrustedDevice rejects wrong token", async () => {
+      const { createTrustedDevice, verifyTrustedDevice } = await import("../server/services/mfa-enhanced.js");
+      const { device } = createTrustedDevice("Test Device");
+      assert.equal(verifyTrustedDevice("wrong-token", [device]), false);
+    });
+
+    it("pruneExpiredDevices removes old entries", async () => {
+      const { pruneExpiredDevices } = await import("../server/services/mfa-enhanced.js");
+      const expired: any = {
+        tokenHash: "abc",
+        name: "Old",
+        createdAt: "2020-01-01",
+        expiresAt: "2020-02-01",
+      };
+      const valid: any = {
+        tokenHash: "def",
+        name: "New",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+      };
+      const pruned = pruneExpiredDevices([expired, valid]);
+      assert.equal(pruned.length, 1);
+      assert.equal(pruned[0].name, "New");
+    });
+  });
+
+  describe("WebAuthn", () => {
+    it("validateCounter rejects replay (counter not advancing)", async () => {
+      const { validateCounter } = await import("../server/services/mfa-enhanced.js");
+      assert.ok(validateCounter(5, 6)); // 6 > 5 → valid
+      assert.ok(!validateCounter(5, 5)); // 5 = 5 → replay
+      assert.ok(!validateCounter(5, 3)); // 3 < 5 → replay
+    });
+  });
+});
+
+describe("RAG hybrid search", () => {
+  it("bm25Score returns higher score for matching terms", async () => {
+    const { bm25Score } = await import("../server/services/rag-hybrid.js");
+    const corpus = ["billing policy for insurance claims", "scheduling appointments guide", "emergency procedures"];
+    const matchScore = bm25Score("billing insurance", "billing policy for insurance claims", corpus);
+    const noMatchScore = bm25Score("billing insurance", "emergency procedures", corpus);
+    assert.ok(matchScore > noMatchScore, `Match (${matchScore}) should score higher than no-match (${noMatchScore})`);
+  });
+
+  it("bm25Score returns 0 for empty query", async () => {
+    const { bm25Score } = await import("../server/services/rag-hybrid.js");
+    assert.equal(bm25Score("", "some document text", ["some document text"]), 0);
+  });
+
+  it("hybridRank combines semantic and BM25 scores", async () => {
+    const { hybridRank } = await import("../server/services/rag-hybrid.js");
+    const chunks = [
+      { id: "c1", text: "billing policy for insurance claims", semanticScore: 0.9 },
+      { id: "c2", text: "scheduling appointments guide", semanticScore: 0.3 },
+      { id: "c3", text: "insurance billing procedures and claims", semanticScore: 0.7 },
+    ];
+    const allTexts = chunks.map((c) => c.text);
+
+    const results = hybridRank("billing insurance claims", chunks, allTexts);
+    assert.ok(results.length > 0);
+    // First result should have highest combined score
+    assert.ok(results[0].combinedScore >= results[results.length - 1].combinedScore);
+    // Each result should have both score components
+    for (const r of results) {
+      assert.ok(r.semanticScore >= 0);
+      assert.ok(r.bm25Score >= 0);
+      assert.ok(r.combinedScore >= 0);
+    }
+  });
+
+  it("hybridRank respects topK limit", async () => {
+    const { hybridRank } = await import("../server/services/rag-hybrid.js");
+    const chunks = Array.from({ length: 20 }, (_, i) => ({
+      id: `c${i}`,
+      text: `document ${i} about billing`,
+      semanticScore: Math.random(),
+    }));
+    const results = hybridRank("billing", chunks, chunks.map((c) => c.text), { topK: 3 });
+    assert.ok(results.length <= 3);
+  });
+
+  it("hybridRank filters below minScore", async () => {
+    const { hybridRank } = await import("../server/services/rag-hybrid.js");
+    const chunks = [
+      { id: "c1", text: "completely unrelated text about weather", semanticScore: 0.01 },
+    ];
+    // With only 1 chunk, normalization makes its score 1.0. Use a very high threshold.
+    const results = hybridRank("billing claims", chunks, [chunks[0].text], { minScore: 1.5 });
+    assert.equal(results.length, 0, "Results above threshold should be filtered");
+  });
+});
