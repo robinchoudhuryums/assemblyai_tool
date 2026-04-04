@@ -420,6 +420,30 @@ export function registerCallRoutes(
       await storage.createCallAnalysis(updatedAnalysis);
 
       console.log(`[${callId}] Manual edit by ${editedBy}: ${reason} (fields: ${editRecord.fieldsChanged.join(", ")})`);
+
+      // Record scoring correction for the feedback loop (improves future AI analysis)
+      if (updates.performanceScore || updates.subScores) {
+        import("../services/scoring-feedback").then(({ recordScoringCorrection }) => {
+          const origScore = parseFloat(editRecord.previousValues.performanceScore || existing.performanceScore || "0");
+          const newScore = parseFloat((updates.performanceScore || existing.performanceScore || "0") as string);
+          const subChanges: Record<string, { original: number; corrected: number }> = {};
+          if (updates.subScores && existing.subScores) {
+            const orig = existing.subScores as Record<string, number>;
+            const corr = updates.subScores as Record<string, number>;
+            for (const dim of Object.keys(corr)) {
+              if (orig[dim] !== undefined && orig[dim] !== corr[dim]) {
+                subChanges[dim] = { original: orig[dim], corrected: corr[dim] };
+              }
+            }
+          }
+          recordScoringCorrection({
+            callId, correctedBy: editedBy, reason: reason.trim(),
+            originalScore: origScore, correctedScore: newScore,
+            subScoreChanges: Object.keys(subChanges).length > 0 ? subChanges : undefined,
+          }).catch(() => {}); // fire-and-forget
+        }).catch(() => {});
+      }
+
       res.json(updatedAnalysis);
     } catch (error) {
       logPhiAccess({

@@ -177,6 +177,15 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
     ragSection = `\n- COMPANY KNOWLEDGE BASE (use these to evaluate compliance and provide specific feedback):\n${ragContext}`;
   }
 
+  // Scoring corrections from manager feedback loop — teaches the AI to avoid past mistakes
+  try {
+    const { buildCorrectionContext } = require("./scoring-feedback");
+    const correctionContext = buildCorrectionContext(callCategory);
+    if (correctionContext) {
+      ragSection += `\n- ${correctionContext}`;
+    }
+  } catch { /* scoring-feedback module not loaded yet — skip */ }
+
   // Language instruction for non-English analysis
   let languageInstruction = "";
   if (language && language !== "en") {

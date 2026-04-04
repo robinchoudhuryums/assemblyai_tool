@@ -6,6 +6,7 @@ import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
 import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore } from "./utils";
+import { expandMedicalSynonyms } from "../services/medical-synonyms";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -22,7 +23,9 @@ export function registerReportRoutes(router: Router) {
       }
 
       const limit = clampInt(req.query.limit as string | undefined, 50, 1, 200);
-      const results = await storage.searchCalls(query, limit);
+      // Expand medical abbreviations for better search recall (e.g., "O2" → also matches "oxygen")
+      const expandedQuery = expandMedicalSynonyms(query);
+      const results = await storage.searchCalls(expandedQuery, limit);
 
       // Apply optional client-side filters for sentiment, score range, date range
       let filtered = results;
