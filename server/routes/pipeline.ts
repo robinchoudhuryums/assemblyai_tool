@@ -578,6 +578,23 @@ export async function processAudioFile(
           captureException(err as Error, { callId, errorType: "badge_evaluation" });
         });
       }
+
+      // Best practice auto-ingestion: send exceptional calls (≥9.0) to the KB
+      if (performanceScore >= 9.0) {
+        import("../services/best-practice-ingest").then(({ ingestBestPractice }) => {
+          const feedback = analysis.feedback as { strengths?: Array<string | { text: string }> } | undefined;
+          const strengths = (feedback?.strengths || []).map(s => typeof s === "string" ? s : (s as { text: string }).text);
+          ingestBestPractice({
+            callId,
+            callCategory: completedCall?.callCategory || undefined,
+            score: performanceScore,
+            agentName: analysis.detectedAgentName as string | undefined,
+            summary: callSummary,
+            transcript: speakerLabeledText?.slice(0, 5000) || "",
+            strengths,
+          }).catch(() => {}); // fire-and-forget
+        }).catch(() => {});
+      }
     } catch (alertErr) {
       console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);
       captureException(alertErr as Error, { callId, errorType: "coaching_alert_setup" });

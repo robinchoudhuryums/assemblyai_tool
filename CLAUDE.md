@@ -102,7 +102,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger, RAG client, prompt guard, PHI redactor, resilience (circuit breaker), correlation ID, tracing (OpenTelemetry), trace spans
+server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger, RAG client, RAG hybrid search, prompt guard, PHI redactor, resilience (circuit breaker), correlation ID, tracing (OpenTelemetry), trace spans, medical synonyms, scoring feedback loop, best practice ingestion, durable queue (Redis/BullMQ), enhanced MFA (WebAuthn/backup codes), error handler middleware
 server/constants.ts      # Centralized scoring thresholds (LOW_SCORE, HIGH_SCORE, STREAK, etc.)
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
@@ -420,6 +420,9 @@ RAG_API_KEY                     # API key for service-to-service auth (X-API-Key
 RAG_CACHE_TTL_MIN               # RAG cache TTL in minutes (default: 30)
 RAG_CACHE_SIZE                  # Max RAG cache entries (default: 50)
 
+# Best Practice Auto-Ingestion (sends exceptional calls to KB as reference docs)
+BEST_PRACTICE_INGEST_ENABLED    # Set to "true" to auto-ingest exceptional calls (≥9.0) to KB (default: disabled)
+
 # OpenTelemetry Distributed Tracing
 OTEL_ENABLED                    # Set to "true" to enable tracing (default: disabled)
 OTEL_EXPORTER_OTLP_ENDPOINT    # OTLP collector endpoint (default: http://localhost:4318)
@@ -640,12 +643,22 @@ CallAnalyzer integrates with the **ums-knowledge-reference** repository to groun
 - `server/services/ai-provider.ts:buildAnalysisPrompt()` — injects RAG context into prompt
 - `server/services/coaching-alerts.ts` — reuses RAG sources from analysis in coaching plans
 - `server/services/rag-client.ts:getRagCacheMetrics()` — cache hit/miss stats for admin monitoring
+- `server/services/scoring-feedback.ts` — captures manager score overrides as corrections; injects into future prompts so AI learns from mistakes
+- `server/services/best-practice-ingest.ts` — auto-ingests exceptional calls (≥9.0) to KB as reference documents
+- `server/services/medical-synonyms.ts` — expands medical abbreviations in search (e.g., "O2" → also matches "oxygen")
+
+### Feedback Loop (scoring corrections → improved AI)
+When managers edit a call's score, the correction is recorded (reason, original/corrected scores, sub-score changes). Recent corrections for the same call category are injected into future Bedrock prompts as "RECENT SCORING CORRECTIONS". Over time, the AI aligns with human judgment without prompt engineering. Corrections are also persisted to S3 (`corrections/` prefix) for audit trail.
+
+### Best Practice Ingestion
+When `BEST_PRACTICE_INGEST_ENABLED=true`, exceptional calls (≥9.0) are auto-sent to the Knowledge Base as text documents in a "best-practices" collection. Future RAG queries then retrieve real examples of excellent call handling alongside company policies.
 
 ### Configuration
 ```
 RAG_ENABLED=true
 RAG_SERVICE_URL=http://localhost:3001    # Knowledge base API URL
 RAG_API_KEY=<64-char-shared-secret>      # Same key as SERVICE_API_KEY on the KB side
+BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (optional)
 ```
 
 ## Common Gotchas
