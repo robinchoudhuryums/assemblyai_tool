@@ -245,11 +245,16 @@ export async function processAudioFile(
       }
     }
 
-    // Fetch RAG context from knowledge base (non-blocking — graceful fallback)
-    // Uses category-based caching: calls with the same category share cached context.
+    // Parallelize RAG fetch + injection detection (both are independent).
+    // RAG fetch is the bottleneck on uncached calls (up to 8s timeout).
+    // Running injection detection concurrently saves 1-2ms (fast) but more importantly
+    // the RAG result is ready sooner when the AI analysis step needs it.
     let ragContext: string | undefined;
     let ragSources: RagSource[] = [];
-    if (isRagEnabled() && speakerLabeledText) {
+    let injectionDetected = false;
+
+    const ragPromise = (async () => {
+      if (!isRagEnabled() || !speakerLabeledText) return;
       try {
         const { query: ragQuery, cacheKey } = buildRagQuery(callCategory);
         const ragResult = await fetchRagContext(ragQuery, undefined, cacheKey);
@@ -261,12 +266,9 @@ export async function processAudioFile(
       } catch (ragErr) {
         console.warn(`[${callId}] RAG context fetch failed (non-blocking):`, (ragErr as Error).message);
       }
-    }
+    })();
 
-    // Prompt injection detection: scan transcript for manipulation attempts.
-    // Spoken injection is a real attack vector (caller says "ignore previous instructions").
-    // We don't block analysis — we flag it so reviewers know the AI output may be manipulated.
-    let injectionDetected = false;
+    // Injection detection runs in parallel with RAG fetch
     if (speakerLabeledText) {
       const injectionCheck = detectTranscriptInjection(speakerLabeledText);
       if (injectionCheck.detected) {
@@ -274,6 +276,9 @@ export async function processAudioFile(
         console.warn(`[${callId}] ⚠ Prompt injection detected in transcript: ${injectionCheck.reasons.join("; ")}`);
       }
     }
+
+    // Wait for RAG to complete before AI analysis needs it
+    await ragPromise;
 
     // Batch mode: defer AI analysis for 50% cost savings
     if (shouldUseBatchMode(processingMode) && aiProvider.isAvailable && speakerLabeledText) {
