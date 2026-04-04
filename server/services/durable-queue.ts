@@ -52,11 +52,13 @@ export async function enqueueJob(
   const maxAttempts = options?.maxAttempts ?? 3;
 
   if (isRedisAvailable()) {
-    // BullMQ path — import dynamically to avoid requiring Redis as a hard dependency
+    // BullMQ path — dynamic import to avoid hard dependency.
+    // If bullmq is not installed, the import throws and we fall through to in-memory.
     try {
-      const { Queue } = await import("bullmq");
+      const bullmq: any = await import("bullmq" as string);
+      const QueueClass = bullmq.Queue;
       const redisUrl = process.env.REDIS_URL!;
-      const q = new Queue(queue, { connection: { url: redisUrl } });
+      const q = new QueueClass(queue, { connection: { url: redisUrl } });
       const job = await q.add(queue, data, {
         jobId: id,
         attempts: maxAttempts,
