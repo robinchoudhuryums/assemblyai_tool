@@ -120,9 +120,8 @@ systemctl daemon-reload
 systemctl enable callanalyzer
 
 # --- Install Caddyfile ---
-# NOTE: Replace YOUR_DOMAIN before running!
 cat > /etc/caddy/Caddyfile << 'CADDYFILE'
-YOUR_DOMAIN {
+umscallanalyzer.com {
     reverse_proxy localhost:5000
 
     header {
@@ -158,8 +157,7 @@ echo "  1. Connect via EC2 Instance Connect (AWS Console → EC2 → Connect) or
 echo "  2. Clone your repo to /opt/callanalyzer/"
 echo "  3. Run: npm ci && npm run build && npm prune --production"
 echo "  4. Edit /opt/callanalyzer/.env with real credentials"
-echo "  5. Edit /etc/caddy/Caddyfile — replace YOUR_DOMAIN"
-echo "  6. Point your domain's DNS A record to this instance's public IP"
-echo "  7. Start services: sudo systemctl start callanalyzer && sudo systemctl start caddy"
-echo "  8. Verify: curl https://YOUR_DOMAIN/api/auth/me"
+echo "  5. Point your domain's DNS A record to this instance's public IP"
+echo "  6. Start services: sudo systemctl start callanalyzer && sudo systemctl start caddy"
+echo "  7. Verify: curl https://umscallanalyzer.com/api/auth/me"
 echo ""

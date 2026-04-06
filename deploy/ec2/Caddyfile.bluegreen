@@ -1,5 +1,4 @@
 # CallAnalyzer — Caddy reverse proxy with blue-green deployment support
-# Replace YOUR_DOMAIN with your actual domain (e.g., umscallanalyzer.com)
 #
 # Blue-green support:
 #   - Admin API enabled on localhost:2019 (not exposed externally)
@@ -15,7 +14,7 @@
     admin localhost:2019
 }
 
-YOUR_DOMAIN {
+umscallanalyzer.com {
     # Reverse proxy to the active app slot (blue=5000, green=5001)
     reverse_proxy localhost:5000 {
         # Health check — Caddy stops routing to unhealthy backends
@@ -49,6 +48,6 @@ YOUR_DOMAIN {
 }
 
 # HTTP → HTTPS redirect
-http://YOUR_DOMAIN {
-    redir https://YOUR_DOMAIN{uri} permanent
+http://umscallanalyzer.com {
+    redir https://umscallanalyzer.com{uri} permanent
 }
