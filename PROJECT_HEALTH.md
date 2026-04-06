@@ -1,29 +1,31 @@
-# CallAnalyzer — Project Health
-
-**Last updated**: 2026-04-06
-**Last full systems map**: 2026-04-06
+# Project Health
 
 ## Current Standing
+Last synthesis: [not yet run — first full synthesis pending completion of all subsystem audits]
+Overall: —/10
+One-line summary: No subsystem audits completed yet. Systems map constructed. First audit cycle starting.
+Top priority this cycle: Core Architecture & Pipeline or Security & Compliance — confirm with /health-pulse before starting
 
-No formal audit cycles have been completed yet. The systems map in CLAUDE.md was constructed from a five-phase analysis of entry points, module headers, data flow tracing, and verified dependency mapping.
+## Score History
+[No cycles completed yet — first Health Synthesis scheduled after all 7 subsystems complete]
 
-## Known Active Issues
+## Known Issues at Audit Start (from Systems Map)
+- Hand-rolled AWS SigV4 signing for all AWS services (S3, Bedrock, IMDS) — no SDK. Single point of failure: any signing bug breaks all AWS integration simultaneously. Highest-risk subsystem.
+- Manual SQL string construction in server/storage-postgres.ts — roadmap explicitly flags "Replace manual SQL string concatenation" as multi-sprint effort. Structural injection risk despite parameterized queries.
+- setInterval timers started in module scope — auth.ts (lockout cleanup), index.ts (rate limit cleanup), audit-log.ts (flush), webhooks.ts. npm test uses --test-force-exit flag confirming this is a known leak risk.
+- server/services/rag-hybrid.ts presence unverified — systems map flags as potentially dead code. Not confirmed imported anywhere. Needs verification sweep.
+- Stale roadmap — docs/improvement-roadmap.md Infrastructure section lists "Structured observability" and "correlation IDs" as TODO but these are already implemented. Roadmap needs cleanup.
+- Replit devDependencies (@replit/vite-plugin-*) still present in package.json but removed from vite.config.ts. Dead dependencies.
+- package.json name is "rest-express" — generic starter template name, cosmetic only.
 
-- `server/services/rag-hybrid.ts` is dead code — not imported by any production file (only referenced in tests)
-- `server/services/telephony-8x8.ts` is a stub pending 8x8 API access clarification
-- `server/services/scheduled-reports.ts` exists but is undocumented in API routes or CLAUDE.md
-- `@replit/vite-plugin-*` packages in devDependencies are unused (removed from vite.config.ts but not from package.json)
-- Improvement roadmap (`docs/improvement-roadmap.md`) has stale entries: "Structured observability" and "correlation IDs" listed as TODO but already implemented
-- Manual SQL in `storage-postgres.ts` without query builder (acknowledged in roadmap as multi-sprint effort)
+## Subsystems to Audit (7 total)
+- [ ] Core Architecture & Pipeline
+- [ ] Storage Layer / Database
+- [ ] AI Processing & Analysis
+- [ ] Security & Compliance
+- [ ] AWS & External Integrations
+- [ ] Engagement & Reporting
+- [ ] Frontend / UI
 
-## Audit History
-
-| Date | Scope | Findings | Status |
-|------|-------|----------|--------|
-| — | No audits completed yet | — | — |
-
-## Health Pulse History
-
-| Date | Overall | Architecture | Security | Pipeline | AI | AWS | Data | Ops | Frontend | Features |
-|------|---------|-------------|----------|----------|----|-----|------|-----|----------|----------|
-| — | No pulses recorded yet | — | — | — | — | — | — | — | — | — |
+## Pulse Check Log (directional only — do not compare to synthesis scores)
+[No pulse checks run yet]
