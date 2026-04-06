@@ -714,6 +714,211 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - In-memory incidents array capped at 500 (evicts oldest closed first)
 - `tsconfig.json` uses `target: "ES2022"` — do NOT add `downlevelIteration` or `baseUrl` (deprecated in TS 7.0)
 
+## Systems Map
+
+### Module Map
+
+| Module | Files | Responsibility |
+|--------|-------|---------------|
+| **Server Entry** | `server/index.ts`, `server/vite.ts` | Express bootstrap: middleware stack (rate limiting, CORS, CSRF, WAF, security headers, audit logging, correlation IDs), env validation, graceful shutdown, Vite dev server integration |
+| **Route Coordinator** | `server/routes.ts` | Registers all 12 sub-routers, configures multer, initializes job queue + batch scheduler + calibration + telephony schedulers, handles AssemblyAI webhook endpoint |
+| **Auth & Sessions** | `server/auth.ts`, `server/routes/auth.ts` | Passport.js local strategy, session management (PostgreSQL or memorystore), password hashing/complexity, account lockout, session fingerprinting, MFA two-step flow |
+| **Call Routes** | `server/routes/calls.ts`, `server/routes/calls-tags.ts` | Call CRUD, audio streaming, transcript/sentiment/analysis retrieval, tagging, annotations |
+| **Pipeline** | `server/routes/pipeline.ts` | Core audio processing: transcription → quality gates → RAG fetch → injection detection → AI analysis → score calibration → storage → coaching/badges/webhooks |
+| **Route Utilities** | `server/routes/utils.ts` | Shared helpers: `sendError`, `sendValidationError`, `validateParams`, `requireRole`, `safeFloat`, `TaskQueue`, `computeConfidenceScore`, `autoAssignEmployee`, `cleanupFile`, `escapeCsvValue` |
+| **Admin Routes** | `server/routes/admin.ts`, `admin-security.ts`, `admin-operations.ts`, `admin-content.ts` | Admin facade delegating to security (WAF, incidents, vulns), operations (queue, batch, calibration, telephony), and content (templates, A/B tests, webhooks, usage) |
+| **Employee Routes** | `server/routes/employees.ts` | Employee CRUD, bulk CSV import |
+| **Dashboard & Metrics** | `server/routes/dashboard.ts` | Dashboard metrics, sentiment distribution, top performers, flagged calls |
+| **Analytics** | `server/routes/analytics.ts` | Team analytics, trends, speech metrics, call clustering, CSV export, heatmaps |
+| **Reports** | `server/routes/reports.ts` | Search, agent profiles, filtered reports, AI-generated agent summaries |
+| **Coaching** | `server/routes/coaching.ts` | Coaching session CRUD, action item toggling, webhook triggers |
+| **Users** | `server/routes/users.ts` | User management (admin CRUD, password reset/change, MFA) |
+| **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company) |
+| **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
+| **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends |
+| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~30+ methods), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback) |
+| **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
+| **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
+| **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory |
+| **Batch Inference** | `server/services/bedrock-batch.ts`, `server/services/batch-scheduler.ts` | Deferred AI analysis via JSONL to S3, periodic job submission/polling/recovery. Note: `bedrock-batch.ts` uses `sigv4.ts` directly for S3 operations (not `S3Client`) |
+| **Scoring** | `server/services/scoring-calibration.ts`, `server/services/auto-calibration.ts`, `server/services/scoring-feedback.ts` | Score normalization, periodic distribution analysis, manager correction capture for future prompt injection |
+| **AWS Infrastructure** | `server/services/s3.ts`, `server/services/sigv4.ts`, `server/services/aws-credentials.ts` | Custom S3 REST client (single consumer: `storage.ts`), SigV4 signing, credential resolution (env vars + IMDS with caching) |
+| **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
+| **RAG Hybrid** | `server/services/rag-hybrid.ts` | Hybrid vector+BM25 retrieval — **dead code**: not imported by any production file (only referenced in tests) |
+| **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain), brute-force/credential stuffing detection, automated vuln scanning, incident lifecycle management |
+| **MFA** | `server/services/totp.ts`, `server/services/mfa-enhanced.ts` | RFC 6238 TOTP with replay protection; enhanced MFA with WebAuthn/backup codes |
+| **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
+| **SSRF Protection** | `server/services/url-validator.ts` | URL validator blocking private IPs, metadata endpoints, DNS resolution to private ranges |
+| **Resilience** | `server/services/resilience.ts` | Circuit breaker (5 failures → 30s open → half-open test) wrapping Bedrock calls (single consumer: `bedrock.ts`) |
+| **Job Queue** | `server/services/job-queue.ts`, `server/services/durable-queue.ts` | PostgreSQL-backed durable queue (`FOR UPDATE SKIP LOCKED`); optional Redis/BullMQ queue |
+| **WebSocket** | `server/services/websocket.ts` | Authenticated WebSocket server broadcasting real-time call processing status |
+| **Webhooks** | `server/services/webhooks.ts` | HMAC-signed HTTP POST notifications on call events with retry logic and SSRF validation |
+| **Coaching Alerts** | `server/services/coaching-alerts.ts` | Auto-creates coaching sessions for low/high-score calls, detects recurring weaknesses |
+| **Gamification Service** | `server/services/gamification.ts` | Badge evaluation (12 types), points/streak computation, leaderboard queries |
+| **Snapshots Service** | `server/services/performance-snapshots.ts` | AI-generated narrative + numerical performance snapshots at multiple levels |
+| **Best Practice Ingest** | `server/services/best-practice-ingest.ts` | Auto-ingests exceptional calls (score ≥9.0) to knowledge base |
+| **Call Clustering** | `server/services/call-clustering.ts` | Groups calls by topic similarity using TF-IDF cosine similarity |
+| **Medical Synonyms** | `server/services/medical-synonyms.ts` | Expands medical abbreviations in search queries |
+| **Telephony** | `server/services/telephony-8x8.ts` | 8x8 auto-ingestion framework (stub, pending API access) |
+| **Scheduled Reports** | `server/services/scheduled-reports.ts` | Weekly/monthly performance summary generation (dynamically imported by `routes.ts`) |
+| **Observability** | `server/services/logger.ts`, `server/services/correlation-id.ts`, `server/services/tracing.ts`, `server/services/trace-span.ts`, `server/services/sentry.ts` | Structured JSON logging, per-request correlation IDs, OpenTelemetry tracing, PHI-scrubbing Sentry integration |
+| **Middleware** | `server/middleware/waf.ts`, `server/middleware/rate-limit.ts`, `server/middleware/error-handler.ts` | WAF (SQLi/XSS/path traversal/IP blocklist), per-user rate limiting, typed error handling |
+| **Shared Schema** | `shared/schema.ts` | Zod schemas for all entities, shared between client and server |
+| **Constants** | `server/constants.ts` | Centralized scoring thresholds (env-configurable) |
+| **Frontend Entry** | `client/src/main.tsx`, `client/src/App.tsx` | React SPA root: auth gate, 25 lazy-loaded pages, WebSocket connection, idle timeout, keyboard shortcuts |
+| **Frontend Lib** | `client/src/lib/` | TanStack Query setup (`queryClient.ts`), i18n, appearance/theme, Sentry, saved filters, display utils, constants |
+| **Frontend Hooks** | `client/src/hooks/` | `useWebSocket`, `useIdleTimeout`, `useBeforeUnload` |
+| **Frontend Pages** | `client/src/pages/` | 25+ page components (dashboard, upload, transcripts, reports, coaching, admin, leaderboard, etc.) |
+| **Frontend Components** | `client/src/components/` | Layout (sidebar), UI (shadcn/ui), backgrounds, error boundary, file upload |
+
+### Data Flow Paths
+
+**Path 1: Audio Upload → Analysis Completion**
+```
+POST /api/calls/upload [routes/calls.ts]
+  → multer parses file → create call record (status: "uploading")
+  → archive audio to S3 [storage.uploadAudio]
+  → enqueue job [job-queue.ts] OR add to in-memory TaskQueue [pipeline.ts]
+  → Job worker calls processAudioFile() [pipeline.ts]:
+    1. Get audio URL (presigned S3 or upload to AssemblyAI) [assemblyai.ts]
+    2. Submit transcription [assemblyai.ts:transcribeAudio]
+    3. Wait for transcript (webhook resolve OR polling) [assemblyai.ts:waitForTranscript]
+    4. Quality gates: empty transcript (<10 chars), low confidence (<0.6) → early exit
+    5. Build speaker-labeled transcript [assemblyai.ts:buildSpeakerLabeledTranscript]
+    6. [Parallel] RAG context fetch [rag-client.ts] + injection detection [prompt-guard.ts]
+    7. Build analysis prompt (with RAG, custom template, corrections) [ai-provider.ts]
+    8. If batch mode → save to S3 pending/, set status "awaiting_analysis", return
+    9. If on-demand → call Bedrock (via circuit breaker) [bedrock.ts → resilience.ts]
+       - Cost optimization: Haiku for short routine calls (≤120s, no template, <3K tokens)
+    10. Process results: normalize, calibrate scores [scoring-calibration.ts]
+    11. Compute confidence score [utils.ts:computeConfidenceScore]
+    12. Store transcript, sentiment, analysis [storage]
+    13. Auto-assign employee by detected name [utils.ts:autoAssignEmployee]
+    14. Auto-categorize call if AI returns category
+    15. Update call status → "completed"
+    16. [Fire-and-forget] Coaching alerts, badge evaluation, best practice ingestion,
+        webhook triggers, embedding generation
+    17. WebSocket broadcast → frontend [websocket.ts:broadcastCallUpdate]
+```
+
+**Path 2: AssemblyAI Webhook → Transcript Stored**
+```
+POST /api/webhooks/assemblyai [routes.ts]
+  → Timing-safe secret verification (production requires ASSEMBLYAI_WEBHOOK_SECRET)
+  → handleAssemblyAIWebhook(transcript_id, data) [assemblyai.ts]
+  → Resolves pending promise in assemblyAIService.waitForTranscript()
+  → Pipeline continues from step 4 in Path 1 above
+  → If transcript_id not in pending map → acknowledged but ignored (stale delivery)
+```
+
+**Path 3: Authentication**
+```
+POST /api/auth/login [routes/auth.ts]
+  → Rate limit (5/15min/IP) → WAF check → CSRF exempt
+  → If mfaToken + totpCode → Step 2 (MFA verification):
+    → Lookup pending token → getMFASecret → verifyTOTP (timing-safe)
+    → req.login(user, { keepSessionInfo: true }) → bindSessionFingerprint
+  → Else Step 1 (password):
+    → passport.authenticate("local") → account lockout check
+    → DB user lookup [storage] or AUTH_USERS env var fallback
+    → Password verify (scrypt + timingSafeEqual)
+    → If MFA enabled → issue mfaToken, return { mfaRequired: true }
+    → If MFA required but not set up → login + { mfaSetupRequired: true }
+    → Standard login → req.login() + bindSessionFingerprint()
+  → Session stored in PostgreSQL (connect-pg-simple) or memorystore
+
+Every subsequent request:
+  → requireAuth → session validation → fingerprint check (UA + accept-language hash)
+  → Mismatch → session destroyed
+  → requireRole(level) for role-gated routes
+```
+
+### External Dependencies
+
+| Service | Purpose | Integration File |
+|---------|---------|-----------------|
+| **AssemblyAI** | Audio transcription (speech-to-text, speaker detection, sentiment) | `server/services/assemblyai.ts` — REST API |
+| **AWS Bedrock** (Claude Sonnet/Haiku) | AI call analysis via Converse API | `server/services/bedrock.ts` — raw SigV4 signed REST |
+| **AWS S3** | Audio blob storage, analysis JSON, batch inference, calibration config | `server/services/s3.ts` — raw SigV4 signed REST |
+| **AWS RDS PostgreSQL** | Metadata, sessions, job queue, audit log, users, employees | `server/db/pool.ts` — `pg` driver |
+| **AWS EC2 IMDS** | Instance profile credential resolution | `server/services/aws-credentials.ts` |
+| **Sentry** | Error tracking (server + client), PHI-scrubbed | `server/services/sentry.ts`, `client/src/lib/sentry.ts` |
+| **RAG Knowledge Base** (ums-knowledge-reference) | Company-specific context for AI analysis | `server/services/rag-client.ts` — REST with X-API-Key |
+| **8x8 Telephony** | Call recording auto-ingestion (stub) | `server/services/telephony-8x8.ts` |
+| **Redis** (optional) | Distributed job queue | `server/services/durable-queue.ts` |
+| **OpenTelemetry Collector** (optional) | Distributed tracing | `server/services/tracing.ts` |
+| **Let's Encrypt** (via Caddy) | TLS certificates | `deploy/ec2/Caddyfile` |
+
+### Auth & Security Surface
+
+**Where auth is enforced:**
+- `server/auth.ts` → `requireAuth` middleware on all non-public routes (imported by 15 route files)
+- `server/auth.ts` → `requireRole(level)` for role-gated endpoints (imported by 12 route files)
+- `server/index.ts` → rate limiting, CSRF (double-submit cookie + Content-Type), CORS, WAF, security headers
+- `server/routes.ts` → AssemblyAI webhook uses timing-safe secret verification (not session auth)
+
+**Intentional auth bypass points:**
+- `GET /api/health` — public health check
+- `POST /api/auth/login` — public (rate-limited, WAF-protected)
+- `POST /api/auth/logout` — public
+- `GET /api/auth/me` — session check (returns 401 if not authenticated)
+- `POST /api/access-requests` — public submission
+- `POST /api/webhooks/assemblyai` — webhook-secret-verified
+
+**Where PHI is touched:**
+- Audio files in S3 (call recordings)
+- Transcripts in PostgreSQL/S3 (spoken content)
+- Bedrock prompts (contain transcript text)
+- Audit log stdout entries (PHI-redacted via `phi-redactor.ts`)
+- RAG queries use category templates, NOT raw transcript (avoids PHI leakage)
+- WebSocket broadcasts contain status only, not PHI content
+
+### Inter-Module Dependency Map (Verified)
+
+**Highest fan-out modules (most consumers):**
+
+| Module | Consumers | Notes |
+|--------|-----------|-------|
+| `server/routes/utils.ts` | 16 files | All route files + `performance-snapshots.ts`, `batch-scheduler.ts` |
+| `server/storage.ts` | 15+ files | All route files + services |
+| `server/auth.ts` | 15 files | All route files + `websocket.ts` |
+| `server/services/audit-log.ts` | 13 files | Security services, middleware/waf, most route files |
+| `shared/schema.ts` | 15+ files | Route files, storage, services, client |
+
+**Key verified dependency chains:**
+- `shared/schema.ts` → consumed by route files, `storage.ts`, `storage-postgres.ts`, services — VERIFIED
+- `server/storage.ts` → consumed by `pipeline.ts` + 14 route files — VERIFIED
+- `server/routes/pipeline.ts` → `processAudioFile` consumed by `routes.ts` only (passed to `registerCallRoutes`, `startTelephonyScheduler`, and called in job worker) — VERIFIED
+- `server/services/ai-factory.ts` → `aiProvider` consumed by `pipeline.ts`, `reports.ts`, `snapshots.ts`, `coaching-alerts.ts` — VERIFIED
+- `server/services/assemblyai.ts` → consumed by `pipeline.ts`, `routes.ts`, `analytics.ts`, `admin-content.ts`, `batch-scheduler.ts` — VERIFIED
+- `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY — VERIFIED
+- `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
+- `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file — VERIFIED
+
+### Complexity & Risk Rankings
+
+**Highest-complexity subsystems (most likely to contain hidden issues):**
+1. **Audio Processing Pipeline** (`server/routes/pipeline.ts`) — 600+ lines, 10+ async steps, dual-mode, 6 fire-and-forget side effects, quality gates, cost optimization branching
+2. **Storage Abstraction** (`server/storage.ts` + `server/storage-postgres.ts`) — 30+ method interface, 3 backends, manual SQL with dynamic WHERE clauses, no query builder
+3. **AWS SigV4 + Custom S3/Bedrock** (`sigv4.ts`, `s3.ts`, `bedrock.ts`, `aws-credentials.ts`) — Hand-rolled cryptographic signing, credential refresh, IMDS caching
+4. **Security Middleware Stack** (`server/index.ts` lines 25–280) — 10+ ordering-sensitive middleware layers, dual CSRF implementations
+5. **Auth + Session Management** (`server/auth.ts`) — Passport 0.7 compat patches, dual user source, session fingerprinting, MFA integration
+
+**Highest-risk subsystems (most likely to cause problems if broken):**
+1. **AWS SigV4 + S3/Bedrock clients** — Single point of failure for all AWS services, no SDK fallback
+2. **Audio Processing Pipeline** — Core value proposition; if broken, no new calls processed
+3. **Authentication** (`server/auth.ts`) — Breakage means lockout or security bypass
+4. **Storage layer** — 15+ route files depend on it; manual SQL for ~30 methods
+5. **Route utilities** (`server/routes/utils.ts`) — 16 consumers; bugs cascade everywhere
+
+### Known Discrepancies
+
+- `server/services/rag-hybrid.ts` is listed in Architecture but is dead code (no production imports)
+- `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
+- `server/services/scheduled-reports.ts` is not documented in API routes (dynamically imported by `routes.ts`)
+- `@replit/vite-plugin-*` packages remain in devDependencies but are unused in `vite.config.ts`
+- Improvement roadmap lists "Structured observability" and "correlation IDs" as TODO but both are implemented
+
 ## Long-Term Improvement Roadmap
 
 See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full multi-sprint improvement plan covering testing, security hardening, code quality, accessibility, and infrastructure.
