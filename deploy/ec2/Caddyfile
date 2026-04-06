@@ -1,10 +1,9 @@
 # CallAnalyzer — Caddy reverse proxy with automatic TLS
-# Replace YOUR_DOMAIN with your actual domain (e.g., calls.yourcompany.com)
 #
 # Caddy automatically provisions and renews Let's Encrypt TLS certificates.
 # No manual cert management required.
 
-YOUR_DOMAIN {
+umscallanalyzer.com {
     # Reverse proxy to the Node.js app
     reverse_proxy localhost:5000
 
@@ -37,6 +36,6 @@ YOUR_DOMAIN {
 }
 
 # HTTP → HTTPS redirect (automatic with Caddy, but explicit for clarity)
-http://YOUR_DOMAIN {
-    redir https://YOUR_DOMAIN{uri} permanent
+http://umscallanalyzer.com {
+    redir https://umscallanalyzer.com{uri} permanent
 }
