@@ -720,12 +720,12 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 
 | Module | Files | Responsibility |
 |--------|-------|---------------|
-| **Server Entry** | `server/index.ts`, `server/vite.ts` | Express bootstrap: middleware stack (rate limiting, CORS, CSRF, WAF, security headers, audit logging, correlation IDs), env validation, graceful shutdown, Vite dev server integration |
+| **Server Entry** | `server/index.ts`, `server/vite.ts`, `server/types.d.ts` | Express bootstrap: middleware stack (X-Forwarded-For validation, HTTPS redirect, CORS, WAF, security headers, CSRF double-submit, audit logging, correlation IDs, rate limiting), env validation, graceful shutdown, Vite dev server integration. `types.d.ts` holds Express.User and SessionData type augmentations. |
 | **Route Coordinator** | `server/routes.ts` | Registers all 12 sub-routers, configures multer, initializes job queue + batch scheduler + calibration + telephony schedulers, handles AssemblyAI webhook endpoint |
 | **Auth & Sessions** | `server/auth.ts`, `server/routes/auth.ts` | Passport.js local strategy, session management (PostgreSQL or memorystore), password hashing/complexity, account lockout, session fingerprinting, MFA two-step flow |
 | **Call Routes** | `server/routes/calls.ts`, `server/routes/calls-tags.ts` | Call CRUD, audio streaming, transcript/sentiment/analysis retrieval, tagging, annotations |
 | **Pipeline** | `server/routes/pipeline.ts` | Core audio processing: transcription → quality gates → RAG fetch → injection detection → AI analysis → score calibration → storage → coaching/badges/webhooks |
-| **Route Utilities** | `server/routes/utils.ts` | Shared helpers: `sendError`, `sendValidationError`, `validateParams`, `requireRole`, `safeFloat`, `TaskQueue`, `computeConfidenceScore`, `autoAssignEmployee`, `cleanupFile`, `escapeCsvValue` |
+| **Route Utilities** | `server/routes/utils.ts` | Shared helpers: `sendError`, `sendValidationError`, `validateParams`, `validateIdParam`, `safeFloat`, `safeJsonParse`, `clampInt`, `parseDate`, `asyncHandler`, `TaskQueue`, `computeConfidenceScore`, `autoAssignEmployee`, `cleanupFile`, `escapeCsvValue`, `filterCallsByDateRange`, `countFrequency`, `calculateSentimentBreakdown`, `calculateAvgScore`, `estimateBedrockCost`, `estimateAssemblyAICost`, `estimateEmbeddingCost`. **Note:** `requireRole` is exported from `server/auth.ts`, NOT from utils.ts. |
 | **Admin Routes** | `server/routes/admin.ts`, `admin-security.ts`, `admin-operations.ts`, `admin-content.ts` | Admin facade delegating to security (WAF, incidents, vulns), operations (queue, batch, calibration, telephony), and content (templates, A/B tests, webhooks, usage) |
 | **Employee Routes** | `server/routes/employees.ts` | Employee CRUD, bulk CSV import |
 | **Dashboard & Metrics** | `server/routes/dashboard.ts` | Dashboard metrics, sentiment distribution, top performers, flagged calls |
@@ -775,30 +775,54 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 
 **Path 1: Audio Upload → Analysis Completion**
 ```
-POST /api/calls/upload [routes/calls.ts]
-  → multer parses file → create call record (status: "uploading")
-  → archive audio to S3 [storage.uploadAudio]
-  → enqueue job [job-queue.ts] OR add to in-memory TaskQueue [pipeline.ts]
-  → Job worker calls processAudioFile() [pipeline.ts]:
+POST /api/calls/upload [routes/calls.ts:133]
+  → requireAuth middleware
+  → multer parses file → sanitize filename, validate category/language/processingMode
+  → Duplicate detection: SHA-256 content hash compared against existing calls
+    (rejects with 409 if already uploaded)
+  → storage.createCall() with status: "processing"
+  → storage.uploadAudio() — archive to S3
+  → If jobQueue (PostgreSQL) → jobQueue.enqueue("process_audio", payload)
+    Else → audioProcessingQueue.add() [in-memory TaskQueue]
+  → Return 201 with call record (pipeline runs async)
+
+Job worker [routes.ts:180] or in-memory TaskQueue [pipeline.ts:21]
+  → Reads audio from S3 (job queue path) or uses buffer (in-memory path)
+  → Calls processAudioFile() [pipeline.ts:57]:
     1. Get audio URL (presigned S3 or upload to AssemblyAI) [assemblyai.ts]
-    2. Submit transcription [assemblyai.ts:transcribeAudio]
-    3. Wait for transcript (webhook resolve OR polling) [assemblyai.ts:waitForTranscript]
-    4. Quality gates: empty transcript (<10 chars), low confidence (<0.6) → early exit
-    5. Build speaker-labeled transcript [assemblyai.ts:buildSpeakerLabeledTranscript]
-    6. [Parallel] RAG context fetch [rag-client.ts] + injection detection [prompt-guard.ts]
-    7. Build analysis prompt (with RAG, custom template, corrections) [ai-provider.ts]
-    8. If batch mode → save to S3 pending/, set status "awaiting_analysis", return
-    9. If on-demand → call Bedrock (via circuit breaker) [bedrock.ts → resilience.ts]
-       - Cost optimization: Haiku for short routine calls (≤120s, no template, <3K tokens)
-    10. Process results: normalize, calibrate scores [scoring-calibration.ts]
-    11. Compute confidence score [utils.ts:computeConfidenceScore]
-    12. Store transcript, sentiment, analysis [storage]
-    13. Auto-assign employee by detected name [utils.ts:autoAssignEmployee]
-    14. Auto-categorize call if AI returns category
-    15. Update call status → "completed"
-    16. [Fire-and-forget] Coaching alerts, badge evaluation, best practice ingestion,
-        webhook triggers, embedding generation
-    17. WebSocket broadcast → frontend [websocket.ts:broadcastCallUpdate]
+    2. Archive audio to S3 (skipped if already archived)
+    3. Build word boost list from employee names + COMPANY_NAME
+    4. Submit transcription [assemblyai.ts:transcribeAudio]
+    5. Wait for transcript (webhook resolve OR polling) [assemblyai.ts:waitForTranscript]
+    6. Quality gates: empty transcript (<10 chars) OR low confidence (<0.6) → early exit
+    7. Build speaker-labeled transcript [assemblyai.ts:buildSpeakerLabeledTranscript]
+    8. Compute utterance metrics [assemblyai.ts:computeUtteranceMetrics]
+    9. [Parallel] RAG context fetch [rag-client.ts] + injection detection [prompt-guard.ts]
+    10. Build analysis prompt (with RAG, custom template, corrections) [ai-provider.ts]
+    11. If batch mode → save to S3 pending/, store partial analysis,
+        set status "awaiting_analysis", track usage, return early
+    12. If on-demand → call Bedrock (via circuit breaker) [bedrock.ts → resilience.ts]
+        - Cost optimization: Haiku for short routine calls (≤120s, no template, <3K tokens)
+    13. Process results: normalize, calibrate sub-scores [scoring-calibration.ts]
+    14. Compute confidence score [utils.ts:computeConfidenceScore]
+    15. Identify agent speaker label from detected name
+    16. Store utterance metrics + RAG sources in confidenceFactors
+    17. Auto-categorize call if AI returned category (before storage writes)
+    18. Apply flags: low_confidence, prompt_injection_detected, output_anomaly
+    19. Store transcript, sentiment, analysis [storage]
+    20. [Fire-and-forget] generateCallEmbedding()
+    21. Auto-assign employee by detected name [utils.ts:autoAssignEmployee] (awaited)
+    22. storage.updateCall() → status: "completed"
+    23. [Fire-and-forget] Coaching alerts [coaching-alerts.ts]
+    24. [Fire-and-forget] Badge evaluation [gamification.ts]
+    25. [Fire-and-forget] Best practice ingestion if score ≥9.0 [best-practice-ingest.ts]
+    26. [Fire-and-forget] Webhook triggers: call.completed (+ score.low ≤4, score.exceptional ≥9)
+    27. Track usage record [storage.createUsageRecord]
+    28. WebSocket broadcast "completed" → frontend [websocket.ts:broadcastCallUpdate]
+    29. finally: cleanupFile(filePath)
+
+  On error: mark call "failed", broadcast "failed", trigger call.failed webhook,
+  cleanupFile in finally block.
 ```
 
 **Path 2: AssemblyAI Webhook → Transcript Stored**
@@ -854,7 +878,7 @@ Every subsequent request:
 **Where auth is enforced:**
 - `server/auth.ts` → `requireAuth` middleware on all non-public routes (imported by 15 route files)
 - `server/auth.ts` → `requireRole(level)` for role-gated endpoints (imported by 12 route files)
-- `server/index.ts` → rate limiting, CSRF (double-submit cookie + Content-Type), CORS, WAF, security headers
+- `server/index.ts` middleware stack (in order): X-Forwarded-For validation (strips spoofed IPs), correlation ID injection, HTTPS redirect (production), CORS (same-origin), WAF (SQLi/XSS/path traversal/IP blocklist), security headers (CSP, HSTS, X-Frame-Options, etc.), audit logging, CSRF double-submit cookie, CSRF Content-Type/X-Requested-With check, per-route rate limiting
 - `server/routes.ts` → AssemblyAI webhook uses timing-safe secret verification (not session auth)
 
 **Intentional auth bypass points:**
@@ -880,20 +904,22 @@ Every subsequent request:
 | Module | Consumers | Notes |
 |--------|-----------|-------|
 | `server/routes/utils.ts` | 16 files | All route files + `performance-snapshots.ts`, `batch-scheduler.ts` |
-| `server/storage.ts` | 15+ files | All route files + services |
-| `server/auth.ts` | 15 files | All route files + `websocket.ts` |
+| `server/storage.ts` | 27 files | 15 route files + `index.ts`, `routes.ts`, `auth.ts`, `storage-postgres.ts` (type import), and 8 services: `gamification.ts`, `coaching-alerts.ts`, `batch-scheduler.ts`, `scheduled-reports.ts`, `telephony-8x8.ts`, `scoring-feedback.ts`, `auto-calibration.ts`, `call-clustering.ts`. **Note:** `webhooks.ts` does NOT directly import `storage` — it receives an S3 client via `initWebhooks()` callback at the bottom of `storage.ts`. |
+| `server/auth.ts` | 16 files | All 15 auth-using route files + `websocket.ts` (imports `sessionMiddleware`) |
 | `server/services/audit-log.ts` | 13 files | Security services, middleware/waf, most route files |
 | `shared/schema.ts` | 15+ files | Route files, storage, services, client |
 
 **Key verified dependency chains:**
 - `shared/schema.ts` → consumed by route files, `storage.ts`, `storage-postgres.ts`, services — VERIFIED
-- `server/storage.ts` → consumed by `pipeline.ts` + 14 route files — VERIFIED
-- `server/routes/pipeline.ts` → `processAudioFile` consumed by `routes.ts` only (passed to `registerCallRoutes`, `startTelephonyScheduler`, and called in job worker) — VERIFIED
+- `server/storage.ts` → consumed by `pipeline.ts` + 14 other route files + 8 services (see table above) — VERIFIED
+- `server/routes/pipeline.ts` → exports `processAudioFile`, `shouldUseBatchMode`, `audioProcessingQueue`; all three consumed by `routes.ts` only (`processAudioFile` passed to `registerCallRoutes`, `startTelephonyScheduler`, and called in job worker) — VERIFIED
 - `server/services/ai-factory.ts` → `aiProvider` consumed by `pipeline.ts`, `reports.ts`, `snapshots.ts`, `coaching-alerts.ts` — VERIFIED
 - `server/services/assemblyai.ts` → consumed by `pipeline.ts`, `routes.ts`, `analytics.ts`, `admin-content.ts`, `batch-scheduler.ts` — VERIFIED
-- `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY — VERIFIED
+- `server/services/rag-client.ts` → `fetchRagContext` / `isRagEnabled` consumed by `pipeline.ts`, `coaching-alerts.ts`, `scoring-feedback.ts`, `best-practice-ingest.ts` — VERIFIED
+- `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback — VERIFIED
 - `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
-- `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file — VERIFIED
+- `server/services/audit-log.ts` → exports `logPhiAccess`, `flushAuditQueue`, `auditContext` (used by `routes/auth.ts` and other route files for extracting audit context), `AuditEntry`, `getDroppedAuditEntryCount`, `getPendingAuditEntryCount` — VERIFIED
+- `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file (only referenced in `tests/oqa-adaptations.test.ts` via dynamic `import()`) — VERIFIED
 
 ### Complexity & Risk Rankings
 
