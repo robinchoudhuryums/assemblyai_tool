@@ -247,7 +247,8 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
   processTranscriptData(
     transcriptResponse: AssemblyAIResponse,
     aiAnalysis: CallAnalysis | null,
-    callId: string
+    callId: string,
+    agentSpeakerLabel?: string,
   ): { transcript: InsertTranscript; sentiment: InsertSentimentAnalysis; analysis: InsertCallAnalysis } {
     // Build transcript record
     const transcript: InsertTranscript = {
@@ -297,15 +298,17 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       : undefined;
     const words = transcriptResponse.words || [];
 
-    // Calculate talk time ratio (if speaker labels exist)
-    let talkTimeRatio = 0.5;
-    if (words.length > 0) {
-      const speakerATime = words
-        .filter((w: TranscriptWord) => w.speaker === 'A')
+    // Calculate talk time ratio only when we know which speaker is the agent.
+    // A4/F06: previously assumed Speaker A was always the agent, producing
+    // misleading 0.5 fallbacks. Returns null when the agent label is unknown.
+    let talkTimeRatio: number | null = null;
+    if (agentSpeakerLabel && words.length > 0) {
+      const agentTime = words
+        .filter((w: TranscriptWord) => w.speaker === agentSpeakerLabel)
         .reduce((sum: number, w: TranscriptWord) => sum + (w.end - w.start), 0);
       const totalTime = words[words.length - 1].end - words[0].start;
       if (totalTime > 0) {
-        talkTimeRatio = Math.round((speakerATime / totalTime) * 100) / 100;
+        talkTimeRatio = Math.round((agentTime / totalTime) * 100) / 100;
       }
     }
 
@@ -337,7 +340,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
     const analysis: InsertCallAnalysis = {
       callId,
       performanceScore: performanceScore.toString(),
-      talkTimeRatio: talkTimeRatio.toString(),
+      talkTimeRatio: talkTimeRatio !== null ? talkTimeRatio.toString() : undefined,
       responseTime: undefined,
       keywords: normalizeStringArray(aiAnalysis?.topics, "topics"),
       topics: normalizeStringArray(aiAnalysis?.topics, "topics"),
@@ -413,6 +416,12 @@ export function computeUtteranceMetrics(words: TranscriptWord[]): UtteranceMetri
     return { interruptionCount: 0, avgResponseLatencyMs: 0, monologueSegments: 0, questionCount: 0, speakerATalkTimeMs: 0, speakerBTalkTimeMs: 0 };
   }
 
+  // NaN-safe env reads (A5/F01)
+  const parsedMonologue = Number(process.env.MONOLOGUE_DURATION_MS);
+  const monologueDurationMs = Number.isFinite(parsedMonologue) && parsedMonologue > 0 ? parsedMonologue : 60000;
+  const parsedGap = Number(process.env.INTERRUPTION_GAP_MS);
+  const interruptionGapMs = Number.isFinite(parsedGap) && parsedGap >= 0 ? parsedGap : 200;
+
   let interruptionCount = 0;
   const responseTimes: number[] = [];
   let monologueSegments = 0;
@@ -437,11 +446,11 @@ export function computeUtteranceMetrics(words: TranscriptWord[]): UtteranceMetri
       if (segmentSpeaker === "A") speakerATalkTimeMs += segmentDuration;
       else speakerBTalkTimeMs += segmentDuration;
 
-      if (segmentDuration > 60000) monologueSegments++;
+      if (segmentDuration > monologueDurationMs) monologueSegments++;
 
-      // Check for interruption: overlap or very short gap (< 200ms)
+      // Check for interruption: overlap or very short gap
       const gap = word.start - lastWordEnd;
-      if (gap < 200) {
+      if (gap < interruptionGapMs) {
         interruptionCount++;
       }
 
@@ -466,7 +475,7 @@ export function computeUtteranceMetrics(words: TranscriptWord[]): UtteranceMetri
   const finalDuration = lastWordEnd - segmentStart;
   if (segmentSpeaker === "A") speakerATalkTimeMs += finalDuration;
   else speakerBTalkTimeMs += finalDuration;
-  if (finalDuration > 60000) monologueSegments++;
+  if (finalDuration > monologueDurationMs) monologueSegments++;
 
   const avgResponseLatencyMs = responseTimes.length > 0
     ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)

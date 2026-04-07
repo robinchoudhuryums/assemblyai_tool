@@ -16,8 +16,8 @@
  * 5. Over time, the AI's scoring aligns with human judgment
  */
 
+import { randomUUID } from "crypto";
 import { storage } from "../storage";
-import { fetchRagContext, isRagEnabled, type RagSource } from "./rag-client";
 import { logger } from "./logger";
 
 export interface ScoringCorrection {
@@ -72,7 +72,7 @@ export async function recordScoringCorrection(params: {
   } catch { /* non-critical */ }
 
   const correction: ScoringCorrection = {
-    id: `corr-${Date.now()}`,
+    id: `corr-${randomUUID()}`,
     callId,
     callCategory,
     correctedBy,
@@ -105,6 +105,43 @@ export async function recordScoringCorrection(params: {
     }
   } catch {
     // Non-critical — correction is still in memory
+  }
+}
+
+/**
+ * A2/F11: Hydrate in-memory corrections from S3 at startup so the feedback loop
+ * survives restarts. Called from server/index.ts after storage is initialized.
+ * Loads up to MAX_CORRECTIONS most recent corrections.
+ */
+export async function loadPersistedCorrections(): Promise<number> {
+  try {
+    const s3Client = storage.getObjectStorageClient();
+    if (!s3Client) return 0;
+
+    const keys = await s3Client.listObjects("corrections/");
+    if (!keys || keys.length === 0) return 0;
+
+    // Load all (or last MAX_CORRECTIONS) and sort by correctedAt
+    const subset = keys.slice(-MAX_CORRECTIONS * 2); // over-fetch to allow sorting
+    const loaded: ScoringCorrection[] = [];
+    for (const key of subset) {
+      try {
+        const c = await s3Client.downloadJson<ScoringCorrection>(key);
+        if (c && c.id && c.callId) loaded.push(c);
+      } catch {
+        // skip individual failures
+      }
+    }
+    loaded.sort((a, b) => (a.correctedAt || "").localeCompare(b.correctedAt || ""));
+    const trimmed = loaded.slice(-MAX_CORRECTIONS);
+    corrections.length = 0;
+    corrections.push(...trimmed);
+
+    logger.info("Hydrated scoring corrections from S3", { count: corrections.length });
+    return corrections.length;
+  } catch (err) {
+    logger.warn("Failed to hydrate scoring corrections from S3", { error: (err as Error).message });
+    return 0;
   }
 }
 

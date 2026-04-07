@@ -51,8 +51,24 @@ async function processBatchResults(
           continue;
         }
 
+        // A4/F06: derive agent speaker label from detected name + early words
+        let agentSpeakerLabel: string | undefined;
+        const words = transcriptResponse.words as Array<{ text: string; speaker?: string }> | undefined;
+        if (analysis.detected_agent_name && words && words.length > 0) {
+          const detectedName = analysis.detected_agent_name.toLowerCase();
+          const earlyWords = words.slice(0, 50);
+          for (let i = 0; i < earlyWords.length; i++) {
+            const w = earlyWords[i];
+            if (w.text.toLowerCase().includes(detectedName) ||
+                (i > 0 && `${earlyWords[i - 1].text} ${w.text}`.toLowerCase().includes(detectedName))) {
+              agentSpeakerLabel = w.speaker || undefined;
+              break;
+            }
+          }
+        }
+
         const { analysis: updatedAnalysis } =
-          assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId);
+          assemblyAIService.processTranscriptData(transcriptResponse, analysis, callId, agentSpeakerLabel);
 
         const callDuration = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
         const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore(

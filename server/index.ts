@@ -426,6 +426,9 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // is no longer load-bearing.
   initWebhooks(() => storage.getObjectStorageClient() || null);
 
+  // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
+  void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});
+
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
 
