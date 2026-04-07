@@ -1,3 +1,5 @@
+import { logger } from "./logger";
+
 /**
  * Call Quality Scoring Calibration
  *
@@ -54,7 +56,7 @@ export async function loadPersistedCalibration(s3Client: { downloadJson<T>(key: 
     const stored = await s3Client.downloadJson<Partial<ScoringCalibration>>("calibration/active-config.json");
     if (stored) {
       runtimeOverrides = stored;
-      console.log("[CALIBRATION] Loaded persisted calibration overrides:", JSON.stringify(stored));
+      logger.info("Loaded persisted calibration overrides", { stored });
     }
   } catch {
     // No persisted config — use env vars

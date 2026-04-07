@@ -101,6 +101,16 @@ export interface IStorage {
   setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
+  /**
+   * A7/F14: indexed status lookup. Replaces full-table scan + filter used by
+   * batch orphan recovery and background workers.
+   */
+  getCallsByStatus(status: string): Promise<Call[]>;
+  /**
+   * A7/F14: return calls created on or after the given date. Backed by the
+   * existing created_at index. Used by auto-calibration and windowed analytics.
+   */
+  getCallsSince(since: Date): Promise<Call[]>;
   /** Find a call by its content hash (A21). Returns undefined if not found. */
   findCallByContentHash(contentHash: string): Promise<Call | undefined>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
@@ -327,6 +337,13 @@ export class MemStorage implements IStorage {
     return [...this.calls.values()].sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
+  }
+  async getCallsByStatus(status: string): Promise<Call[]> {
+    return [...this.calls.values()].filter(c => c.status === status);
+  }
+  async getCallsSince(since: Date): Promise<Call[]> {
+    const sinceMs = since.getTime();
+    return [...this.calls.values()].filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
   }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     for (const c of this.calls.values()) {
@@ -794,6 +811,16 @@ export class CloudStorage implements IStorage {
     return calls.sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
+  }
+  async getCallsByStatus(status: string): Promise<Call[]> {
+    // A7/F14: no secondary index in S3-only backend — O(n) is unavoidable here.
+    const all = await this.getAllCalls();
+    return all.filter(c => c.status === status);
+  }
+  async getCallsSince(since: Date): Promise<Call[]> {
+    const all = await this.getAllCalls();
+    const sinceMs = since.getTime();
+    return all.filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
   }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     // O(n) in S3-only mode — acceptable fallback when no DB is configured.

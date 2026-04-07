@@ -18,6 +18,7 @@ import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { CircuitBreaker } from "./resilience";
 import { withSpan } from "./trace-span";
 import { signRequest, sha256Buffer } from "./sigv4.js";
+import { logger } from "./logger";
 
 // LRU cache for embeddings — avoids redundant Bedrock calls on re-analysis/retries.
 // Keyed by content hash (SHA-256 of input text). Max 200 entries (~50KB per 256-dim vector).
@@ -31,7 +32,14 @@ function getEmbeddingCacheKey(text: string): string {
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";
 const DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 const DEFAULT_REGION = "us-east-1";
-const BEDROCK_TIMEOUT_MS = 120_000; // 2 minutes — prevents indefinite hangs
+
+// A9/F12: env-configurable timeouts with NaN-safe defaults
+function envIntMs(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+const BEDROCK_TIMEOUT_MS = envIntMs("BEDROCK_TIMEOUT_MS", 120_000); // 2 min default
+const BEDROCK_EMBEDDING_TIMEOUT_MS = envIntMs("BEDROCK_EMBEDDING_TIMEOUT_MS", 15_000);
 
 // Shared circuit breaker for all Bedrock instances — prevents cascading failures
 // when Bedrock is down. 5 failures → open for 30s → half-open test → close on success.
@@ -56,11 +64,11 @@ export class BedrockProvider implements AIAnalysisProvider {
       };
       this.initialized = true;
       if (!modelOverride) {
-        console.log(`Bedrock provider initialized (region: ${this.credentials.region}, model: ${this.model})`);
+        logger.info("Bedrock provider initialized", { region: this.credentials.region, model: this.model });
       }
     } else {
       if (!modelOverride) {
-        console.log("Bedrock provider: env vars not set, will try IMDS on first request");
+        logger.info("Bedrock provider: env vars not set, will try IMDS on first request");
       }
     }
   }
@@ -87,10 +95,11 @@ export class BedrockProvider implements AIAnalysisProvider {
   }
 
   get isAvailable(): boolean {
-    // Synchronous check: credentials already loaded, env vars present, or IMDS not yet tried
+    // A8/F07: honest check — credentials must already be loaded or env vars present.
+    // Previous "optimistic" branch returned true when IMDS had not yet been tried,
+    // which made callers log "AI provider not configured" only after a real request failed.
     return this.credentials !== null
-      || !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
-      || !this.initialized; // optimistic: IMDS may succeed on first request
+      || !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
   }
 
   async generateText(prompt: string): Promise<string> {
@@ -119,7 +128,7 @@ export class BedrockProvider implements AIAnalysisProvider {
           const errorText = await response.text();
           // HIPAA: Log full error server-side, throw sanitized message to prevent
           // AWS internals (account IDs, ARNs, model details) from reaching clients.
-          console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+          logger.error("Bedrock API error", { status: response.status, error: errorText.substring(0, 300) });
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
@@ -159,7 +168,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       },
     });
 
-    console.log(`[${callId}] Calling Bedrock (${this.model}) for analysis...`);
+    logger.info("Calling Bedrock for analysis", { callId, model: this.model });
 
     const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
 
@@ -176,7 +185,7 @@ export class BedrockProvider implements AIAnalysisProvider {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[Bedrock] API error (${response.status}): ${errorText.substring(0, 300)}`);
+          logger.error("Bedrock API error", { status: response.status, error: errorText.substring(0, 300) });
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
@@ -196,7 +205,7 @@ export class BedrockProvider implements AIAnalysisProvider {
     const analysis = parseJsonResponse(responseText, callId, callDurationSeconds);
     span.setAttribute("score", analysis.performance_score || 0);
     span.setAttribute("sentiment", analysis.sentiment || "unknown");
-    console.log(`[${callId}] Bedrock analysis complete (score: ${analysis.performance_score}/10, sentiment: ${analysis.sentiment})`);
+    logger.info("Bedrock analysis complete", { callId, score: analysis.performance_score, sentiment: analysis.sentiment });
     return analysis;
     }); // end withSpan
   }
@@ -209,9 +218,15 @@ export class BedrockProvider implements AIAnalysisProvider {
   async generateEmbedding(text: string): Promise<number[] | null> {
     try {
       // Check LRU cache first (avoids redundant Bedrock calls on re-analysis)
+      // A13/F20: true LRU — delete-then-set on hit moves the entry to the
+      // most-recently-used end (Map iteration order = insertion order).
       const cacheKey = getEmbeddingCacheKey(text);
       const cached = embeddingCache.get(cacheKey);
-      if (cached) return cached;
+      if (cached) {
+        embeddingCache.delete(cacheKey);
+        embeddingCache.set(cacheKey, cached);
+        return cached;
+      }
 
       const creds = await this.ensureCredentials();
       const region = creds.region;
@@ -233,12 +248,12 @@ export class BedrockProvider implements AIAnalysisProvider {
 
       return bedrockCircuitBreaker.execute(async () => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout for embeddings
+        const timeout = setTimeout(() => controller.abort(), BEDROCK_EMBEDDING_TIMEOUT_MS);
         try {
           const response = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
           if (!response.ok) {
             const errorText = await response.text();
-            console.warn(`Embedding API error (${response.status}): ${errorText.substring(0, 200)}`);
+            logger.warn("Bedrock embedding API error", { status: response.status, error: errorText.substring(0, 200) });
             return null;
           }
           const result = await response.json();
@@ -257,7 +272,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       });
     } catch (error) {
       // Non-critical — clustering falls back to TF-IDF
-      console.warn("Embedding generation failed (non-critical):", (error as Error).message);
+      logger.warn("Bedrock embedding generation failed (non-critical)", { error: (error as Error).message });
       return null;
     }
   }

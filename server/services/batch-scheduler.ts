@@ -15,6 +15,7 @@ import { broadcastCallUpdate } from "./websocket";
 import { estimateBedrockCost, computeConfidenceScore, autoAssignEmployee } from "../routes/utils";
 import type { UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { logger } from "./logger";
 
 const ORPHAN_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const ORPHAN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -35,11 +36,11 @@ async function processBatchResults(
   s3Client: NonNullable<ReturnType<typeof storage.getObjectStorageClient>>,
 ): Promise<void> {
   const status = await bedrockBatchService.getJobStatus(job.jobArn);
-  console.log(`[BATCH] Job ${job.jobId}: ${status.status}`);
+  logger.info("Batch job status", { jobId: job.jobId, status: status.status });
 
   if (status.status === "Completed") {
     const results = await bedrockBatchService.readBatchOutput(job.outputS3Uri);
-    console.log(`[BATCH] Job ${job.jobId} completed. Processing ${results.size} results.`);
+    logger.info("Batch job completed, processing results", { jobId: job.jobId, resultCount: results.size });
 
     for (const [callId, analysis] of results) {
       try {
@@ -47,7 +48,7 @@ async function processBatchResults(
         const transcriptResponse = pendingData?.transcriptResponse;
 
         if (!transcriptResponse) {
-          console.warn(`[BATCH] No transcript data found for call ${callId}, skipping.`);
+          logger.warn("Batch: no transcript data found for call, skipping", { callId });
           continue;
         }
 
@@ -138,20 +139,20 @@ async function processBatchResults(
           };
           await storage.createUsageRecord(usageRecord);
         } catch (usageErr) {
-          console.warn(`[BATCH] Failed to record usage for ${callId}:`, (usageErr as Error).message);
+          logger.warn("Batch: failed to record usage", { callId, error: (usageErr as Error).message });
         }
 
         broadcastCallUpdate(callId, "completed", { label: "Batch analysis complete" });
         await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
-        console.log(`[BATCH] Call ${callId} analysis stored successfully.`);
+        logger.info("Batch: call analysis stored successfully", { callId });
       } catch (callErr) {
-        console.warn(`[BATCH] Failed to process result for ${callId}:`, (callErr as Error).message);
+        logger.warn("Batch: failed to process result", { callId, error: (callErr as Error).message });
       }
     }
 
     await s3Client.deleteObject(jobKey);
   } else if (status.status === "Failed" || status.status === "Stopped" || status.status === "Expired") {
-    console.error(`[BATCH] Job ${job.jobId} failed: ${status.message || status.status}`);
+    logger.error("Batch job failed", { jobId: job.jobId, reason: status.message || status.status });
     for (const callId of job.callIds) {
       await storage.updateCall(callId, { status: "failed" });
       broadcastCallUpdate(callId, "failed", { label: "Batch analysis failed" });
@@ -179,7 +180,7 @@ export async function runBatchCycle(): Promise<void> {
         if (!job) continue;
         await processBatchResults(job, jobKey, s3Client);
       } catch (jobErr) {
-        console.warn(`[BATCH] Error checking job status:`, (jobErr as Error).message);
+        logger.warn("Batch: error checking job status", { error: (jobErr as Error).message });
       }
     }
 
@@ -192,13 +193,13 @@ export async function runBatchCycle(): Promise<void> {
       if (oldestItem) {
         const age = Date.now() - new Date(oldestItem.timestamp).getTime();
         if (age < batchIntervalMinutes * 60 * 1000 * 2) {
-          console.log(`[BATCH] ${pendingKeys.length} pending items (below threshold of ${MIN_BATCH_SIZE}). Waiting for more.`);
+          logger.info("Batch: below threshold, waiting", { pendingCount: pendingKeys.length, threshold: MIN_BATCH_SIZE });
           return;
         }
       }
     }
 
-    console.log(`[BATCH] Collecting ${pendingKeys.length} pending items for batch submission.`);
+    logger.info("Batch: collecting pending items for submission", { pendingCount: pendingKeys.length });
 
     const items: PendingBatchItem[] = [];
     for (const key of pendingKeys) {
@@ -206,7 +207,7 @@ export async function runBatchCycle(): Promise<void> {
       if (data?.callId && data?.prompt) {
         items.push({ callId: data.callId, prompt: data.prompt, callCategory: data.callCategory, uploadedBy: data.uploadedBy, timestamp: data.timestamp });
       } else {
-        console.warn(`[BATCH] Skipping invalid pending item: ${key}`);
+        logger.warn("Batch: skipping invalid pending item", { key });
       }
     }
 
@@ -217,10 +218,10 @@ export async function runBatchCycle(): Promise<void> {
     const batchJob = await bedrockBatchService.createJob(s3Uri, batchId, callIds);
 
     await s3Client.uploadJson(`batch-inference/active-jobs/${batchJob.jobId}.json`, batchJob);
-    console.log(`[BATCH] Submitted batch job ${batchJob.jobId} with ${items.length} calls.`);
+    logger.info("Batch: submitted job", { jobId: batchJob.jobId, itemCount: items.length });
 
   } catch (batchErr) {
-    console.error(`[BATCH] Batch cycle error:`, (batchErr as Error).message);
+    logger.error("Batch cycle error", { error: (batchErr as Error).message });
   }
 }
 
@@ -232,8 +233,8 @@ export async function recoverOrphans(): Promise<void> {
     const s3Client = storage.getObjectStorageClient();
     if (!s3Client) return;
 
-    const allCalls = await storage.getAllCalls();
-    const awaitingCalls = allCalls.filter(c => c.status === "awaiting_analysis");
+    // A7/F14: indexed status lookup replaces full-table scan
+    const awaitingCalls = await storage.getCallsByStatus("awaiting_analysis");
     if (awaitingCalls.length === 0) return;
 
     const pendingKeys = new Set(
@@ -251,10 +252,10 @@ export async function recoverOrphans(): Promise<void> {
       }
     }
     if (recovered > 0) {
-      console.warn(`[BATCH] Recovered ${recovered} orphaned call(s) stuck in awaiting_analysis.`);
+      logger.warn("Batch: recovered orphaned calls stuck in awaiting_analysis", { count: recovered });
     }
   } catch (err) {
-    console.warn("[BATCH] Orphan recovery error:", (err as Error).message);
+    logger.warn("Batch: orphan recovery error", { error: (err as Error).message });
   }
 }
 
@@ -266,7 +267,7 @@ export function startBatchScheduler(): () => void {
   if (!bedrockBatchService.isAvailable) return () => {};
 
   const batchIntervalMinutes = parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10);
-  console.log(`[BATCH] Batch inference mode enabled. Scheduling every ${batchIntervalMinutes} minutes.`);
+  logger.info("Batch inference mode enabled", { intervalMinutes: batchIntervalMinutes });
 
   // First run after 1 minute, then on interval
   batchCycleTimeout = setTimeout(runBatchCycle, 60_000);
@@ -287,5 +288,5 @@ export function stopBatchScheduler(): void {
   if (batchCycleInterval) { clearInterval(batchCycleInterval); batchCycleInterval = null; }
   if (orphanCheckTimeout) { clearTimeout(orphanCheckTimeout); orphanCheckTimeout = null; }
   if (orphanCheckInterval) { clearInterval(orphanCheckInterval); orphanCheckInterval = null; }
-  console.log("[BATCH] Scheduler stopped.");
+  logger.info("Batch scheduler stopped");
 }
