@@ -194,6 +194,7 @@ export class MemStorage implements IStorage {
   private transcripts = new Map<string, Transcript>();
   private sentiments = new Map<string, SentimentAnalysis>();
   private analyses = new Map<string, CallAnalysis>();
+  private badges = new Map<string, Badge>();
   private audioFiles = new Map<string, Buffer>(); // objectName -> buffer
   private accessRequests = new Map<string, AccessRequest>();
   private promptTemplates = new Map<string, PromptTemplate>();
@@ -266,6 +267,21 @@ export class MemStorage implements IStorage {
     return this.calls.get(id);
   }
   async createCall(call: InsertCall): Promise<Call> {
+    // F20: enforce content_hash uniqueness in MemStorage to mirror the
+    // PostgresStorage UNIQUE INDEX (idx_calls_content_hash_unique). The
+    // route handler in routes/calls.ts catches pg error code 23505 — match
+    // that shape so dev parity holds.
+    if (call.contentHash) {
+      for (const existing of this.calls.values()) {
+        if (existing.contentHash === call.contentHash) {
+          const err = new Error(
+            `duplicate key value violates unique constraint "idx_calls_content_hash_unique"`,
+          ) as Error & { code?: string };
+          err.code = "23505";
+          throw err;
+        }
+      }
+    }
     const id = randomUUID();
     const newCall: Call = { ...call, id, uploadedAt: new Date().toISOString() };
     this.calls.set(id, newCall);
@@ -611,8 +627,6 @@ export class MemStorage implements IStorage {
   }
 
   // Gamification
-  private badges = new Map<string, Badge>();
-
   async createBadge(badge: InsertBadge): Promise<Badge> {
     const id = randomUUID();
     const newBadge: Badge = { id, ...badge };
@@ -1232,10 +1246,25 @@ function createStorage(): IStorage {
 
   const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
 
-  // S3-only storage (legacy, all data as JSON files in S3)
-  if (storageBackend === "s3" || process.env.S3_BUCKET) {
+  // F08/F17: CloudStorage (S3-only JSON blob backend) is deprecated. The
+  // gate was renamed to STORAGE_BACKEND=s3-legacy so the old "s3" value
+  // can no longer silently activate it. Operators on the old value get a
+  // hard startup error rather than a silent fallback to MemStorage (which
+  // would lose data on every restart).
+  if (storageBackend === "s3") {
+    throw new Error(
+      "[STORAGE] STORAGE_BACKEND=s3 is no longer supported. CloudStorage is deprecated; " +
+      "set DATABASE_URL to use PostgresStorage, or set STORAGE_BACKEND=s3-legacy to opt in " +
+      "to the legacy S3-only backend (which will be removed in a future release).",
+    );
+  }
+
+  if (storageBackend === "s3-legacy") {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
-    console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);
+    console.warn(
+      `[STORAGE] WARN: CloudStorage backend is deprecated and will be removed. ` +
+      `Migrate to PostgresStorage by setting DATABASE_URL. (bucket: ${bucket})`,
+    );
     return new CloudStorage(new S3Client(bucket));
   }
 
