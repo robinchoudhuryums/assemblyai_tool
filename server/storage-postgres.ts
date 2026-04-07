@@ -125,7 +125,9 @@ function mapUsageRecord(row: any): UsageRecord {
   return {
     id: row.id, callId: row.call_id, type: row.type,
     timestamp: row.timestamp?.toISOString?.() ?? row.timestamp,
-    user: row.user, services: row.services,
+    // F18: query aliases the reserved-word column "user" → user_name
+    user: row.user_name,
+    services: row.services,
     totalEstimatedCost: parseFloat(row.total_estimated_cost),
   };
 }
@@ -946,7 +948,11 @@ export class PostgresStorage implements IStorage {
   }
 
   async getAllUsageRecords(): Promise<UsageRecord[]> {
-    const { rows } = await this.db.query("SELECT * FROM usage_records ORDER BY timestamp DESC");
+    // F18: explicit alias for the reserved-word column "user" → user_name
+    const { rows } = await this.db.query(
+      `SELECT id, call_id, type, timestamp, "user" AS user_name, services, total_estimated_cost
+       FROM usage_records ORDER BY timestamp DESC`,
+    );
     return rows.map(mapUsageRecord);
   }
 
@@ -1026,23 +1032,40 @@ export class PostgresStorage implements IStorage {
   }
 
   // --- Gamification ---
+  // F15: ON CONFLICT only fires for milestone badge types — those are the
+  // only ones with a UNIQUE (employee_id, badge_type) constraint. For all
+  // other badge types (score/streak/sub-score/improvement), the conflict
+  // path is unreachable and indicates a logic bug; throw loudly instead of
+  // silently swallowing the row count == 0 case.
+  private static readonly MILESTONE_BADGE_TYPES = new Set([
+    "first_call", "calls_25", "calls_50", "calls_100",
+  ]);
+
   async createBadge(badge: InsertBadge): Promise<Badge> {
     const id = randomUUID();
+    const isMilestone = PostgresStorage.MILESTONE_BADGE_TYPES.has(badge.badgeType);
     const { rows } = await this.db.query(
       `INSERT INTO badges (id, employee_id, badge_type, call_id, earned_at, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT DO NOTHING
+       ${isMilestone ? "ON CONFLICT DO NOTHING" : ""}
        RETURNING *`,
       [id, badge.employeeId, badge.badgeType, badge.callId || null, badge.earnedAt, JSON.stringify(badge.metadata || {})]
     );
     if (rows.length === 0) {
-      // Badge already exists (unique constraint), return existing
+      if (!isMilestone) {
+        throw new Error(
+          `createBadge: INSERT returned no rows for non-milestone badge "${badge.badgeType}" — should be unreachable`,
+        );
+      }
+      // Milestone duplicate path: return the existing row
       const existing = await this.db.query(
         `SELECT * FROM badges WHERE employee_id = $1 AND badge_type = $2 LIMIT 1`,
         [badge.employeeId, badge.badgeType]
       );
       if (existing.rows.length > 0) return this.mapBadge(existing.rows[0]);
-      return { id, ...badge };
+      throw new Error(
+        `createBadge: milestone "${badge.badgeType}" conflict with no existing row for employee ${badge.employeeId}`,
+      );
     }
     return this.mapBadge(rows[0]);
   }

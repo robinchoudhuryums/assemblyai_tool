@@ -194,6 +194,7 @@ export class MemStorage implements IStorage {
   private transcripts = new Map<string, Transcript>();
   private sentiments = new Map<string, SentimentAnalysis>();
   private analyses = new Map<string, CallAnalysis>();
+  private badges = new Map<string, Badge>();
   private audioFiles = new Map<string, Buffer>(); // objectName -> buffer
   private accessRequests = new Map<string, AccessRequest>();
   private promptTemplates = new Map<string, PromptTemplate>();
@@ -266,6 +267,21 @@ export class MemStorage implements IStorage {
     return this.calls.get(id);
   }
   async createCall(call: InsertCall): Promise<Call> {
+    // F20: enforce content_hash uniqueness in MemStorage to mirror the
+    // PostgresStorage UNIQUE INDEX (idx_calls_content_hash_unique). The
+    // route handler in routes/calls.ts catches pg error code 23505 — match
+    // that shape so dev parity holds.
+    if (call.contentHash) {
+      for (const existing of this.calls.values()) {
+        if (existing.contentHash === call.contentHash) {
+          const err = new Error(
+            `duplicate key value violates unique constraint "idx_calls_content_hash_unique"`,
+          ) as Error & { code?: string };
+          err.code = "23505";
+          throw err;
+        }
+      }
+    }
     const id = randomUUID();
     const newCall: Call = { ...call, id, uploadedAt: new Date().toISOString() };
     this.calls.set(id, newCall);
@@ -611,8 +627,6 @@ export class MemStorage implements IStorage {
   }
 
   // Gamification
-  private badges = new Map<string, Badge>();
-
   async createBadge(badge: InsertBadge): Promise<Badge> {
     const id = randomUUID();
     const newBadge: Badge = { id, ...badge };
