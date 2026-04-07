@@ -196,10 +196,8 @@ describe("webhook event filtering", () => {
 
 describe("webhook S3 client not initialized", () => {
   beforeEach(() => {
-    // Reset to no S3 client. Also invalidate the 30s config cache by creating
-    // and deleting a config via a fresh mock — without this, getAllWebhookConfigs
-    // serves stale cached entries from the previous describe block.
-    initWebhooks(() => undefined);
+    // Reset to no S3 client
+    initWebhooks(() => null);
   });
 
   it("getAllWebhookConfigs returns empty array", async () => {
@@ -227,7 +225,9 @@ describe("webhook S3 client not initialized", () => {
     );
   });
 
-  it("deleteWebhookConfig throws when S3 unavailable", async () => {
+  it("deleteWebhookConfig throws when S3 client unavailable", async () => {
+    // A5: writes (create/update/delete) now throw via requireS3Client()
+    // instead of silently no-op'ing. Reads still degrade gracefully.
     await assert.rejects(
       () => deleteWebhookConfig("any-id"),
       /S3 client unavailable/
