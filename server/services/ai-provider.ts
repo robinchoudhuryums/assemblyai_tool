@@ -2,6 +2,8 @@
  * AI Analysis Provider — shared interface for AWS Bedrock (Claude).
  */
 import { z } from "zod";
+import { buildCorrectionContext } from "./scoring-feedback";
+import { logger } from "./logger";
 
 export interface CallAnalysis {
   summary: string;
@@ -178,13 +180,10 @@ export function buildAnalysisPrompt(transcriptText: string, callCategory?: strin
   }
 
   // Scoring corrections from manager feedback loop — teaches the AI to avoid past mistakes
-  try {
-    const { buildCorrectionContext } = require("./scoring-feedback");
-    const correctionContext = buildCorrectionContext(callCategory);
-    if (correctionContext) {
-      ragSection += `\n- ${correctionContext}`;
-    }
-  } catch { /* scoring-feedback module not loaded yet — skip */ }
+  const correctionContext = buildCorrectionContext(callCategory);
+  if (correctionContext) {
+    ragSection += `\n- ${correctionContext}`;
+  }
 
   // Language instruction for non-English analysis
   let languageInstruction = "";
@@ -222,18 +221,23 @@ const FeedbackItemSchema = z.union([
   z.object({ text: z.string(), timestamp: z.string().optional() }),
 ]);
 
+// A12/F17: summary, performance_score, and sub_scores no longer have `.catch()`
+// fallbacks. If the AI returns invalid data for any of these, the whole parse
+// fails, pipeline catches it, and the call either retries once or falls back
+// to the no-AI code path. Previously, silent Zod defaults produced calls that
+// looked "successfully analyzed" but contained meaningless 5.0 placeholders.
 const CallAnalysisSchema = z.object({
-  summary: z.string().min(1).catch("No summary available"),
+  summary: z.string().min(1),
   topics: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])).catch([]),
   sentiment: z.enum(["positive", "neutral", "negative"]).catch("neutral"),
   sentiment_score: z.number().min(0).max(1).catch(0.5),
-  performance_score: z.number().min(0).max(10).catch(5.0),
+  performance_score: z.number().min(0).max(10),
   sub_scores: z.object({
-    compliance: z.number().min(0).max(10).catch(5.0),
-    customer_experience: z.number().min(0).max(10).catch(5.0),
-    communication: z.number().min(0).max(10).catch(5.0),
-    resolution: z.number().min(0).max(10).catch(5.0),
-  }).catch({ compliance: 5.0, customer_experience: 5.0, communication: 5.0, resolution: 5.0 }),
+    compliance: z.number().min(0).max(10),
+    customer_experience: z.number().min(0).max(10),
+    communication: z.number().min(0).max(10),
+    resolution: z.number().min(0).max(10),
+  }),
   action_items: z.array(z.union([z.string(), z.object({ text: z.string() }).transform(o => o.text)])).catch([]),
   feedback: z.object({
     strengths: z.array(FeedbackItemSchema).catch([]),
@@ -282,7 +286,7 @@ function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number
 export function parseJsonResponse(text: string, callId: string, callDurationSeconds?: number): CallAnalysis {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    console.warn(`[${callId}] AI response was not parseable JSON:`, text.slice(0, 200));
+    logger.warn("AI response was not parseable JSON", { callId, sample: text.slice(0, 200) });
     throw new Error("AI response did not contain valid JSON");
   }
 
@@ -290,49 +294,33 @@ export function parseJsonResponse(text: string, callId: string, callDurationSeco
   try {
     raw = JSON.parse(jsonMatch[0]);
   } catch (parseError) {
-    console.warn(`[${callId}] JSON parse failed:`, (parseError as Error).message, text.slice(0, 300));
+    logger.warn("AI JSON parse failed", { callId, error: (parseError as Error).message, sample: text.slice(0, 300) });
     throw new Error("AI response contained malformed JSON");
   }
 
-  const result = CallAnalysisSchema.safeParse(raw);
-  if (!result.success) {
-    console.warn(`[${callId}] AI response failed Zod validation:`, result.error.issues.slice(0, 5));
-    throw new Error("AI response failed schema validation");
-  }
+  let result = CallAnalysisSchema.safeParse(raw);
 
-  let analysis = result.data as CallAnalysis;
-
-  // Quality gate: if all fields are at defaults, the AI likely returned garbage
-  // that was silently defaulted by Zod .catch() handlers. Try to recover by
-  // unwrapping a nested wrapper (e.g. { analysis: { ... } } or { result: { ... } }).
-  const isAllDefaults = analysis.summary === "No summary available"
-    && analysis.sub_scores.compliance === 5.0
-    && analysis.sub_scores.customer_experience === 5.0
-    && analysis.sub_scores.communication === 5.0
-    && analysis.sub_scores.resolution === 5.0;
-
-  if (isAllDefaults && raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const values = Object.values(raw as Record<string, unknown>);
-    for (const nested of values) {
+  // A12/F17: on validation failure, attempt a single nested-wrapper unwrap
+  // (e.g. { analysis: { ... } } or { result: { ... } }) before giving up.
+  if (!result.success && raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const nested of Object.values(raw as Record<string, unknown>)) {
       if (nested && typeof nested === "object" && !Array.isArray(nested)) {
         const retry = CallAnalysisSchema.safeParse(nested);
         if (retry.success) {
-          const retryData = retry.data as CallAnalysis;
-          // Only use the nested result if it's NOT all-defaults too
-          if (retryData.summary !== "No summary available") {
-            console.log(`[${callId}] Recovered AI response from nested wrapper object`);
-            analysis = retryData;
-            break;
-          }
+          logger.info("Recovered AI response from nested wrapper object", { callId });
+          result = retry;
+          break;
         }
       }
     }
-
-    // If still all-defaults after unwrap attempts, log the warning
-    if (analysis.summary === "No summary available") {
-      console.warn(`[${callId}] AI response quality gate: all fields at defaults — AI likely returned unusable output`);
-    }
   }
+
+  if (!result.success) {
+    logger.warn("AI response failed Zod validation", { callId, issues: result.error.issues.slice(0, 5) });
+    throw new Error("AI response failed schema validation");
+  }
+
+  const analysis = result.data as CallAnalysis;
 
   return validateTimestamps(analysis, callDurationSeconds);
 }

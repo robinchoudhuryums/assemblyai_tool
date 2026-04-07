@@ -17,8 +17,9 @@
 import { randomUUID } from "crypto";
 import { parseJsonResponse } from "./ai-provider";
 import type { CallAnalysis } from "./ai-provider";
-import { signRequest, sha256, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
+import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
+import { logger } from "./logger";
 
 const BATCH_TIMEOUT_MS = 30_000; // 30s for batch management API calls
 
@@ -75,7 +76,7 @@ export class BedrockBatchService {
     if (process.env.BEDROCK_BATCH_MODE !== "true") return false;
     if (!process.env.BEDROCK_BATCH_ROLE_ARN) {
       if (!this.misconfigLogged) {
-        console.error("[BATCH] BEDROCK_BATCH_MODE=true but BEDROCK_BATCH_ROLE_ARN is not set — batch mode disabled");
+        logger.error("BEDROCK_BATCH_MODE=true but BEDROCK_BATCH_ROLE_ARN is not set — batch mode disabled");
         this.misconfigLogged = true;
       }
       return false;
@@ -101,9 +102,11 @@ export class BedrockBatchService {
     const key = `batch-inference/input/${batchId}.jsonl`;
     const s3Uri = `s3://${this.bucketName}/${key}`;
 
-    // Upload JSONL to S3 using raw PUT
+    // Upload JSONL to S3 using raw PUT.
+    // A15/F19: Bedrock batch inference JSONL input — content-type per AWS docs:
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-data.html
     await this.s3Put(key, Buffer.from(jsonlContent, "utf-8"), "application/jsonl");
-    console.log(`[BATCH] Uploaded input file: ${s3Uri} (${items.length} items, ${jsonlContent.length} bytes)`);
+    logger.info("Batch input uploaded", { s3Uri, itemCount: items.length, bytes: jsonlContent.length });
 
     return { s3Uri, batchId };
   }
@@ -160,7 +163,7 @@ export class BedrockBatchService {
       const result = await response.json() as { jobArn: string };
       const jobId = result.jobArn.split("/").pop() || batchId;
 
-      console.log(`[BATCH] Job created: ${jobId} (${callIds.length} calls)`);
+      logger.info("Batch job created", { jobId, callCount: callIds.length });
 
       return {
         jobId,
@@ -222,7 +225,7 @@ export class BedrockBatchService {
 
     // List output files (Bedrock writes .jsonl.out files)
     const outputFiles = await this.s3List(uriPath);
-    console.log(`[BATCH] Found ${outputFiles.length} output files under ${uriPath}`);
+    logger.info("Batch output files located", { count: outputFiles.length, uriPath });
 
     for (const file of outputFiles) {
       if (!file.endsWith(".jsonl.out")) continue;
@@ -240,20 +243,20 @@ export class BedrockBatchService {
           };
 
           if (record.error) {
-            console.warn(`[BATCH] Error for call ${record.recordId}: ${record.error}`);
+            logger.warn("Batch error for call", { callId: record.recordId, error: record.error });
             continue;
           }
 
           const responseText = record.modelOutput?.output?.message?.content?.[0]?.text;
           if (!responseText) {
-            console.warn(`[BATCH] Empty response for call ${record.recordId}`);
+            logger.warn("Batch empty response for call", { callId: record.recordId });
             continue;
           }
 
           const analysis = parseJsonResponse(responseText, record.recordId);
           results.set(record.recordId, analysis);
         } catch (parseErr) {
-          console.warn(`[BATCH] Failed to parse output line: ${(parseErr as Error).message}`);
+          logger.warn("Batch failed to parse output line", { error: (parseErr as Error).message });
         }
       }
     }
@@ -343,7 +346,7 @@ export class BedrockBatchService {
     }
 
     if (page >= MAX_PAGES) {
-      console.warn(`[BATCH] s3List hit safety cap of ${MAX_PAGES} pages for prefix ${prefix}; results may be incomplete`);
+      logger.warn("s3List hit safety cap; results may be incomplete", { maxPages: MAX_PAGES, prefix });
     }
 
     return keys;

@@ -3,12 +3,15 @@
  */
 import type { AIAnalysisProvider } from "./ai-provider";
 import { BedrockProvider } from "./bedrock";
+import { logger } from "./logger";
 
 function createProvider(): AIAnalysisProvider {
   const provider = new BedrockProvider();
-  if (provider.isAvailable) return provider;
-
-  console.warn("No AI analysis provider configured. AWS credentials are required for Bedrock. Analysis will use transcript-based defaults.");
+  if (!provider.isAvailable) {
+    // A8/F07: removed the misleading "transcript-based defaults" log — Bedrock is
+    // the only provider; if it's unavailable, analysis is simply skipped upstream.
+    logger.warn("Bedrock AI provider not configured: set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or attach an IAM instance profile");
+  }
   return provider;
 }
 

@@ -2,6 +2,7 @@ import { InsertTranscript, InsertSentimentAnalysis, InsertCallAnalysis } from "@
 import type { CallAnalysis } from "./ai-provider";
 
 import { calibrateScore, calibrateSubScores, getScoreFlags, getCalibrationConfig } from "./scoring-calibration.js";
+import { logger } from "./logger";
 
 export interface AssemblyAIConfig {
   apiKey: string;
@@ -41,14 +42,6 @@ export interface AssemblyAIResponse {
   error?: string;
 }
 
-export interface LeMURResponse {
-  request_id: string;
-  response: string;
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-  };
-}
 
 /**
  * Pending webhook transcripts — when webhook mode is active, transcription results
@@ -73,7 +66,7 @@ export function isWebhookModeEnabled(): boolean {
 export function handleAssemblyAIWebhook(transcriptId: string, response: AssemblyAIResponse): boolean {
   const pending = pendingWebhookTranscripts.get(transcriptId);
   if (!pending) {
-    console.warn(`[WEBHOOK] Received callback for unknown transcript ${transcriptId}`);
+    logger.warn("AssemblyAI webhook callback for unknown transcript", { transcriptId });
     return false;
   }
 
@@ -97,7 +90,7 @@ export class AssemblyAIService {
       baseUrl: 'https://api.assemblyai.com/v2'
     };
     if (!this.config.apiKey) {
-      console.warn('ASSEMBLYAI_API_KEY is not set. Audio processing will fail.');
+      logger.warn("ASSEMBLYAI_API_KEY is not set — audio processing will fail");
     }
   }
 
@@ -172,7 +165,7 @@ export class AssemblyAIService {
    */
   async waitForTranscript(transcriptId: string): Promise<AssemblyAIResponse> {
     if (isWebhookModeEnabled()) {
-      console.log(`[${transcriptId}] Waiting for webhook callback (timeout: 10 min)...`);
+      logger.info("Waiting for AssemblyAI webhook callback (timeout 10 min)", { transcriptId });
       try {
         const result = await new Promise<AssemblyAIResponse>((resolve, reject) => {
           const WEBHOOK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -183,17 +176,24 @@ export class AssemblyAIService {
 
           pendingWebhookTranscripts.set(transcriptId, { resolve, reject, timeout });
         });
-        console.log(`[${transcriptId}] Webhook callback received. Status: ${result.status}`);
+        logger.info("AssemblyAI webhook callback received", { transcriptId, status: result.status });
         return result;
       } catch (webhookErr) {
-        console.warn(`[${transcriptId}] Webhook failed: ${(webhookErr as Error).message}. Falling back to polling.`);
+        logger.warn("AssemblyAI webhook failed, falling back to polling", { transcriptId, error: (webhookErr as Error).message });
         // Fall through to polling
       }
     }
     return this.pollTranscript(transcriptId);
   }
 
-  async pollTranscript(transcriptId: string, maxAttempts = 60): Promise<AssemblyAIResponse> {
+  async pollTranscript(transcriptId: string, maxAttempts?: number): Promise<AssemblyAIResponse> {
+    // A9/F13: env-configurable poll ceiling. Attempts run at 3s×10 + 5s×N ≈ 30s + 5s per extra.
+    // ASSEMBLYAI_POLL_MAX_MINUTES * 12 gives the attempt count (since average ≈ 5s).
+    if (maxAttempts === undefined) {
+      const parsed = Number(process.env.ASSEMBLYAI_POLL_MAX_MINUTES);
+      const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+      maxAttempts = Math.max(10, Math.ceil(minutes * 12));
+    }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const transcript = await this.getTranscript(transcriptId);
 
@@ -211,39 +211,6 @@ export class AssemblyAIService {
     throw new Error('Transcription polling timed out');
   }
 
-  // LeMUR task endpoint is synchronous - it returns the result directly
-  async submitLeMURTask(transcriptId: string): Promise<LeMURResponse> {
-    console.log(`[${transcriptId}] Submitting task to LeMUR...`);
-    const response = await fetch(`https://api.assemblyai.com/lemur/v3/generate/task`, {
-      method: 'POST',
-      headers: { 'Authorization': this.config.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transcript_ids: [transcriptId],
-        prompt: `Analyze this customer service call for a medical supply company. Provide your response in the following JSON format only, with no additional text:
-{
-  "summary": "A concise one-paragraph summary of the call",
-  "topics": ["topic1", "topic2", "topic3"],
-  "sentiment": "positive|neutral|negative",
-  "sentiment_score": 0.0,
-  "performance_score": 0.0,
-  "action_items": ["action1", "action2"],
-  "feedback": {
-    "strengths": ["strength1", "strength2"],
-    "suggestions": ["suggestion1", "suggestion2"]
-  }
-}
-
-For sentiment_score, use 0.0-1.0 where 1.0 is most positive.
-For performance_score, use 0.0-10.0 where 10.0 is best.
-Evaluate the agent on: professionalism, product knowledge, empathy, problem resolution, and compliance with medical supply protocols.`,
-      })
-    });
-    if (!response.ok) throw new Error(`Failed to submit LeMUR task: ${await response.text()}`);
-    const result = await response.json();
-    console.log(`[${transcriptId}] LeMUR task complete. Request ID: ${result.request_id}`);
-    return result;
-  }
-
   processTranscriptData(
     transcriptResponse: AssemblyAIResponse,
     aiAnalysis: CallAnalysis | null,
@@ -258,7 +225,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
       words: transcriptResponse.words || [],
     };
 
-    // Determine sentiment: prefer Gemini analysis, fall back to AssemblyAI sentiment results
+    // Determine sentiment: prefer AI analysis, fall back to AssemblyAI sentiment results
     let overallSentiment = aiAnalysis?.sentiment || 'neutral';
     let overallScore = aiAnalysis?.sentiment_score ?? 0.5;
 
@@ -330,7 +297,7 @@ Evaluate the agent on: professionalism, product knowledge, empathy, problem reso
           if (typeof obj.name === "string") return obj.name;
           if (typeof obj.task === "string") return obj.task;
           // Unknown object shape — log for debugging, stringify as fallback
-          console.warn(`[${callId}] Unexpected object shape in ${fieldName || "array"}: keys=[${Object.keys(obj).join(",")}]`);
+          logger.warn("Unexpected object shape in AI array field", { callId, field: fieldName || "array", keys: Object.keys(obj) });
           return JSON.stringify(item);
         }
         return String(item ?? "");

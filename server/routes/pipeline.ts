@@ -419,16 +419,27 @@ export async function processAudioFile(
           }
         }
 
-        aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+        try {
+          aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+        } catch (firstErr) {
+          // A12/F17: 1-retry budget on parse/schema failures. The first call may
+          // have gotten a malformed response that a second try can recover.
+          const firstMsg = (firstErr as Error).message || "";
+          const isParseFailure = /JSON|parse|schema/i.test(firstMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(firstMsg);
+          if (isParseFailure) {
+            console.warn(`[${callId}] AI parse failure on first attempt, retrying once:`, firstMsg);
+            aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+          } else {
+            throw firstErr;
+          }
+        }
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         const errMsg = (aiError as Error).message || "";
-        // A24/F55: broader parse-failure match — covers native JSON.parse
-        // SyntaxError, our custom messages, and zod validation errors.
         const isParseFailure =
           /JSON|parse|schema/i.test(errMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(errMsg);
         if (isParseFailure) {
-          console.error(`[${callId}] AI returned unparseable response (continuing with defaults):`, errMsg);
+          console.error(`[${callId}] AI returned unparseable response after retry (continuing with defaults):`, errMsg);
           captureException(aiError as Error, { callId, errorType: "ai_parse_failure" });
         } else {
           console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, errMsg);
@@ -436,7 +447,7 @@ export async function processAudioFile(
         }
       }
     } else if (!aiProvider.isAvailable) {
-      console.log(`[${callId}] Step 4/6: AI provider not configured, using transcript-based defaults.`);
+      console.log(`[${callId}] Step 4/6: AI provider not configured, skipping AI analysis.`);
     }
 
     // Step 5: Process combined results

@@ -17,6 +17,7 @@
  */
 import { storage } from "../storage";
 import { getCalibrationConfig, type ScoringCalibration } from "./scoring-calibration";
+import { logger } from "./logger";
 
 export interface CalibrationSnapshot {
   timestamp: string;
@@ -35,7 +36,10 @@ export interface CalibrationSnapshot {
   recommended: {
     aiModelMean: number;
     center: number;
-    spread: number;
+    // A14/F15: `spread` intentionally removed — the prior calculation
+    // (targetSpread / observedSpread) was dimensionally wrong and produced
+    // values that would distort the distribution rather than correct it.
+    // Operators must set `spread` manually until a correct derivation exists.
   };
   driftDetected: boolean;
   autoApplied: boolean;
@@ -89,7 +93,7 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
     }
 
     if (rawScores.length < MIN_SAMPLE_SIZE) {
-      console.log(`[CALIBRATION] Insufficient data: ${rawScores.length} scored calls (need ${MIN_SAMPLE_SIZE}). Skipping.`);
+      logger.info("Calibration: insufficient data, skipping", { scoredCalls: rawScores.length, minSampleSize: MIN_SAMPLE_SIZE });
       return null;
     }
 
@@ -107,10 +111,6 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
 
     // Recommended adjustments
     const recommendedMean = Math.round(mean * 10) / 10;
-    // If observed spread is narrower than desired, increase spread multiplier
-    const observedSpread = stdDev > 0 ? stdDev : 1;
-    const targetSpread = 2.0; // Desired stdDev around center
-    const recommendedSpread = Math.round(Math.min(2.0, Math.max(0.5, targetSpread / observedSpread)) * 10) / 10;
 
     const snapshot: CalibrationSnapshot = {
       timestamp: new Date().toISOString(),
@@ -129,21 +129,24 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
       recommended: {
         aiModelMean: recommendedMean,
         center: currentConfig.center, // Keep target center as configured
-        spread: recommendedSpread,
       },
       driftDetected,
       autoApplied: false,
     };
 
     if (driftDetected) {
-      console.warn(
-        `[CALIBRATION] Score drift detected: observed mean=${mean.toFixed(2)}, configured aiModelMean=${currentConfig.aiModelMean}. ` +
-        `Recommended: aiModelMean=${recommendedMean}, spread=${recommendedSpread}`
-      );
+      logger.warn("Calibration: score drift detected", {
+        observedMean: Number(mean.toFixed(2)),
+        configuredAiModelMean: currentConfig.aiModelMean,
+        recommendedMean,
+      });
     } else {
-      console.log(
-        `[CALIBRATION] Distribution healthy: mean=${mean.toFixed(2)}, median=${median.toFixed(2)}, stdDev=${stdDev.toFixed(2)} (${rawScores.length} calls)`
-      );
+      logger.info("Calibration: distribution healthy", {
+        mean: Number(mean.toFixed(2)),
+        median: Number(median.toFixed(2)),
+        stdDev: Number(stdDev.toFixed(2)),
+        sampleCount: rawScores.length,
+      });
     }
 
     // Store snapshot for admin visibility
@@ -154,12 +157,12 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
         await s3Client.uploadJson("calibration/latest.json", snapshot);
       }
     } catch (storeErr) {
-      console.warn("[CALIBRATION] Failed to store snapshot:", (storeErr as Error).message);
+      logger.warn("Calibration: failed to store snapshot", { error: (storeErr as Error).message });
     }
 
     return snapshot;
   } catch (error) {
-    console.error("[CALIBRATION] Analysis failed:", (error as Error).message);
+    logger.error("Calibration analysis failed", { error: (error as Error).message });
     return null;
   }
 }
@@ -182,7 +185,7 @@ let calibrationInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startCalibrationScheduler(): () => void {
   const intervalHours = parseInt(process.env.CALIBRATION_INTERVAL_HOURS || "24", 10);
-  console.log(`[CALIBRATION] Auto-calibration analysis scheduled every ${intervalHours} hours.`);
+  logger.info("Auto-calibration analysis scheduled", { intervalHours });
 
   // First run after 2 minutes
   const timeout = setTimeout(() => analyzeScoreDistribution(), 2 * 60 * 1000);
