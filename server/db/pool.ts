@@ -152,6 +152,13 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_badges_unique_milestone ON badges (employee_id, badge_type) WHERE badge_type IN ('first_call', 'calls_25', 'calls_50', 'calls_100')",
     // Password history for HIPAA compliance (prevents reuse of last 5 passwords)
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_history JSONB DEFAULT '[]'",
+    // Job queue heartbeat (A18) — detect crashed workers via stale heartbeat
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_heartbeat ON jobs (status, last_heartbeat_at) WHERE status = 'running'",
+    // Content hash uniqueness (A21) — idempotent upload dedupe. Attempted as
+    // unique index; if existing duplicates prevent creation we swallow the
+    // error and log rather than crashing startup.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_content_hash_unique ON calls (content_hash) WHERE content_hash IS NOT NULL",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

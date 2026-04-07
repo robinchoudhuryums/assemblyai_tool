@@ -13,22 +13,16 @@ import type { JobQueue } from "../services/job-queue";
 import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
-/** Type for the processAudioFile function passed from the main routes module. */
-export type ProcessAudioFn = (
-  callId: string,
-  filePath: string,
-  audioBuffer: Buffer,
-  originalName: string,
-  mimeType: string,
-  callCategory?: string,
-  uploadedBy?: string,
-  processingMode?: string,
-  language?: string,
-) => Promise<void>;
-
 // Shared audio processing queue (A11) — single singleton across pipeline.ts,
 // calls.ts, admin-content.ts. Bounded with maxQueueSize + per-task timeout.
-import { audioProcessingQueue } from "./pipeline";
+import { audioProcessingQueue, type ProcessAudioOptions } from "./pipeline";
+
+/** Type for the processAudioFile function passed from the main routes module (A22). */
+export type ProcessAudioFn = (
+  callId: string,
+  audio: Buffer,
+  options: ProcessAudioOptions,
+) => Promise<void>;
 
 // assignCallSchema imported from @shared/schema
 
@@ -58,34 +52,21 @@ export function registerCallRoutes(
         employee: employee as string,
       };
 
-      if (cursor || req.query.mode === "cursor") {
-        const result = await storage.getCallsPaginated({
-          filters,
-          cursor: cursor as string | undefined,
-          limit,
-        });
-        const totalPages = Math.ceil(result.total / limit);
-        res.json({
-          calls: result.calls,
-          pagination: { page: 1, limit, total: result.total, totalPages },
-          nextCursor: result.nextCursor,
-          hasMore: result.nextCursor !== null,
-        });
-      } else {
-        const page = Math.max(1, parseInt(req.query.page as string) || 1);
-        // Note: offset pagination loads all matching calls into memory for slicing.
-        // For large datasets, clients should use cursor mode (?mode=cursor) which
-        // uses SQL-level pagination via getCallsPaginated().
-        const calls = await storage.getCallsWithDetails(filters);
-        const total = calls.length;
-        const totalPages = Math.ceil(total / limit);
-        const offset = (page - 1) * limit;
-        const paginated = calls.slice(offset, offset + limit);
-        res.json({
-          calls: paginated,
-          pagination: { page, limit, total, totalPages },
-        });
-      }
+      // A20/F20: SQL-level pagination is now the only path. Legacy offset
+      // mode previously loaded the full result set into memory which could
+      // OOM at scale; it now delegates to getCallsPaginated as well.
+      const result = await storage.getCallsPaginated({
+        filters,
+        cursor: cursor as string | undefined,
+        limit,
+      });
+      const totalPages = Math.ceil(result.total / limit);
+      res.json({
+        calls: result.calls,
+        pagination: { page: 1, limit, total: result.total, totalPages },
+        nextCursor: result.nextCursor,
+        hasMore: result.nextCursor !== null,
+      });
     } catch (error) {
       res.status(500).json({ message: "Failed to get calls" });
     }
@@ -164,29 +145,32 @@ export function registerCallRoutes(
       const audioBuffer = await fs.promises.readFile(req.file.path);
 
       const contentHash = createHash("sha256").update(audioBuffer).digest("hex");
-      const allCalls = await storage.getAllCalls();
-      const duplicate = allCalls.find(c =>
-        c.contentHash === contentHash &&
-        (c.status === "processing" || c.status === "completed" || c.status === "awaiting_analysis" || c.status === "failed")
-      );
-      if (duplicate) {
-        await cleanupFile(req.file.path);
-        res.status(409).json({
-          message: "This audio file has already been uploaded.",
-          existingCallId: duplicate.id,
-          existingStatus: duplicate.status,
+      // A21/F17: rely on DB UNIQUE(content_hash) constraint instead of an
+      // O(n) scan of getAllCalls. createCall surfaces pg error 23505 on
+      // duplicate — look up the existing call and 409.
+      let call;
+      try {
+        call = await storage.createCall({
+          employeeId: employeeId || undefined,
+          fileName: req.file.originalname,
+          filePath: req.file.path,
+          status: "processing",
+          callCategory: callCategory || undefined,
+          contentHash,
         });
-        return;
+      } catch (err) {
+        if ((err as { code?: string })?.code === "23505") {
+          const existing = await storage.findCallByContentHash?.(contentHash);
+          await cleanupFile(req.file.path);
+          res.status(409).json({
+            message: "This audio file has already been uploaded.",
+            existingCallId: existing?.id,
+            existingStatus: existing?.status,
+          });
+          return;
+        }
+        throw err;
       }
-
-      const call = await storage.createCall({
-        employeeId: employeeId || undefined,
-        fileName: req.file.originalname,
-        filePath: req.file.path,
-        status: "processing",
-        callCategory: callCategory || undefined,
-        contentHash,
-      });
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
       const uploadUser = req.user?.username || "unknown";
@@ -210,7 +194,15 @@ export function registerCallRoutes(
           language: language || null,
         });
       } else {
-        audioProcessingQueue.add(() => processAudioFn(call.id, req.file!.path, audioBuffer, originalName, mimeType, callCategory, uploadUser, processingMode, language))
+        audioProcessingQueue.add(() => processAudioFn(call.id, audioBuffer, {
+          filePath: req.file!.path,
+          originalName,
+          mimeType,
+          callCategory,
+          uploadedBy: uploadUser,
+          processingMode,
+          language,
+        }))
           .catch(async (error) => {
             console.error(`Failed to process call ${call.id}:`, error);
             try {
@@ -570,10 +562,12 @@ export function registerCallRoutes(
         } else {
           const audioBuffer = await storage.downloadAudio(audioFiles[0]);
           if (audioBuffer) {
-            audioProcessingQueue.add(() => processAudioFn(
-              callId, "", audioBuffer, call.fileName || "reanalysis",
-              "audio/mpeg", call.callCategory, uploadUser,
-            )).catch(async (error) => {
+            audioProcessingQueue.add(() => processAudioFn(callId, audioBuffer, {
+              originalName: call.fileName || "reanalysis",
+              mimeType: "audio/mpeg",
+              callCategory: call.callCategory ?? undefined,
+              uploadedBy: uploadUser,
+            })).catch(async (error) => {
               console.error(`Failed to re-analyze call ${callId}:`, error);
               await storage.updateCall(callId, { status: "failed" });
             });

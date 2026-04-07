@@ -6,6 +6,7 @@
  */
 import type pg from "pg";
 import { randomUUID } from "crypto";
+import { runWithCorrelationId } from "./correlation-id";
 
 export interface Job {
   id: string;
@@ -60,7 +61,9 @@ export class JobQueue {
   }
 
   /**
-   * Claim the next available job using SKIP LOCKED.
+   * Claim the next available pending job using SKIP LOCKED.
+   * Does NOT increment attempts — that's done by failJob only (A18/F22).
+   * Stale running jobs are handled separately by reapStaleJobs().
    */
   private async claimJob(): Promise<Job | null> {
     const { rows } = await this.db.query(`
@@ -68,12 +71,12 @@ export class JobQueue {
         status = 'running',
         locked_at = NOW(),
         locked_by = $1,
-        attempts = attempts + 1,
+        last_heartbeat_at = NOW(),
         updated_at = NOW()
       WHERE id = (
         SELECT id FROM jobs
-        WHERE (status = 'pending' AND (locked_at IS NULL OR locked_at <= NOW()))
-          OR (status = 'running' AND locked_at < NOW() - INTERVAL '10 minutes')
+        WHERE status = 'pending'
+          AND (locked_at IS NULL OR locked_at <= NOW())
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -113,8 +116,13 @@ export class JobQueue {
    * Backoff: attempt 1 → 10s, attempt 2 → 30s, attempt 3+ → 60s
    */
   async failJob(jobId: string, reason: string): Promise<void> {
-    // Check current attempt count
-    const { rows } = await this.db.query("SELECT attempts, max_attempts FROM jobs WHERE id = $1", [jobId]);
+    // Atomically increment attempts and read back (A18/F22 — was incremented
+    // on claim, which meant crashes burned attempts; now the increment is
+    // explicit on failure).
+    const { rows } = await this.db.query(
+      "UPDATE jobs SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1 RETURNING attempts, max_attempts",
+      [jobId],
+    );
     if (rows.length === 0) return;
 
     const { attempts, max_attempts } = rows[0];
@@ -206,6 +214,36 @@ export class JobQueue {
   }
 
   /**
+   * Reap jobs whose worker crashed mid-execution (A18/F23).
+   * Any job in 'running' status whose heartbeat hasn't updated in
+   * STALE_HEARTBEAT_MS is treated as crashed — failJob handles the attempts
+   * increment and retry/dead-letter decision.
+   */
+  private static readonly STALE_HEARTBEAT_MS = 2 * 60 * 1000; // 2 minutes
+  private static readonly HEARTBEAT_INTERVAL_MS = 30 * 1000;  // 30 seconds
+  private async reapStaleJobs(): Promise<void> {
+    const { rows } = await this.db.query(
+      `SELECT id FROM jobs
+       WHERE status = 'running'
+         AND last_heartbeat_at < NOW() - ($1::int || ' milliseconds')::interval
+       LIMIT 20`,
+      [JobQueue.STALE_HEARTBEAT_MS],
+    );
+    for (const row of rows) {
+      console.warn(`[JOB_QUEUE] Reaping stale job ${row.id} (no heartbeat for ${Math.round(JobQueue.STALE_HEARTBEAT_MS / 1000)}s)`);
+      await this.failJob(row.id, "Worker crashed: no heartbeat");
+    }
+  }
+
+  /** Update the heartbeat timestamp for a running job. */
+  private async heartbeat(jobId: string): Promise<void> {
+    await this.db.query(
+      "UPDATE jobs SET last_heartbeat_at = NOW() WHERE id = $1 AND status = 'running'",
+      [jobId],
+    );
+  }
+
+  /**
    * Start the worker loop. Provide a handler that processes each job.
    */
   start(handler: (job: Job) => Promise<void>): void {
@@ -216,37 +254,57 @@ export class JobQueue {
     const poll = async () => {
       if (!this.running) return;
 
-      while (this.activeJobs < this.concurrency && this.running) {
-        const job = await this.claimJob();
-        if (!job) break; // No more jobs available
+      // A18/F71: wrap everything in try/catch so a DB error doesn't kill the
+      // worker loop. Errors are logged but polling continues.
+      try {
+        await this.reapStaleJobs();
 
-        this.activeJobs++;
-        // Process in background (don't await)
-        this.processJob(job, handler).finally(() => {
-          this.activeJobs--;
-        });
+        while (this.activeJobs < this.concurrency && this.running) {
+          const job = await this.claimJob();
+          if (!job) break;
+
+          this.activeJobs++;
+          this.processJob(job, handler).finally(() => {
+            this.activeJobs--;
+          });
+        }
+      } catch (err) {
+        console.error("[JOB_QUEUE] Poll iteration error (continuing):", (err as Error).message);
       }
 
-      // Schedule next poll
       if (this.running) {
         this.pollTimer = setTimeout(poll, this.pollIntervalMs);
       }
     };
 
-    // Start polling
     poll().catch((err) => {
-      console.error("[JOB_QUEUE] Fatal poll error:", err.message);
+      console.error("[JOB_QUEUE] Fatal poll startup error:", err.message);
     });
   }
 
   private async processJob(job: Job, handler: (job: Job) => Promise<void>): Promise<void> {
+    // Heartbeat ticker — refreshed every HEARTBEAT_INTERVAL_MS during job
+    // execution. Cleared in finally to prevent leaked intervals.
+    const heartbeatTimer = setInterval(() => {
+      this.heartbeat(job.id).catch((err) => {
+        console.warn(`[JOB_QUEUE] Heartbeat failed for ${job.id}:`, (err as Error).message);
+      });
+    }, JobQueue.HEARTBEAT_INTERVAL_MS);
+    // A31/F66: wrap handler invocation in a correlation-id scope so all
+    // structured logs emitted during processing carry the job id.
     try {
-      await handler(job);
+      await runWithCorrelationId(job.id, async () => handler(job));
       await this.completeJob(job.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[JOB_QUEUE] Job ${job.id} failed (attempt ${job.attempts}/${job.maxAttempts}): ${message}`);
-      await this.failJob(job.id, message);
+      console.error(`[JOB_QUEUE] Job ${job.id} failed (attempt ${job.attempts + 1}/${job.maxAttempts}): ${message}`);
+      try {
+        await this.failJob(job.id, message);
+      } catch (failErr) {
+        console.error(`[JOB_QUEUE] failJob threw for ${job.id}:`, (failErr as Error).message);
+      }
+    } finally {
+      clearInterval(heartbeatTimer);
     }
   }
 

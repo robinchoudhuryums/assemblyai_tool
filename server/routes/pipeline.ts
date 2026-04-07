@@ -53,18 +53,24 @@ export function shouldUseBatchMode(perUploadOverride?: string): boolean {
   return true;
 }
 
-/** Process audio file with AssemblyAI and archive to cloud storage */
+export interface ProcessAudioOptions {
+  originalName: string;
+  mimeType: string;
+  callCategory?: string;
+  uploadedBy?: string;
+  processingMode?: string;
+  language?: string;
+  /** Optional filesystem path to the audio file for cleanup on finish. */
+  filePath?: string;
+}
+
+/** Process audio file with AssemblyAI and archive to cloud storage (A22). */
 export async function processAudioFile(
   callId: string,
-  filePath: string,
   audioBuffer: Buffer,
-  originalName: string,
-  mimeType: string,
-  callCategory?: string,
-  uploadedBy?: string,
-  processingMode?: string,
-  language?: string,
+  options: ProcessAudioOptions,
 ) {
+  const { originalName, mimeType, callCategory, uploadedBy, processingMode, language, filePath } = options;
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -79,11 +85,11 @@ export async function processAudioFile(
         console.log(`[${callId}] Step 1/7: Using pre-signed S3 URL for AssemblyAI (skipping upload).`);
       } else {
         console.log(`[${callId}] Step 1/7: Pre-signed URL unavailable, uploading to AssemblyAI...`);
-        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
       }
     } else {
       console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
-      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
     }
     console.log(`[${callId}] Step 1/7: Audio URL ready.`);
 

@@ -69,6 +69,8 @@ export interface IStorage {
   createEmployee(employee: InsertEmployee): Promise<Employee>;
   updateEmployee(id: string, updates: Partial<Employee>): Promise<Employee | undefined>;
   getAllEmployees(): Promise<Employee[]>;
+  /** Paginated employee list (A20). Defaults applied by impl if unspecified. */
+  getEmployeesPaginated(options: { limit: number; offset: number; status?: "Active" | "Inactive" }): Promise<{ employees: Employee[]; total: number }>;
   findEmployeeByName(name: string): Promise<Employee | undefined>;
 
   // Call operations
@@ -79,6 +81,8 @@ export interface IStorage {
   atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
+  /** Find a call by its content hash (A21). Returns undefined if not found. */
+  findCallByContentHash(contentHash: string): Promise<Call | undefined>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
   getCallsPaginated(options: {
     filters?: { status?: string; sentiment?: string; employee?: string };
@@ -222,6 +226,13 @@ export class MemStorage implements IStorage {
   async getAllEmployees(): Promise<Employee[]> {
     return [...this.employees.values()];
   }
+  async getEmployeesPaginated(options: { limit: number; offset: number; status?: "Active" | "Inactive" }): Promise<{ employees: Employee[]; total: number }> {
+    let all = [...this.employees.values()];
+    if (options.status) all = all.filter(e => e.status === options.status);
+    const total = all.length;
+    const employees = all.slice(options.offset, options.offset + options.limit);
+    return { employees, total };
+  }
   async findEmployeeByName(name: string): Promise<Employee | undefined> {
     const normalized = name.toLowerCase().trim();
     const all = [...this.employees.values()];
@@ -268,6 +279,12 @@ export class MemStorage implements IStorage {
     return [...this.calls.values()].sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
+  }
+  async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
+    for (const c of this.calls.values()) {
+      if (c.contentHash === contentHash) return c;
+    }
+    return undefined;
   }
   async getCallsWithDetails(
     filters: { status?: string; sentiment?: string; employee?: string } = {}
@@ -658,6 +675,13 @@ export class CloudStorage implements IStorage {
       return [];
     }
   }
+  async getEmployeesPaginated(options: { limit: number; offset: number; status?: "Active" | "Inactive" }): Promise<{ employees: Employee[]; total: number }> {
+    let all = await this.getAllEmployees();
+    if (options.status) all = all.filter(e => e.status === options.status);
+    const total = all.length;
+    const employees = all.slice(options.offset, options.offset + options.limit);
+    return { employees, total };
+  }
   async findEmployeeByName(name: string): Promise<Employee | undefined> {
     const normalized = name.toLowerCase().trim();
     const all = await this.getAllEmployees();
@@ -713,6 +737,11 @@ export class CloudStorage implements IStorage {
     return calls.sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
+  }
+  async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
+    // O(n) in S3-only mode — acceptable fallback when no DB is configured.
+    const all = await this.getAllCalls();
+    return all.find(c => c.contentHash === contentHash);
   }
 
   async getCallsWithDetails(

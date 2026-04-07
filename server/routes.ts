@@ -126,6 +126,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log("[ASSEMBLYAI] Polling mode (set APP_BASE_URL to enable faster webhook mode).");
   }
 
+  // ==================== JOB QUEUE INITIALIZATION ====================
+  // A19/F21: init BEFORE route registration so the upload route never sees
+  // a null jobQueue during the startup race window.
+  const dbPool = getPool();
+  if (dbPool) {
+    const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
+    const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
+    jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
+
+    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
+      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
+      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
+    };
+
+    jobQueue.start(async (job: Job) => {
+      if (job.type === "process_audio") {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
+          callId: string; filePath: string; originalName: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string;
+        };
+
+        const audioFiles = await storage.getAudioFiles(callId);
+        let audioBuffer: Buffer | undefined;
+        if (audioFiles.length > 0) {
+          audioBuffer = await storage.downloadAudio(audioFiles[0]);
+        }
+
+        if (!audioBuffer) {
+          if (filePath && fs.existsSync(filePath)) {
+            audioBuffer = await fs.promises.readFile(filePath);
+          } else {
+            throw new Error(`No audio data available for call ${callId}`);
+          }
+        }
+
+        await processAudioFile(callId, audioBuffer, {
+          originalName,
+          mimeType,
+          callCategory,
+          uploadedBy,
+          processingMode,
+          language,
+          filePath,
+        });
+      } else {
+        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
+      }
+    });
+  }
+
   // Register all route modules
   registerAuthRoutes(router);
   registerDashboardRoutes(router);
@@ -165,48 +215,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start 8x8 telephony auto-ingestion (if configured)
   startTelephonyScheduler(processAudioFile);
-
-  // ==================== JOB QUEUE INITIALIZATION ====================
-  const dbPool = getPool();
-  if (dbPool) {
-    const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
-    const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
-    jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
-
-    // Alert when a job exhausts all retries (dead letter)
-    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
-      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
-      // Broadcast via WebSocket so admin UI can display alert
-      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
-    };
-
-    jobQueue.start(async (job: Job) => {
-      if (job.type === "process_audio") {
-        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
-          callId: string; filePath: string; originalName: string;
-          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string;
-        };
-
-        const audioFiles = await storage.getAudioFiles(callId);
-        let audioBuffer: Buffer | undefined;
-        if (audioFiles.length > 0) {
-          audioBuffer = await storage.downloadAudio(audioFiles[0]);
-        }
-
-        if (!audioBuffer) {
-          if (fs.existsSync(filePath)) {
-            audioBuffer = await fs.promises.readFile(filePath);
-          } else {
-            throw new Error(`No audio data available for call ${callId}`);
-          }
-        }
-
-        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode, language);
-      } else {
-        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
-      }
-    });
-  }
 
   const httpServer = createServer(app);
   return httpServer;

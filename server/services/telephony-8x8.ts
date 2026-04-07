@@ -165,7 +165,7 @@ export async function mapExtensionToEmployee(extension: string): Promise<string 
  */
 export async function ingestRecording(
   recording: Recording8x8,
-  processAudioFn: (callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string, processingMode?: string, language?: string) => Promise<void>,
+  processAudioFn: (callId: string, audioBuffer: Buffer, options: { originalName: string; mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string; filePath?: string }) => Promise<void>,
 ): Promise<IngestionResult> {
   try {
     // Skip very short recordings (likely voicemail greetings or test calls)
@@ -211,15 +211,12 @@ export async function ingestRecording(
     }
 
     // Submit to pipeline (non-blocking)
-    processAudioFn(
-      callId,
-      `telephony/8x8/${recording.recordingId}`,
-      audioBuffer,
-      externalFileName,
-      "audio/wav",
+    processAudioFn(callId, audioBuffer, {
+      originalName: externalFileName,
+      mimeType: "audio/wav",
       callCategory,
-      "8x8-auto-ingestion",
-    ).catch(err => {
+      uploadedBy: "8x8-auto-ingestion",
+    }).catch(err => {
       console.error(`[8x8] Pipeline failed for ${recording.recordingId}:`, (err as Error).message);
     });
 
@@ -235,7 +232,7 @@ export async function ingestRecording(
  * Poll 8x8 for new recordings and ingest them.
  */
 export async function pollAndIngest(
-  processAudioFn: (callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string, processingMode?: string, language?: string) => Promise<void>,
+  processAudioFn: (callId: string, audioBuffer: Buffer, options: { originalName: string; mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string; filePath?: string }) => Promise<void>,
 ): Promise<IngestionResult[]> {
   if (!is8x8Enabled()) return [];
 
@@ -273,7 +270,7 @@ let pollInterval: ReturnType<typeof setInterval> | null = null;
 let pollTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export function startTelephonyScheduler(
-  processAudioFn: (callId: string, filePath: string, audioBuffer: Buffer, originalName: string, mimeType: string, callCategory?: string, uploadedBy?: string, processingMode?: string, language?: string) => Promise<void>,
+  processAudioFn: (callId: string, audioBuffer: Buffer, options: { originalName: string; mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string; filePath?: string }) => Promise<void>,
 ): () => void {
   if (!is8x8Enabled()) {
     console.log("[8x8] Telephony integration disabled (set TELEPHONY_8X8_ENABLED=true to enable).");

@@ -9,10 +9,24 @@ import fs from "fs";
 import path from "path";
 
 export function register(router: Router) {
-  // Get all employees
+  // Get employees (A20/F31): SQL-level pagination. Silent default limit=50,
+  // max=500. Clients not sending limit get X-Pagination-Default: true for
+  // visibility while the frontend migrates.
   router.get("/api/employees", requireAuth, async (req, res) => {
     try {
-      const employees = await storage.getAllEmployees();
+      const rawLimit = parseInt(req.query.limit as string);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 50;
+      const rawOffset = parseInt(req.query.offset as string);
+      const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+      const statusParam = req.query.status;
+      const status = statusParam === "Active" || statusParam === "Inactive" ? statusParam : undefined;
+      if (!req.query.limit) {
+        res.setHeader("X-Pagination-Default", "true");
+      }
+      const { employees, total } = await storage.getEmployeesPaginated({ limit, offset, status });
+      res.setHeader("X-Total-Count", String(total));
+      // Transitional shape: return bare array for back-compat with existing
+      // frontend callers that expect an Employee[]. Total available via header.
       res.json(employees);
     } catch (error) {
       res.status(500).json({ message: "Failed to get employees" });

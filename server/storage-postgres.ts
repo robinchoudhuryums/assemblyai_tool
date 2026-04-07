@@ -266,6 +266,23 @@ export class PostgresStorage implements IStorage {
     const { rows } = await this.db.query("SELECT * FROM employees ORDER BY name");
     return rows.map(mapEmployee);
   }
+  async getEmployeesPaginated(options: { limit: number; offset: number; status?: "Active" | "Inactive" }): Promise<{ employees: Employee[]; total: number }> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (options.status) {
+      params.push(options.status);
+      where.push(`status = $${params.length}`);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const totalResult = await this.db.query(`SELECT COUNT(*)::int AS c FROM employees ${whereSql}`, params);
+    params.push(options.limit);
+    params.push(options.offset);
+    const { rows } = await this.db.query(
+      `SELECT * FROM employees ${whereSql} ORDER BY name LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return { employees: rows.map(mapEmployee), total: totalResult.rows[0].c };
+  }
 
   /**
    * Find employee by name (case-insensitive). Tries exact match first,
@@ -340,6 +357,13 @@ export class PostgresStorage implements IStorage {
   async getAllCalls(): Promise<Call[]> {
     const { rows } = await this.db.query("SELECT * FROM calls ORDER BY uploaded_at DESC");
     return rows.map(mapCall);
+  }
+  async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
+    const { rows } = await this.db.query(
+      "SELECT * FROM calls WHERE content_hash = $1 LIMIT 1",
+      [contentHash],
+    );
+    return rows.length > 0 ? mapCall(rows[0]) : undefined;
   }
 
   async getCallsWithDetails(

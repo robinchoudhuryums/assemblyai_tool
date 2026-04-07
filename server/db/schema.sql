@@ -207,12 +207,14 @@ CREATE TABLE IF NOT EXISTS jobs (
   max_attempts INTEGER DEFAULT 3,
   locked_at TIMESTAMPTZ,
   locked_by VARCHAR(100),
+  last_heartbeat_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   failed_reason TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON jobs (status, priority DESC, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_heartbeat ON jobs (status, last_heartbeat_at) WHERE status = 'running';
 
 -- ============================================================
 -- Users (PostgreSQL-backed user management)

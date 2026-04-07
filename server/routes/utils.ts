@@ -93,14 +93,15 @@ export function safeJsonParse<T>(value: unknown, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
-/** Delete uploaded file after processing */
-export async function cleanupFile(filePath: string) {
+/** Delete uploaded file after processing (A25/F58). */
+export async function cleanupFile(filePath: string | undefined): Promise<void> {
+  if (!filePath) return;
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    await fs.promises.unlink(filePath);
   } catch (error) {
-    console.error('Failed to cleanup file:', error);
+    // ENOENT = already gone, not an error worth logging
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    console.error("Failed to cleanup file:", (error as Error).message);
   }
 }
 
