@@ -10,7 +10,6 @@
  *   - Score: perfect_10
  *   - Streak: streak_3, streak_5, streak_10
  *   - Sub-score excellence: compliance_star, empathy_champion, resolution_ace
- *   - Improvement: most_improved (evaluated weekly, not per-call)
  *
  * Points system:
  *   - Base: 10 points per completed call

@@ -224,7 +224,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/search` | authenticated | Full-text search |
 | GET | `/api/performance` | authenticated | Performance metrics |
 | GET | `/api/reports/summary` | authenticated | Summary report |
-| GET | `/api/reports/filtered` | authenticated | Filtered reports (date range) |
+| GET | `/api/reports/filtered` | authenticated | Filtered reports (query: `from`, `to`, `employeeId`, `role` (preferred) or `department` (deprecated alias), `callPartyType`) |
 | GET | `/api/reports/agent-profile/:id` | authenticated | Detailed agent profile |
 | POST | `/api/reports/agent-summary/:id` | authenticated | Generate agent summary |
 
@@ -240,10 +240,15 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/prompt-templates` | admin | Create prompt template |
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
 | DELETE | `/api/prompt-templates/:id` | admin | Delete prompt template |
-| GET | `/api/insights` | authenticated | Aggregate insights & trends |
+| GET | `/api/insights` | authenticated | Aggregate insights & trends (query: `days`, default 90, max 365) |
 | GET | `/api/admin/queue-status` | admin | Job queue stats (pending, running, completed, failed) |
+| GET | `/api/admin/jobs/:id` | admin | Generic job status lookup (used by batch snapshot polling) |
 | GET | `/api/admin/dead-jobs` | admin | List dead-letter jobs (failed after max retries) |
 | POST | `/api/admin/dead-jobs/:id/retry` | admin | Retry a dead-letter job |
+| GET | `/api/admin/reports` | manager+ | List generated weekly/monthly scheduled reports |
+| GET | `/api/admin/reports/:id` | manager+ | Get a single scheduled report (DB lookup on cache miss) |
+| POST | `/api/admin/reports/generate` | manager+ | Manually generate a weekly or monthly report |
+| GET | `/api/admin/metrics` | admin | Runtime counters + histograms (Prometheus-style) |
 | GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
 | GET | `/api/admin/security-summary` | admin | Security posture summary |
 | GET | `/api/admin/security-alerts` | admin | Recent security alerts |
@@ -291,6 +296,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
 | GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
 | GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
+| GET | `/api/analytics/heatmap` | authenticated | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 

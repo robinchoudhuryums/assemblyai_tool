@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth } from "../auth";
+import { logger } from "../services/logger";
 import { safeFloat, clampInt } from "./utils";
 
 export function register(router: Router) {
@@ -122,6 +123,13 @@ export function register(router: Router) {
         },
       });
     } catch (error) {
+      // A14/F24: was silently swallowing the error and returning 500 with
+      // no trace anywhere. Log the underlying message so we can debug
+      // failures in production.
+      logger.error("company insights endpoint failed", {
+        error: (error as Error).message,
+        days: req.query.days,
+      });
       res.status(500).json({ message: "Failed to compute company insights" });
     }
   });

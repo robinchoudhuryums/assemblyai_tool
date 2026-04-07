@@ -47,6 +47,11 @@ export interface PerformanceMetrics {
   commonTopics: Array<{ text: string; count: number }>;
   flaggedCallCount: number;
   exceptionalCallCount: number;
+  // A11/F25: quality + safety signal counts. The pipeline applies these
+  // flags but the snapshot was previously ignoring them.
+  lowConfidenceCallCount: number;
+  promptInjectionCallCount: number;
+  outputAnomalyCallCount: number;
 }
 
 export interface PerformanceSnapshot {
@@ -265,6 +270,9 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
   const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
   let flaggedCount = 0;
   let exceptionalCount = 0;
+  let lowConfidenceCount = 0;
+  let promptInjectionCount = 0;
+  let outputAnomalyCount = 0;
   const subScoreSums = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0 };
   let subScoreCount = 0;
 
@@ -274,11 +282,15 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     }
 
     // Sub-scores
+    // A10/F22: pipeline normalizes Bedrock's snake_case sub_scores to
+    // camelCase before persistence (routes/pipeline.ts:489), so the
+    // stored JSONB has `customerExperience`. The aggregator was reading
+    // `customer_experience` and silently producing 0 for the CX column.
     if (call.analysis?.subScores) {
       const sub = safeJsonParse<Record<string, number>>(call.analysis.subScores, {});
-      if (sub.compliance !== undefined || sub.customer_experience !== undefined) {
+      if (sub.compliance !== undefined || sub.customerExperience !== undefined) {
         subScoreSums.compliance += safeFloat(sub.compliance);
-        subScoreSums.customerExperience += safeFloat(sub.customer_experience);
+        subScoreSums.customerExperience += safeFloat(sub.customerExperience);
         subScoreSums.communication += safeFloat(sub.communication);
         subScoreSums.resolution += safeFloat(sub.resolution);
         subScoreCount++;
@@ -305,14 +317,20 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     }
 
     // Flags
+    // A11/F25: also count quality/safety signals so the snapshot UI can
+    // surface them. These are emitted by the pipeline (low transcript
+    // confidence, prompt injection detection, AI output anomalies) and
+    // were previously dropped.
     if (call.analysis?.flags) {
       const flags = safeJsonParse<string[]>(call.analysis.flags, []);
       if (Array.isArray(flags)) {
         for (const f of flags) {
-          if (typeof f === "string") {
-            if (f === "low_score" || f.startsWith("agent_misconduct")) flaggedCount++;
-            if (f === "exceptional_call") exceptionalCount++;
-          }
+          if (typeof f !== "string") continue;
+          if (f === "low_score" || f.startsWith("agent_misconduct")) flaggedCount++;
+          if (f === "exceptional_call") exceptionalCount++;
+          if (f === "low_confidence") lowConfidenceCount++;
+          if (f === "prompt_injection_detected") promptInjectionCount++;
+          if (f === "output_anomaly") outputAnomalyCount++;
         }
       }
     }
@@ -343,6 +361,9 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     commonTopics: countFrequency(allTopics),
     flaggedCallCount: flaggedCount,
     exceptionalCallCount: exceptionalCount,
+    lowConfidenceCallCount: lowConfidenceCount,
+    promptInjectionCallCount: promptInjectionCount,
+    outputAnomalyCallCount: outputAnomalyCount,
   };
 }
 

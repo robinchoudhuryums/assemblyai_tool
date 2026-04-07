@@ -554,7 +554,9 @@ export const BADGE_TYPES = [
   { value: "calls_25", label: "Quarter Century", description: "25 calls analyzed", icon: "trophy" },
   { value: "calls_50", label: "Half Century", description: "50 calls analyzed", icon: "trophy" },
   { value: "calls_100", label: "Century Club", description: "100 calls analyzed", icon: "crown" },
-  { value: "most_improved", label: "Most Improved", description: "Biggest score improvement over 30 days", icon: "trend-up" },
+  // A13/F10/D1: most_improved was never implemented in evaluateBadges — there
+  // is no code path that awards it. Removing it from BADGE_TYPES so the badge
+  // catalog matches the actual evaluation logic.
   { value: "compliance_star", label: "Compliance Star", description: "Compliance sub-score 9+ on 5 consecutive calls", icon: "shield" },
   { value: "empathy_champion", label: "Empathy Champion", description: "Customer Experience sub-score 9+ on 5 consecutive calls", icon: "heart" },
   { value: "resolution_ace", label: "Resolution Ace", description: "Resolution sub-score 9+ on 5 consecutive calls", icon: "check-circle" },

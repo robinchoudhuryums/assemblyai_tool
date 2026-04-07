@@ -10,10 +10,21 @@
 import { storage } from "../storage";
 import { broadcastCallUpdate } from "./websocket";
 import { aiProvider } from "./ai-factory";
-import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
+import type { InsertCoachingSession, CallAnalysis } from "@shared/schema";
 import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
 import { fetchRagContext, isRagEnabled, type RagSource } from "./rag-client";
 import { logger } from "./logger";
+
+/**
+ * A12/F11/F21: shape passed from the pipeline so we don't re-fetch the
+ * analysis from storage. The caller already has the freshly-built analysis
+ * record in scope; loading it again is wasteful and racy if the pipeline
+ * is mid-update.
+ */
+type CoachingAnalysisInput = Pick<
+  CallAnalysis,
+  "feedback" | "subScores" | "flags"
+> | undefined;
 
 interface SubScores {
   compliance?: number;
@@ -62,6 +73,7 @@ export async function checkAndCreateCoachingAlert(
   employeeId: string | undefined,
   summary: string,
   ragSources?: RagSource[],
+  analysis?: CoachingAnalysisInput,
 ): Promise<void> {
   if (!employeeId) return;
 
@@ -75,7 +87,7 @@ export async function checkAndCreateCoachingAlert(
 
     if (aiProvider.isAvailable && aiProvider.generateText) {
       try {
-        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score, ragSources);
+        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score, ragSources, analysis);
         if (aiPlan) {
           actionPlan = aiPlan.tasks.map(t => ({ task: t, completed: false }));
           aiNotes = aiPlan.notes;
@@ -158,6 +170,7 @@ async function generateAICoachingPlan(
   callSummary: string,
   score: number,
   ragSources?: RagSource[],
+  analysis?: CoachingAnalysisInput,
 ): Promise<{ tasks: string[]; notes: string } | null> {
   if (!aiProvider.generateText) return null;
 
@@ -168,22 +181,22 @@ async function generateAICoachingPlan(
     if (emp) employeeName = emp.name;
   } catch {}
 
-  // Get the call analysis for more detail
+  // A12/F11/F21: previously this re-fetched the analysis from storage.
+  // The pipeline already has it in scope and now passes it through —
+  // saves a DB round-trip and avoids racing the pipeline's own update.
   let analysisContext = "";
-  try {
-    const analysis = await storage.getCallAnalysis(callId);
-    if (analysis) {
-      const feedback = analysis.feedback as { strengths?: string[]; suggestions?: string[] } | undefined;
-      const suggestions = feedback?.suggestions || [];
-      const strengths = feedback?.strengths || [];
-      const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
-      analysisContext = `
-Sub-scores: Compliance ${analysis.subScores?.compliance ?? "N/A"}/10, Customer Experience ${analysis.subScores?.customerExperience ?? "N/A"}/10, Communication ${analysis.subScores?.communication ?? "N/A"}/10, Resolution ${analysis.subScores?.resolution ?? "N/A"}/10
+  if (analysis) {
+    const feedback = analysis.feedback as { strengths?: string[]; suggestions?: string[] } | undefined;
+    const suggestions = feedback?.suggestions || [];
+    const strengths = feedback?.strengths || [];
+    const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
+    const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
+    analysisContext = `
+Sub-scores: Compliance ${subScores?.compliance ?? "N/A"}/10, Customer Experience ${subScores?.customerExperience ?? "N/A"}/10, Communication ${subScores?.communication ?? "N/A"}/10, Resolution ${subScores?.resolution ?? "N/A"}/10
 Suggestions from AI: ${suggestions.slice(0, 4).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Strengths observed: ${strengths.slice(0, 3).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Flags: ${flags.join(", ") || "none"}`;
-    }
-  } catch {}
+  }
 
   // Reuse RAG sources from the analysis (avoids duplicate API call)
   // Falls back to fetching if sources weren't passed from the pipeline

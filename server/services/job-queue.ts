@@ -156,6 +156,28 @@ export class JobQueue {
   }
 
   /**
+   * A8/F18: Look up a single job by ID. Used by GET /api/admin/jobs/:id
+   * so callers that enqueue async work (e.g. batch snapshot generation)
+   * can poll for completion. Returns undefined if the job doesn't exist.
+   */
+  async getJob(jobId: string): Promise<Job | undefined> {
+    const { rows } = await this.db.query(`SELECT * FROM jobs WHERE id = $1 LIMIT 1`, [jobId]);
+    if (rows.length === 0) return undefined;
+    const row = rows[0];
+    return {
+      id: row.id, type: row.type, status: row.status,
+      payload: row.payload, priority: row.priority,
+      attempts: row.attempts, maxAttempts: row.max_attempts,
+      lockedAt: row.locked_at?.toISOString?.() ?? row.locked_at,
+      lockedBy: row.locked_by,
+      completedAt: row.completed_at?.toISOString?.() ?? row.completed_at,
+      failedReason: row.failed_reason,
+      createdAt: row.created_at?.toISOString?.() ?? row.created_at,
+      updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at,
+    };
+  }
+
+  /**
    * Get all dead-letter jobs (failed after max attempts).
    */
   async getDeadJobs(limit = 50): Promise<Job[]> {

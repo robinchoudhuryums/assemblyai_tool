@@ -7,11 +7,24 @@ import { getCallClusters } from "../services/call-clustering";
 import { computeUtteranceMetrics, type TranscriptWord } from "../services/assemblyai";
 import { escapeCsvValue, validateParams } from "./utils";
 
-/** Validate an ISO date string; returns undefined if invalid. */
+/**
+ * Validate an ISO date string and clamp to a sane window.
+ *
+ * A14/F23: previously this only checked that `new Date(val)` parsed.
+ * Callers could pass year 0 or year 9999 which created ridiculous SQL
+ * date predicates and pathological JS Date math (e.g. negative
+ * timestamps blowing up filterCallsByDateRange). We now clamp to
+ * 2000-01-01 .. 2100-12-31. Anything outside is treated as invalid.
+ */
+const MIN_DATE = new Date("2000-01-01T00:00:00.000Z").getTime();
+const MAX_DATE = new Date("2100-12-31T23:59:59.999Z").getTime();
 function validateDate(val: string | undefined): string | undefined {
   if (!val) return undefined;
   const d = new Date(val);
-  return isNaN(d.getTime()) ? undefined : val;
+  const ms = d.getTime();
+  if (isNaN(ms)) return undefined;
+  if (ms < MIN_DATE || ms > MAX_DATE) return undefined;
+  return val;
 }
 
 export function register(router: Router) {
