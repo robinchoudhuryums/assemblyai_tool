@@ -14,6 +14,7 @@ import { timingSafeEqual, createHash } from "crypto";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerCallRoutes } from "./routes/calls";
 import { registerAdminRoutes } from "./routes/admin";
+import { requireMFASetup } from "./auth";
 import { register as registerDashboardRoutes } from "./routes/dashboard";
 import { register as registerEmployeeRoutes } from "./routes/employees";
 import { registerReportRoutes } from "./routes/reports";
@@ -190,6 +191,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerUserRoutes(router);
   registerSnapshotRoutes(router);
   registerGamificationRoutes(router);
+  // HIPAA: enforce MFA enrollment on /api/admin/* before any admin handler runs.
+  // Mounted directly before registerAdminRoutes so it intercepts all admin paths
+  // that get registered below. The MFA setup endpoints live under /api/auth/mfa/*
+  // and are unaffected, so admins without MFA can still enroll.
+  router.use("/api/admin", requireMFASetup);
   registerAdminRoutes(router, upload.single('audioFile'), {
     getJobQueue: () => jobQueue,
     shouldUseBatchMode,

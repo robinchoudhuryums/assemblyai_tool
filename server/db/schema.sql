@@ -344,3 +344,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log (event);
 -- Note: audit_log intentionally does NOT have a FK to users.id.
 -- HIPAA audit logs must be immutable and survive user deletion/renaming.
 -- Both user_id and username are denormalized to preserve the audit trail.
+
+-- Persistent state for the HMAC integrity chain (A6).
+-- Single-row table; `id = 1` is the only legal row. Seeded with the genesis
+-- hash on first boot so chain verification works across process restarts.
+CREATE TABLE IF NOT EXISTS audit_log_integrity (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  previous_hash VARCHAR(64) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO audit_log_integrity (id, previous_hash)
+  VALUES (1, 'genesis')
+  ON CONFLICT (id) DO NOTHING;

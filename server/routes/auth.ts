@@ -25,7 +25,7 @@ export function registerAuthRoutes(router: Router) {
     for (const [token, data] of mfaPendingTokens) {
       if (now > data.expires) mfaPendingTokens.delete(token);
     }
-  }, 5 * 60 * 1000);
+  }, 5 * 60 * 1000).unref();
 
   // Login (supports MFA two-step flow)
   router.post("/api/auth/login", (req, res, next) => {

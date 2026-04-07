@@ -37,87 +37,8 @@ describe("Structured error handling", () => {
 // dead code — the production queue is JobQueue in services/job-queue.ts
 // backed by PostgreSQL. Those tests are covered in tests/job-queue.test.ts.
 
-describe("Enhanced MFA", () => {
-  describe("Backup codes", () => {
-    it("generates 10 backup codes", async () => {
-      const { generateBackupCodes } = await import("../server/services/mfa-enhanced.js");
-      const { plaintext, hashes } = generateBackupCodes();
-      assert.equal(plaintext.length, 10);
-      assert.equal(hashes.length, 10);
-    });
-
-    it("backup codes are formatted as XXXX-XXXX", async () => {
-      const { generateBackupCodes } = await import("../server/services/mfa-enhanced.js");
-      const { plaintext } = generateBackupCodes();
-      for (const code of plaintext) {
-        assert.match(code, /^[A-F0-9]{4}-[A-F0-9]{4}$/);
-      }
-    });
-
-    it("verifyBackupCode matches a valid code", async () => {
-      const { generateBackupCodes, verifyBackupCode } = await import("../server/services/mfa-enhanced.js");
-      const { plaintext, hashes } = generateBackupCodes();
-      const idx = verifyBackupCode(plaintext[3], hashes);
-      assert.equal(idx, 3);
-    });
-
-    it("verifyBackupCode rejects invalid code", async () => {
-      const { verifyBackupCode } = await import("../server/services/mfa-enhanced.js");
-      const idx = verifyBackupCode("XXXX-YYYY", ["abc123"]);
-      assert.equal(idx, -1);
-    });
-  });
-
-  describe("Trusted devices", () => {
-    it("createTrustedDevice returns token and device record", async () => {
-      const { createTrustedDevice } = await import("../server/services/mfa-enhanced.js");
-      const { token, device } = createTrustedDevice("Chrome on MacOS");
-      assert.ok(token.length > 0);
-      assert.equal(device.name, "Chrome on MacOS");
-      assert.ok(new Date(device.expiresAt) > new Date());
-    });
-
-    it("verifyTrustedDevice accepts valid token", async () => {
-      const { createTrustedDevice, verifyTrustedDevice } = await import("../server/services/mfa-enhanced.js");
-      const { token, device } = createTrustedDevice("Test Device");
-      assert.ok(verifyTrustedDevice(token, [device]));
-    });
-
-    it("verifyTrustedDevice rejects wrong token", async () => {
-      const { createTrustedDevice, verifyTrustedDevice } = await import("../server/services/mfa-enhanced.js");
-      const { device } = createTrustedDevice("Test Device");
-      assert.equal(verifyTrustedDevice("wrong-token", [device]), false);
-    });
-
-    it("pruneExpiredDevices removes old entries", async () => {
-      const { pruneExpiredDevices } = await import("../server/services/mfa-enhanced.js");
-      const expired: any = {
-        tokenHash: "abc",
-        name: "Old",
-        createdAt: "2020-01-01",
-        expiresAt: "2020-02-01",
-      };
-      const valid: any = {
-        tokenHash: "def",
-        name: "New",
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 86400000).toISOString(),
-      };
-      const pruned = pruneExpiredDevices([expired, valid]);
-      assert.equal(pruned.length, 1);
-      assert.equal(pruned[0].name, "New");
-    });
-  });
-
-  describe("WebAuthn", () => {
-    it("validateCounter rejects replay (counter not advancing)", async () => {
-      const { validateCounter } = await import("../server/services/mfa-enhanced.js");
-      assert.ok(validateCounter(5, 6)); // 6 > 5 → valid
-      assert.ok(!validateCounter(5, 5)); // 5 = 5 → replay
-      assert.ok(!validateCounter(5, 3)); // 3 < 5 → replay
-    });
-  });
-});
+// Enhanced MFA module (server/services/mfa-enhanced.ts) was removed as dead code (A3).
+// Backup codes / trusted devices / WebAuthn were never wired into any route.
 
 describe("RAG hybrid search", () => {
   it("bm25Score returns higher score for matching terms", async () => {
