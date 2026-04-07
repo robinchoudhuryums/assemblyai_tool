@@ -221,12 +221,16 @@ describe("webhook S3 client not initialized", () => {
         createdBy: "admin",
         createdAt: "2026-01-01T00:00:00Z",
       }),
-      /S3 client not available/
+      /S3 client unavailable/
     );
   });
 
-  it("deleteWebhookConfig does not throw", async () => {
-    // Should be a no-op
-    await deleteWebhookConfig("any-id");
+  it("deleteWebhookConfig throws when S3 client unavailable", async () => {
+    // A5: writes (create/update/delete) now throw via requireS3Client()
+    // instead of silently no-op'ing. Reads still degrade gracefully.
+    await assert.rejects(
+      () => deleteWebhookConfig("any-id"),
+      /S3 client unavailable/
+    );
   });
 });
