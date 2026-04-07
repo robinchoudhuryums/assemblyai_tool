@@ -233,8 +233,8 @@ export async function recoverOrphans(): Promise<void> {
     const s3Client = storage.getObjectStorageClient();
     if (!s3Client) return;
 
-    const allCalls = await storage.getAllCalls();
-    const awaitingCalls = allCalls.filter(c => c.status === "awaiting_analysis");
+    // A7/F14: indexed status lookup replaces full-table scan
+    const awaitingCalls = await storage.getCallsByStatus("awaiting_analysis");
     if (awaitingCalls.length === 0) return;
 
     const pendingKeys = new Set(

@@ -66,15 +66,12 @@ function percentile(sorted: number[], p: number): number {
  */
 export async function analyzeScoreDistribution(windowDays?: number): Promise<CalibrationSnapshot | null> {
   const days = windowDays || parseInt(process.env.CALIBRATION_WINDOW_DAYS || String(DEFAULT_WINDOW_DAYS), 10);
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const cutoffDate = new Date(Date.now() - days * 86400000);
 
   try {
-    const allCalls = await storage.getAllCalls();
-    const recentScoredCalls = allCalls.filter(c =>
-      c.status === "completed" &&
-      c.uploadedAt &&
-      c.uploadedAt > cutoff
-    );
+    // A7/F14: uploaded_at indexed range scan replaces full-table getAllCalls().
+    const windowedCalls = await storage.getCallsSince(cutoffDate);
+    const recentScoredCalls = windowedCalls.filter(c => c.status === "completed");
 
     // Extract raw performance scores from analysis
     const rawScores: number[] = [];

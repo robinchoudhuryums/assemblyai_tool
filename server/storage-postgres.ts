@@ -445,6 +445,21 @@ export class PostgresStorage implements IStorage {
     const { rows } = await this.db.query("SELECT * FROM calls ORDER BY uploaded_at DESC");
     return rows.map(mapCall);
   }
+  async getCallsByStatus(status: string): Promise<Call[]> {
+    // A7/F14: indexed via idx_calls_status (see schema.sql)
+    const { rows } = await this.db.query(
+      "SELECT * FROM calls WHERE status = $1 ORDER BY uploaded_at DESC",
+      [status],
+    );
+    return rows.map(mapCall);
+  }
+  async getCallsSince(since: Date): Promise<Call[]> {
+    const { rows } = await this.db.query(
+      "SELECT * FROM calls WHERE uploaded_at >= $1 ORDER BY uploaded_at DESC",
+      [since],
+    );
+    return rows.map(mapCall);
+  }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     const { rows } = await this.db.query(
       "SELECT * FROM calls WHERE content_hash = $1 LIMIT 1",
