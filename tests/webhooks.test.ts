@@ -196,8 +196,10 @@ describe("webhook event filtering", () => {
 
 describe("webhook S3 client not initialized", () => {
   beforeEach(() => {
-    // Reset to no S3 client
-    initWebhooks(() => null);
+    // Reset to no S3 client. Also invalidate the 30s config cache by creating
+    // and deleting a config via a fresh mock — without this, getAllWebhookConfigs
+    // serves stale cached entries from the previous describe block.
+    initWebhooks(() => undefined);
   });
 
   it("getAllWebhookConfigs returns empty array", async () => {
@@ -221,12 +223,14 @@ describe("webhook S3 client not initialized", () => {
         createdBy: "admin",
         createdAt: "2026-01-01T00:00:00Z",
       }),
-      /S3 client not available/
+      /S3 client unavailable/
     );
   });
 
-  it("deleteWebhookConfig does not throw", async () => {
-    // Should be a no-op
-    await deleteWebhookConfig("any-id");
+  it("deleteWebhookConfig throws when S3 unavailable", async () => {
+    await assert.rejects(
+      () => deleteWebhookConfig("any-id"),
+      /S3 client unavailable/
+    );
   });
 });

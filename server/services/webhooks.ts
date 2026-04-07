@@ -55,6 +55,10 @@ let initialized = false;
 export function initWebhooks(s3ClientAccessor: () => ObjectStorageClient | undefined): void {
   getS3Client = s3ClientAccessor;
   initialized = true;
+  // Invalidate any cached configs from a prior init — important for tests that
+  // swap S3 backends between describe blocks, but also a sane invariant: the
+  // cache is keyed to the prior backend's view of the world.
+  invalidateConfigCache();
 }
 
 function requireS3Client(op: string): ObjectStorageClient {
