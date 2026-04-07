@@ -44,10 +44,28 @@ export function asyncHandler(
  * Global error handler — mount as the last middleware.
  * Converts AppError instances to structured JSON responses.
  * Catches unhandled errors as 500 Internal Server Error.
+ *
+ * RESPONSE SHAPE (transitional, see A4/AD3): emits BOTH the legacy
+ *   { message }
+ * field AND the new
+ *   { error: { code, message, detail? } }
+ * field for one release. Existing frontend handlers (queryClient.ts,
+ * error-boundary.tsx) continue to read top-level `message`. New code should
+ * read from `error`. The top-level `message` field will be removed in batch 2.
+ *
+ * In production, raw error messages from non-AppError instances are sanitized
+ * to avoid leaking stack traces / DB error details / library internals.
  */
-export function globalErrorHandler(err: Error, _req: Request, res: Response, _next: NextFunction): void {
+const isProduction = () => process.env.NODE_ENV === "production";
+
+export function globalErrorHandler(err: Error & { statusCode?: number; status?: number }, _req: Request, res: Response, _next: NextFunction): void {
+  if (res.headersSent) {
+    // Express requires we delegate if a response has already started streaming
+    return _next(err);
+  }
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
+      message: err.message, // legacy field — drop in batch 2
       error: {
         code: err.code,
         message: err.message,
@@ -57,13 +75,19 @@ export function globalErrorHandler(err: Error, _req: Request, res: Response, _ne
     return;
   }
 
-  // Log unexpected errors
+  // Unexpected error → log full server-side, sanitize client message in prod
   console.error("[ERROR]", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
 
-  res.status(500).json({
+  const status = err.statusCode || err.status || 500;
+  const sanitizedMessage = isProduction() && status >= 500
+    ? "An unexpected error occurred"
+    : (err.message || "An unexpected error occurred");
+
+  res.status(status).json({
+    message: sanitizedMessage, // legacy field — drop in batch 2
     error: {
       code: "INTERNAL_ERROR",
-      message: "An unexpected error occurred",
+      message: sanitizedMessage,
     },
   });
 }

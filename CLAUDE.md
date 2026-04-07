@@ -116,6 +116,9 @@ tests/                   # Unit tests (Node test runner)
 ```
 
 ### Audio Processing Pipeline (server/routes.ts → processAudioFile)
+
+**Signature (A22)**: `processAudioFile(callId: string, audio: Buffer, options: ProcessAudioOptions)`. The options object carries `originalName`, `mimeType`, `callCategory?`, `uploadedBy?`, `processingMode?`, `language?`, `filePath?`. Legacy 9-positional signature removed.
+
 1. Archive audio to S3 immediately on upload (before queuing)
 2. Enqueue job in PostgreSQL job queue (falls back to in-memory TaskQueue if no DB)
 3. Job worker reads audio from S3 and sends to AssemblyAI for transcription (webhook mode if `APP_BASE_URL` set, polling fallback otherwise)
@@ -133,7 +136,7 @@ tests/                   # Unit tests (Node test runner)
 - Uses `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent processing
 - Configurable concurrency via `JOB_CONCURRENCY` env var (default 5)
 - Auto-retry with dead-letter pattern (3 max attempts)
-- Stale job reclaim after 10 minutes of inactivity
+- Heartbeat: workers emit `last_heartbeat_at` every 30s during job execution; `reapStaleJobs()` fails any 'running' job with a heartbeat older than 2 minutes. Attempts increment only on explicit failJob (including via reap) — worker crashes no longer burn retries on their own (A18).
 
 **Batch Inference Mode** (when `BEDROCK_BATCH_MODE=true`):
 - After transcription, the AI analysis prompt is saved to S3 (`batch-inference/pending/`) instead of calling Bedrock synchronously
@@ -412,6 +415,7 @@ VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (opt
 # AssemblyAI Webhooks (faster than polling)
 APP_BASE_URL                    # Public URL of the app (e.g. https://umscallanalyzer.com) — enables webhook mode for AssemblyAI
 ASSEMBLYAI_WEBHOOK_SECRET       # Shared secret for verifying AssemblyAI webhook signatures (REQUIRED in production if APP_BASE_URL is set)
+ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED  # Dev-only override: set to "true" to accept AssemblyAI webhooks when ASSEMBLYAI_WEBHOOK_SECRET is not set. Default is deny in all environments.
 
 # RAG Knowledge Base (ums-knowledge-reference integration)
 RAG_SERVICE_URL                 # URL of the knowledge reference API (e.g., http://localhost:3001)
@@ -439,6 +443,23 @@ TELEPHONY_8X8_API_KEY           # 8x8 Work API key
 TELEPHONY_8X8_SUBACCOUNT_ID     # 8x8 subaccount ID
 TELEPHONY_8X8_POLL_MINUTES      # How often to poll for new recordings (default: 15)
 TELEPHONY_8X8_BASE_URL          # 8x8 API base URL (override for testing)
+
+# Pipeline quality gates (A24)
+MIN_CALL_DURATION_FOR_AI_SEC    # Minimum seconds of audio to run AI analysis (default: 15)
+MIN_TRANSCRIPT_LEN_FOR_AI       # Minimum transcript char count (default: 10)
+MIN_TRANSCRIPT_CONFIDENCE_FOR_AI # Minimum transcript confidence to run AI (default: 0.6)
+HAIKU_SHORT_CALL_MAX_SEC        # Short-call Haiku optimization threshold in seconds (default: 120)
+HAIKU_SHORT_CALL_MAX_TOKENS     # Token cap for Haiku short-call eligibility (default: 3000)
+
+# Gamification / coaching (A41 — all env-overridable, NaN-guarded)
+STREAK_SCORE_THRESHOLD          # Minimum score to count toward streak (default: 8.0)
+WEAKNESS_CALL_THRESHOLD         # Recent low sub-score count to trigger coaching plan (default: 3)
+WEAKNESS_SCORE_THRESHOLD        # Sub-score considered "weak" (default: 5.0)
+LOOKBACK_CALLS                  # Recent-call window for weakness analysis (default: 10)
+
+# Speech metrics (A41)
+MONOLOGUE_DURATION_MS           # Single-speaker monologue threshold in ms (default: 60000)
+INTERRUPTION_GAP_MS             # Speaker-change gap considered interruption in ms (default: 200)
 
 # Optional
 PORT                            # Default: 5000
@@ -485,7 +506,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 | **MFA (TOTP)** | `server/services/totp.ts` | Optional TOTP two-factor authentication (RFC 6238); timing-safe code verification via `timingSafeEqual`; enforced via `REQUIRE_MFA=true` |
 | **Password complexity** | `server/auth.ts` | Rejects weak passwords (12+ chars, uppercase, lowercase, digit, special char) — enforcement on AUTH_USERS, DB user creation, and password reset |
 | **Session fingerprinting** | `server/auth.ts` | Binds sessions to user-agent + accept-language (IP intentionally excluded to avoid false kills on mobile/VPN); set on first authenticated request; destroys session on mismatch |
-| **Webhook secret enforcement** | `server/routes.ts` | AssemblyAI webhook endpoint rejects unverified payloads in production when `ASSEMBLYAI_WEBHOOK_SECRET` is not set |
+| **Webhook secret enforcement** | `server/routes.ts` | AssemblyAI webhook endpoint rejects unverified payloads by default in ALL environments when `ASSEMBLYAI_WEBHOOK_SECRET` is not set. Dev override: `ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true`. Secret compare uses SHA-256 + timingSafeEqual. |
 | **SSRF protection** | `server/services/url-validator.ts` | Shared URL validator: blocks localhost, private/reserved IPs (RFC 1918/6598), cloud metadata endpoints (AWS/GCP/Azure/Alibaba), .local/.internal hostnames, IPv6-mapped IPv4, DNS resolution to private IPs; enforces HTTPS in production; applied to webhook create, update, and delivery |
 | **Startup env validation** | `server/index.ts` | Critical config (`SESSION_SECRET`, API keys, `DATABASE_URL`) validated at boot with clear warnings/errors |
 | **CSRF protection** | `server/index.ts` | JSON requests require `Content-Type: application/json`; file uploads require `X-Requested-With` header; both prevent cross-origin form submissions |
@@ -494,7 +515,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 | **Breach notification** | `server/services/security-monitor.ts` | HIPAA §164.408 breach reporting with timeline tracking, notification status |
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
-| **WAF** | `server/middleware/waf.ts` | Application-level firewall: SQL injection, XSS, path traversal detection; IP blocklist with anomaly scoring; suspicious bot blocking; input truncation (4KB) prevents regex DoS |
+| **WAF** | `server/middleware/waf.ts` | Application-level firewall split into two passes: `wafPreBody` (runs before `express.json()` — inspects IP/UA/URL/query/path) and `wafPostBody` (runs after parsing — inspects `req.body`, no-ops on multipart). SQL injection, XSS, path traversal, CRLF, IP blocklist with LRU-bounded anomaly scoring; NFC + HTML entity decode normalization; input truncated to 4KB to prevent regex DoS. Legacy `wafMiddleware()` is deprecated. |
 | **Audit log integrity** | `server/services/audit-log.ts` | HMAC-SHA256 chain on stdout entries — each hash covers content + previous hash; tampering/deletion breaks the chain |
 | **TOTP replay protection** | `server/services/totp.ts` | Used-token cache prevents same TOTP code from being reused within the same time window |
 | **Route param validation** | `server/routes/utils.ts` | `validateParams()` middleware rejects malformed UUIDs, IDs, and names before they reach DB queries (30+ routes) |
@@ -514,6 +535,15 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 | **SSL hardening** | `server/db/pool.ts` | Production always enforces `rejectUnauthorized: true` regardless of env var override |
 
 ## Key Design Decisions
+- **JobQueue attempts-on-failJob contract** (A18): `attempts` increments only when `failJob` runs — explicit failures and stale-heartbeat reaps. Crashes alone no longer burn attempts. Trade-off: a genuinely unhealthy worker that repeatedly crashes before heartbeat will be caught by the reaper, which burns one attempt per reap; transient DB flapping during reap can exhaust retries on a job that never actually failed.
+- **`/api/calls` is cursor-pagination-only** (A20): the legacy offset mode was removed because it loaded the full result set into memory for slicing. `?page=N` requests silently return page 1 rather than 400 — breaks loudly would be better but was deferred to avoid a same-cycle frontend migration.
+- **`/api/employees` silent default pagination** (A20): limit=50 default with `X-Pagination-Default: true` header rather than a hard 400 on missing limit. Preserves backward compat at the cost of silent truncation for unmigrated callers.
+- **Content hash uniqueness is DB-enforced** (A21): `UNIQUE INDEX idx_calls_content_hash_unique` rejects duplicate uploads at insert time; route handler catches pg 23505 and 409s. Replaces the prior O(n) scan over `getAllCalls`.
+- **CSV import contract change** (A29): switched from server-side file read (`./employees.csv`) to multipart upload. Closes a file-write injection hole and ends pm2 working-directory fragility, but breaks any admin automation relying on the old path.
+- **Sentry beforeSend is fail-open**: on scrubber exception, the event is returned *unmodified* rather than dropped. Observability path priority — dropping events on scrubber bugs would blind us to both the original error and the bug. Trade-off: brief PHI-in-Sentry window during a scrubber bug, bounded by `console.error` alerting.
+- **WAF pre/post split ordering is load-bearing**: `wafPreBody` → `express.json({limit:"1mb"})` → `wafPostBody`. Moving WAF after body parsing re-introduces the JSON-parse-then-reject DoS amplification. Moving it all before the parser means `req.body` is undefined for body inspection.
+- **Shared TaskQueue tradeoff**: `audioProcessingQueue` is one singleton across pipeline/calls/admin-content (was 4 separate `new TaskQueue(3)` instances with independent caps — effective concurrency 12). Consolidation enforces a real 3-slot cap but means A/B tests and normal uploads compete. If A/B testing becomes heavily used, split them back out with named queues.
+- **LRU-bounded WAF IP state**: `blockedIPs`, `temporaryBlocks`, `anomalyScores`, `anomalyCooldowns` are capped at 10k entries with LRU eviction. Under sustained >10k unique attacker IPs, the oldest permanent blocks are evicted. If durable blocks at that scale are needed, move to a persistent store (Redis / PostgreSQL).
 - **No AWS SDK**: Both S3 and Bedrock use raw REST APIs with manual SigV4 signing — reduces bundle size and avoids SDK dependency overhead, but means signing logic must be maintained manually
 - **Hybrid storage**: PostgreSQL for structured metadata (fast queries, JOINs, transactions) + S3 for audio blobs (cheap, durable). Falls back gracefully without DATABASE_URL.
 - **Durable job queue**: PostgreSQL-backed with `SELECT ... FOR UPDATE SKIP LOCKED` — survives restarts, supports concurrent workers, auto-retry with dead-letter
@@ -681,6 +711,22 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 ```
 
 ## Common Gotchas
+- **processAudioFile signature is `(callId, audio, options)`** (A22) — not the old 9-positional shape. `audio` is a Buffer; the options object carries originalName, mimeType, callCategory?, uploadedBy?, processingMode?, language?, filePath?. Telephony scheduler and job worker both use this shape.
+- **Job queue attempts increment only on failJob** (A18) — a worker crash no longer burns an attempt by itself. Stale-heartbeat reap calls failJob explicitly, so a job with a flapping DB connection can still burn the retry budget through repeated reaps. Heartbeat every 30s; stale threshold 2min.
+- **Upgrading an existing DB to the A18 schema leaves orphan 'running' jobs unreapable** — `last_heartbeat_at` is NULL and the reaper's `<` comparison skips NULLs. On first deploy, run `UPDATE jobs SET last_heartbeat_at = NOW() WHERE status = 'running' AND last_heartbeat_at IS NULL;` before expecting reap to work on stale jobs.
+- **estimateBedrockCost returns `number | null`** (A27) — unknown models return null. Unknown-model usage records store `estimatedCost: 0`, not a Sonnet ballpark. Adding a new BEDROCK_MODEL requires updating `BEDROCK_PRICING` in `server/routes/utils.ts` or cost tracking silently zeroes.
+- **`/api/calls` offset mode is gone** (A20) — `?page=2` silently returns page 1. Frontend must send `?cursor=<token>`; consume `nextCursor` from the response.
+- **`/api/employees` paginates by default** (A20) — default limit=50, max=500. Response is a bare `Employee[]`; total in `X-Total-Count` header, `X-Pagination-Default: true` if the client omitted `?limit`. Any code iterating the response assuming "all employees" will silently truncate.
+- **CSV import is multipart upload** (A29) — POST /api/employees/import-csv expects `multipart/form-data` with a `file` field. The old "read `./employees.csv` from server cwd" behavior is gone.
+- **`uploadsDir` is `path.resolve(cwd, "uploads")`** (A42) — absolute. pm2 working-directory changes no longer strand uploads.
+- **Graceful shutdown does NOT stop JobQueue** (A34, known gap) — in-flight jobs crash mid-pipeline on SIGTERM. Audit queue is flushed and DB pool is closed; JobQueue poll loop crashes harmlessly on closed connection.
+- **PATCH /api/calls/:id/analysis** is strict-whitelisted via `analysisEditSchema.strict()`. Adding a new editable field requires editing `shared/schema.ts`; passing unknown keys is rejected with 400.
+- **audioProcessingQueue** is a single shared singleton exported from `server/routes/pipeline.ts`. A/B test uploads, bulk re-analysis, and normal call uploads compete for the same concurrency slots. Don't construct `new TaskQueue()` in a route file — import the singleton.
+- **Global JSON body limit is 1MB** (`express.json({limit:"1mb"})` in `server/index.ts`). Routes that legitimately need larger payloads must mount a per-route `express.json({limit:...})` override before the route handler.
+- **WAF is two middlewares**, not one: `wafPreBody` runs before body parsing (inspects URL/query/headers/IP), `wafPostBody` runs after (inspects `req.body`, no-ops on multipart). Do not reorder them in `index.ts`.
+- **Logger meta is PHI-scrubbed** recursively via `phi-redactor.ts` in `logger.emit()` (depth=6, WeakSet cycle detection, 10KB string cap). Formatted numeric strings that look like phone numbers will show as `[REDACTED-PHONE]` in log output.
+- **Sentry namespace export removed** — import `captureException` / `captureMessage` from `server/services/sentry.ts`. Direct `Sentry.*` access bypassed PHI scrubbing and is no longer available.
+- **Global error response shape is transitional**: `{ message, error: { code, message, detail? } }`. Both fields are populated in batch 1. The top-level `message` will be removed in batch 2 once all frontend handlers read from `error.message`.
 - Bedrock AI responses may contain objects where strings are expected — always use `toDisplayString()` on frontend and `normalizeStringArray()` on server when rendering/storing AI data
 - The same IAM user is shared across 3 projects (CallAnalyzer, RAG Tool, PMD Questionnaire) — IAM policy covers S3, Bedrock, and Textract
 - Recharts uses inline styles that override CSS; dark mode fixes use `!important`
@@ -720,12 +766,12 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 
 | Module | Files | Responsibility |
 |--------|-------|---------------|
-| **Server Entry** | `server/index.ts`, `server/vite.ts`, `server/types.d.ts` | Express bootstrap: middleware stack (X-Forwarded-For validation, HTTPS redirect, CORS, WAF, security headers, CSRF double-submit, audit logging, correlation IDs, rate limiting), env validation, graceful shutdown, Vite dev server integration. `types.d.ts` holds Express.User and SessionData type augmentations. |
+| **Server Entry** | `server/index.ts`, `server/vite.ts`, `server/types.d.ts` | Express bootstrap. Middleware order: X-Forwarded-For validation → correlation ID (UUID-validated, truncated, falls back to randomUUID) → HTTPS redirect → CORS → `wafPreBody` → `express.json({limit:"1mb"})` → `express.urlencoded({limit:"1mb"})` → `wafPostBody` → security headers → audit logging → CSRF double-submit (timingSafeEqual on hashed tokens) → legacy CSRF Content-Type check → routes → `globalErrorHandler` (AppError-aware, transitional `{message, error:{...}}` shape, prod 5xx sanitization). Env validation, graceful shutdown, Vite dev server integration. `types.d.ts` holds Express.User and SessionData type augmentations. |
 | **Route Coordinator** | `server/routes.ts` | Registers all 12 sub-routers, configures multer, initializes job queue + batch scheduler + calibration + telephony schedulers, handles AssemblyAI webhook endpoint |
 | **Auth & Sessions** | `server/auth.ts`, `server/routes/auth.ts` | Passport.js local strategy, session management (PostgreSQL or memorystore), password hashing/complexity, account lockout, session fingerprinting, MFA two-step flow |
 | **Call Routes** | `server/routes/calls.ts`, `server/routes/calls-tags.ts` | Call CRUD, audio streaming, transcript/sentiment/analysis retrieval, tagging, annotations |
 | **Pipeline** | `server/routes/pipeline.ts` | Core audio processing: transcription → quality gates → RAG fetch → injection detection → AI analysis → score calibration → storage → coaching/badges/webhooks |
-| **Route Utilities** | `server/routes/utils.ts` | Shared helpers: `sendError`, `sendValidationError`, `validateParams`, `validateIdParam`, `safeFloat`, `safeJsonParse`, `clampInt`, `parseDate`, `asyncHandler`, `TaskQueue`, `computeConfidenceScore`, `autoAssignEmployee`, `cleanupFile`, `escapeCsvValue`, `filterCallsByDateRange`, `countFrequency`, `calculateSentimentBreakdown`, `calculateAvgScore`, `estimateBedrockCost`, `estimateAssemblyAICost`, `estimateEmbeddingCost`. **Note:** `requireRole` is exported from `server/auth.ts`, NOT from utils.ts. |
+| **Route Utilities** | `server/routes/utils.ts` | Shared helpers: `sendError`, `sendValidationError`, `validateParams`, `validateIdParam`, `safeFloat`, `safeJsonParse`, `clampInt`, `parseDate`, `TaskQueue` (with `QueueFullError`/`TaskTimeoutError`, `maxQueueSize=1000`, `taskTimeoutMs=10min` bounds), `computeConfidenceScore`, `autoAssignEmployee`, `cleanupFile`, `escapeCsvValue`, `filterCallsByDateRange`, `countFrequency`, `calculateSentimentBreakdown`, `calculateAvgScore`, `estimateBedrockCost`, `estimateAssemblyAICost`, `estimateEmbeddingCost`. **Note:** `requireRole` is exported from `server/auth.ts`; `asyncHandler` is exported from `server/middleware/error-handler.ts` (not utils.ts). |
 | **Admin Routes** | `server/routes/admin.ts`, `admin-security.ts`, `admin-operations.ts`, `admin-content.ts` | Admin facade delegating to security (WAF, incidents, vulns), operations (queue, batch, calibration, telephony), and content (templates, A/B tests, webhooks, usage) |
 | **Employee Routes** | `server/routes/employees.ts` | Employee CRUD, bulk CSV import |
 | **Dashboard & Metrics** | `server/routes/dashboard.ts` | Dashboard metrics, sentiment distribution, top performers, flagged calls |
@@ -736,7 +782,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company) |
 | **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
 | **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends |
-| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~30+ methods), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback) |
+| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~32 methods), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). |
 | **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
 | **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
 | **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory |
@@ -750,7 +796,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
 | **SSRF Protection** | `server/services/url-validator.ts` | URL validator blocking private IPs, metadata endpoints, DNS resolution to private ranges |
 | **Resilience** | `server/services/resilience.ts` | Circuit breaker (5 failures → 30s open → half-open test) wrapping Bedrock calls (single consumer: `bedrock.ts`) |
-| **Job Queue** | `server/services/job-queue.ts`, `server/services/durable-queue.ts` | PostgreSQL-backed durable queue (`FOR UPDATE SKIP LOCKED`); optional Redis/BullMQ queue |
+| **Job Queue** | `server/services/job-queue.ts` | PostgreSQL-backed durable queue with `FOR UPDATE SKIP LOCKED`, 30s worker heartbeat, 2min stale reap, attempts-on-failJob contract (A18). |
 | **WebSocket** | `server/services/websocket.ts` | Authenticated WebSocket server broadcasting real-time call processing status |
 | **Webhooks** | `server/services/webhooks.ts` | HMAC-signed HTTP POST notifications on call events with retry logic and SSRF validation |
 | **Coaching Alerts** | `server/services/coaching-alerts.ts` | Auto-creates coaching sessions for low/high-score calls, detects recurring weaknesses |
@@ -762,7 +808,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Telephony** | `server/services/telephony-8x8.ts` | 8x8 auto-ingestion framework (stub, pending API access) |
 | **Scheduled Reports** | `server/services/scheduled-reports.ts` | Weekly/monthly performance summary generation (dynamically imported by `routes.ts`) |
 | **Observability** | `server/services/logger.ts`, `server/services/correlation-id.ts`, `server/services/tracing.ts`, `server/services/trace-span.ts`, `server/services/sentry.ts` | Structured JSON logging, per-request correlation IDs, OpenTelemetry tracing, PHI-scrubbing Sentry integration |
-| **Middleware** | `server/middleware/waf.ts`, `server/middleware/rate-limit.ts`, `server/middleware/error-handler.ts` | WAF (SQLi/XSS/path traversal/IP blocklist), per-user rate limiting, typed error handling |
+| **Middleware** | `server/middleware/waf.ts`, `server/middleware/rate-limit.ts`, `server/middleware/error-handler.ts` | WAF split into `wafPreBody`/`wafPostBody` passes (pre runs before body parser, post after — no-ops on multipart); per-user rate limiting with LRU-bounded maps (10k cap); `AppError` + `globalErrorHandler` with transitional `{message, error:{code,message,detail?}}` response shape and prod 5xx sanitization. |
 | **Shared Schema** | `shared/schema.ts` | Zod schemas for all entities, shared between client and server |
 | **Constants** | `server/constants.ts` | Centralized scoring thresholds (env-configurable) |
 | **Frontend Entry** | `client/src/main.tsx`, `client/src/App.tsx` | React SPA root: auth gate, 25 lazy-loaded pages, WebSocket connection, idle timeout, keyboard shortcuts |
@@ -807,7 +853,7 @@ Job worker [routes.ts:180] or in-memory TaskQueue [pipeline.ts:21]
     14. Compute confidence score [utils.ts:computeConfidenceScore]
     15. Identify agent speaker label from detected name
     16. Store utterance metrics + RAG sources in confidenceFactors
-    17. Auto-categorize call if AI returned category (before storage writes)
+    17. Defer auto-categorize decision (if AI returned category and none provided at upload) — applied in the final updateCall in step 22, not mid-pipeline (A15)
     18. Apply flags: low_confidence, prompt_injection_detected, output_anomaly
     19. Store transcript, sentiment, analysis [storage]
     20. [Fire-and-forget] generateCallEmbedding()
@@ -869,7 +915,7 @@ Every subsequent request:
 | **Sentry** | Error tracking (server + client), PHI-scrubbed | `server/services/sentry.ts`, `client/src/lib/sentry.ts` |
 | **RAG Knowledge Base** (ums-knowledge-reference) | Company-specific context for AI analysis | `server/services/rag-client.ts` — REST with X-API-Key |
 | **8x8 Telephony** | Call recording auto-ingestion (stub) | `server/services/telephony-8x8.ts` |
-| **Redis** (optional) | Distributed job queue | `server/services/durable-queue.ts` |
+| **Redis** (optional) | Distributed job queue | (not currently integrated — placeholder for future BullMQ wiring) |
 | **OpenTelemetry Collector** (optional) | Distributed tracing | `server/services/tracing.ts` |
 | **Let's Encrypt** (via Caddy) | TLS certificates | `deploy/ec2/Caddyfile` |
 
@@ -940,6 +986,7 @@ Every subsequent request:
 ### Known Discrepancies
 
 - `server/services/rag-hybrid.ts` is listed in Architecture but is dead code (no production imports)
+- `server/services/durable-queue.ts` was deleted in Batch 2 (A40) — any lingering references in older docs should be treated as stale
 - `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
 - `server/services/scheduled-reports.ts` is not documented in API routes (dynamically imported by `routes.ts`)
 - `@replit/vite-plugin-*` packages remain in devDependencies but are unused in `vite.config.ts`

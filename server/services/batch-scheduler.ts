@@ -62,7 +62,6 @@ async function processBatchResults(
             callDurationSeconds: callDuration,
             hasAiAnalysis: true,
           },
-          (transcriptResponse.text || "").length,
         );
 
         updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
@@ -103,7 +102,7 @@ async function processBatchResults(
           const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
           const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
           const estimatedOutputTokens = 800;
-          const bedrockCost = estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) * 0.5;
+          const bedrockCost = (estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) ?? 0) * 0.5;
 
           const usageRecord: UsageRecord = {
             id: randomUUID(),

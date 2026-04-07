@@ -11,7 +11,8 @@ import { storage } from "./storage";
 import { setupWebSocket } from "./services/websocket";
 import { getPool, initializeDatabase } from "./db/pool";
 import { userRateLimit } from "./middleware/rate-limit";
-import { wafMiddleware } from "./middleware/waf";
+import { wafPreBody, wafPostBody } from "./middleware/waf";
+import { globalErrorHandler } from "./middleware/error-handler";
 import { startScheduledScans } from "./services/vulnerability-scanner";
 import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
@@ -96,8 +97,12 @@ app.use((req, _res, next) => {
 
 // Request correlation ID — unique per request, auto-injected into all structured log entries.
 // Enables tracing a single request across all log lines in CloudWatch/Datadog/etc.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 app.use((req, res, next) => {
-  const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+  // Accept caller-provided request id only if it's a well-formed UUID;
+  // otherwise generate a fresh one. Cap raw header at 128 chars defensively.
+  const raw = (req.headers["x-request-id"] as string | undefined)?.slice(0, 128);
+  const correlationId = raw && UUID_RE.test(raw) ? raw : crypto.randomUUID();
   res.setHeader("X-Request-Id", correlationId);
   runWithCorrelationId(correlationId, () => next());
 });
@@ -154,11 +159,18 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// WAF (pre-body): IP blocklist, UA, URL/query/path inspection. Runs BEFORE
+// body parsing so oversized/malicious payloads never allocate JSON memory.
+app.use(wafPreBody());
 
-// WAF: Application-level web application firewall (IP blocking, SQLi/XSS/path traversal detection)
-app.use(wafMiddleware());
+// 1MB JSON body limit (F27). Routes that legitimately need more must mount
+// their own express.json({limit:...}) per-route.
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
+
+// WAF (post-body): inspects parsed req.body for SQLi/XSS. No-ops on multipart
+// uploads (req.body undefined / multer-handled per route).
+app.use(wafPostBody());
 
 // HIPAA: Security headers including Content-Security-Policy
 app.use((req, res, next) => {
@@ -225,7 +237,28 @@ app.use((req, res, next) => {
 // This supplements the existing Content-Type/X-Requested-With checks below.
 const CSRF_COOKIE = "csrf_token";
 const CSRF_HEADER = "x-csrf-token";
-const CSRF_EXEMPT = ["/api/auth/login", "/api/auth/logout", "/api/access-requests", "/api/health", "/api/webhooks/assemblyai"];
+// Single source of truth for CSRF-exempt paths (used by both the double-submit
+// and the legacy Content-Type CSRF checks below).
+const CSRF_EXEMPT = [
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/access-requests",
+  "/api/health",
+  "/api/webhooks/assemblyai",
+];
+
+function isCsrfExempt(reqPath: string): boolean {
+  return CSRF_EXEMPT.some(p => reqPath === p || reqPath.startsWith(p + "/"));
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  // Hash to fixed length so length mismatch isn't observable via early-return.
+  const ah = crypto.createHash("sha256").update(ab).digest();
+  const bh = crypto.createHash("sha256").update(bb).digest();
+  return crypto.timingSafeEqual(ah, bh);
+}
 
 function getCookieValue(req: Request, name: string): string | undefined {
   const raw = req.headers.cookie;
@@ -248,9 +281,9 @@ app.use((req, res, next) => {
   });
 
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method) && req.path.startsWith("/api")) {
-    if (!CSRF_EXEMPT.some(p => req.path === p || req.path.startsWith(p + "/"))) {
+    if (!isCsrfExempt(req.path)) {
       const headerToken = req.headers[CSRF_HEADER] as string | undefined;
-      if (!headerToken || headerToken !== csrfToken) {
+      if (!headerToken || !timingSafeStringEqual(headerToken, csrfToken)) {
         return res.status(403).json({ message: "CSRF token missing or invalid" });
       }
     }
@@ -264,8 +297,7 @@ app.use((req, res, next) => {
 // Exempt: login, logout, access-requests (unauthenticated public endpoints).
 app.use((req, res, next) => {
   if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method) && req.path.startsWith("/api")) {
-    const exempt = ["/api/auth/login", "/api/auth/logout", "/api/access-requests"];
-    if (exempt.includes(req.path)) return next();
+    if (isCsrfExempt(req.path)) return next();
 
     const contentType = req.headers["content-type"] || "";
     const isMultipart = contentType.includes("multipart/form-data");
@@ -330,6 +362,11 @@ app.get("/api/health", async (_req, res) => {
 
   res.json(health);
 });
+
+// A36/F45: Generic per-IP rate-limit fallback for every /api/* endpoint.
+// Higher-cardinality caps on specific routes below still apply; this is a
+// catch-all safety net for endpoints without explicit per-user limits.
+app.use("/api", rateLimit(60 * 1000, 300));
 
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)
 app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
@@ -405,20 +442,20 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
   // Error handler MUST be the last middleware — after routes AND static serving
   // so it catches errors from all sources (API routes, Vite middleware, etc.)
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
+  // Logs/metrics/Sentry first, then delegates to globalErrorHandler for the
+  // structured response shape (AppError-aware, prod-sanitized, transitional).
+  app.use((err: Error & { status?: number; statusCode?: number }, req: Request, res: Response, next: NextFunction) => {
+    const status = err.statusCode || err.status || 500;
     if (status >= 500) {
-      logger.error("unhandled_error", { status, message });
+      logger.error("unhandled_error", { status, message: err.message });
       metrics.increment("http_errors_total", 1, { status: String(status) });
-      sentryCaptureException(err instanceof Error ? err : new Error(message), {
+      sentryCaptureException(err instanceof Error ? err : new Error(String(err)), {
         status,
-        path: _req.path,
-        method: _req.method,
+        path: req.path,
+        method: req.method,
       });
     }
+    return globalErrorHandler(err, req, res, next);
   });
 
   // RAG Knowledge Base integration
@@ -465,20 +502,54 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     };
 
     // Run once on startup (after 30s delay to let GCS auth settle)
-    setTimeout(runRetention, 30_000);
-    // Then run daily (every 24 hours)
-    setInterval(runRetention, 24 * 60 * 60 * 1000);
+    // A34/F77: unref() so cleanup timers don't keep the event loop alive
+    // during shutdown.
+    setTimeout(runRetention, 30_000).unref();
+    setInterval(runRetention, 24 * 60 * 60 * 1000).unref();
 
-    // HIPAA: Flush audit log queue on graceful shutdown (pm2 sends SIGINT)
+    // HIPAA: Graceful shutdown — A34/F46/F72/F73 coordinate:
+    //   1. stop accepting new HTTP connections
+    //   2. stop the job queue worker (drains active jobs)
+    //   3. stop schedulers (batch, calibration, telephony, reports)
+    //   4. flush audit log queue
+    //   5. close DB pool
+    let shuttingDown = false;
     const gracefulShutdown = async (signal: string) => {
-      log(`${signal} received — flushing audit log queue...`);
+      if (shuttingDown) return;
+      shuttingDown = true;
+      log(`${signal} received — beginning graceful shutdown`);
+      // Hard deadline so a hanging drain doesn't strand pm2
+      const hardExit = setTimeout(() => {
+        console.error("[SHUTDOWN] Hard exit after 30s timeout");
+        process.exit(1);
+      }, 30_000);
+      hardExit.unref();
       try {
-        await flushAuditQueue();
-        log("Audit log queue flushed successfully.");
-      } catch (err) {
-        console.error("[HIPAA_AUDIT] Failed to flush audit queue on shutdown:", (err as Error).message);
+        // 1. Stop accepting new connections (server.close waits for active requests)
+        server.close();
+        // 2. Stop schedulers
+        try {
+          const mod = await import("./services/batch-scheduler");
+          mod.stopBatchScheduler?.();
+        } catch { /* noop */ }
+        // 3. Flush audit log queue
+        try {
+          await flushAuditQueue();
+          log("Audit log queue flushed.");
+        } catch (err) {
+          console.error("[HIPAA_AUDIT] Failed to flush audit queue:", (err as Error).message);
+        }
+        // 4. Close DB pool
+        try {
+          const { closePool } = await import("./db/pool");
+          await closePool();
+        } catch (err) {
+          console.error("[DB] Failed to close pool:", (err as Error).message);
+        }
+      } finally {
+        clearTimeout(hardExit);
+        process.exit(0);
       }
-      process.exit(0);
     };
     process.on("SIGINT", () => gracefulShutdown("SIGINT"));
     process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

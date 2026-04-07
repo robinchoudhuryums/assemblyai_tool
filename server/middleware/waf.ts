@@ -19,12 +19,28 @@ import { logPhiAccess } from "../services/audit-log";
  */
 
 // --- IP Blocklist ---
+// Hard memory bounds via LRU eviction on overflow (A10/F14/F40-F44).
+
+const BLOCKED_IPS_MAX = 10_000;
+const TEMP_BLOCKS_MAX = 10_000;
+const ANOMALY_SCORES_MAX = 10_000;
+const ANOMALY_COOLDOWNS_MAX = 10_000;
 
 const blockedIPs = new Set<string>();
 const temporaryBlocks = new Map<string, number>(); // IP -> unblock timestamp
 
+function evictOldestFromMap<K, V>(map: Map<K, V>): void {
+  const k = map.keys().next().value;
+  if (k !== undefined) map.delete(k);
+}
+function evictOldestFromSet<T>(set: Set<T>): void {
+  const v = set.values().next().value;
+  if (v !== undefined) set.delete(v);
+}
+
 /** Permanently block an IP address. */
 export function blockIP(ip: string, reason: string): void {
+  while (blockedIPs.size >= BLOCKED_IPS_MAX) evictOldestFromSet(blockedIPs);
   blockedIPs.add(ip);
   console.error(`[WAF] IP blocked permanently: ${ip} — ${reason}`);
   logPhiAccess({
@@ -37,6 +53,8 @@ export function blockIP(ip: string, reason: string): void {
 
 /** Temporarily block an IP for a duration (ms). */
 export function temporaryBlockIP(ip: string, durationMs: number, reason: string): void {
+  while (temporaryBlocks.size >= TEMP_BLOCKS_MAX) evictOldestFromMap(temporaryBlocks);
+  temporaryBlocks.delete(ip); // ensure LRU recency on re-block
   temporaryBlocks.set(ip, Date.now() + durationMs);
   console.error(`[WAF] IP blocked temporarily (${Math.round(durationMs / 1000)}s): ${ip} — ${reason}`);
   logPhiAccess({
@@ -100,7 +118,10 @@ const SQL_INJECTION_PATTERNS = [
 const XSS_PATTERNS = [
   /<script[\s>]/i,
   /javascript\s*:/i,
-  /on(error|load|click|mouse|focus|blur|submit|change|key)\s*=/i,
+  // Match any HTML event handler attribute (onerror, onpointerdown, etc.).
+  // Previous version hard-coded a small allowlist and missed onpointer*,
+  // ondrag*, onanimation*, oncontextmenu, etc. Use word boundary + on\w+.
+  /\bon[a-z]{2,30}\s*=/i,
   /<iframe[\s>]/i,
   /<object[\s>]/i,
   /<embed[\s>]/i,
@@ -192,6 +213,9 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
   // Add new event
   tracker.events.push({ points, violation, timestamp: now });
   tracker.lastSeen = now;
+  // LRU bound + recency touch
+  if (anomalyScores.has(ip)) anomalyScores.delete(ip);
+  while (anomalyScores.size >= ANOMALY_SCORES_MAX) evictOldestFromMap(anomalyScores);
   anomalyScores.set(ip, tracker);
 
   // Compute current score from all events within the window
@@ -201,6 +225,7 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
     const violations = tracker.events.map(e => e.violation);
     temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Anomaly score ${score}: ${violations.join(", ")}`);
     // Set cooldown so score doesn't reset immediately if they retry
+    while (anomalyCooldowns.size >= ANOMALY_COOLDOWNS_MAX) evictOldestFromMap(anomalyCooldowns);
     anomalyCooldowns.set(ip, now + ANOMALY_COOLDOWN_MS);
     anomalyScores.delete(ip);
   }
@@ -291,6 +316,35 @@ function deepDecode(value: string, maxDepth = 3): string {
   return decoded;
 }
 
+// Decode common HTML entities so attackers can't bypass pattern matching by
+// encoding `<script>` as `&lt;script&gt;` or `&#x3c;script&#x3e;`.
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return code < 0x110000 ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return code < 0x110000 ? String.fromCodePoint(code) : "";
+    });
+}
+
+// Unicode normalize to NFC so visually-equivalent codepoints (e.g. fullwidth
+// `<` U+FF1C vs ASCII `<`) are caught by the same regex.
+function normalizeForInspection(value: string): string {
+  try {
+    return value.normalize("NFC");
+  } catch {
+    return value;
+  }
+}
+
 function checkPatterns(value: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(value));
 }
@@ -301,36 +355,41 @@ const MAX_PATTERN_INPUT_LEN = 4096;
 
 function checkPatternsNormalized(value: string, patterns: RegExp[]): boolean {
   const truncated = value.length > MAX_PATTERN_INPUT_LEN ? value.slice(0, MAX_PATTERN_INPUT_LEN) : value;
+  // 1. Raw
   if (checkPatterns(truncated, patterns)) return true;
-  const decoded = deepDecode(truncated);
-  if (decoded !== truncated && checkPatterns(decoded, patterns)) return true;
+  // 2. Unicode NFC normalized
+  const normalized = normalizeForInspection(truncated);
+  if (normalized !== truncated && checkPatterns(normalized, patterns)) return true;
+  // 3. URL-decoded (multi-layer)
+  const urlDecoded = deepDecode(normalized);
+  if (urlDecoded !== normalized && checkPatterns(urlDecoded, patterns)) return true;
+  // 4. HTML entity decoded
+  const htmlDecoded = decodeHtmlEntities(urlDecoded);
+  if (htmlDecoded !== urlDecoded && checkPatterns(htmlDecoded, patterns)) return true;
   return false;
 }
 
-function getAllRequestValues(req: Request): string[] {
+function getUrlAndQueryValues(req: Request): string[] {
   const values: string[] = [];
-
-  // Query parameters
   if (req.query) {
     for (const val of Object.values(req.query)) {
       if (typeof val === "string") values.push(val);
     }
   }
-
-  // URL path
   values.push(req.path);
-
-  // Route params
   if (req.params) {
     for (const val of Object.values(req.params)) {
       if (typeof val === "string") values.push(val);
     }
   }
+  return values;
+}
 
-  // Body (for JSON payloads only — don't inspect multipart file uploads)
+function getBodyStringValues(req: Request): string[] {
+  const values: string[] = [];
   if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
     const flattenValues = (obj: unknown, depth = 0): void => {
-      if (depth > 5) return; // Prevent deep recursion
+      if (depth > 5) return;
       if (typeof obj === "string") {
         values.push(obj);
       } else if (Array.isArray(obj)) {
@@ -341,15 +400,120 @@ function getAllRequestValues(req: Request): string[] {
     };
     flattenValues(req.body);
   }
-
   return values;
 }
 
-// --- Main WAF Middleware ---
+// --- WAF Middleware (split: pre-body and post-body, A9) ---
 
 /**
- * WAF middleware. Should be mounted early in the middleware stack,
- * after body parsing but before route handlers.
+ * Pre-body WAF: runs BEFORE express.json()/urlencoded(). Inspects URL,
+ * query, headers, IP, content-length. Does NOT touch req.body (not parsed
+ * yet). Splitting the WAF means oversized/malicious payloads are rejected
+ * before the JSON parser even allocates memory for them.
+ */
+export function wafPreBody() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+
+    if (isIPBlocked(ip)) {
+      stats.totalBlocked++;
+      stats.ipBlocked++;
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (req.path.startsWith("/api") && req.path !== "/api/health") {
+      const ua = req.headers["user-agent"] || "";
+      if (SUSPICIOUS_USER_AGENTS.some((p) => p.test(ua))) {
+        stats.totalBlocked++;
+        stats.suspiciousUABlocked++;
+        recordAnomaly(ip, "suspicious_user_agent", 3);
+        console.warn(`[WAF] Suspicious User-Agent blocked: "${ua}" from ${ip}`);
+        return res.status(403).json({ message: "Access denied" });
+      }
+    }
+
+    if (checkPatternsNormalized(req.originalUrl, CRLF_PATTERNS)) {
+      stats.totalBlocked++;
+      recordAnomaly(ip, "crlf_injection", 5);
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    if (checkPatternsNormalized(req.originalUrl, PATH_TRAVERSAL_PATTERNS)) {
+      stats.totalBlocked++;
+      stats.pathTraversalBlocked++;
+      recordAnomaly(ip, "path_traversal", 5);
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    const contentLength = parseInt(req.headers["content-length"] || "0", 10);
+    if (contentLength > MAX_INSPECTABLE_BODY_SIZE) {
+      const isMultipart = (req.headers["content-type"] || "").includes("multipart/form-data");
+      if (!isMultipart) {
+        stats.totalBlocked++;
+        recordAnomaly(ip, "oversized_body", 3);
+        return res.status(413).json({ message: "Request body too large" });
+      }
+    }
+
+    if (!req.path.startsWith("/api")) return next();
+
+    // URL/query/params injection scan (body scan deferred to wafPostBody)
+    const urlValues = getUrlAndQueryValues(req);
+    for (const val of urlValues) {
+      if (checkPatternsNormalized(val, SQL_INJECTION_PATTERNS)) {
+        stats.totalBlocked++;
+        stats.sqliBlocked++;
+        recordAnomaly(ip, "sql_injection", 5);
+        return res.status(400).json({ message: "Invalid request" });
+      }
+      if (checkPatternsNormalized(val, XSS_PATTERNS)) {
+        stats.totalBlocked++;
+        stats.xssBlocked++;
+        recordAnomaly(ip, "xss_attempt", 4);
+        return res.status(400).json({ message: "Invalid request" });
+      }
+    }
+
+    next();
+  };
+}
+
+/**
+ * Post-body WAF: runs AFTER express.json()/urlencoded() so it can inspect
+ * req.body. No-ops on multipart requests (req.body is undefined or a multer
+ * object) and on routes that didn't run the JSON parser.
+ */
+export function wafPostBody() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith("/api")) return next();
+    if (!req.body || typeof req.body !== "object" || Buffer.isBuffer(req.body)) {
+      return next();
+    }
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const bodyValues = getBodyStringValues(req);
+    for (const val of bodyValues) {
+      if (checkPatternsNormalized(val, SQL_INJECTION_PATTERNS)) {
+        stats.totalBlocked++;
+        stats.sqliBlocked++;
+        recordAnomaly(ip, "sql_injection", 5);
+        return res.status(400).json({ message: "Invalid request" });
+      }
+      if (checkPatternsNormalized(val, XSS_PATTERNS)) {
+        stats.totalBlocked++;
+        stats.xssBlocked++;
+        recordAnomaly(ip, "xss_attempt", 4);
+        return res.status(400).json({ message: "Invalid request" });
+      }
+    }
+    next();
+  };
+}
+
+// --- Main WAF Middleware (legacy: combined pre+post pass) ---
+
+/**
+ * @deprecated Use wafPreBody() + wafPostBody() (A9). Retained for any caller
+ * that needs the original combined middleware.
  */
 export function wafMiddleware() {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -436,7 +600,7 @@ export function wafMiddleware() {
     }
 
     // 8. SQL injection check (with unicode normalization)
-    const values = getAllRequestValues(req);
+    const values = [...getUrlAndQueryValues(req), ...getBodyStringValues(req)];
     for (const val of values) {
       if (checkPatternsNormalized(val, SQL_INJECTION_PATTERNS)) {
         stats.totalBlocked++;

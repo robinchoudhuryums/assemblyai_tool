@@ -82,10 +82,31 @@ export function registerSecurityRoutes(router: Router) {
     res.json(getWAFStats());
   });
 
+  // A37/F39: validate IP format — prevent hostname-based blocks that would
+  // silently fail (isIPBlocked matches by exact string).
+  const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+  const IPV6_RE = /^[0-9a-fA-F:]{2,45}$/;
+  function isValidIpFormat(s: unknown): s is string {
+    if (typeof s !== "string" || s.length > 45) return false;
+    if (IPV4_RE.test(s)) {
+      return s.split(".").every(oct => {
+        const n = parseInt(oct, 10);
+        return n >= 0 && n <= 255;
+      });
+    }
+    return s.includes(":") && IPV6_RE.test(s);
+  }
+
   router.post("/api/admin/waf/block-ip", requireAuth, requireRole("admin"), (req, res) => {
     const { ip, reason, durationMs } = req.body;
-    if (!ip || !reason) {
-      return res.status(400).json({ message: "IP address and reason are required" });
+    if (!isValidIpFormat(ip)) {
+      return res.status(400).json({ message: "Valid IPv4 or IPv6 address is required" });
+    }
+    if (!reason || typeof reason !== "string") {
+      return res.status(400).json({ message: "Reason is required" });
+    }
+    if (durationMs !== undefined && (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0)) {
+      return res.status(400).json({ message: "durationMs must be a positive number" });
     }
     if (durationMs) {
       temporaryBlockIP(ip, durationMs, `Manual block by ${req.user!.username}: ${reason}`);
@@ -105,7 +126,7 @@ export function registerSecurityRoutes(router: Router) {
 
   router.post("/api/admin/waf/unblock-ip", requireAuth, requireRole("admin"), (req, res) => {
     const { ip } = req.body;
-    if (!ip) return res.status(400).json({ message: "IP address is required" });
+    if (!isValidIpFormat(ip)) return res.status(400).json({ message: "Valid IPv4 or IPv6 address is required" });
     const removed = unblockIP(ip);
     if (!removed) return res.status(404).json({ message: "IP not found in blocklist" });
     // HIPAA: Audit admin WAF IP unblock actions

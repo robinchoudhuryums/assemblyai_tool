@@ -8,7 +8,7 @@ import { storage } from "./storage";
 import { getPool } from "./db/pool";
 import { JobQueue, type Job } from "./services/job-queue";
 import { broadcastCallUpdate } from "./services/websocket";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHash } from "crypto";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -25,18 +25,19 @@ import { registerSnapshotRoutes } from "./routes/snapshots";
 import { registerGamificationRoutes } from "./routes/gamification";
 
 // Pipeline
-import { processAudioFile, shouldUseBatchMode, audioProcessingQueue } from "./routes/pipeline";
+import { processAudioFile, shouldUseBatchMode } from "./routes/pipeline";
 import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemblyai";
 
 // Batch scheduler (extracted for testability)
-import { startBatchScheduler, stopBatchScheduler } from "./services/batch-scheduler";
+import { startBatchScheduler } from "./services/batch-scheduler";
 
 // Auto-calibration and telephony
 import { startCalibrationScheduler } from "./services/auto-calibration";
 import { startTelephonyScheduler } from "./services/telephony-8x8";
 
-// Ensure uploads directory exists
-const uploadsDir = 'uploads';
+// Ensure uploads directory exists. A42/F63: absolute path — cwd-relative
+// "uploads" broke when pm2 or dev scripts ran from a different directory.
+const uploadsDir = path.resolve(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -47,7 +48,7 @@ const upload = multer({
   limits: {
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req: unknown, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg', '.webm'];
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
@@ -59,7 +60,7 @@ const upload = multer({
     if (allowedTypes.includes(ext) && mimeOk) {
       cb(null, true);
     } else {
-      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`), false);
+      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`));
     }
   }
 });
@@ -76,17 +77,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Verify webhook secret (timing-safe to prevent side-channel leaks)
     const secret = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
     if (!secret) {
-      // HIPAA: In production, reject unverified webhooks to prevent spoofed transcript injections
-      if (process.env.NODE_ENV === "production") {
-        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook in production");
+      // Default-deny: reject in all environments unless explicit dev opt-in.
+      // Set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true in local dev only.
+      if (process.env.ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED !== "true") {
+        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook (set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true for dev override)");
         return res.status(500).json({ message: "Webhook secret not configured" });
       }
-      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev only)");
+      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev override)");
     } else {
       const provided = String(req.headers["x-webhook-secret"] || "");
-      const secretBuf = Buffer.from(secret, "utf8");
-      const providedBuf = Buffer.from(provided, "utf8");
-      if (secretBuf.length !== providedBuf.length || !timingSafeEqual(secretBuf, providedBuf)) {
+      // Hash both sides to constant-length buffers so length mismatch doesn't
+      // leak via early return; constant-time compare on the hashes.
+      const secretHash = createHash("sha256").update(secret, "utf8").digest();
+      const providedHash = createHash("sha256").update(provided, "utf8").digest();
+      if (!timingSafeEqual(secretHash, providedHash)) {
         console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
         return res.status(401).json({ message: "Invalid webhook secret" });
       }
@@ -121,6 +125,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log(`[ASSEMBLYAI] Webhook mode enabled. Callbacks will be sent to ${process.env.APP_BASE_URL}/api/webhooks/assemblyai`);
   } else {
     console.log("[ASSEMBLYAI] Polling mode (set APP_BASE_URL to enable faster webhook mode).");
+  }
+
+  // ==================== JOB QUEUE INITIALIZATION ====================
+  // A19/F21: init BEFORE route registration so the upload route never sees
+  // a null jobQueue during the startup race window.
+  const dbPool = getPool();
+  if (dbPool) {
+    const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
+    const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
+    jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
+
+    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
+      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
+      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
+    };
+
+    jobQueue.start(async (job: Job) => {
+      if (job.type === "process_audio") {
+        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
+          callId: string; filePath: string; originalName: string;
+          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string;
+        };
+
+        const audioFiles = await storage.getAudioFiles(callId);
+        let audioBuffer: Buffer | undefined;
+        if (audioFiles.length > 0) {
+          audioBuffer = await storage.downloadAudio(audioFiles[0]);
+        }
+
+        if (!audioBuffer) {
+          if (filePath && fs.existsSync(filePath)) {
+            audioBuffer = await fs.promises.readFile(filePath);
+          } else {
+            throw new Error(`No audio data available for call ${callId}`);
+          }
+        }
+
+        await processAudioFile(callId, audioBuffer, {
+          originalName,
+          mimeType,
+          callCategory,
+          uploadedBy,
+          processingMode,
+          language,
+          filePath,
+        });
+      } else {
+        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
+      }
+    });
   }
 
   // Register all route modules
@@ -162,48 +216,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start 8x8 telephony auto-ingestion (if configured)
   startTelephonyScheduler(processAudioFile);
-
-  // ==================== JOB QUEUE INITIALIZATION ====================
-  const dbPool = getPool();
-  if (dbPool) {
-    const concurrency = parseInt(process.env.JOB_CONCURRENCY || "5", 10);
-    const pollInterval = parseInt(process.env.JOB_POLL_INTERVAL_MS || "5000", 10);
-    jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
-
-    // Alert when a job exhausts all retries (dead letter)
-    jobQueue.onDeadLetter = (jobId, reason, attempts) => {
-      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
-      // Broadcast via WebSocket so admin UI can display alert
-      broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
-    };
-
-    jobQueue.start(async (job: Job) => {
-      if (job.type === "process_audio") {
-        const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
-          callId: string; filePath: string; originalName: string;
-          mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string;
-        };
-
-        const audioFiles = await storage.getAudioFiles(callId);
-        let audioBuffer: Buffer | undefined;
-        if (audioFiles.length > 0) {
-          audioBuffer = await storage.downloadAudio(audioFiles[0]);
-        }
-
-        if (!audioBuffer) {
-          if (fs.existsSync(filePath)) {
-            audioBuffer = await fs.promises.readFile(filePath);
-          } else {
-            throw new Error(`No audio data available for call ${callId}`);
-          }
-        }
-
-        await processAudioFile(callId, filePath, audioBuffer, originalName, mimeType, callCategory, uploadedBy, processingMode, language);
-      } else {
-        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
-      }
-    });
-  }
 
   const httpServer = createServer(app);
   return httpServer;

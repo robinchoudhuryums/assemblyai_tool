@@ -12,6 +12,11 @@ import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-
 import { type UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, computeConfidenceScore, autoAssignEmployee } from "./utils";
+import {
+  MIN_CALL_DURATION_FOR_AI_SEC,
+  HAIKU_SHORT_CALL_MAX_SEC,
+  HAIKU_SHORT_CALL_MAX_TOKENS,
+} from "../constants";
 import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
 import { triggerWebhook } from "../services/webhooks";
 import { captureException } from "../services/sentry";
@@ -24,28 +29,43 @@ export const audioProcessingQueue = new TaskQueue(3);
  * Determine if batch processing should be used for a given upload.
  * Considers: BEDROCK_BATCH_MODE env var, time-of-day schedule, and per-upload override.
  */
+// A26/F53: parse and validate BATCH_SCHEDULE_* once at module load. Invalid
+// values (non-HH:MM, out-of-range hours/minutes) are logged and ignored —
+// the schedule window check is skipped in that case rather than silently
+// mis-computing minutes from NaN.
+function parseScheduleTime(raw: string | undefined, label: string): number | null {
+  if (!raw) return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
+  if (!m) {
+    console.warn(`[STARTUP] ${label}=${raw} is not HH:MM format — batch schedule window disabled.`);
+    return null;
+  }
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) {
+    console.warn(`[STARTUP] ${label}=${raw} is out of range — batch schedule window disabled.`);
+    return null;
+  }
+  return h * 60 + mm;
+}
+
+const BATCH_SCHEDULE_START_MIN = parseScheduleTime(process.env.BATCH_SCHEDULE_START, "BATCH_SCHEDULE_START");
+const BATCH_SCHEDULE_END_MIN = parseScheduleTime(process.env.BATCH_SCHEDULE_END, "BATCH_SCHEDULE_END");
+
 export function shouldUseBatchMode(perUploadOverride?: string): boolean {
   if (perUploadOverride === "immediate") return false;
   if (perUploadOverride === "batch") return bedrockBatchService.isAvailable;
   if (!bedrockBatchService.isAvailable) return false;
 
-  const scheduleStart = process.env.BATCH_SCHEDULE_START;
-  const scheduleEnd = process.env.BATCH_SCHEDULE_END;
-
-  if (scheduleStart && scheduleEnd) {
+  if (BATCH_SCHEDULE_START_MIN !== null && BATCH_SCHEDULE_END_MIN !== null) {
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const [startH, startM] = scheduleStart.split(":").map(Number);
-    const [endH, endM] = scheduleEnd.split(":").map(Number);
-    const startMinutes = startH * 60 + (startM || 0);
-    const endMinutes = endH * 60 + (endM || 0);
+    const startMinutes = BATCH_SCHEDULE_START_MIN;
+    const endMinutes = BATCH_SCHEDULE_END_MIN;
 
     if (startMinutes <= endMinutes) {
-      // Same-day window (e.g., 09:00–17:00): active between start and end
       if (currentMinutes < startMinutes || currentMinutes >= endMinutes) return false;
     } else {
-      // Overnight window (e.g., 22:00–06:00): active from start to midnight, and midnight to end
-      // Inactive only between endMinutes and startMinutes
       if (currentMinutes >= endMinutes && currentMinutes < startMinutes) return false;
     }
   }
@@ -53,18 +73,24 @@ export function shouldUseBatchMode(perUploadOverride?: string): boolean {
   return true;
 }
 
-/** Process audio file with AssemblyAI and archive to cloud storage */
+export interface ProcessAudioOptions {
+  originalName: string;
+  mimeType: string;
+  callCategory?: string;
+  uploadedBy?: string;
+  processingMode?: string;
+  language?: string;
+  /** Optional filesystem path to the audio file for cleanup on finish. */
+  filePath?: string;
+}
+
+/** Process audio file with AssemblyAI and archive to cloud storage (A22). */
 export async function processAudioFile(
   callId: string,
-  filePath: string,
   audioBuffer: Buffer,
-  originalName: string,
-  mimeType: string,
-  callCategory?: string,
-  uploadedBy?: string,
-  processingMode?: string,
-  language?: string,
+  options: ProcessAudioOptions,
 ) {
+  const { originalName, mimeType, callCategory, uploadedBy, processingMode, language, filePath } = options;
   console.log(`[${callId}] Starting audio processing...`);
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
@@ -79,23 +105,25 @@ export async function processAudioFile(
         console.log(`[${callId}] Step 1/7: Using pre-signed S3 URL for AssemblyAI (skipping upload).`);
       } else {
         console.log(`[${callId}] Step 1/7: Pre-signed URL unavailable, uploading to AssemblyAI...`);
-        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+        audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
       }
     } else {
       console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
-      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
+      audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
     }
     console.log(`[${callId}] Step 1/7: Audio URL ready.`);
 
     // Step 1b: Archive audio to cloud storage (skip if already archived by job queue)
-    const existingAudio = await storage.getAudioFiles(callId);
-    if (existingAudio.length === 0) {
+    // A23/F82: reuse existingAudioFiles from step 1a — no mutation between steps.
+    if (existingAudioFiles.length === 0) {
       console.log(`[${callId}] Step 1b/7: Archiving audio file to cloud storage...`);
       try {
         await storage.uploadAudio(callId, originalName, audioBuffer, mimeType);
         console.log(`[${callId}] Step 1b/7: Audio archived.`);
       } catch (archiveError) {
-        console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, archiveError);
+        // A23/F83: log the error properly instead of dropping it into stringification
+        console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, (archiveError as Error).message);
+        captureException(archiveError as Error, { callId, errorType: "audio_archive_failed" });
       }
     } else {
       console.log(`[${callId}] Step 1b/7: Audio already archived, skipping.`);
@@ -311,14 +339,14 @@ export async function processAudioFile(
         const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
         await storage.createTranscript(transcript);
         await storage.createSentimentAnalysis(sentiment);
-        analysis.confidenceScore = "0.300";
+        analysis.confidenceScore = "0.500"; // A24/F54: batch placeholder — we've verified transcription succeeded, not "unknown"
         analysis.confidenceFactors = {
           transcriptConfidence: transcriptResponse.confidence || 0,
           wordCount: transcriptResponse.words?.length || 0,
-          callDurationSeconds: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+          callDurationSeconds,
           transcriptLength: (transcriptResponse.text || "").length,
           aiAnalysisCompleted: false,
-          overallScore: 0.3,
+          overallScore: 0.5,
         };
         const existingFlags = (analysis.flags as string[]) || [];
         existingFlags.push("awaiting_batch_analysis");
@@ -327,7 +355,7 @@ export async function processAudioFile(
 
         await storage.updateCall(callId, {
           status: "awaiting_analysis",
-          duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+          duration: callDurationSeconds,
         });
 
         // Track usage (transcription only)
@@ -359,7 +387,7 @@ export async function processAudioFile(
     }
 
     // Skip AI for very short calls (< 15 seconds) — likely noise, voicemail, or misdials
-    const tooShortForAI = callDurationSeconds < 15;
+    const tooShortForAI = callDurationSeconds < MIN_CALL_DURATION_FOR_AI_SEC;
 
     if (tooShortForAI) {
       console.log(`[${callId}] Step 4/6: Skipping AI analysis (call too short: ${callDurationSeconds}s). Saves ~$0.05.`);
@@ -375,14 +403,17 @@ export async function processAudioFile(
 
         // Cost optimization: use Haiku for short routine calls (≤ 2min, no flags, no custom template)
         // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call
-        const isRoutineShort = callDurationSeconds <= 120 && !promptTemplate && estimatedTokens < 3000;
+        const isRoutineShort = callDurationSeconds <= HAIKU_SHORT_CALL_MAX_SEC && !promptTemplate && estimatedTokens < HAIKU_SHORT_CALL_MAX_TOKENS;
         let analysisProvider = aiProvider;
         if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
           try {
             const { BedrockProvider } = await import("../services/bedrock");
             const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
             analysisProvider = BedrockProvider.createWithModel(haikuModel);
-            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ 120s, ~${estimatedTokens} tokens) — 67% cost savings`);
+            // Rough rate differential: Sonnet $3/$15 per 1M vs Haiku $0.80/$4 per 1M.
+            // Savings per call depend on in/out mix; ~70% is a typical ballpark
+            // but left qualitative here rather than hard-coded.
+            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ ${HAIKU_SHORT_CALL_MAX_SEC}s, ~${estimatedTokens} tokens)`);
           } catch (haikuErr) {
             console.warn(`[${callId}] Haiku provider creation failed, using default model:`, (haikuErr as Error).message);
           }
@@ -392,7 +423,10 @@ export async function processAudioFile(
         console.log(`[${callId}] Step 4/6: AI analysis complete.`);
       } catch (aiError) {
         const errMsg = (aiError as Error).message || "";
-        const isParseFailure = errMsg.includes("malformed JSON") || errMsg.includes("did not contain valid JSON") || errMsg.includes("failed schema validation");
+        // A24/F55: broader parse-failure match — covers native JSON.parse
+        // SyntaxError, our custom messages, and zod validation errors.
+        const isParseFailure =
+          /JSON|parse|schema/i.test(errMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(errMsg);
         if (isParseFailure) {
           console.error(`[${callId}] AI returned unparseable response (continuing with defaults):`, errMsg);
           captureException(aiError as Error, { callId, errorType: "ai_parse_failure" });
@@ -411,15 +445,12 @@ export async function processAudioFile(
     const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, aiAnalysis, callId);
 
     // Compute confidence score (shared formula from utils.ts)
-    const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore(
-      {
-        transcriptConfidence: transcriptResponse.confidence || 0,
-        wordCount: transcriptResponse.words?.length || 0,
-        callDurationSeconds,
-        hasAiAnalysis: aiAnalysis !== null,
-      },
-      (transcriptResponse.text || "").length,
-    );
+    const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore({
+      transcriptConfidence: transcriptResponse.confidence || 0,
+      wordCount: transcriptResponse.words?.length || 0,
+      callDurationSeconds,
+      hasAiAnalysis: aiAnalysis !== null,
+    });
 
     analysis.confidenceScore = confidenceScore.toFixed(3);
     analysis.confidenceFactors = confidenceFactors;
@@ -481,17 +512,16 @@ export async function processAudioFile(
       }));
     }
 
-    // Auto-categorize if no category was provided at upload and AI returned one
+    // Auto-categorize: defer the actual updateCall write to AFTER all storage
+    // writes (transcript/sentiment/analysis) so we batch it into the
+    // status-completed update below. This avoids a partial update window where
+    // the call has a category but no analysis yet (A15/F25).
+    let autoCategoryToApply: "inbound" | "outbound" | "internal" | "vendor" | undefined;
     if (!callCategory && aiAnalysis?.call_category) {
       const validCategories = ["inbound", "outbound", "internal", "vendor"] as const;
       type ValidCategory = typeof validCategories[number];
       if (validCategories.includes(aiAnalysis.call_category as ValidCategory)) {
-        try {
-          await storage.updateCall(callId, { callCategory: aiAnalysis.call_category as ValidCategory });
-          console.log(`[${callId}] Auto-categorized as: ${aiAnalysis.call_category}`);
-        } catch (catErr) {
-          console.warn(`[${callId}] Failed to auto-categorize (non-blocking):`, (catErr as Error).message);
-        }
+        autoCategoryToApply = aiAnalysis.call_category as ValidCategory;
       }
     }
 
@@ -555,14 +585,21 @@ export async function processAudioFile(
 
     await storage.updateCall(callId, {
       status: "completed",
-      duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
+      duration: callDurationSeconds, // A23/F56 dedup
+      ...(autoCategoryToApply ? { callCategory: autoCategoryToApply } : {}),
     });
+    if (autoCategoryToApply) {
+      console.log(`[${callId}] Auto-categorized as: ${autoCategoryToApply}`);
+    }
     console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
+
+    // A23/F57: fetch completed call once and reuse across coaching and webhook blocks.
+    const completedCall = await storage.getCall(callId);
+    const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
 
     // Auto-generate coaching alerts for low/high scores (non-blocking)
     try {
-      const performanceScore = parseFloat(analysis.performanceScore || "0");
-      const completedCall = await storage.getCall(callId);
+      const performanceScore = performanceScoreNum;
       const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
       checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources).catch(err => {
@@ -602,9 +639,7 @@ export async function processAudioFile(
 
     // Trigger webhooks (non-blocking)
     try {
-      const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
-      const finalCallForWebhook = await storage.getCall(callId);
-      const employeeId = finalCallForWebhook?.employeeId;
+      const employeeId = completedCall?.employeeId;
       let employeeName: string | undefined;
       if (employeeId) {
         try {
@@ -636,9 +671,9 @@ export async function processAudioFile(
           employee: employeeName || undefined,
           fileName: originalName,
         }).catch(err => {
-        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
-        captureException(err as Error, { callId, errorType: "webhook_delivery" });
-      });
+          console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+          captureException(err as Error, { callId, errorType: "webhook_delivery" });
+        });
       }
 
       // score.exceptional (score >= 9)
@@ -649,9 +684,9 @@ export async function processAudioFile(
           employee: employeeName || undefined,
           fileName: originalName,
         }).catch(err => {
-        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
-        captureException(err as Error, { callId, errorType: "webhook_delivery" });
-      });
+          console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+          captureException(err as Error, { callId, errorType: "webhook_delivery" });
+        });
       }
     } catch (webhookErr) {
       console.warn(`[${callId}] Webhook trigger failed (non-blocking):`, (webhookErr as Error).message);
@@ -664,7 +699,9 @@ export async function processAudioFile(
       const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
       const estimatedOutputTokens = 800;
       const assemblyaiCost = estimateAssemblyAICost(audioDuration);
-      const bedrockCost = (aiAnalysis !== null) ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) : 0;
+      const bedrockCost = (aiAnalysis !== null)
+        ? (estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) ?? 0)
+        : 0;
 
       const usageRecord: UsageRecord = {
         id: randomUUID(),

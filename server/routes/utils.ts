@@ -28,7 +28,12 @@ export function validateParams(
           valid = SAFE_ID_RE.test(value);
           break;
         case "safeName":
-          valid = SAFE_NAME_RE.test(decodeURIComponent(value));
+          try {
+            valid = SAFE_NAME_RE.test(decodeURIComponent(value));
+          } catch {
+            // Malformed percent-encoding (URIError) → reject as invalid
+            valid = false;
+          }
           break;
       }
 
@@ -61,19 +66,6 @@ export function sendValidationError(res: Response, message: string, zodError: Zo
   res.status(400).json({ message, errors: zodError.flatten() });
 }
 
-/**
- * Wrap an async route handler so unhandled promise rejections are forwarded
- * to Express error middleware. Express 4 doesn't do this natively.
- * Usage: router.get("/api/foo", asyncHandler(async (req, res) => { ... }));
- */
-export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
-): RequestHandler {
-  return (req, res, next) => {
-    fn(req, res, next).catch(next);
-  };
-}
-
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
 export function clampInt(value: string | undefined, defaultVal: number, min: number, max: number): number {
   if (!value) return defaultVal;
@@ -101,14 +93,15 @@ export function safeJsonParse<T>(value: unknown, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
-/** Delete uploaded file after processing */
-export async function cleanupFile(filePath: string) {
+/** Delete uploaded file after processing (A25/F58). */
+export async function cleanupFile(filePath: string | undefined): Promise<void> {
+  if (!filePath) return;
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    await fs.promises.unlink(filePath);
   } catch (error) {
-    console.error('Failed to cleanup file:', error);
+    // ENOENT = already gone, not an error worth logging
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    console.error("Failed to cleanup file:", (error as Error).message);
   }
 }
 
@@ -199,20 +192,23 @@ export interface ConfidenceResult {
     transcriptConfidence: number;
     wordCount: number;
     callDurationSeconds: number;
-    transcriptLength: number;
     aiAnalysisCompleted: boolean;
     overallScore: number;
   };
 }
 
-export function computeConfidenceScore(input: ConfidenceInput, transcriptLength: number): ConfidenceResult {
+// A28/F81: dead transcriptLength param removed. A28/F85: wordConfidence
+// saturation raised from 50 to 150 words (50 was saturating on sub-minute calls
+// and giving artificially high scores).
+const WORD_CONFIDENCE_SATURATION = 150;
+
+export function computeConfidenceScore(input: ConfidenceInput): ConfidenceResult {
   const { wordCount, callDurationSeconds, hasAiAnalysis } = input;
-  // Guard against NaN/undefined inputs — default to 0 so the score degrades gracefully
   const safeTranscriptConf = Number.isFinite(input.transcriptConfidence) ? input.transcriptConfidence : 0;
   const safeWordCount = Number.isFinite(wordCount) ? wordCount : 0;
   const safeDuration = Number.isFinite(callDurationSeconds) ? callDurationSeconds : 0;
 
-  const wordConfidence = Math.min(safeWordCount / 50, 1);
+  const wordConfidence = Math.min(safeWordCount / WORD_CONFIDENCE_SATURATION, 1);
   const durationConfidence = safeDuration > 30 ? 1 : safeDuration / 30;
   const aiConfidence = hasAiAnalysis ? 1 : 0.3;
 
@@ -229,7 +225,6 @@ export function computeConfidenceScore(input: ConfidenceInput, transcriptLength:
       transcriptConfidence: Math.round(safeTranscriptConf * 100) / 100,
       wordCount: safeWordCount,
       callDurationSeconds: safeDuration,
-      transcriptLength,
       aiAnalysisCompleted: hasAiAnalysis,
       overallScore: Math.round(score * 100) / 100,
     },
@@ -263,46 +258,88 @@ export async function autoAssignEmployee(
   return { assigned: false };
 }
 
-/** Estimate Bedrock cost based on model and token counts. Prices per 1K tokens (input/output).
- *  Note: When BEDROCK_BATCH_MODE=true, actual cost is 50% of these rates. */
-export function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number {
-  const pricing: Record<string, [number, number]> = {
-    "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
-    "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
-    "us.anthropic.claude-haiku-4-5-20251001": [0.001, 0.005],
-    "anthropic.claude-3-haiku-20240307": [0.00025, 0.00125],
-    "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
-  };
-  const [inputRate, outputRate] = pricing[model] || [0.003, 0.015];
-  return (inputTokens / 1000) * inputRate + (outputTokens / 1000) * outputRate;
+/**
+ * Pricing table (USD per 1K tokens, [input, output]).
+ * LAST VERIFIED: 2025-11 against AWS Bedrock on-demand pricing page.
+ * Update this comment when values change.
+ */
+const BEDROCK_PRICING: Record<string, [number, number]> = {
+  "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
+  "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
+  "us.anthropic.claude-haiku-4-5-20251001": [0.0008, 0.004],
+  "anthropic.claude-3-haiku-20240307": [0.00025, 0.00125],
+  "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
+};
+
+/** Estimate Bedrock cost. Returns null for unknown models (A27/F60 —
+ *  previous behavior of silently defaulting to Sonnet pricing hid model
+ *  misconfiguration). Note: BEDROCK_BATCH_MODE=true applies 50% discount. */
+export function estimateBedrockCost(model: string, inputTokens: number, outputTokens: number): number | null {
+  const rates = BEDROCK_PRICING[model];
+  if (!rates) return null;
+  return (inputTokens / 1000) * rates[0] + (outputTokens / 1000) * rates[1];
 }
 
-/** Estimate AssemblyAI cost: base $0.15/hr + sentiment $0.02/hr = $0.17/hr = ~$0.0000472/sec
- *  When sentiment is disabled (non-English): $0.15/hr = ~$0.0000417/sec */
+// AssemblyAI pricing LAST VERIFIED: 2025-11. Base $0.15/hr + sentiment $0.02/hr.
+const ASSEMBLYAI_RATE_PER_SEC_WITH_SENTIMENT = 0.17 / 3600;
+const ASSEMBLYAI_RATE_PER_SEC_BASE = 0.15 / 3600;
+/** Estimate AssemblyAI cost from duration. */
 export function estimateAssemblyAICost(durationSeconds: number, sentimentEnabled = true): number {
-  const ratePerSecond = sentimentEnabled ? 0.0000472 : 0.0000417;
-  return durationSeconds * ratePerSecond;
+  const rate = sentimentEnabled ? ASSEMBLYAI_RATE_PER_SEC_WITH_SENTIMENT : ASSEMBLYAI_RATE_PER_SEC_BASE;
+  return durationSeconds * rate;
 }
 
-/** Estimate Bedrock Titan Embed cost: $0.00002 per 1K tokens */
+// Titan Embed V2 pricing LAST VERIFIED: 2025-11. $0.00002 per 1K tokens.
+const TITAN_EMBED_V2_RATE_PER_1K = 0.00002;
+/** Estimate Bedrock Titan Embed V2 cost from raw text length. */
 export function estimateEmbeddingCost(textLength: number): number {
   const estimatedTokens = Math.ceil(textLength / 4);
-  return (estimatedTokens / 1000) * 0.00002;
+  return (estimatedTokens / 1000) * TITAN_EMBED_V2_RATE_PER_1K;
 }
 
-/** Concurrency-limited task queue for expensive async operations. */
+/**
+ * Concurrency-limited task queue for expensive async operations.
+ *
+ * Bounds (A11/F16/F76):
+ * - `concurrency`: max parallel tasks
+ * - `maxQueueSize`: max queued (non-running) tasks; new add() rejects with
+ *   QueueFullError when exceeded — backpressure for callers (return 503).
+ * - `taskTimeoutMs`: per-task wall clock; rejects with TaskTimeoutError on
+ *   expiry. Tasks needing >10min should use the durable PostgreSQL job queue.
+ */
+export class QueueFullError extends Error {
+  constructor() { super("Task queue is full"); this.name = "QueueFullError"; }
+}
+export class TaskTimeoutError extends Error {
+  constructor() { super("Task exceeded timeout"); this.name = "TaskTimeoutError"; }
+}
+
 export class TaskQueue {
   private running = 0;
   private queue: Array<() => void> = [];
-  constructor(private concurrency: number) {}
+  constructor(
+    private concurrency: number,
+    private maxQueueSize: number = 1000,
+    private taskTimeoutMs: number = 10 * 60 * 1000,
+  ) {}
   add<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.concurrency && this.queue.length >= this.maxQueueSize) {
+      return Promise.reject(new QueueFullError());
+    }
     return new Promise<T>((resolve, reject) => {
       const run = () => {
         this.running++;
-        fn().then(resolve, reject).finally(() => {
-          this.running--;
-          if (this.queue.length > 0) this.queue.shift()!();
+        let timer: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new TaskTimeoutError()), this.taskTimeoutMs);
         });
+        Promise.race([fn(), timeoutPromise])
+          .then(resolve as (v: unknown) => void, reject)
+          .finally(() => {
+            if (timer) clearTimeout(timer);
+            this.running--;
+            if (this.queue.length > 0) this.queue.shift()!();
+          });
       };
       if (this.running < this.concurrency) run();
       else this.queue.push(run);

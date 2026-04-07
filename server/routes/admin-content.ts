@@ -7,9 +7,10 @@ import { requireAuth, requireRole } from "../auth";
 import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
-import { insertPromptTemplateSchema, insertWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
+import { insertPromptTemplateSchema, insertWebhookConfigSchema, updateWebhookConfigSchema, CALL_CATEGORIES, BEDROCK_MODEL_PRESETS, type UsageRecord } from "@shared/schema";
 import { validateUrlForSSRF } from "../services/url-validator";
-import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, sendError, sendValidationError } from "./utils";
+import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, sendError, sendValidationError, validateIdParam } from "./utils";
+import { audioProcessingQueue } from "./pipeline";
 import {
   getAllWebhookConfigs,
   getWebhookConfig,
@@ -20,8 +21,6 @@ import {
   WEBHOOK_EVENTS,
   type WebhookConfig,
 } from "../services/webhooks";
-
-const audioProcessingQueue = new TaskQueue(3);
 
 export function registerContentRoutes(
   router: Router,
@@ -56,7 +55,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.patch("/api/prompt-templates/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.patch("/api/prompt-templates/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const { updatedBy: _ignore, id: _ignoreId, ...bodyWithoutMeta } = req.body;
       const templateUpdateParsed = insertPromptTemplateSchema.partial().safeParse(bodyWithoutMeta);
@@ -78,7 +77,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.delete("/api/prompt-templates/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.delete("/api/prompt-templates/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       await storage.deletePromptTemplate(req.params.id);
       res.json({ message: "Template deleted" });
@@ -111,7 +110,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.get("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.get("/api/ab-tests/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const test = await storage.getABTest(req.params.id);
       if (!test) {
@@ -175,7 +174,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.delete("/api/ab-tests/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.delete("/api/ab-tests/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const test = await storage.getABTest(req.params.id);
       if (!test) {
@@ -222,7 +221,7 @@ export function registerContentRoutes(
       const config: WebhookConfig = {
         ...parsed.data,
         id: randomUUID(),
-        createdBy: req.user?.username || "admin",
+        createdBy: req.user!.username,
         createdAt: new Date().toISOString(),
       };
       await createWebhookConfig(config);
@@ -234,15 +233,20 @@ export function registerContentRoutes(
 
   router.patch("/api/admin/webhooks/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const parsed = updateWebhookConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendValidationError(res, "Invalid webhook update", parsed.error);
+        return;
+      }
       // SSRF protection: validate URL if being updated
-      if (req.body.url) {
-        const urlCheck = await validateUrlForSSRF(req.body.url);
+      if (parsed.data.url) {
+        const urlCheck = await validateUrlForSSRF(parsed.data.url);
         if (!urlCheck.valid) {
           res.status(400).json({ message: urlCheck.error || "Invalid webhook URL" });
           return;
         }
       }
-      const updated = await updateWebhookConfig(req.params.id, req.body);
+      const updated = await updateWebhookConfig(req.params.id, parsed.data);
       if (!updated) {
         res.status(404).json({ message: "Webhook config not found" });
         return;
@@ -382,7 +386,7 @@ export function registerContentRoutes(
         };
 
         if (baselineResult.status === "fulfilled") {
-          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens);
+          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
           services.bedrock = {
             model: abTest.baselineModel,
             estimatedInputTokens,
@@ -392,7 +396,7 @@ export function registerContentRoutes(
           };
         }
         if (testResult.status === "fulfilled") {
-          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens);
+          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
           services.bedrockSecondary = {
             model: abTest.testModel,
             estimatedInputTokens,

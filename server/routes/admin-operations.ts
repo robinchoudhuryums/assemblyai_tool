@@ -62,7 +62,7 @@ export function registerOperationsRoutes(
         logPhiAccess({
           timestamp: new Date().toISOString(),
           event: "admin_dead_job_retry",
-          username: req.user?.username || "unknown",
+          username: req.user!.username,
           resourceType: "admin",
           resourceId: req.params.id,
           detail: "Admin retried dead-letter job",
@@ -78,14 +78,22 @@ export function registerOperationsRoutes(
 
   // ==================== EXPORT: CSV DOWNLOAD ====================
 
-  router.get("/api/export/calls", requireAuth, async (req, res) => {
+  const EXPORT_ROW_LIMIT = 10_000;
+  router.get("/api/export/calls", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       const { status, sentiment, employee } = req.query;
-      const calls = await storage.getCallsWithDetails({
+      const allCalls = await storage.getCallsWithDetails({
         status: status as string,
         sentiment: sentiment as string,
         employee: employee as string,
       });
+      // Bulk-exfiltration guard: cap rows; client must narrow filters if exceeded
+      if (allCalls.length > EXPORT_ROW_LIMIT) {
+        return res.status(413).json({
+          message: `Export exceeds ${EXPORT_ROW_LIMIT} row limit (${allCalls.length} matched). Narrow your filters.`,
+        });
+      }
+      const calls = allCalls;
 
       const header = "Date,Employee,Duration (s),Sentiment,Score,Party Type,Status,Flags,Summary\n";
       const rows = calls.map(c => {
@@ -164,7 +172,7 @@ export function registerOperationsRoutes(
   router.post("/api/admin/reports/generate", requireRole("manager", "admin"), async (req, res) => {
     try {
       const type = req.body.type === "monthly" ? "monthly" : "weekly";
-      const report = await generateReport(type, req.user?.username || "unknown");
+      const report = await generateReport(type, req.user!.username);
       res.json(report);
     } catch (error) {
       console.error("Report generation error:", (error as Error).message);

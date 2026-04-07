@@ -150,8 +150,13 @@ export function registerCallTagRoutes(router: Router) {
         return;
       }
       const { timestampMs, text } = req.body;
-      if (typeof timestampMs !== "number" || !text?.trim()) {
-        res.status(400).json({ message: "timestampMs (number) and text (string) are required" });
+      // A35/F88: validate both fields strictly.
+      if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs) || timestampMs < 0) {
+        res.status(400).json({ message: "timestampMs must be a non-negative finite number" });
+        return;
+      }
+      if (typeof text !== "string" || !text.trim() || text.length > 2000) {
+        res.status(400).json({ message: "text must be a non-empty string ≤ 2000 chars" });
         return;
       }
       const { rows } = await pool.query(
@@ -175,7 +180,24 @@ export function registerCallTagRoutes(router: Router) {
         res.status(503).json({ message: "Annotations require PostgreSQL" });
         return;
       }
+      // Author-or-manager check: only the original author or manager+ may delete
+      const { rows } = await pool.query(
+        "SELECT author FROM annotations WHERE id = $1 AND call_id = $2",
+        [req.params.annotationId, req.params.id]
+      );
+      if (rows.length === 0) {
+        return res.status(404).json({ message: "Annotation not found" });
+      }
+      const annotationAuthor = rows[0].author;
+      const userIdentifier = req.user?.name || req.user?.username || "";
+      const userRole = req.user?.role || "viewer";
+      const isAuthor = annotationAuthor === userIdentifier;
+      const isManagerOrAdmin = userRole === "manager" || userRole === "admin";
+      if (!isAuthor && !isManagerOrAdmin) {
+        return res.status(403).json({ message: "Only the author or a manager can delete this annotation" });
+      }
       await pool.query("DELETE FROM annotations WHERE id = $1 AND call_id = $2", [req.params.annotationId, req.params.id]);
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "annotation_deleted", resourceType: "annotation", resourceId: req.params.annotationId });
       res.json({ message: "Annotation deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete annotation" });

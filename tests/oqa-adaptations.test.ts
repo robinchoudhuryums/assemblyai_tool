@@ -33,49 +33,9 @@ describe("Structured error handling", () => {
   });
 });
 
-describe("Durable job queue", () => {
-  it("enqueueJob returns a job ID", async () => {
-    const { enqueueJob } = await import("../server/services/durable-queue.js");
-    const id = await enqueueJob("test-queue", { foo: "bar" });
-    assert.ok(id, "Should return a job ID");
-    assert.ok(id.startsWith("test-queue-"), "Job ID should include queue name");
-  });
-
-  it("getJobStatus returns the enqueued job", async () => {
-    const { enqueueJob, getJobStatus } = await import("../server/services/durable-queue.js");
-    const id = await enqueueJob("status-queue", { data: 1 });
-    const job = getJobStatus(id);
-    assert.ok(job, "Should find the job");
-    assert.equal(job!.status, "pending");
-    assert.equal(job!.queue, "status-queue");
-  });
-
-  it("completeJob marks job as completed", async () => {
-    const { enqueueJob, completeJob, getJobStatus } = await import("../server/services/durable-queue.js");
-    const id = await enqueueJob("complete-queue", {});
-    completeJob(id);
-    const job = getJobStatus(id);
-    assert.equal(job!.status, "completed");
-    assert.ok(job!.completedAt);
-  });
-
-  it("failJob moves to dead-letter after max attempts", async () => {
-    const { enqueueJob, failJob, getJobStatus, getDeadLetterJobs } = await import("../server/services/durable-queue.js");
-    const id = await enqueueJob("fail-queue", {}, { maxAttempts: 2 });
-    failJob(id, "Error 1"); // attempt 1
-    assert.equal(getJobStatus(id)?.status, "pending"); // still retryable
-    failJob(id, "Error 2"); // attempt 2 = max
-    assert.equal(getJobStatus(id), undefined); // moved to DLQ
-    const dlq = getDeadLetterJobs();
-    assert.ok(dlq.some((j) => j.id === id));
-  });
-
-  it("getQueueStats returns per-queue counts", async () => {
-    const { getQueueStats } = await import("../server/services/durable-queue.js");
-    const stats = getQueueStats();
-    assert.ok(typeof stats === "object");
-  });
-});
+// Durable job queue tests removed (A40): services/durable-queue.ts was
+// dead code — the production queue is JobQueue in services/job-queue.ts
+// backed by PostgreSQL. Those tests are covered in tests/job-queue.test.ts.
 
 describe("Enhanced MFA", () => {
   describe("Backup codes", () => {
