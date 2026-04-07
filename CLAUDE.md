@@ -156,7 +156,7 @@ tests/                   # Unit tests (Node test runner)
 
 ### Storage Backend Selection (server/storage.ts)
 1. `DATABASE_URL` env var → **PostgresStorage** (metadata in RDS, audio in S3) — **recommended for production**
-2. `STORAGE_BACKEND=s3` or `S3_BUCKET` env var → **CloudStorage** (legacy, all data as JSON in S3)
+2. `STORAGE_BACKEND=s3-legacy` → **CloudStorage** (deprecated, all data as JSON in S3 — emits a startup WARN). The old `STORAGE_BACKEND=s3` value now throws at boot.
 3. Neither → **MemStorage** (in-memory, non-persistent — dev only)
 
 ## API Routes Overview
@@ -472,7 +472,7 @@ LOG_LEVEL                       # Logging verbosity: debug, info, warn, error (d
 
 # Database
 DB_SSL_REJECT_UNAUTHORIZED      # Set to "false" for self-signed certs in dev/staging (IGNORED in production — always true)
-STORAGE_BACKEND                 # Explicit backend: "s3", "postgres", "memory" (default: auto-detected from DATABASE_URL/S3_BUCKET)
+STORAGE_BACKEND                 # "s3-legacy" → deprecated CloudStorage with startup WARN. Old "s3" value throws. Default: auto-detected from DATABASE_URL.
 
 # Score Calibration
 SCORE_CALIBRATION_ENABLED       # Set to "true" to enable score distribution normalization (default: disabled)

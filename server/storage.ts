@@ -1246,10 +1246,25 @@ function createStorage(): IStorage {
 
   const storageBackend = process.env.STORAGE_BACKEND?.toLowerCase();
 
-  // S3-only storage (legacy, all data as JSON files in S3)
-  if (storageBackend === "s3" || process.env.S3_BUCKET) {
+  // F08/F17: CloudStorage (S3-only JSON blob backend) is deprecated. The
+  // gate was renamed to STORAGE_BACKEND=s3-legacy so the old "s3" value
+  // can no longer silently activate it. Operators on the old value get a
+  // hard startup error rather than a silent fallback to MemStorage (which
+  // would lose data on every restart).
+  if (storageBackend === "s3") {
+    throw new Error(
+      "[STORAGE] STORAGE_BACKEND=s3 is no longer supported. CloudStorage is deprecated; " +
+      "set DATABASE_URL to use PostgresStorage, or set STORAGE_BACKEND=s3-legacy to opt in " +
+      "to the legacy S3-only backend (which will be removed in a future release).",
+    );
+  }
+
+  if (storageBackend === "s3-legacy") {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
-    console.log(`[STORAGE] Using S3 (bucket: ${bucket})`);
+    console.warn(
+      `[STORAGE] WARN: CloudStorage backend is deprecated and will be removed. ` +
+      `Migrate to PostgresStorage by setting DATABASE_URL. (bucket: ${bucket})`,
+    );
     return new CloudStorage(new S3Client(bucket));
   }
 
