@@ -10,7 +10,7 @@ import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
 import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
-import { cleanupFile, TaskQueue, validateIdParam, validateParams, sendError, sendValidationError } from "./utils";
+import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
 /** Type for the processAudioFile function passed from the main routes module. */
@@ -26,8 +26,9 @@ export type ProcessAudioFn = (
   language?: string,
 ) => Promise<void>;
 
-// Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
-const audioProcessingQueue = new TaskQueue(3);
+// Shared audio processing queue (A11) — single singleton across pipeline.ts,
+// calls.ts, admin-content.ts. Bounded with maxQueueSize + per-task timeout.
+import { audioProcessingQueue } from "./pipeline";
 
 // assignCallSchema imported from @shared/schema
 
@@ -372,7 +373,13 @@ export function registerCallRoutes(
   router.patch("/api/calls/:id/analysis", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
-      const { updates, reason } = req.body;
+
+      const parsed = analysisEditSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendValidationError(res, "Invalid edit data", parsed.error);
+        return;
+      }
+      const { updates, reason } = parsed.data;
 
       logPhiAccess({
         ...auditContext(req),
@@ -380,14 +387,8 @@ export function registerCallRoutes(
         event: "edit_call_analysis",
         resourceType: "analysis",
         resourceId: callId,
-        detail: `reason: ${reason}; fields: ${updates ? Object.keys(updates).join(",") : "none"}`,
+        detail: `reason: ${reason}; fields: ${Object.keys(updates).join(",")}`,
       });
-
-      const parsed = analysisEditSchema.safeParse({ updates, reason });
-      if (!parsed.success) {
-        sendValidationError(res, "Invalid edit data", parsed.error);
-        return;
-      }
 
       const existing = await storage.getCallAnalysis(callId);
       if (!existing) {
@@ -521,15 +522,15 @@ export function registerCallRoutes(
   // ==================== BULK RE-ANALYSIS (admin only) ====================
   router.post("/api/calls/bulk-reanalyze", requireAuth, requireRole("admin"), async (req, res) => {
     try {
-      const { callIds } = req.body;
-      if (!Array.isArray(callIds) || callIds.length === 0) {
-        res.status(400).json({ message: "callIds must be a non-empty array" });
+      const bulkSchema = z.object({
+        callIds: z.array(z.string().uuid()).min(1).max(50),
+      }).strict();
+      const parsed = bulkSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendValidationError(res, "Invalid bulk-reanalyze payload", parsed.error);
         return;
       }
-      if (callIds.length > 50) {
-        res.status(400).json({ message: "Maximum 50 calls can be re-analyzed at once" });
-        return;
-      }
+      const { callIds } = parsed.data;
 
       const jobQueue = getJobQueue();
       const results: { callId: string; status: string }[] = [];
@@ -569,8 +570,7 @@ export function registerCallRoutes(
         } else {
           const audioBuffer = await storage.downloadAudio(audioFiles[0]);
           if (audioBuffer) {
-            const audioQueue = new TaskQueue(3);
-            audioQueue.add(() => processAudioFn(
+            audioProcessingQueue.add(() => processAudioFn(
               callId, "", audioBuffer, call.fileName || "reanalysis",
               "audio/mpeg", call.callCategory, uploadUser,
             )).catch(async (error) => {

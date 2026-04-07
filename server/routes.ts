@@ -8,7 +8,7 @@ import { storage } from "./storage";
 import { getPool } from "./db/pool";
 import { JobQueue, type Job } from "./services/job-queue";
 import { broadcastCallUpdate } from "./services/websocket";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHash } from "crypto";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -76,17 +76,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Verify webhook secret (timing-safe to prevent side-channel leaks)
     const secret = process.env.ASSEMBLYAI_WEBHOOK_SECRET;
     if (!secret) {
-      // HIPAA: In production, reject unverified webhooks to prevent spoofed transcript injections
-      if (process.env.NODE_ENV === "production") {
-        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook in production");
+      // Default-deny: reject in all environments unless explicit dev opt-in.
+      // Set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true in local dev only.
+      if (process.env.ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED !== "true") {
+        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook (set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true for dev override)");
         return res.status(500).json({ message: "Webhook secret not configured" });
       }
-      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev only)");
+      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev override)");
     } else {
       const provided = String(req.headers["x-webhook-secret"] || "");
-      const secretBuf = Buffer.from(secret, "utf8");
-      const providedBuf = Buffer.from(provided, "utf8");
-      if (secretBuf.length !== providedBuf.length || !timingSafeEqual(secretBuf, providedBuf)) {
+      // Hash both sides to constant-length buffers so length mismatch doesn't
+      // leak via early return; constant-time compare on the hashes.
+      const secretHash = createHash("sha256").update(secret, "utf8").digest();
+      const providedHash = createHash("sha256").update(provided, "utf8").digest();
+      if (!timingSafeEqual(secretHash, providedHash)) {
         console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
         return res.status(401).json({ message: "Invalid webhook secret" });
       }

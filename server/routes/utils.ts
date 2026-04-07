@@ -28,7 +28,12 @@ export function validateParams(
           valid = SAFE_ID_RE.test(value);
           break;
         case "safeName":
-          valid = SAFE_NAME_RE.test(decodeURIComponent(value));
+          try {
+            valid = SAFE_NAME_RE.test(decodeURIComponent(value));
+          } catch {
+            // Malformed percent-encoding (URIError) → reject as invalid
+            valid = false;
+          }
           break;
       }
 
@@ -59,19 +64,6 @@ export function sendError(res: Response, status: number, message: string): void 
 /** Send a 400 with Zod validation errors (always uses .flatten() for consistency). */
 export function sendValidationError(res: Response, message: string, zodError: ZodError): void {
   res.status(400).json({ message, errors: zodError.flatten() });
-}
-
-/**
- * Wrap an async route handler so unhandled promise rejections are forwarded
- * to Express error middleware. Express 4 doesn't do this natively.
- * Usage: router.get("/api/foo", asyncHandler(async (req, res) => { ... }));
- */
-export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
-): RequestHandler {
-  return (req, res, next) => {
-    fn(req, res, next).catch(next);
-  };
 }
 
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */
@@ -290,19 +282,49 @@ export function estimateEmbeddingCost(textLength: number): number {
   return (estimatedTokens / 1000) * 0.00002;
 }
 
-/** Concurrency-limited task queue for expensive async operations. */
+/**
+ * Concurrency-limited task queue for expensive async operations.
+ *
+ * Bounds (A11/F16/F76):
+ * - `concurrency`: max parallel tasks
+ * - `maxQueueSize`: max queued (non-running) tasks; new add() rejects with
+ *   QueueFullError when exceeded — backpressure for callers (return 503).
+ * - `taskTimeoutMs`: per-task wall clock; rejects with TaskTimeoutError on
+ *   expiry. Tasks needing >10min should use the durable PostgreSQL job queue.
+ */
+export class QueueFullError extends Error {
+  constructor() { super("Task queue is full"); this.name = "QueueFullError"; }
+}
+export class TaskTimeoutError extends Error {
+  constructor() { super("Task exceeded timeout"); this.name = "TaskTimeoutError"; }
+}
+
 export class TaskQueue {
   private running = 0;
   private queue: Array<() => void> = [];
-  constructor(private concurrency: number) {}
+  constructor(
+    private concurrency: number,
+    private maxQueueSize: number = 1000,
+    private taskTimeoutMs: number = 10 * 60 * 1000,
+  ) {}
   add<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.concurrency && this.queue.length >= this.maxQueueSize) {
+      return Promise.reject(new QueueFullError());
+    }
     return new Promise<T>((resolve, reject) => {
       const run = () => {
         this.running++;
-        fn().then(resolve, reject).finally(() => {
-          this.running--;
-          if (this.queue.length > 0) this.queue.shift()!();
+        let timer: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new TaskTimeoutError()), this.taskTimeoutMs);
         });
+        Promise.race([fn(), timeoutPromise])
+          .then(resolve as (v: unknown) => void, reject)
+          .finally(() => {
+            if (timer) clearTimeout(timer);
+            this.running--;
+            if (this.queue.length > 0) this.queue.shift()!();
+          });
       };
       if (this.running < this.concurrency) run();
       else this.queue.push(run);

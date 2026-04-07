@@ -481,17 +481,16 @@ export async function processAudioFile(
       }));
     }
 
-    // Auto-categorize if no category was provided at upload and AI returned one
+    // Auto-categorize: defer the actual updateCall write to AFTER all storage
+    // writes (transcript/sentiment/analysis) so we batch it into the
+    // status-completed update below. This avoids a partial update window where
+    // the call has a category but no analysis yet (A15/F25).
+    let autoCategoryToApply: "inbound" | "outbound" | "internal" | "vendor" | undefined;
     if (!callCategory && aiAnalysis?.call_category) {
       const validCategories = ["inbound", "outbound", "internal", "vendor"] as const;
       type ValidCategory = typeof validCategories[number];
       if (validCategories.includes(aiAnalysis.call_category as ValidCategory)) {
-        try {
-          await storage.updateCall(callId, { callCategory: aiAnalysis.call_category as ValidCategory });
-          console.log(`[${callId}] Auto-categorized as: ${aiAnalysis.call_category}`);
-        } catch (catErr) {
-          console.warn(`[${callId}] Failed to auto-categorize (non-blocking):`, (catErr as Error).message);
-        }
+        autoCategoryToApply = aiAnalysis.call_category as ValidCategory;
       }
     }
 
@@ -555,8 +554,12 @@ export async function processAudioFile(
 
     await storage.updateCall(callId, {
       status: "completed",
-      duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000)
+      duration: Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000),
+      ...(autoCategoryToApply ? { callCategory: autoCategoryToApply } : {}),
     });
+    if (autoCategoryToApply) {
+      console.log(`[${callId}] Auto-categorized as: ${autoCategoryToApply}`);
+    }
     console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
 
     // Auto-generate coaching alerts for low/high scores (non-blocking)

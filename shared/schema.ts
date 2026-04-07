@@ -329,9 +329,10 @@ export const analysisEditSchema = z.object({
       .transform(v => typeof v === "string" ? parseFloat(v) : v)
       .pipe(z.number().min(0).max(10))
       .optional(),
-  }).refine(obj => Object.keys(obj).length > 0, { message: "At least one field must be updated" }),
+    subScores: z.record(z.string(), z.number().min(0).max(10)).optional(),
+  }).strict().refine(obj => Object.keys(obj).length > 0, { message: "At least one field must be updated" }),
   reason: z.string().min(1, "A reason for the edit is required").max(1000),
-});
+}).strict();
 
 export type AnalysisEdit = z.infer<typeof analysisEditSchema>;
 
@@ -459,9 +460,18 @@ export const webhookConfigSchema = z.object({
   active: z.boolean().default(true),
   createdBy: z.string(),
   createdAt: z.string(),
-});
+}).strict();
 
-export const insertWebhookConfigSchema = webhookConfigSchema.omit({ id: true, createdAt: true });
+export const insertWebhookConfigSchema = webhookConfigSchema.omit({ id: true, createdAt: true, createdBy: true });
+
+// Strict whitelist for PATCH /api/admin/webhooks/:id — only these fields may
+// be updated; passing extra keys is rejected.
+export const updateWebhookConfigSchema = z.object({
+  url: z.string().url().optional(),
+  events: z.array(z.string()).min(1).optional(),
+  secret: z.string().min(1).optional(),
+  active: z.boolean().optional(),
+}).strict().refine(o => Object.keys(o).length > 0, { message: "At least one field must be updated" });
 
 export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
 export type InsertWebhookConfig = z.infer<typeof insertWebhookConfigSchema>;

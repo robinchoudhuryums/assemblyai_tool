@@ -3,7 +3,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { insertEmployeeSchema, assignCallSchema } from "@shared/schema";
 import { z } from "zod";
-import { sendError, sendValidationError } from "./utils";
+import { sendError, sendValidationError, validateIdParam } from "./utils";
 import csv from "csv-parser";
 import fs from "fs";
 import path from "path";
@@ -44,7 +44,7 @@ export function register(router: Router) {
     subTeam: z.string().max(100).optional(),
   }).strict();
 
-  router.patch("/api/employees/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.patch("/api/employees/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = updateEmployeeSchema.safeParse(req.body);
       if (!parsed.success) {

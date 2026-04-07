@@ -17,9 +17,16 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
+const USER_BUCKETS_MAX = 10_000;
 const userBuckets = new Map<string, RateLimitEntry>();
 
-// Clean up expired entries every 5 minutes
+function evictOldestUserBucket(): void {
+  const firstKey = userBuckets.keys().next().value;
+  if (firstKey !== undefined) userBuckets.delete(firstKey);
+}
+
+// Clean up expired entries every 5 minutes (TTL correctness — LRU is the
+// hard memory bound below).
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of userBuckets) {
@@ -51,7 +58,15 @@ export function userRateLimit(maxRequests: number, windowMs: number = 60_000) {
     let entry = userBuckets.get(bucketKey);
 
     if (!entry || now >= entry.resetAt) {
+      // Hard LRU bound: evict oldest insertion-order entry on overflow.
+      while (userBuckets.size >= USER_BUCKETS_MAX) {
+        evictOldestUserBucket();
+      }
       entry = { count: 0, resetAt: now + windowMs };
+      userBuckets.set(bucketKey, entry);
+    } else {
+      // Touch: re-insert to move to end (LRU recency)
+      userBuckets.delete(bucketKey);
       userBuckets.set(bucketKey, entry);
     }
 
