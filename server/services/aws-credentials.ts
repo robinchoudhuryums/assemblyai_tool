@@ -7,6 +7,7 @@
  *
  * IMDS credentials are cached and automatically refreshed 5 minutes before expiration.
  */
+import { logger } from "./logger.js";
 
 export interface AwsCredentials {
   accessKeyId: string;
@@ -57,9 +58,17 @@ export async function getAwsCredentials(): Promise<AwsCredentials | null> {
       return creds;
     }
   } catch (err) {
-    // IMDS not available (not on EC2, or IMDS disabled)
+    // IMDS not available (not on EC2, IMDS disabled, transient network failure, etc.)
+    // First failure logs at info; subsequent failures (during refresh) log at warn
+    // so transient/refresh problems are visible instead of being swallowed.
+    const errMsg = (err as Error).message || String(err);
     if (imdsAvailable === null) {
-      console.log("[AWS] IMDS not available — not running on EC2 or instance profile not attached");
+      logger.info("IMDS not available — not running on EC2 or instance profile not attached", { error: errMsg });
+    } else if (imdsAvailable === true) {
+      // We had working IMDS before; this is a refresh failure — surface it.
+      logger.warn("IMDS credential refresh failed", { error: errMsg });
+    } else {
+      logger.debug("IMDS still unavailable", { error: errMsg });
     }
     imdsAvailable = false;
   }
@@ -129,7 +138,7 @@ async function fetchIMDSCredentials(region: string): Promise<AwsCredentials | nu
     region,
   };
 
-  console.log(`[AWS] Obtained IMDS credentials (role: ${roleName}, expires: ${credData.Expiration})`);
+  logger.info("Obtained IMDS credentials", { role: roleName, expires: credData.Expiration });
   return cachedCredentials;
 }
 

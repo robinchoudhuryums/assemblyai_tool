@@ -445,6 +445,7 @@ TELEPHONY_8X8_ENABLED           # Set to "true" to enable auto-ingestion from 8x
 TELEPHONY_8X8_API_KEY           # 8x8 Work API key
 TELEPHONY_8X8_SUBACCOUNT_ID     # 8x8 subaccount ID
 TELEPHONY_8X8_POLL_MINUTES      # How often to poll for new recordings (default: 15)
+TELEPHONY_8X8_STUB_ACKNOWLEDGED # Required ack flag (A1) — without this, scheduler refuses to start even if TELEPHONY_8X8_ENABLED=true
 TELEPHONY_8X8_BASE_URL          # 8x8 API base URL (override for testing)
 
 # Pipeline quality gates (A24)
@@ -729,6 +730,14 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 ```
 
 ## Common Gotchas
+- **8x8 telephony scheduler is double-gated** (A1) — `is8x8Enabled()` requires both `TELEPHONY_8X8_ENABLED=true` AND `TELEPHONY_8X8_STUB_ACKNOWLEDGED=true`. Scheduler refuses to start without the ack flag and logs a warning. Operators flipping the legacy enable flag alone will see the integration silently no-op.
+- **Webhook delivery sends dual-emit HMAC headers** (A3) — every delivery includes legacy `X-Webhook-Signature` (HMAC over body) AND new `X-Webhook-Timestamp` + `X-Webhook-Signature-V2` (HMAC over `${timestamp}.${body}`). Receivers can verify either; v2 enables replay protection. v1 deprecation timeline TBD — do not remove v1 emission without external coordination.
+- **Webhook config writes throw, reads no-op** (A5) — `createWebhookConfig`/`updateWebhookConfig`/`deleteWebhookConfig` throw via `requireS3Client()` if S3 isn't initialized. `getAllWebhookConfigs`/`triggerWebhook` still degrade silently to preserve fire-and-forget semantics. Webhook config list is cached for 30s — disable/delete propagation has up to a 30s tail; account for this during incident response.
+- **`rag-client.ts` boot-fails in production on plaintext http://** (A6) — module load throws if `RAG_SERVICE_URL` starts with `http://` and `NODE_ENV=production`. `isRagEnabled()` also returns false as defense-in-depth. Dev/staging warns instead of failing.
+- **`s3.ts` ensureCredentials retries IMDS on every call until success** (A2) — previously, a single transient IMDS failure at boot permanently flipped the client into refresh-only mode with no cached credentials. Now `initialized=true` is set only after a successful first fetch. Tradeoff: under sustained IMDS outage, every S3 op pays a 2s IMDS timeout instead of failing once.
+- **`s3.ts` listObjects/listObjectsWithMetadata XML-decode keys** (A12) — S3 ListObjectsV2 XML-encodes the 5 predefined entities (`&`, `<`, `>`, `'`, `"`) in object keys. Without decoding, a key like `audio/foo&bar.wav` came back as `audio/foo&amp;bar.wav` and subsequent GET/DELETE silently 404'd. Decoded via `decodeXmlEntities()`.
+- **`findCallByExternalId(externalId)` is the upstream-source dedupe primitive** (A10) — added on IStorage and all 3 backends. Backed by a unique partial index on `calls.external_id` (PostgresStorage). Used by telephony-8x8 to skip duplicate recordings before downloading audio. Concurrent ingest workers racing on the same recording id will currently surface as `status: "error"` (pg 23505) instead of `"duplicate"` — telephony catch block does not yet remap.
+- **`aws-credentials.ts` log scrapers** (A7-batch2) — `[AWS]` literal stdout prefix is gone. IMDS first-failure logs at `info`, refresh failures escalate to `warn`. Output is structured JSON via `logger.*`.
 - **Incident routes 500 on missing `incidents` table** (A7) — `persistIncident` and `createBreachReport` now throw on DB write failure (DB-first persist; in-memory cache only updated after successful persist). On a fresh deploy without `initializeDatabase()` having run, `/api/admin/incidents/*` will 500 instead of silently caching in memory. Run schema migration before exercising admin incident routes.
 - **Incident/breach/alert IDs are opaque UUIDs** (A7) — `INC-<uuid>`, `breach-<uuid>`, `alert-<uuid>`. Old `Date.now()`-based IDs were parseable but collision-prone within the same millisecond. Anything that tried to extract a timestamp from an ID needs to read `declaredAt`/`reportedAt` instead.
 - **Auth / security / incident logs are structured JSON via `logger.*`** (A11) — `[AUTH]`, `[SECURITY]`, `[INCIDENT]` bracket prefixes are gone. External scrapers grepping for those literal strings will silently match nothing. The `[HIPAA_AUDIT]` stdout line is intentionally preserved (canonical chain record).
@@ -821,7 +830,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company) |
 | **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
 | **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends |
-| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~35 methods, A7 added `getCallsByStatus(status)` and `getCallsSince(date)` — indexed lookups that replaced `getAllCalls` scans in batch orphan recovery and auto-calibration), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. |
+| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~35 methods, A7 added `getCallsByStatus(status)` and `getCallsSince(date)` — indexed lookups that replaced `getAllCalls` scans in batch orphan recovery and auto-calibration), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. A10: `findCallByExternalId(externalId)` added to all backends, backed by `calls.external_id` + unique partial index for upstream-source dedupe (e.g. 8x8 recording ids). |
 | **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
 | **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
 | **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory |
@@ -829,7 +838,6 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Scoring** | `server/services/scoring-calibration.ts`, `server/services/auto-calibration.ts`, `server/services/scoring-feedback.ts` | Score normalization, periodic distribution analysis, manager correction capture for future prompt injection |
 | **AWS Infrastructure** | `server/services/s3.ts`, `server/services/sigv4.ts`, `server/services/aws-credentials.ts` | Custom S3 REST client (single consumer: `storage.ts`), SigV4 signing, credential resolution (env vars + IMDS with caching) |
 | **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
-| **RAG Hybrid** | `server/services/rag-hybrid.ts` | Hybrid vector+BM25 retrieval — **dead code**: not imported by any production file (only referenced in tests) |
 | **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain, persistent integrity head), brute-force/credential stuffing detection (wired to client IP via `passReqToCallback`), automated vuln scanning (history retains hollow entries past cap, summary kept), incident lifecycle management (DB-first persist; randomUUID IDs; throws on persist failure) |
 | **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection, used-token cache. `requireMFASetup` (in `server/auth.ts`) is mounted on `/api/admin/*` and gates admin routes when `isMFARoleRequired(role)` returns true |
 | **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
@@ -1004,7 +1012,6 @@ Every subsequent request:
 - `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback wired from `server/index.ts` startup — VERIFIED
 - `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
 - `server/services/audit-log.ts` → exports `logPhiAccess`, `flushAuditQueue`, `auditContext` (used by `routes/auth.ts` and other route files for extracting audit context), `AuditEntry`, `getDroppedAuditEntryCount`, `getPendingAuditEntryCount` — VERIFIED
-- `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file (only referenced in `tests/oqa-adaptations.test.ts` via dynamic `import()`) — VERIFIED
 
 ### Complexity & Risk Rankings
 
@@ -1024,7 +1031,7 @@ Every subsequent request:
 
 ### Known Discrepancies
 
-- `server/services/rag-hybrid.ts` is listed in Architecture but is dead code (no production imports)
+- `server/services/rag-hybrid.ts` was deleted in A8 (was dead code; never imported by any production file)
 - `server/services/durable-queue.ts` was deleted in Batch 2 (A40) — any lingering references in older docs should be treated as stale
 - `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
 - `server/services/scheduled-reports.ts` is not documented in API routes (dynamically imported by `routes.ts`)

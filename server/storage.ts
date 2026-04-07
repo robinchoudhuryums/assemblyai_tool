@@ -113,6 +113,12 @@ export interface IStorage {
   getCallsSince(since: Date): Promise<Call[]>;
   /** Find a call by its content hash (A21). Returns undefined if not found. */
   findCallByContentHash(contentHash: string): Promise<Call | undefined>;
+  /**
+   * A10: Find a call by its upstream-source external id (e.g. an 8x8 recording id).
+   * Indexed lookup; returns undefined if not found. Used by telephony auto-ingest
+   * to dedupe before downloading audio bytes.
+   */
+  findCallByExternalId(externalId: string): Promise<Call | undefined>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
   getCallsPaginated(options: {
     filters?: { status?: string; sentiment?: string; employee?: string };
@@ -348,6 +354,12 @@ export class MemStorage implements IStorage {
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     for (const c of this.calls.values()) {
       if (c.contentHash === contentHash) return c;
+    }
+    return undefined;
+  }
+  async findCallByExternalId(externalId: string): Promise<Call | undefined> {
+    for (const c of this.calls.values()) {
+      if ((c as any).externalId === externalId) return c;
     }
     return undefined;
   }
@@ -826,6 +838,11 @@ export class CloudStorage implements IStorage {
     // O(n) in S3-only mode — acceptable fallback when no DB is configured.
     const all = await this.getAllCalls();
     return all.find(c => c.contentHash === contentHash);
+  }
+  async findCallByExternalId(externalId: string): Promise<Call | undefined> {
+    // O(n) in S3-only mode — see note above. Indexed in PostgresStorage.
+    const all = await this.getAllCalls();
+    return all.find(c => (c as any).externalId === externalId);
   }
 
   async getCallsWithDetails(

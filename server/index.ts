@@ -428,7 +428,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // A7/F09: explicit startup wiring of webhook service. Previously this ran
   // as a side effect of importing storage.ts; moved here so module load order
   // is no longer load-bearing.
-  initWebhooks(() => storage.getObjectStorageClient() || null);
+  initWebhooks(() => storage.getObjectStorageClient());
 
   // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
   void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});

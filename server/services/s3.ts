@@ -11,8 +11,38 @@
  */
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, generatePresignedUrl } from "./sigv4.js";
+import { logger } from "./logger.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
+
+/**
+ * A12/F16: S3 ListObjectsV2 XML-encodes object keys that contain reserved XML
+ * characters (&, <, >, ', "). Without decoding, a key like `audio/foo&bar.wav`
+ * comes back as `audio/foo&amp;bar.wav` and subsequent GET/DELETE requests
+ * silently 404. Decode the five XML predefined entities before returning keys.
+ * Numeric entities are not used by S3, but are decoded too for safety.
+ */
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot|apos|#(x[0-9a-fA-F]+|[0-9]+));/g, (_, entity: string) => {
+    switch (entity) {
+      case "amp": return "&";
+      case "lt": return "<";
+      case "gt": return ">";
+      case "quot": return '"';
+      case "apos": return "'";
+      default:
+        if (entity.startsWith("#x") || entity.startsWith("#X")) {
+          const cp = parseInt(entity.slice(2), 16);
+          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+        }
+        if (entity.startsWith("#")) {
+          const cp = parseInt(entity.slice(1), 10);
+          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+        }
+        return `&${entity};`;
+    }
+  });
+}
 
 export class S3Client {
   private credentials: AwsCredentials | null = null;
@@ -38,17 +68,19 @@ export class S3Client {
       }
       // Refresh failed — fall back to last known good credentials if available
       if (this.credentials) {
-        console.warn("[S3] Credential refresh failed, using cached credentials");
+        logger.warn("S3 credential refresh failed, using cached credentials", { bucket: this.bucketName });
         return this.credentials;
       }
       throw new Error("S3 credentials expired and refresh failed. Check IAM instance profile or AWS env vars.");
     }
 
-    // First initialization
-    this.initialized = true;
+    // First initialization — only mark initialized after credential fetch succeeds,
+    // so a transient failure (e.g. IMDS hiccup at boot) doesn't permanently flip
+    // this client into the "refresh-only" code path with no cached credentials.
     const creds = await getAwsCredentials();
     if (creds) {
       this.credentials = creds;
+      this.initialized = true;
       return creds;
     }
     throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
@@ -101,7 +133,7 @@ export class S3Client {
       // Parse <Key>...</Key> from each <Contents> block
       const keyMatches = Array.from(xml.matchAll(/<Contents>[\s\S]*?<Key>([\s\S]*?)<\/Key>[\s\S]*?<\/Contents>/g));
       for (const match of keyMatches) {
-        names.push(match[1]);
+        names.push(decodeXmlEntities(match[1]));
       }
 
       // Check for pagination
@@ -139,10 +171,10 @@ export class S3Client {
       const contentBlocks = Array.from(xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g));
       for (const block of contentBlocks) {
         const content = block[1];
-        const key = content.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "";
+        const rawKey = content.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "";
         const size = content.match(/<Size>([\s\S]*?)<\/Size>/)?.[1] || "0";
         const lastModified = content.match(/<LastModified>([\s\S]*?)<\/LastModified>/)?.[1] || "";
-        items.push({ name: key, size, updated: lastModified });
+        items.push({ name: decodeXmlEntities(rawKey), size, updated: lastModified });
       }
 
       const truncatedMatch = xml.match(/<IsTruncated>(.*?)<\/IsTruncated>/);
@@ -230,7 +262,7 @@ export class S3Client {
     const response = await this.request("GET", `/${objectName}`);
     if (response.status === 404) return undefined;
     if (response.status === 403) {
-      console.error(`[S3] Access denied (403) for ${objectName} — check IAM permissions`);
+      logger.error("S3 access denied (403) — check IAM permissions", { object: objectName, bucket: this.bucketName });
       return undefined;
     }
     if (!response.ok) {

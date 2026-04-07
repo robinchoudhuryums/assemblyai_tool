@@ -118,6 +118,7 @@ export const insertCallSchema = z.object({
   assemblyAiId: z.string().optional(),
   callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
   contentHash: z.string().optional(),
+  externalId: z.string().max(255).optional(),
 });
 
 export const callSchema = insertCallSchema.extend({
