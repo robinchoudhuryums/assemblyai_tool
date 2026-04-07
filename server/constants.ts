@@ -24,7 +24,26 @@ export const WEAKNESS_SCORE_THRESHOLD = 5.0;
 export const LOOKBACK_CALLS = 10;
 
 // --- Speech metrics ---
+function numFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 /** Monologue: a single speaker talking for longer than this (ms). */
-export const MONOLOGUE_DURATION_MS = 60_000;
+export const MONOLOGUE_DURATION_MS = numFromEnv("MONOLOGUE_DURATION_MS", 60_000);
 /** Interruption: speaker change gap shorter than this (ms). */
-export const INTERRUPTION_GAP_MS = 200;
+export const INTERRUPTION_GAP_MS = numFromEnv("INTERRUPTION_GAP_MS", 200);
+
+// --- Pipeline quality gates (A24) ---
+/** Minimum call duration in seconds required to run AI analysis. */
+export const MIN_CALL_DURATION_FOR_AI_SEC = numFromEnv("MIN_CALL_DURATION_FOR_AI_SEC", 15);
+/** Minimum transcript length (chars) to run AI analysis. */
+export const MIN_TRANSCRIPT_LEN_FOR_AI = numFromEnv("MIN_TRANSCRIPT_LEN_FOR_AI", 10);
+/** Minimum transcript confidence to run AI analysis. */
+export const MIN_TRANSCRIPT_CONFIDENCE_FOR_AI = numFromEnv("MIN_TRANSCRIPT_CONFIDENCE_FOR_AI", 0.6);
+/** Duration (sec) at or below which routine short-call Haiku optimization kicks in. */
+export const HAIKU_SHORT_CALL_MAX_SEC = numFromEnv("HAIKU_SHORT_CALL_MAX_SEC", 120);
+/** Estimated-token upper bound for Haiku short-call eligibility. */
+export const HAIKU_SHORT_CALL_MAX_TOKENS = numFromEnv("HAIKU_SHORT_CALL_MAX_TOKENS", 3000);

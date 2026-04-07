@@ -7,21 +7,23 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { computeConfidenceScore as computeConfidence } from "../server/routes/utils.js";
 
-// Wrapper that returns just the score (matching test expectations)
+// Wrapper that returns just the score (matching test expectations).
+// Saturation raised from 50 to 150 words (A28/F85) — tests updated accordingly.
+const WORD_SAT = 150;
 function computeConfidenceScore(params: {
   transcriptConfidence: number;
   wordCount: number;
   callDurationSeconds: number;
   hasAiAnalysis: boolean;
 }): number {
-  return computeConfidence(params, 0).score;
+  return computeConfidence(params).score;
 }
 
 describe("confidence score formula", () => {
   it("returns maximum score (1.0) with perfect inputs", () => {
     const score = computeConfidenceScore({
       transcriptConfidence: 1.0,
-      wordCount: 100,
+      wordCount: WORD_SAT,
       callDurationSeconds: 60,
       hasAiAnalysis: true,
     });
@@ -31,11 +33,10 @@ describe("confidence score formula", () => {
   it("returns correct score with no AI analysis (0.3 weight)", () => {
     const score = computeConfidenceScore({
       transcriptConfidence: 1.0,
-      wordCount: 100,
+      wordCount: WORD_SAT,
       callDurationSeconds: 60,
       hasAiAnalysis: false,
     });
-    // 1.0*0.4 + 1.0*0.2 + 1.0*0.15 + 0.3*0.25 = 0.4 + 0.2 + 0.15 + 0.075 = 0.825
     assert.equal(Math.round(score * 1000) / 1000, 0.825);
   });
 
@@ -46,44 +47,44 @@ describe("confidence score formula", () => {
       callDurationSeconds: 0,
       hasAiAnalysis: false,
     });
-    // 0*0.4 + 0*0.2 + 0*0.15 + 0.3*0.25 = 0.075
     assert.equal(Math.round(score * 1000) / 1000, 0.075);
   });
 
-  it("word confidence caps at 1.0 for 50+ words", () => {
-    const score50 = computeConfidenceScore({
+  it(`word confidence caps at 1.0 for ${WORD_SAT}+ words`, () => {
+    const scoreAtSat = computeConfidenceScore({
       transcriptConfidence: 0.9,
-      wordCount: 50,
+      wordCount: WORD_SAT,
       callDurationSeconds: 60,
       hasAiAnalysis: true,
     });
-    const score200 = computeConfidenceScore({
+    const score500 = computeConfidenceScore({
       transcriptConfidence: 0.9,
-      wordCount: 200,
+      wordCount: 500,
       callDurationSeconds: 60,
       hasAiAnalysis: true,
     });
-    assert.equal(score50, score200, "50 words and 200 words should give same word confidence");
+    assert.equal(scoreAtSat, score500, "Saturated word confidence should be stable past saturation");
   });
 
-  it("word confidence scales linearly below 50 words", () => {
-    const score25 = computeConfidenceScore({
+  it(`word confidence scales linearly below ${WORD_SAT} words`, () => {
+    const halfSat = WORD_SAT / 2;
+    const scoreHalf = computeConfidenceScore({
       transcriptConfidence: 0,
-      wordCount: 25,
+      wordCount: halfSat,
       callDurationSeconds: 0,
       hasAiAnalysis: false,
     });
-    const score50 = computeConfidenceScore({
+    const scoreFull = computeConfidenceScore({
       transcriptConfidence: 0,
-      wordCount: 50,
+      wordCount: WORD_SAT,
       callDurationSeconds: 0,
       hasAiAnalysis: false,
     });
-    // 25 words: wordConfidence = 0.5, contribution = 0.5*0.2 = 0.1
-    // 50 words: wordConfidence = 1.0, contribution = 1.0*0.2 = 0.2
+    // halfSat words: wordConfidence = 0.5, contribution = 0.5*0.2 = 0.1
+    // WORD_SAT words: wordConfidence = 1.0, contribution = 1.0*0.2 = 0.2
     // Both also get 0.075 from aiConfidence(0.3*0.25)
-    assert.equal(Math.round(score25 * 1000) / 1000, 0.175);
-    assert.equal(Math.round(score50 * 1000) / 1000, 0.275);
+    assert.equal(Math.round(scoreHalf * 1000) / 1000, 0.175);
+    assert.equal(Math.round(scoreFull * 1000) / 1000, 0.275);
   });
 
   it("duration confidence caps at 1.0 for calls > 30 seconds", () => {

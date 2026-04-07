@@ -150,8 +150,13 @@ export function registerCallTagRoutes(router: Router) {
         return;
       }
       const { timestampMs, text } = req.body;
-      if (typeof timestampMs !== "number" || !text?.trim()) {
-        res.status(400).json({ message: "timestampMs (number) and text (string) are required" });
+      // A35/F88: validate both fields strictly.
+      if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs) || timestampMs < 0) {
+        res.status(400).json({ message: "timestampMs must be a non-negative finite number" });
+        return;
+      }
+      if (typeof text !== "string" || !text.trim() || text.length > 2000) {
+        res.status(400).json({ message: "text must be a non-empty string ≤ 2000 chars" });
         return;
       }
       const { rows } = await pool.query(

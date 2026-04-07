@@ -173,7 +173,7 @@ export function registerCallRoutes(
       }
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || "audio/mpeg";
-      const uploadUser = req.user?.username || "unknown";
+      const uploadUser = req.user!.username;
 
       try {
         await storage.uploadAudio(call.id, originalName, audioBuffer, mimeType);
@@ -275,17 +275,30 @@ export function registerCallRoutes(
 
       const rangeHeader = req.headers.range;
       if (rangeHeader) {
-        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
-        if (match) {
-          const start = parseInt(match[1], 10);
-          const end = match[2] ? parseInt(match[2], 10) : audioBuffer.length - 1;
-          const chunkSize = end - start + 1;
-          res.status(206);
-          res.setHeader('Content-Range', `bytes ${start}-${end}/${audioBuffer.length}`);
-          res.setHeader('Content-Length', chunkSize.toString());
-          res.send(audioBuffer.subarray(start, end + 1));
+        // A33/F38: tight single-range regex; reject multi-range and malformed.
+        // Validate numeric bounds and 416 on invalid.
+        const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
+        if (!match) {
+          res.setHeader("Content-Range", `bytes */${audioBuffer.length}`);
+          res.status(416).end();
           return;
         }
+        const start = parseInt(match[1], 10);
+        const end = match[2] ? parseInt(match[2], 10) : audioBuffer.length - 1;
+        if (
+          !Number.isFinite(start) || !Number.isFinite(end) ||
+          start < 0 || end < start || end >= audioBuffer.length
+        ) {
+          res.setHeader("Content-Range", `bytes */${audioBuffer.length}`);
+          res.status(416).end();
+          return;
+        }
+        const chunkSize = end - start + 1;
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${start}-${end}/${audioBuffer.length}`);
+        res.setHeader("Content-Length", chunkSize.toString());
+        res.send(audioBuffer.subarray(start, end + 1));
+        return;
       }
 
       res.setHeader('Content-Length', audioBuffer.length.toString());
@@ -546,7 +559,7 @@ export function registerCallRoutes(
 
         await storage.updateCall(callId, { status: "processing" });
 
-        const uploadUser = req.user?.username || "admin";
+        const uploadUser = req.user!.username;
 
         if (jobQueue) {
           await jobQueue.enqueue("process_audio", {

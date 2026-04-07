@@ -221,7 +221,7 @@ export function registerContentRoutes(
       const config: WebhookConfig = {
         ...parsed.data,
         id: randomUUID(),
-        createdBy: req.user?.username || "admin",
+        createdBy: req.user!.username,
         createdAt: new Date().toISOString(),
       };
       await createWebhookConfig(config);
@@ -386,7 +386,7 @@ export function registerContentRoutes(
         };
 
         if (baselineResult.status === "fulfilled") {
-          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens);
+          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
           services.bedrock = {
             model: abTest.baselineModel,
             estimatedInputTokens,
@@ -396,7 +396,7 @@ export function registerContentRoutes(
           };
         }
         if (testResult.status === "fulfilled") {
-          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens);
+          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
           services.bedrockSecondary = {
             model: abTest.testModel,
             estimatedInputTokens,

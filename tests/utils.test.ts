@@ -31,8 +31,9 @@ describe("estimateBedrockCost", () => {
   });
 
   it("calculates cost for Haiku 4.5", () => {
+    // Titan V2 rate updated A27: $0.0008 in / $0.004 out per 1K
     const cost = estimateBedrockCost("us.anthropic.claude-haiku-4-5-20251001", 1000, 500);
-    assert.equal(cost, 0.001 + 0.0025);
+    assert.equal(cost, 0.0008 + 0.002);
   });
 
   it("calculates cost for Claude 3 Haiku (cheapest)", () => {
@@ -40,9 +41,9 @@ describe("estimateBedrockCost", () => {
     assert.equal(cost, 0.00025 + 0.000625);
   });
 
-  it("uses Sonnet default pricing for unknown models", () => {
+  it("returns null for unknown models (A27/F60)", () => {
     const cost = estimateBedrockCost("unknown-model", 1000, 500);
-    assert.equal(cost, 0.003 + 0.0075);
+    assert.equal(cost, null);
   });
 
   it("returns 0 for zero tokens", () => {
@@ -59,14 +60,14 @@ describe("estimateBedrockCost", () => {
 
 describe("estimateAssemblyAICost", () => {
   it("calculates cost with sentiment enabled", () => {
-    // 60 seconds * $0.0000472/sec
+    // Rate updated A27: $0.17/hr = 0.17/3600 per sec
     const cost = estimateAssemblyAICost(60, true);
-    assert.equal(Math.round(cost * 10000000) / 10000000, 0.002832);
+    assert.ok(Math.abs(cost - (60 * 0.17 / 3600)) < 1e-9);
   });
 
   it("calculates cost without sentiment", () => {
     const cost = estimateAssemblyAICost(60, false);
-    assert.equal(Math.round(cost * 10000000) / 10000000, 0.002502);
+    assert.ok(Math.abs(cost - (60 * 0.15 / 3600)) < 1e-9);
   });
 
   it("defaults to sentiment enabled", () => {
@@ -218,21 +219,18 @@ describe("computeConfidenceScore (shared utility)", () => {
   it("returns score and factors object", () => {
     const result = computeConfidenceScore(
       { transcriptConfidence: 0.95, wordCount: 200, callDurationSeconds: 180, hasAiAnalysis: true },
-      3000,
     );
     assert.equal(typeof result.score, "number");
     assert.ok(result.score > 0.9);
     assert.equal(result.factors.transcriptConfidence, 0.95);
     assert.equal(result.factors.wordCount, 200);
     assert.equal(result.factors.callDurationSeconds, 180);
-    assert.equal(result.factors.transcriptLength, 3000);
     assert.equal(result.factors.aiAnalysisCompleted, true);
   });
 
   it("factors.overallScore matches score rounded to 2 decimal places", () => {
     const result = computeConfidenceScore(
       { transcriptConfidence: 0.8, wordCount: 30, callDurationSeconds: 20, hasAiAnalysis: false },
-      500,
     );
     assert.equal(result.factors.overallScore, Math.round(result.score * 100) / 100);
   });

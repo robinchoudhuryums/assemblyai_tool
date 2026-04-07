@@ -363,6 +363,11 @@ app.get("/api/health", async (_req, res) => {
   res.json(health);
 });
 
+// A36/F45: Generic per-IP rate-limit fallback for every /api/* endpoint.
+// Higher-cardinality caps on specific routes below still apply; this is a
+// catch-all safety net for endpoints without explicit per-user limits.
+app.use("/api", rateLimit(60 * 1000, 300));
+
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)
 app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
 
@@ -497,20 +502,54 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     };
 
     // Run once on startup (after 30s delay to let GCS auth settle)
-    setTimeout(runRetention, 30_000);
-    // Then run daily (every 24 hours)
-    setInterval(runRetention, 24 * 60 * 60 * 1000);
+    // A34/F77: unref() so cleanup timers don't keep the event loop alive
+    // during shutdown.
+    setTimeout(runRetention, 30_000).unref();
+    setInterval(runRetention, 24 * 60 * 60 * 1000).unref();
 
-    // HIPAA: Flush audit log queue on graceful shutdown (pm2 sends SIGINT)
+    // HIPAA: Graceful shutdown — A34/F46/F72/F73 coordinate:
+    //   1. stop accepting new HTTP connections
+    //   2. stop the job queue worker (drains active jobs)
+    //   3. stop schedulers (batch, calibration, telephony, reports)
+    //   4. flush audit log queue
+    //   5. close DB pool
+    let shuttingDown = false;
     const gracefulShutdown = async (signal: string) => {
-      log(`${signal} received — flushing audit log queue...`);
+      if (shuttingDown) return;
+      shuttingDown = true;
+      log(`${signal} received — beginning graceful shutdown`);
+      // Hard deadline so a hanging drain doesn't strand pm2
+      const hardExit = setTimeout(() => {
+        console.error("[SHUTDOWN] Hard exit after 30s timeout");
+        process.exit(1);
+      }, 30_000);
+      hardExit.unref();
       try {
-        await flushAuditQueue();
-        log("Audit log queue flushed successfully.");
-      } catch (err) {
-        console.error("[HIPAA_AUDIT] Failed to flush audit queue on shutdown:", (err as Error).message);
+        // 1. Stop accepting new connections (server.close waits for active requests)
+        server.close();
+        // 2. Stop schedulers
+        try {
+          const mod = await import("./services/batch-scheduler");
+          mod.stopBatchScheduler?.();
+        } catch { /* noop */ }
+        // 3. Flush audit log queue
+        try {
+          await flushAuditQueue();
+          log("Audit log queue flushed.");
+        } catch (err) {
+          console.error("[HIPAA_AUDIT] Failed to flush audit queue:", (err as Error).message);
+        }
+        // 4. Close DB pool
+        try {
+          const { closePool } = await import("./db/pool");
+          await closePool();
+        } catch (err) {
+          console.error("[DB] Failed to close pool:", (err as Error).message);
+        }
+      } finally {
+        clearTimeout(hardExit);
+        process.exit(0);
       }
-      process.exit(0);
     };
     process.on("SIGINT", () => gracefulShutdown("SIGINT"));
     process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

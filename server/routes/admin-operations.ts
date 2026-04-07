@@ -62,7 +62,7 @@ export function registerOperationsRoutes(
         logPhiAccess({
           timestamp: new Date().toISOString(),
           event: "admin_dead_job_retry",
-          username: req.user?.username || "unknown",
+          username: req.user!.username,
           resourceType: "admin",
           resourceId: req.params.id,
           detail: "Admin retried dead-letter job",
@@ -172,7 +172,7 @@ export function registerOperationsRoutes(
   router.post("/api/admin/reports/generate", requireRole("manager", "admin"), async (req, res) => {
     try {
       const type = req.body.type === "monthly" ? "monthly" : "weekly";
-      const report = await generateReport(type, req.user?.username || "unknown");
+      const report = await generateReport(type, req.user!.username);
       res.json(report);
     } catch (error) {
       console.error("Report generation error:", (error as Error).message);
