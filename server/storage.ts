@@ -77,7 +77,18 @@ export interface IStorage {
   getCall(id: string): Promise<Call | undefined>;
   createCall(call: InsertCall): Promise<Call>;
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
-  /** Atomically assign employee only if not already assigned. Returns true if assignment was made. */
+  /**
+   * Atomically assign employee only if not already assigned. Returns true if
+   * assignment was made, false if the call was already assigned.
+   *
+   * ATOMICITY CONTRACT (A44/F59): implementations MUST guarantee that
+   * concurrent calls for the same callId cannot both succeed. PostgresStorage
+   * enforces this via a single conditional UPDATE (`WHERE employee_id IS NULL`);
+   * MemStorage uses a JS-level single-turn check-and-set which is atomic on
+   * Node's single-threaded event loop. CloudStorage (S3-only) is best-effort
+   * because S3 lacks compare-and-swap — the fallback is acceptable because
+   * that backend is dev-only.
+   */
   atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;

@@ -25,18 +25,19 @@ import { registerSnapshotRoutes } from "./routes/snapshots";
 import { registerGamificationRoutes } from "./routes/gamification";
 
 // Pipeline
-import { processAudioFile, shouldUseBatchMode, audioProcessingQueue } from "./routes/pipeline";
+import { processAudioFile, shouldUseBatchMode } from "./routes/pipeline";
 import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemblyai";
 
 // Batch scheduler (extracted for testability)
-import { startBatchScheduler, stopBatchScheduler } from "./services/batch-scheduler";
+import { startBatchScheduler } from "./services/batch-scheduler";
 
 // Auto-calibration and telephony
 import { startCalibrationScheduler } from "./services/auto-calibration";
 import { startTelephonyScheduler } from "./services/telephony-8x8";
 
-// Ensure uploads directory exists
-const uploadsDir = 'uploads';
+// Ensure uploads directory exists. A42/F63: absolute path — cwd-relative
+// "uploads" broke when pm2 or dev scripts ran from a different directory.
+const uploadsDir = path.resolve(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -47,7 +48,7 @@ const upload = multer({
   limits: {
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req: unknown, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     const allowedTypes = ['.mp3', '.wav', '.m4a', '.mp4', '.flac', '.ogg', '.webm'];
     const allowedMimeTypes = [
       'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
@@ -59,7 +60,7 @@ const upload = multer({
     if (allowedTypes.includes(ext) && mimeOk) {
       cb(null, true);
     } else {
-      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`), false);
+      cb(new Error(`Invalid file type "${ext}" (${file.mimetype}). Accepted: MP3, WAV, M4A, MP4, FLAC, OGG, WebM.`));
     }
   }
 });

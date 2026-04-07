@@ -21,6 +21,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
 import { ExpressInstrumentation } from "@opentelemetry/instrumentation-express";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 
 const OTEL_ENABLED = process.env.OTEL_ENABLED === "true";
 
@@ -29,7 +30,7 @@ if (OTEL_ENABLED) {
   const environment = process.env.OTEL_ENVIRONMENT || process.env.NODE_ENV || "development";
 
   const sdk = new NodeSDK({
-    resource: new (require("@opentelemetry/resources").Resource)({
+    resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: serviceName,
       "deployment.environment": environment,
     }),

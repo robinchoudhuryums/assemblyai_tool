@@ -172,17 +172,7 @@ async function loadUsersFromEnv(): Promise<void> {
   }
 }
 
-// Extend Express types for session user
-declare global {
-  namespace Express {
-    interface User {
-      id: string;
-      username: string;
-      name: string;
-      role: string;
-    }
-  }
-}
+// Express.User is declared in server/types.d.ts (A39/F64 — single source of truth).
 
 // Exposed so WebSocket upgrade handler can verify sessions (HIPAA requirement)
 export let sessionMiddleware: RequestHandler;
