@@ -83,16 +83,16 @@ describe("parseJsonResponse error handling", () => {
     assert.equal(result.summary, "Test");
   });
 
-  it("clamps performance_score above 10 to 10", () => {
+  it("rejects performance_score above 10", () => {
+    // A12: schema is strict — out-of-range scores throw rather than silently clamp.
     const response = '{"summary":"Test","topics":[],"sentiment":"neutral","sentiment_score":0.5,"performance_score":15.0,"sub_scores":{"compliance":5,"customer_experience":5,"communication":5,"resolution":5},"action_items":[],"feedback":{"strengths":[],"suggestions":[]},"flags":[]}';
-    const result = parseJsonResponse(response, "test-call");
-    assert.ok(result.performance_score <= 10, `Score ${result.performance_score} should be clamped to 10`);
+    assert.throws(() => parseJsonResponse(response, "test-call"), /schema validation/);
   });
 
-  it("clamps negative performance_score to 0", () => {
+  it("rejects negative performance_score", () => {
+    // A12: schema is strict — out-of-range scores throw rather than silently clamp.
     const response = '{"summary":"Test","topics":[],"sentiment":"neutral","sentiment_score":0.5,"performance_score":-3.0,"sub_scores":{"compliance":5,"customer_experience":5,"communication":5,"resolution":5},"action_items":[],"feedback":{"strengths":[],"suggestions":[]},"flags":[]}';
-    const result = parseJsonResponse(response, "test-call");
-    assert.ok(result.performance_score >= 0, `Score ${result.performance_score} should be clamped to 0`);
+    assert.throws(() => parseJsonResponse(response, "test-call"), /schema validation/);
   });
 
   it("recovers analysis from nested wrapper object", () => {
@@ -104,12 +104,10 @@ describe("parseJsonResponse error handling", () => {
     assert.equal(result.performance_score, 7.0);
   });
 
-  it("returns defaults for completely invalid structure (no usable fields)", () => {
-    // Zod .catch() handlers provide defaults for every field, so even garbage JSON
-    // doesn't throw — it just returns all-defaults
-    const result = parseJsonResponse('{"data": [1, 2, 3]}', "test-call");
-    assert.equal(result.summary, "No summary available");
-    assert.equal(result.performance_score, 5.0);
+  it("throws for completely invalid structure (no usable fields)", () => {
+    // A12/F17: schema no longer silently defaults summary/performance_score/sub_scores —
+    // garbage JSON now throws so the pipeline can retry rather than persist a fake 5.0.
+    assert.throws(() => parseJsonResponse('{"data": [1, 2, 3]}', "test-call"), /schema validation/);
   });
 });
 
