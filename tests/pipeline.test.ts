@@ -99,9 +99,9 @@ describe("processTranscriptData", () => {
   });
 
   it("calculates talk time ratio from speaker labels", () => {
-    const { analysis } = service.processTranscriptData(baseTranscript, baseAI, "call-6");
-    // All words are speaker A — ratio is sum(word durations) / total span, not exactly 1.0
-    // because there are gaps between words
+    // A4: talkTimeRatio is null until an agent speaker label is supplied. Pass "A" since
+    // baseTranscript's words are all speaker A.
+    const { analysis } = service.processTranscriptData(baseTranscript, baseAI, "call-6", "A");
     const ratio = parseFloat(analysis.talkTimeRatio!);
     assert.ok(ratio > 0.9, `Expected high ratio for all-A speakers, got ${ratio}`);
   });
@@ -114,7 +114,8 @@ describe("processTranscriptData", () => {
         { text: "Hi", start: 600, end: 1000, confidence: 0.97, speaker: "B" },
       ],
     };
-    const { analysis } = service.processTranscriptData(mixedWords, baseAI, "call-7");
+    // A4: explicit agent speaker label required.
+    const { analysis } = service.processTranscriptData(mixedWords, baseAI, "call-7", "A");
     const ratio = parseFloat(analysis.talkTimeRatio!);
     assert.ok(ratio > 0 && ratio < 1, `Expected ratio between 0 and 1, got ${ratio}`);
   });
