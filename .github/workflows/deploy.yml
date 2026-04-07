@@ -82,6 +82,13 @@ jobs:
             echo "Commit: ${{ github.sha }}"
             echo "Branch: ${{ steps.branch.outputs.name }}"
             echo "Trigger: ${{ github.event_name }}"
+            # Bootstrap: discard any on-box drift to tracked files (e.g.
+            # package-lock.json from a stray `npm install`) so deploy.sh can
+            # always pull cleanly. .env and other gitignored files unaffected.
+            # This guards against the chicken-and-egg case where deploy.sh
+            # itself is what needs to be updated.
+            git fetch origin ${{ steps.branch.outputs.name }}
+            git reset --hard origin/${{ steps.branch.outputs.name }}
             ./deploy.sh ${{ steps.branch.outputs.name }}
 
       - name: Post-deploy health verification
