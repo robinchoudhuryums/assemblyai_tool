@@ -14,6 +14,8 @@
 
 import { logPhiAccess } from "./audit-log";
 import { getPool } from "../db/pool";
+import { randomUUID } from "crypto";
+import { logger } from "./logger";
 
 // --- Types ---
 
@@ -217,7 +219,7 @@ export async function declareIncident(params: {
 }): Promise<Incident> {
   const now = new Date().toISOString();
   const incident: Incident = {
-    id: `INC-${Date.now()}`,
+    id: `INC-${randomUUID()}`,
     title: params.title,
     description: params.description,
     severity: params.severity,
@@ -245,6 +247,11 @@ export async function declareIncident(params: {
     phiInvolved: params.phiInvolved || false,
   };
 
+  // A7: DB-first — persist before mutating in-memory state so a DB write
+  // failure doesn't leave the in-memory store ahead of durable storage. If
+  // there's no DB pool, persistIncident is a no-op and we still cache.
+  await persistIncident(incident);
+
   incidents.push(incident);
 
   // Evict oldest closed incidents if at capacity
@@ -258,9 +265,6 @@ export async function declareIncident(params: {
     }
   }
 
-  // Persist to database if available
-  await persistIncident(incident);
-
   // Log to audit trail
   logPhiAccess({
     timestamp: now,
@@ -271,7 +275,7 @@ export async function declareIncident(params: {
     detail: `${params.severity} incident: ${params.title} (PHI: ${params.phiInvolved ? "yes" : "no"})`,
   });
 
-  console.error(`[INCIDENT] ${params.severity} incident declared: ${incident.id} — ${params.title}`);
+  logger.error("incident: declared", { incidentId: incident.id, severity: params.severity, title: params.title });
 
   return incident;
 }
@@ -357,7 +361,7 @@ export async function addActionItem(
 
   const now = new Date().toISOString();
   incident.actionItems.push({
-    id: `AI-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `AI-${randomUUID()}`,
     description,
     assignee,
     dueDate,
@@ -498,8 +502,13 @@ async function persistIncident(incident: Incident): Promise<void> {
         incident.linkedBreachId || null, incident.phiInvolved,
       ]
     );
-  } catch {
-    // Table may not exist yet — incidents still live in-memory
+  } catch (err) {
+    // A7: surface persist errors so silent table-missing / connection failures
+    // don't leave incidents living only in memory. The throw lets callers
+    // (declareIncident, advanceIncidentPhase, ...) reject when the operator
+    // believes the incident is durably recorded.
+    logger.error("incident: persistIncident failed", { incidentId: incident.id, error: (err as Error).message });
+    throw err;
   }
 }
 
