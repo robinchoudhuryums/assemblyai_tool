@@ -464,6 +464,9 @@ LOOKBACK_CALLS                  # Recent-call window for weakness analysis (defa
 MONOLOGUE_DURATION_MS           # Single-speaker monologue threshold in ms (default: 60000)
 INTERRUPTION_GAP_MS             # Speaker-change gap considered interruption in ms (default: 200)
 
+# Audit Log Integrity (HIPAA §164.312(b))
+AUDIT_HMAC_SECRET               # Required in production. Dedicated secret for the audit log HMAC integrity chain. Falls back to SESSION_SECRET in dev only — boot-fails in production if unset.
+
 # Optional
 PORT                            # Default: 5000
 RETENTION_DAYS                  # Auto-purge calls older than N days (default: 90)
@@ -519,10 +522,10 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 | **Security monitoring** | `server/services/security-monitor.ts` | Detects distributed brute-force, credential stuffing, bulk data exfiltration |
 | **Read rate limiting** | `server/index.ts` | 60 req/min on data endpoints; 5 req/min on exports (prevents bulk exfiltration) |
 | **WAF** | `server/middleware/waf.ts` | Application-level firewall split into two passes: `wafPreBody` (runs before `express.json()` — inspects IP/UA/URL/query/path) and `wafPostBody` (runs after parsing — inspects `req.body`, no-ops on multipart). SQL injection, XSS, path traversal, CRLF, IP blocklist with LRU-bounded anomaly scoring; NFC + HTML entity decode normalization; input truncated to 4KB to prevent regex DoS. Legacy `wafMiddleware()` is deprecated. |
-| **Audit log integrity** | `server/services/audit-log.ts` | HMAC-SHA256 chain on stdout entries — each hash covers content + previous hash; tampering/deletion breaks the chain |
+| **Audit log integrity** | `server/services/audit-log.ts` | HMAC-SHA256 chain on stdout entries — each hash covers content + previous hash; chain head persisted to `audit_log_integrity` singleton table and restored on startup via `loadAuditIntegrityChain()` so deploys/restarts don't break verification; tampering/deletion still breaks the chain. Uses dedicated `AUDIT_HMAC_SECRET` (required in production) |
 | **TOTP replay protection** | `server/services/totp.ts` | Used-token cache prevents same TOTP code from being reused within the same time window |
 | **Route param validation** | `server/routes/utils.ts` | `validateParams()` middleware rejects malformed UUIDs, IDs, and names before they reach DB queries (30+ routes) |
-| **Audit log durability** | `server/services/audit-log.ts` | Write-ahead queue with batch flush (2s interval), retry with exponential backoff, graceful shutdown flush, health endpoint monitoring |
+| **Audit log durability** | `server/services/audit-log.ts` | Write-ahead queue with batched INSERT (up to 100 rows/flush, 2s interval), strict-FIFO drain from queue head, per-row fallback on batch failure, retry with exponential backoff, graceful shutdown flush, health endpoint monitoring |
 | **Graceful shutdown** | `server/index.ts` | SIGINT/SIGTERM flush audit log queue before exit |
 | **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
 | **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
@@ -726,6 +729,11 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 ```
 
 ## Common Gotchas
+- **`/api/admin/*` mounts `requireMFASetup`** (A3) — when `isMFARoleRequired("admin")` returns true (i.e. `REQUIRE_MFA=true`), all admin routes 403 for admins without an enrolled TOTP secret. Enrollment endpoints `/api/auth/mfa/setup` and `/api/auth/mfa/enable` are unaffected. **Operational footgun:** flipping `REQUIRE_MFA=true` without enrolling admins first will lock them out of admin functions on their next request.
+- **`deserializeUser` propagates transient DB errors** (A10) — DB blips during session deserialization now surface as 500 errors instead of silently falling through to env users. Env-user fallback is reserved for "DB returned no rows" (success), not "DB unreachable" (error). Tradeoff: better security posture, worse availability under DB instability.
+- **`AUDIT_HMAC_SECRET` is required in production** (A4) — production boot-fails if unset. The audit chain previously fell back to `SESSION_SECRET`, which silently broke chain verification on session-secret rotation. Add `AUDIT_HMAC_SECRET` to the EC2 `.env` file before next deploy.
+- **`LocalStrategy` uses `passReqToCallback`** (A2) — verify callback signature is `(req, username, password, done)`. Client IP is extracted from `req.ip || req.socket.remoteAddress` and passed to `recordFailedAttempt(username, ip)` → `security-monitor.recordFailedLogin`. Brute-force / credential-stuffing alerts depend on this IP and were never firing before A2.
+- **`audit_log_integrity` is a singleton row** (A6) — `id=1` is the only legal row, seeded with `'genesis'` on first boot. `loadAuditIntegrityChain()` runs in `server/index.ts` startup right after `initializeDatabase()` and restores the chain head. `persistPreviousHash` is fire-and-forget per `logPhiAccess` call — the in-memory head can drift ahead of the persisted head during a crash mid-burst, in which case the chain breaks at the gap (stdout retains the canonical record).
 - **processAudioFile signature is `(callId, audio, options)`** (A22) — not the old 9-positional shape. `audio` is a Buffer; the options object carries originalName, mimeType, callCategory?, uploadedBy?, processingMode?, language?, filePath?. Telephony scheduler and job worker both use this shape.
 - **Job queue attempts increment only on failJob** (A18) — a worker crash no longer burns an attempt by itself. Stale-heartbeat reap calls failJob explicitly, so a job with a flapping DB connection can still burn the retry budget through repeated reaps. Heartbeat every 30s; stale threshold 2min.
 - **Upgrading an existing DB to the A18 schema leaves orphan 'running' jobs unreapable** — `last_heartbeat_at` is NULL and the reaper's `<` comparison skips NULLs. On first deploy, run `UPDATE jobs SET last_heartbeat_at = NOW() WHERE status = 'running' AND last_heartbeat_at IS NULL;` before expecting reap to work on stale jobs.
@@ -818,7 +826,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
 | **RAG Hybrid** | `server/services/rag-hybrid.ts` | Hybrid vector+BM25 retrieval — **dead code**: not imported by any production file (only referenced in tests) |
 | **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain), brute-force/credential stuffing detection, automated vuln scanning, incident lifecycle management |
-| **MFA** | `server/services/totp.ts`, `server/services/mfa-enhanced.ts` | RFC 6238 TOTP with replay protection; enhanced MFA with WebAuthn/backup codes |
+| **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection, used-token cache. `requireMFASetup` (in `server/auth.ts`) is mounted on `/api/admin/*` and gates admin routes when `isMFARoleRequired(role)` returns true |
 | **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
 | **SSRF Protection** | `server/services/url-validator.ts` | URL validator blocking private IPs, metadata endpoints, DNS resolution to private ranges |
 | **Resilience** | `server/services/resilience.ts` | Circuit breaker (5 failures → 30s open → half-open test) wrapping Bedrock calls (single consumer: `bedrock.ts`) |
