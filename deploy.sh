@@ -103,15 +103,30 @@ fi
 
 # [5/5] Zero-downtime reload
 echo "[5/5] Reloading app (zero-downtime)..."
-# pm2 reload starts a new process before killing the old one — no gap.
-# Falls back to restart if reload not supported, or start if no process exists.
-if pm2 reload callanalyzer 2>/dev/null; then
-  echo "Reloaded callanalyzer (zero-downtime)"
-elif pm2 restart all 2>/dev/null; then
-  echo "Restarted all pm2 processes"
+# Always launch via the ecosystem file so env vars (NODE_EXTRA_CA_CERTS for
+# the RDS CA bundle, NODE_ENV, etc.) are the source of truth. pm2 startOrReload
+# does reload-in-place if the process exists, or start-fresh otherwise — and
+# --update-env picks up any changes to the ecosystem env block without needing
+# a delete+start cycle.
+ECOSYSTEM_FILE="$APP_DIR/ecosystem.config.cjs"
+if [ -f "$ECOSYSTEM_FILE" ]; then
+  if pm2 startOrReload "$ECOSYSTEM_FILE" --only callanalyzer --update-env; then
+    echo "Reloaded callanalyzer from ecosystem file (zero-downtime)"
+  else
+    rollback "pm2 startOrReload from ecosystem file failed"
+  fi
 else
-  echo "No existing pm2 processes — starting fresh..."
-  pm2 start dist/index.js --name callanalyzer
+  # Fallback for old checkouts that don't have the ecosystem file.
+  # WARNING: this path loses NODE_EXTRA_CA_CERTS — RDS TLS will fail.
+  echo "WARNING: $ECOSYSTEM_FILE not found, falling back to ad-hoc start"
+  if pm2 reload callanalyzer 2>/dev/null; then
+    echo "Reloaded callanalyzer (zero-downtime)"
+  elif pm2 restart all 2>/dev/null; then
+    echo "Restarted all pm2 processes"
+  else
+    echo "No existing pm2 processes — starting fresh..."
+    pm2 start dist/index.js --name callanalyzer
+  fi
 fi
 pm2 save 2>/dev/null || true
 
