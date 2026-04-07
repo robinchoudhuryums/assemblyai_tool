@@ -20,6 +20,7 @@ import type {
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient } from "./storage";
 import { safeFloat } from "./routes/utils";
+import { logPhiAccess } from "./services/audit-log";
 
 /**
  * Maps a database row (snake_case) to the application model (camelCase).
@@ -129,6 +130,65 @@ function mapUsageRecord(row: any): UsageRecord {
   };
 }
 
+/**
+ * Shared row → CallWithDetails mapper used by getCallsWithDetails,
+ * getCallsPaginated, and searchCalls. The row must include the e_*, t_*,
+ * s_*, a_* aliased columns produced by those queries.
+ */
+function mapCallWithDetailsRow(row: any): CallWithDetails {
+  const call = mapCall(row);
+  const employee = row.e_id ? {
+    id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
+    initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
+    createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
+  } : undefined;
+  const transcript = row.t_id ? {
+    id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
+    words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
+  } : undefined;
+  const sentiment = row.s_id ? {
+    id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
+    overallScore: row.overall_score, segments: row.s_segments,
+    createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
+  } : undefined;
+  const analysis = row.a_id ? {
+    id: row.a_id, callId: call.id,
+    performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
+    responseTime: row.response_time, keywords: row.keywords,
+    topics: Array.isArray(row.topics) ? row.topics : [],
+    summary: typeof row.summary === "string" ? row.summary : "",
+    actionItems: Array.isArray(row.action_items) ? row.action_items : [],
+    feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
+      ? row.feedback : { strengths: [], suggestions: [] },
+    lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
+    flags: Array.isArray(row.flags) ? row.flags : [],
+    manualEdits: row.manual_edits,
+    confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
+    subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
+    createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
+  } : undefined;
+  return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+}
+
+/**
+ * Declarative column map for updateCallAnalysis (A5/F07). Each entry maps an
+ * UpdateCallAnalysisInput key to its DB column and an optional value coercer
+ * (defaults to identity for scalars; jsonb columns need JSON.stringify).
+ */
+const UPDATE_ANALYSIS_COLUMNS = {
+  embedding:        { column: "embedding",         coerce: (v: unknown) => JSON.stringify(v) },
+  manualEdits:      { column: "manual_edits",      coerce: (v: unknown) => JSON.stringify(v) },
+  performanceScore: { column: "performance_score", coerce: (v: unknown) => v },
+  summary:          { column: "summary",           coerce: (v: unknown) => v },
+} as const;
+
+export type UpdateCallAnalysisInput = Partial<{
+  embedding: number[];
+  manualEdits: unknown;
+  performanceScore: string | number;
+  summary: string;
+}>;
+
 function mapDbUser(row: any): DbUser {
   return {
     id: row.id,
@@ -206,19 +266,13 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateDbUserPassword(id: string, passwordHash: string, oldPasswordHash?: string): Promise<boolean> {
-    // Push old password hash onto history (FIFO, max 5 entries) if provided
     if (oldPasswordHash) {
+      // Maintain history JS-side: prepend old hash, keep max 5 entries
+      const history = await this.getDbUserPasswordHistory(id);
+      const newHistory = [oldPasswordHash, ...history].slice(0, 5);
       await this.db.query(
-        `UPDATE users SET
-          password_history = (
-            SELECT jsonb_agg(h) FROM (
-              SELECT h FROM jsonb_array_elements_text($2::jsonb || password_history) WITH ORDINALITY AS t(h, ord)
-              LIMIT 5
-            ) sub
-          ),
-          password_hash = $3, updated_at = NOW()
-        WHERE id = $1`,
-        [id, JSON.stringify([oldPasswordHash]), passwordHash],
+        `UPDATE users SET password_history = $2, password_hash = $3, updated_at = NOW() WHERE id = $1`,
+        [id, JSON.stringify(newHistory), passwordHash],
       );
     } else {
       await this.db.query(
@@ -323,15 +377,46 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined> {
-    const current = await this.getCall(id);
-    if (!current) return undefined;
-    const merged = { ...current, ...updates };
+    // F14: guard against silent employee_id clobber. Callers that need to
+    // change the assignee must use atomicAssignEmployee or setCallEmployee.
+    if (Object.prototype.hasOwnProperty.call(updates, "employeeId")) {
+      throw new Error(
+        "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
+      );
+    }
+    // Dynamic SET clause: only update keys explicitly provided. Includes
+    // content_hash (F01) which was missing from the legacy whitelist.
+    const COLUMN_MAP: Record<string, string> = {
+      fileName: "file_name",
+      filePath: "file_path",
+      status: "status",
+      duration: "duration",
+      assemblyAiId: "assembly_ai_id",
+      callCategory: "call_category",
+      contentHash: "content_hash",
+      uploadedAt: "uploaded_at",
+    };
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
+    for (const [key, column] of Object.entries(COLUMN_MAP)) {
+      if (Object.prototype.hasOwnProperty.call(updates, key)) {
+        fields.push(`${column} = $${++idx}`);
+        values.push((updates as Record<string, unknown>)[key]);
+      }
+    }
+    if (fields.length === 0) return this.getCall(id);
     const { rows } = await this.db.query(
-      `UPDATE calls SET employee_id=$2, file_name=$3, file_path=$4, status=$5,
-       duration=$6, assembly_ai_id=$7, call_category=$8, uploaded_at=$9
-       WHERE id=$1 RETURNING *`,
-      [id, merged.employeeId, merged.fileName, merged.filePath, merged.status,
-       merged.duration, merged.assemblyAiId, merged.callCategory, merged.uploadedAt],
+      `UPDATE calls SET ${fields.join(", ")} WHERE id = $1 RETURNING *`,
+      [id, ...values],
+    );
+    return rows[0] ? mapCall(rows[0]) : undefined;
+  }
+
+  async setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined> {
+    const { rows } = await this.db.query(
+      `UPDATE calls SET employee_id = $2 WHERE id = $1 RETURNING *`,
+      [callId, employeeId],
     );
     return rows[0] ? mapCall(rows[0]) : undefined;
   }
@@ -405,42 +490,7 @@ export class PostgresStorage implements IStorage {
     query += " ORDER BY c.uploaded_at DESC";
 
     const { rows } = await this.db.query(query, params);
-    return rows.map((row) => {
-      const call = mapCall(row);
-      const employee = row.e_id ? {
-        id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
-        initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
-        createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
-      } : undefined;
-      const transcript = row.t_id ? {
-        id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
-        words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
-      } : undefined;
-      const sentiment = row.s_id ? {
-        id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
-        overallScore: row.overall_score, segments: row.s_segments,
-        createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
-      } : undefined;
-
-      const analysis = row.a_id ? {
-        id: row.a_id, callId: call.id,
-        performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
-        responseTime: row.response_time, keywords: row.keywords,
-        topics: Array.isArray(row.topics) ? row.topics : [],
-        summary: typeof row.summary === "string" ? row.summary : "",
-        actionItems: Array.isArray(row.action_items) ? row.action_items : [],
-        feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
-          ? row.feedback : { strengths: [], suggestions: [] },
-        lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
-        flags: Array.isArray(row.flags) ? row.flags : [],
-        manualEdits: row.manual_edits,
-        confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
-        subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
-        createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
-      } : undefined;
-
-      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
-    });
+    return rows.map(mapCallWithDetailsRow);
   }
 
   async getCallsPaginated(options: {
@@ -520,41 +570,7 @@ export class PostgresStorage implements IStorage {
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
-    const calls = pageRows.map((row) => {
-      const call = mapCall(row);
-      const employee = row.e_id ? {
-        id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
-        initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
-        createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
-      } : undefined;
-      const transcript = row.t_id ? {
-        id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
-        words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
-      } : undefined;
-      const sentiment = row.s_id ? {
-        id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
-        overallScore: row.overall_score, segments: row.s_segments,
-        createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
-      } : undefined;
-      const analysis = row.a_id ? {
-        id: row.a_id, callId: call.id,
-        performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
-        responseTime: row.response_time, keywords: row.keywords,
-        topics: Array.isArray(row.topics) ? row.topics : [],
-        summary: typeof row.summary === "string" ? row.summary : "",
-        actionItems: Array.isArray(row.action_items) ? row.action_items : [],
-        feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
-          ? row.feedback : { strengths: [], suggestions: [] },
-        lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
-        flags: Array.isArray(row.flags) ? row.flags : [],
-        manualEdits: row.manual_edits,
-        confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
-        subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
-        createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
-      } : undefined;
-
-      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
-    });
+    const calls = pageRows.map(mapCallWithDetailsRow);
 
     const lastCall = calls[calls.length - 1];
     const nextCursor = hasMore && lastCall?.uploadedAt
@@ -621,32 +637,25 @@ export class PostgresStorage implements IStorage {
     return mapAnalysis(rows[0]);
   }
 
-  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
-    // Build dynamic SET clause from provided fields
+  async updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void> {
     const fields: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-    if (updates.embedding !== undefined) {
-      fields.push(`embedding = $${idx++}`);
-      values.push(JSON.stringify(updates.embedding));
-    }
-    if (updates.manualEdits !== undefined) {
-      fields.push(`manual_edits = $${idx++}`);
-      values.push(JSON.stringify(updates.manualEdits));
-    }
-    if (updates.performanceScore !== undefined) {
-      fields.push(`performance_score = $${idx++}`);
-      values.push(updates.performanceScore);
-    }
-    if (updates.summary !== undefined) {
-      fields.push(`summary = $${idx++}`);
-      values.push(updates.summary);
+    const values: unknown[] = [];
+    let idx = 0;
+    for (const key of Object.keys(updates)) {
+      const def = (UPDATE_ANALYSIS_COLUMNS as Record<string, { column: string; coerce: (v: unknown) => unknown }>)[key];
+      if (!def) {
+        throw new Error(`updateCallAnalysis: unknown field "${key}"`);
+      }
+      const value = (updates as Record<string, unknown>)[key];
+      if (value === undefined) continue;
+      fields.push(`${def.column} = $${++idx}`);
+      values.push(def.coerce(value));
     }
     if (fields.length === 0) return;
     values.push(callId);
     await this.db.query(
-      `UPDATE call_analyses SET ${fields.join(", ")} WHERE call_id = $${idx}`,
-      values
+      `UPDATE call_analyses SET ${fields.join(", ")} WHERE call_id = $${idx + 1}`,
+      values,
     );
   }
 
@@ -749,42 +758,7 @@ export class PostgresStorage implements IStorage {
     `, [query, `%${query}%`, limit]);
 
     if (rows.length === 0) return [];
-
-    return rows.map((row) => {
-      const call = mapCall(row);
-      const employee = row.e_id ? {
-        id: row.e_id, name: row.e_name, role: row.e_role, email: row.e_email,
-        initials: row.e_initials, status: row.e_status, subTeam: row.e_sub_team,
-        createdAt: row.e_created_at?.toISOString?.() ?? row.e_created_at,
-      } : undefined;
-      const transcript = row.t_id ? {
-        id: row.t_id, callId: call.id, text: row.t_text, confidence: row.t_confidence,
-        words: row.t_words, createdAt: row.t_created_at?.toISOString?.() ?? row.t_created_at,
-      } : undefined;
-      const sentiment = row.s_id ? {
-        id: row.s_id, callId: call.id, overallSentiment: row.overall_sentiment,
-        overallScore: row.overall_score, segments: row.s_segments,
-        createdAt: row.s_created_at?.toISOString?.() ?? row.s_created_at,
-      } : undefined;
-      const analysis = row.a_id ? {
-        id: row.a_id, callId: call.id,
-        performanceScore: row.performance_score, talkTimeRatio: row.talk_time_ratio,
-        responseTime: row.response_time, keywords: row.keywords,
-        topics: Array.isArray(row.topics) ? row.topics : [],
-        summary: typeof row.summary === "string" ? row.summary : "",
-        actionItems: Array.isArray(row.action_items) ? row.action_items : [],
-        feedback: (row.feedback && typeof row.feedback === "object" && !Array.isArray(row.feedback))
-          ? row.feedback : { strengths: [], suggestions: [] },
-        lemurResponse: row.lemur_response, callPartyType: row.call_party_type,
-        flags: Array.isArray(row.flags) ? row.flags : [],
-        manualEdits: row.manual_edits,
-        confidenceScore: row.confidence_score, confidenceFactors: row.confidence_factors,
-        subScores: row.sub_scores, detectedAgentName: row.detected_agent_name,
-        createdAt: row.a_created_at?.toISOString?.() ?? row.a_created_at,
-      } : undefined;
-
-      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
-    });
+    return rows.map(mapCallWithDetailsRow);
   }
 
   // ── Access Requests ───────────────────────────────────────
@@ -978,62 +952,77 @@ export class PostgresStorage implements IStorage {
 
   // ── Data Retention ────────────────────────────────────────
   async purgeExpiredCalls(retentionDays: number): Promise<number> {
-    // First, get the IDs of calls to be purged so we can clean up S3 audio
+    // F05/F06: compute a single cutoff timestamp at the top so SELECT and
+    // DELETE see the same boundary (eliminates race where calls expire
+    // mid-purge and S3 cleanup misses them).
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+
+    // Stage 1: regular retention purge (uploaded_at < cutoff)
     const { rows } = await this.db.query(
-      "SELECT id FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",
-      [retentionDays],
+      "SELECT id FROM calls WHERE uploaded_at < $1",
+      [cutoff],
     );
-    if (rows.length === 0) return 0;
+    let purged = 0;
+    if (rows.length > 0) {
+      const callIds = rows.map((r: any) => r.id);
 
-    const callIds = rows.map((r: any) => r.id);
+      // Delete audio + batch-inference artifacts from S3 first (HIPAA)
+      if (this.audioClient) {
+        await Promise.allSettled(
+          callIds.flatMap((id: string) => [
+            this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
+              console.error(`[RETENTION] Failed to delete S3 audio for call ${id}:`, err.message),
+            ),
+            this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch(() => {}),
+          ]),
+        );
+      }
 
-    // Delete audio and batch-inference artifacts from S3 (HIPAA: PHI must not persist beyond retention)
-    if (this.audioClient) {
-      await Promise.allSettled(
-        callIds.flatMap((id: string) => [
-          this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
-            console.error(`[RETENTION] Failed to delete S3 audio for call ${id}:`, err.message)
-          ),
-          // Clean up any stale batch-inference pending items for this call
-          this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch(() => {}),
-        ])
+      // HIPAA audit through the audit-log service (chained HMAC + DB persist)
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "retention_purge",
+        resourceType: "call",
+        resourceId: callIds.join(","),
+        detail: `${callIds.length} calls purged by retention policy (cutoff=${cutoff.toISOString()})`,
+      });
+
+      // Delete by ID array — same set we just cleaned up in S3
+      const { rowCount } = await this.db.query(
+        "DELETE FROM calls WHERE id = ANY($1::uuid[])",
+        [callIds],
       );
+      purged = rowCount ?? 0;
     }
 
-    // HIPAA audit: log which call IDs are being purged by retention policy
-    console.log(`[HIPAA_AUDIT] retention_purge: ${callIds.length} calls purged (IDs: ${callIds.join(", ")})`);
+    // Stage 2: shorter retention for failed calls (split out for clarity)
+    await this.purgeFailedCalls();
 
-    // Delete the DB records (cascading deletes handle transcripts, sentiments, analyses)
-    const { rowCount } = await this.db.query(
-      "DELETE FROM calls WHERE uploaded_at < NOW() - INTERVAL '1 day' * $1",
-      [retentionDays],
-    );
+    return purged;
+  }
 
-    // Also clean up S3 audio for calls marked as "failed" older than 7 days
-    // (shorter retention for failed calls — they have no analysis value)
+  /** Cleanup of failed calls older than 7 days. Split from main retention path. */
+  private async purgeFailedCalls(): Promise<void> {
+    const failedCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     try {
       const { rows: failedRows } = await this.db.query(
-        "SELECT id FROM calls WHERE status = 'failed' AND uploaded_at < NOW() - INTERVAL '7 days'"
+        "SELECT id FROM calls WHERE status = 'failed' AND uploaded_at < $1",
+        [failedCutoff],
       );
-      if (failedRows.length > 0 && this.audioClient) {
+      if (failedRows.length === 0) return;
+      const failedIds = failedRows.map((r: any) => r.id);
+      if (this.audioClient) {
         await Promise.allSettled(
-          failedRows.map((r: any) =>
-            this.audioClient!.deleteByPrefix(`audio/${r.id}/`).catch(() => {})
-          )
+          failedIds.map((id: string) =>
+            this.audioClient!.deleteByPrefix(`audio/${id}/`).catch(() => {}),
+          ),
         );
-        // Delete the failed call records themselves
-        await this.db.query(
-          "DELETE FROM calls WHERE status = 'failed' AND uploaded_at < NOW() - INTERVAL '7 days'"
-        );
-        if (failedRows.length > 0) {
-          console.log(`[RETENTION] Purged ${failedRows.length} failed call(s) older than 7 days.`);
-        }
       }
+      await this.db.query("DELETE FROM calls WHERE id = ANY($1::uuid[])", [failedIds]);
+      console.log(`[RETENTION] Purged ${failedIds.length} failed call(s) older than 7 days.`);
     } catch (err) {
       console.warn("[RETENTION] Failed call cleanup error:", (err as Error).message);
     }
-
-    return rowCount ?? 0;
   }
 
   // --- Gamification ---

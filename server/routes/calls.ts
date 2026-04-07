@@ -487,7 +487,9 @@ export function registerCallRoutes(
           return;
         }
       }
-      const updated = await storage.updateCall(req.params.id, { employeeId: employeeId || undefined });
+      // F14: explicit reassign/unassign goes through setCallEmployee.
+      // Plain updateCall rejects employeeId in its updates payload.
+      const updated = await storage.setCallEmployee(req.params.id, employeeId || null);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to assign employee to call" });

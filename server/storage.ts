@@ -30,9 +30,11 @@ import {
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
 import { getPool } from "./db/pool";
-import { PostgresStorage } from "./storage-postgres";
+import { PostgresStorage, type UpdateCallAnalysisInput } from "./storage-postgres";
 import { randomUUID } from "crypto";
 import { safeFloat } from "./routes/utils";
+
+export type { UpdateCallAnalysisInput };
 
 /** Common interface for S3 object storage client */
 export interface ObjectStorageClient {
@@ -90,6 +92,13 @@ export interface IStorage {
    * that backend is dev-only.
    */
   atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean>;
+  /**
+   * Explicit assign/reassign/unassign of a call's employee. Used by the
+   * manager-facing PATCH /api/calls/:id/assign route, where reassignment
+   * (clobber of an existing employee_id) is intentional. Pass null to unassign.
+   * Regular updateCall rejects employeeId in its updates payload (F14).
+   */
+  setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined>;
   deleteCall(id: string): Promise<void>;
   getAllCalls(): Promise<Call[]>;
   /** Find a call by its content hash (A21). Returns undefined if not found. */
@@ -112,7 +121,7 @@ export interface IStorage {
   // Call analysis operations
   getCallAnalysis(callId: string): Promise<CallAnalysis | undefined>;
   createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis>;
-  updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void>;
+  updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void>;
 
   // Dashboard metrics
   getDashboardMetrics(): Promise<DashboardMetrics>;
@@ -263,6 +272,11 @@ export class MemStorage implements IStorage {
     return newCall;
   }
   async updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined> {
+    if (Object.prototype.hasOwnProperty.call(updates, "employeeId")) {
+      throw new Error(
+        "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
+      );
+    }
     const call = this.calls.get(id);
     if (!call) return undefined;
     const updated = { ...call, ...updates };
@@ -275,6 +289,13 @@ export class MemStorage implements IStorage {
     call.employeeId = employeeId;
     this.calls.set(callId, call);
     return true;
+  }
+  async setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined> {
+    const call = this.calls.get(callId);
+    if (!call) return undefined;
+    const updated = { ...call, employeeId: employeeId ?? undefined };
+    this.calls.set(callId, updated);
+    return updated;
   }
   async deleteCall(id: string): Promise<void> {
     this.calls.delete(id);
@@ -384,9 +405,9 @@ export class MemStorage implements IStorage {
     return newAnalysis;
   }
 
-  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+  async updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void> {
     const existing = this.analyses.get(callId);
-    if (existing) this.analyses.set(callId, { ...existing, ...updates });
+    if (existing) this.analyses.set(callId, { ...existing, ...updates } as CallAnalysis);
   }
 
   async uploadAudio(callId: string, fileName: string, buffer: Buffer, _contentType: string): Promise<void> {
@@ -578,7 +599,9 @@ export class MemStorage implements IStorage {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - retentionDays);
     let purged = 0;
-    for (const call of this.calls.values()) {
+    // Snapshot values before iteration — deleteCall mutates this.calls.
+    const snapshot = [...this.calls.values()];
+    for (const call of snapshot) {
       if (new Date(call.uploadedAt || 0) < cutoff) {
         await this.deleteCall(call.id);
         purged++;
@@ -676,11 +699,8 @@ export class CloudStorage implements IStorage {
   }
 
   async getAllEmployees(): Promise<Employee[]> {
-    console.log("Fetching all employees...");
     try {
-      const employees = await this.client.listAndDownloadJson<Employee>("employees/");
-      console.log(`Found ${employees.length} employees.`);
-      return employees;
+      return await this.client.listAndDownloadJson<Employee>("employees/");
     } catch (error) {
       console.error("Error fetching employees:", error);
       return [];
@@ -719,6 +739,11 @@ export class CloudStorage implements IStorage {
   }
 
   async updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined> {
+    if (Object.prototype.hasOwnProperty.call(updates, "employeeId")) {
+      throw new Error(
+        "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
+      );
+    }
     const call = await this.getCall(id);
     if (!call) return undefined;
     const updated = { ...call, ...updates };
@@ -731,6 +756,13 @@ export class CloudStorage implements IStorage {
     if (!call || call.employeeId) return false;
     await this.client.uploadJson(`calls/${callId}.json`, { ...call, employeeId });
     return true;
+  }
+  async setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined> {
+    const call = await this.getCall(callId);
+    if (!call) return undefined;
+    const updated = { ...call, employeeId: employeeId ?? undefined };
+    await this.client.uploadJson(`calls/${callId}.json`, updated);
+    return updated;
   }
 
   async deleteCall(id: string): Promise<void> {
@@ -758,8 +790,6 @@ export class CloudStorage implements IStorage {
   async getCallsWithDetails(
     filters: { status?: string; sentiment?: string; employee?: string } = {}
   ): Promise<CallWithDetails[]> {
-    console.log("Fetching calls with details, filters:", filters);
-
     // Batch load all data in parallel to avoid N+1 queries
     const [calls, allEmployees, allTranscripts, allSentiments, allAnalyses] = await Promise.all([
       this.getAllCalls(),
@@ -814,7 +844,6 @@ export class CloudStorage implements IStorage {
       filtered = filtered.filter((c) => c.employeeId === filters.employee);
     }
 
-    console.log(`Returning ${filtered.length} filtered calls.`);
     return filtered;
   }
 
@@ -890,7 +919,7 @@ export class CloudStorage implements IStorage {
     return newAnalysis;
   }
 
-  async updateCallAnalysis(callId: string, updates: Partial<CallAnalysis> & { embedding?: number[] }): Promise<void> {
+  async updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void> {
     const existing = await this.getCallAnalysis(callId);
     if (existing) {
       await this.client.uploadJson(`analyses/${callId}.json`, { ...existing, ...updates });
@@ -1189,7 +1218,14 @@ function createStorage(): IStorage {
   const dbPool = getPool();
   if (dbPool) {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
-    const audioClient = (process.env.S3_BUCKET || process.env.AWS_ACCESS_KEY_ID) ? new S3Client(bucket) : undefined;
+    if (process.env.NODE_ENV === "production" && !process.env.S3_BUCKET) {
+      throw new Error(
+        "[STORAGE] S3_BUCKET must be set in production when DATABASE_URL is configured (audio storage required)",
+      );
+    }
+    // Always construct the audio client when a DB pool exists — audio storage
+    // is required for the pipeline. Falls back to default bucket name in dev.
+    const audioClient = new S3Client(bucket);
     console.log(`[STORAGE] Using PostgreSQL (metadata) + S3 (audio, bucket: ${bucket})`);
     return new PostgresStorage(dbPool, audioClient);
   }
@@ -1208,7 +1244,3 @@ function createStorage(): IStorage {
 }
 
 export const storage = createStorage();
-
-// Initialize webhook service with S3 client from the storage backend
-import { initWebhooks } from "./services/webhooks";
-initWebhooks(() => storage.getObjectStorageClient() || null);
