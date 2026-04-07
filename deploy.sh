@@ -62,8 +62,15 @@ rollback() {
 
 # [1/5] Pull latest code
 echo "[1/5] Pulling latest code..."
-if ! git pull origin "$BRANCH"; then
-  echo "::error::Git pull failed. Check network or branch name."
+if ! git fetch origin "$BRANCH"; then
+  echo "::error::Git fetch failed. Check network or branch name."
+  exit 1
+fi
+# Discard any on-box drift to tracked files (e.g. package-lock.json from a
+# stray `npm install` run on the EC2 box) so it can't block the merge. .env
+# and other gitignored files are not affected.
+if ! git reset --hard "origin/$BRANCH"; then
+  echo "::error::Git reset to origin/$BRANCH failed."
   exit 1
 fi
 
