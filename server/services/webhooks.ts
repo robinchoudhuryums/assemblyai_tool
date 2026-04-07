@@ -8,6 +8,7 @@
  */
 import { createHmac } from "crypto";
 import { isUrlSafe } from "./url-validator";
+import type { ObjectStorageClient } from "../storage";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
@@ -44,19 +45,19 @@ export type InsertWebhookConfig = Omit<WebhookConfig, "id" | "createdAt">;
 
 // --- S3 client accessor ---
 
-let getS3Client: (() => any) | null = null;
+let getS3Client: (() => ObjectStorageClient | undefined) | null = null;
 let initialized = false;
 
 /**
  * Initialize the webhook service with an S3 client accessor.
  * Called once at startup from the storage layer.
  */
-export function initWebhooks(s3ClientAccessor: () => any): void {
+export function initWebhooks(s3ClientAccessor: () => ObjectStorageClient | undefined): void {
   getS3Client = s3ClientAccessor;
   initialized = true;
 }
 
-function requireS3Client(op: string): any {
+function requireS3Client(op: string): ObjectStorageClient {
   if (!initialized || !getS3Client) {
     throw new Error(`[Webhooks] S3 client not initialized — call initWebhooks() at startup before ${op}`);
   }
@@ -92,7 +93,7 @@ export async function getAllWebhookConfigs(): Promise<WebhookConfig[]> {
   const client = getS3Client();
   if (!client) return [];
   try {
-    const configs = await (client.listAndDownloadJson as Function).call(client, "webhooks/") as WebhookConfig[];
+    const configs = await client.listAndDownloadJson<WebhookConfig>("webhooks/");
     configCache = { configs, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
     return configs;
   } catch (err) {
@@ -106,7 +107,7 @@ export async function getWebhookConfig(id: string): Promise<WebhookConfig | unde
   const client = getS3Client();
   if (!client) return undefined;
   try {
-    return await (client.downloadJson as Function).call(client, `webhooks/${id}.json`) as WebhookConfig;
+    return await client.downloadJson<WebhookConfig>(`webhooks/${id}.json`);
   } catch {
     return undefined;
   }

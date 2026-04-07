@@ -41,6 +41,7 @@ function mapCall(row: any): Call {
     filePath: row.file_path, status: row.status, duration: row.duration,
     assemblyAiId: row.assembly_ai_id, callCategory: row.call_category,
     contentHash: row.content_hash,
+    externalId: row.external_id ?? undefined,
     uploadedAt: row.uploaded_at?.toISOString?.() ?? row.uploaded_at,
   };
 }
@@ -371,9 +372,9 @@ export class PostgresStorage implements IStorage {
   async createCall(call: InsertCall): Promise<Call> {
     const id = randomUUID();
     const { rows } = await this.db.query(
-      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category, content_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory, call.contentHash],
+      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category, content_hash, external_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory, call.contentHash, (call as any).externalId ?? null],
     );
     return mapCall(rows[0]);
   }
@@ -464,6 +465,13 @@ export class PostgresStorage implements IStorage {
     const { rows } = await this.db.query(
       "SELECT * FROM calls WHERE content_hash = $1 LIMIT 1",
       [contentHash],
+    );
+    return rows.length > 0 ? mapCall(rows[0]) : undefined;
+  }
+  async findCallByExternalId(externalId: string): Promise<Call | undefined> {
+    const { rows } = await this.db.query(
+      "SELECT * FROM calls WHERE external_id = $1 LIMIT 1",
+      [externalId],
     );
     return rows.length > 0 ? mapCall(rows[0]) : undefined;
   }

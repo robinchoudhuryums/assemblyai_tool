@@ -159,6 +159,10 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // unique index; if existing duplicates prevent creation we swallow the
     // error and log rather than crashing startup.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_content_hash_unique ON calls (content_hash) WHERE content_hash IS NOT NULL",
+    // A10: external_id for upstream-source dedupe (e.g. 8x8 recording ids).
+    // Unique partial index lets multiple non-telephony rows with NULL coexist.
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_external_id_unique ON calls (external_id) WHERE external_id IS NOT NULL",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

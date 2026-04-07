@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS calls (
   assembly_ai_id VARCHAR(255),
   call_category VARCHAR(50),
   content_hash VARCHAR(64),
+  external_id VARCHAR(255),
   uploaded_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls (status);
@@ -54,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_calls_uploaded_at ON calls (uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_employee_id ON calls (employee_id);
 CREATE INDEX IF NOT EXISTS idx_calls_call_category ON calls (call_category);
 CREATE INDEX IF NOT EXISTS idx_calls_content_hash ON calls (content_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_external_id_unique ON calls (external_id) WHERE external_id IS NOT NULL;
 
 -- ============================================================
 -- Transcripts (1:1 per call)

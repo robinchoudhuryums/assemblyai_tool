@@ -124,12 +124,20 @@ export async function fetchRagContext(
 ): Promise<{ context: string; sources: RagSource[]; confidence: "high" | "partial" } | undefined> {
   if (!isRagEnabled()) return undefined;
 
+  // A11/F11: wrap cache hits in their own span so traces show RAG cache
+  // activity (latency-near-zero, hit=true) instead of disappearing entirely.
   if (cacheKey) {
     const cached = getCachedRagContext(cacheKey);
-    if (cached) return cached as { context: string; sources: RagSource[]; confidence: "high" | "partial" };
+    if (cached) {
+      return withSpan("rag.fetchContext", { questionChars: question.length, cacheKey, cacheHit: true }, async (span) => {
+        span.setAttribute("cacheHit", true);
+        span.setAttribute("sourceCount", cached.sources.length);
+        return cached as { context: string; sources: RagSource[]; confidence: "high" | "partial" };
+      });
+    }
   }
 
-  return withSpan("rag.fetchContext", { questionChars: question.length, cacheKey: cacheKey || "none" }, async (span) => {
+  return withSpan("rag.fetchContext", { questionChars: question.length, cacheKey: cacheKey || "none", cacheHit: false }, async (span) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RAG_TIMEOUT_MS);
 

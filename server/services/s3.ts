@@ -15,6 +15,35 @@ import { logger } from "./logger.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
 
+/**
+ * A12/F16: S3 ListObjectsV2 XML-encodes object keys that contain reserved XML
+ * characters (&, <, >, ', "). Without decoding, a key like `audio/foo&bar.wav`
+ * comes back as `audio/foo&amp;bar.wav` and subsequent GET/DELETE requests
+ * silently 404. Decode the five XML predefined entities before returning keys.
+ * Numeric entities are not used by S3, but are decoded too for safety.
+ */
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot|apos|#(x[0-9a-fA-F]+|[0-9]+));/g, (_, entity: string) => {
+    switch (entity) {
+      case "amp": return "&";
+      case "lt": return "<";
+      case "gt": return ">";
+      case "quot": return '"';
+      case "apos": return "'";
+      default:
+        if (entity.startsWith("#x") || entity.startsWith("#X")) {
+          const cp = parseInt(entity.slice(2), 16);
+          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+        }
+        if (entity.startsWith("#")) {
+          const cp = parseInt(entity.slice(1), 10);
+          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+        }
+        return `&${entity};`;
+    }
+  });
+}
+
 export class S3Client {
   private credentials: AwsCredentials | null = null;
   private bucketName: string;
@@ -104,7 +133,7 @@ export class S3Client {
       // Parse <Key>...</Key> from each <Contents> block
       const keyMatches = Array.from(xml.matchAll(/<Contents>[\s\S]*?<Key>([\s\S]*?)<\/Key>[\s\S]*?<\/Contents>/g));
       for (const match of keyMatches) {
-        names.push(match[1]);
+        names.push(decodeXmlEntities(match[1]));
       }
 
       // Check for pagination
@@ -142,10 +171,10 @@ export class S3Client {
       const contentBlocks = Array.from(xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g));
       for (const block of contentBlocks) {
         const content = block[1];
-        const key = content.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "";
+        const rawKey = content.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] || "";
         const size = content.match(/<Size>([\s\S]*?)<\/Size>/)?.[1] || "0";
         const lastModified = content.match(/<LastModified>([\s\S]*?)<\/LastModified>/)?.[1] || "";
-        items.push({ name: key, size, updated: lastModified });
+        items.push({ name: decodeXmlEntities(rawKey), size, updated: lastModified });
       }
 
       const truncatedMatch = xml.match(/<IsTruncated>(.*?)<\/IsTruncated>/);

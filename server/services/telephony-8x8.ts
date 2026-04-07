@@ -194,18 +194,24 @@ export async function ingestRecording(
     }
 
     const externalFileName = `8x8-${recording.recordingId}.wav`;
+    const externalId = `8x8:${recording.recordingId}`;
 
-    // Download audio first so we can content-hash for dedupe.
-    // A4/F03: Replaces the prior O(n) getAllCalls() scan with the indexed
-    // findCallByContentHash() lookup. This is the temporary dedupe mechanism
-    // until A10 (Batch 2) adds findCallByExternalId for recording-id-based
-    // dedupe without needing to download bytes first.
+    // A10/F03: dedupe by upstream recording id BEFORE downloading audio.
+    // findCallByExternalId is an indexed lookup; the previous content-hash
+    // approach required pulling the full audio buffer just to skip duplicates.
+    const existingByExternalId = await storage.findCallByExternalId(externalId);
+    if (existingByExternalId) {
+      return { recordingId: recording.recordingId, callId: existingByExternalId.id, status: "duplicate" };
+    }
+
     const audioBuffer = await downloadRecordingAudio(recording);
     const contentHash = createHash("sha256").update(audioBuffer).digest("hex");
 
-    const duplicate = await storage.findCallByContentHash(contentHash);
-    if (duplicate) {
-      return { recordingId: recording.recordingId, callId: duplicate.id, status: "duplicate" };
+    // Belt-and-suspenders: also check content hash, in case the same call
+    // was uploaded manually before the auto-ingest path saw it.
+    const existingByHash = await storage.findCallByContentHash(contentHash);
+    if (existingByHash) {
+      return { recordingId: recording.recordingId, callId: existingByHash.id, status: "duplicate" };
     }
 
     // Map extension to employee
@@ -226,7 +232,8 @@ export async function ingestRecording(
       duration: recording.durationSeconds,
       callCategory,
       contentHash,
-    } as any);
+      externalId,
+    });
     const callId = created.id;
 
     // Archive to S3 if available
