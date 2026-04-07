@@ -19,6 +19,7 @@ import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
 import { runWithCorrelationId } from "./services/correlation-id";
 import { flushAuditQueue } from "./services/audit-log";
+import { initWebhooks } from "./services/webhooks";
 
 // Initialize Sentry early (before Express setup) so it catches startup errors
 initSentry();
@@ -419,6 +420,11 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();
+
+  // A7/F09: explicit startup wiring of webhook service. Previously this ran
+  // as a side effect of importing storage.ts; moved here so module load order
+  // is no longer load-bearing.
+  initWebhooks(() => storage.getObjectStorageClient() || null);
 
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);

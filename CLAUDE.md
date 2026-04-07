@@ -558,6 +558,9 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 - **performanceScore type**: Schema accepts both string and number, normalizes to string via `.transform()` — consistent with DB VARCHAR column and all `parseFloat()` usage
 - **AI error classification**: Pipeline distinguishes parse failures (malformed JSON) from provider unavailability — different Sentry tags and log levels
 - **Fire-and-forget Sentry**: Background tasks (embeddings, coaching alerts, badges, webhooks) report errors to Sentry via `captureException()`, not just `console.warn`
+- **`updateCall` is employeeId-free** (A6/F14): all three storage backends throw if `employeeId` appears in the updates payload. The manager-facing PATCH /api/calls/:id/assign route uses the new `setCallEmployee` method; pipeline auto-assignment uses `atomicAssignEmployee`. Closes a silent-clobber race where status updates would re-write a stale `employee_id` from a prior read.
+- **PostgresStorage password history is JS-side** (A3/F02): `updateDbUserPassword` reads the existing history, prepends + slices to 5, and writes it back in a single UPDATE. Replaces an opaque jsonb_array_elements_text aggregation. Trade-off: small lost-update window on concurrent password changes (admin reset racing self-change). Acceptable because concurrent rotations are vanishingly rare.
+- **Production requires `S3_BUCKET`** (A1/F03): `createStorage()` throws at boot when `NODE_ENV=production` and `DATABASE_URL` is set but `S3_BUCKET` is not. Replaces a silent-degraded path where audio uploads would fail at runtime instead of at startup.
 
 ## Deployment
 
@@ -759,6 +762,10 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - Security monitor tracking Maps (failedLoginsByUser, failedLoginsByIP, bulkAccessByUser) are capped at 10,000 entries with LRU eviction
 - In-memory incidents array capped at 500 (evicts oldest closed first)
 - `tsconfig.json` uses `target: "ES2022"` — do NOT add `downlevelIteration` or `baseUrl` (deprecated in TS 7.0)
+- **`storage.updateCall` rejects `employeeId`** (A6/F14) — passing it throws `Error: updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee`. First-time assign → `atomicAssignEmployee`; manager reassign/unassign → `setCallEmployee(callId, employeeId | null)`.
+- **Production boot requires `S3_BUCKET`** (A1) — when `DATABASE_URL` is set in production, missing `S3_BUCKET` causes `createStorage()` to throw at startup. Set it in `.env` on EC2 before deploy.
+- **`updateCallAnalysis` throws on unknown keys** (A5) — only `embedding`, `manualEdits`, `performanceScore`, `summary` are accepted (`UPDATE_ANALYSIS_COLUMNS`). Adding a new updateable analysis field requires both a COLUMN_MAP entry and an `UpdateCallAnalysisInput` type addition.
+- **PostgresStorage `updateCall` silently ignores unknown keys** — only keys in COLUMN_MAP are sent to SQL. Adding a new persisted call field requires both a schema migration and a COLUMN_MAP entry, or the value will appear to save but vanish on re-read.
 
 ## Systems Map
 
@@ -782,7 +789,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company) |
 | **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
 | **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends |
-| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~32 methods), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). |
+| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~33 methods), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. |
 | **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
 | **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
 | **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory |
@@ -950,7 +957,7 @@ Every subsequent request:
 | Module | Consumers | Notes |
 |--------|-----------|-------|
 | `server/routes/utils.ts` | 16 files | All route files + `performance-snapshots.ts`, `batch-scheduler.ts` |
-| `server/storage.ts` | 27 files | 15 route files + `index.ts`, `routes.ts`, `auth.ts`, `storage-postgres.ts` (type import), and 8 services: `gamification.ts`, `coaching-alerts.ts`, `batch-scheduler.ts`, `scheduled-reports.ts`, `telephony-8x8.ts`, `scoring-feedback.ts`, `auto-calibration.ts`, `call-clustering.ts`. **Note:** `webhooks.ts` does NOT directly import `storage` — it receives an S3 client via `initWebhooks()` callback at the bottom of `storage.ts`. |
+| `server/storage.ts` | 27 files | 15 route files + `index.ts`, `routes.ts`, `auth.ts`, `storage-postgres.ts` (type import), and 8 services: `gamification.ts`, `coaching-alerts.ts`, `batch-scheduler.ts`, `scheduled-reports.ts`, `telephony-8x8.ts`, `scoring-feedback.ts`, `auto-calibration.ts`, `call-clustering.ts`. **Note:** `webhooks.ts` does NOT directly import `storage` — it receives an S3 client via `initWebhooks()` callback wired in `server/index.ts` startup (after `initializeDatabase()`). |
 | `server/auth.ts` | 16 files | All 15 auth-using route files + `websocket.ts` (imports `sessionMiddleware`) |
 | `server/services/audit-log.ts` | 13 files | Security services, middleware/waf, most route files |
 | `shared/schema.ts` | 15+ files | Route files, storage, services, client |
@@ -962,7 +969,7 @@ Every subsequent request:
 - `server/services/ai-factory.ts` → `aiProvider` consumed by `pipeline.ts`, `reports.ts`, `snapshots.ts`, `coaching-alerts.ts` — VERIFIED
 - `server/services/assemblyai.ts` → consumed by `pipeline.ts`, `routes.ts`, `analytics.ts`, `admin-content.ts`, `batch-scheduler.ts` — VERIFIED
 - `server/services/rag-client.ts` → `fetchRagContext` / `isRagEnabled` consumed by `pipeline.ts`, `coaching-alerts.ts`, `scoring-feedback.ts`, `best-practice-ingest.ts` — VERIFIED
-- `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback — VERIFIED
+- `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback wired from `server/index.ts` startup — VERIFIED
 - `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
 - `server/services/audit-log.ts` → exports `logPhiAccess`, `flushAuditQueue`, `auditContext` (used by `routes/auth.ts` and other route files for extracting audit context), `AuditEntry`, `getDroppedAuditEntryCount`, `getPendingAuditEntryCount` — VERIFIED
 - `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file (only referenced in `tests/oqa-adaptations.test.ts` via dynamic `import()`) — VERIFIED

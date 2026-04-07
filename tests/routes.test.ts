@@ -233,7 +233,7 @@ describe("Storage integration (MemStorage)", () => {
   it("can assign a call to an employee", async () => {
     const emp = await globalStorage.createEmployee({ name: "Assignee", email: "assign@test.com", role: "Agent", status: "Active" });
     const call = await globalStorage.createCall({ fileName: "assign-test.mp3", duration: 90, status: "completed" });
-    await globalStorage.updateCall(call.id, { employeeId: emp.id });
+    await globalStorage.setCallEmployee(call.id, emp.id);
 
     const updated = await globalStorage.getCall(call.id);
     assert.equal(updated?.employeeId, emp.id);
