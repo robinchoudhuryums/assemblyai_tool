@@ -67,7 +67,7 @@ setInterval(() => {
       bulkAccessByUser.delete(key);
     }
   }
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
 
 /**
  * Record a failed login and check for suspicious patterns.

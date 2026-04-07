@@ -44,7 +44,17 @@ const AUDIT_PREFIX = "[HIPAA_AUDIT]";
 // --- HMAC Integrity Chain ---
 // Each entry's hash = HMAC-SHA256(entry_content + previous_hash, secret).
 // The chain makes it detectable if any log entry is modified, deleted, or reordered.
-const AUDIT_HMAC_SECRET = process.env.SESSION_SECRET || "audit-log-integrity-key";
+// Dedicated secret for audit log integrity. Falls back to SESSION_SECRET in dev for
+// convenience, but production MUST set AUDIT_HMAC_SECRET explicitly — sharing the secret
+// with sessions means a session-secret rotation silently breaks the audit chain.
+const AUDIT_HMAC_SECRET = (() => {
+  const dedicated = process.env.AUDIT_HMAC_SECRET;
+  if (dedicated) return dedicated;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("AUDIT_HMAC_SECRET is required in production (HIPAA §164.312(b))");
+  }
+  return process.env.SESSION_SECRET || "audit-log-integrity-key";
+})();
 let previousHash = "genesis"; // seed value for the first entry in the chain
 
 function computeIntegrityHash(content: string): string {
@@ -53,7 +63,45 @@ function computeIntegrityHash(content: string): string {
   hmac.update(previousHash);
   const hash = hmac.digest("hex").slice(0, 16); // truncate to 16 chars for readability
   previousHash = hash;
+  // Fire-and-forget persist so a process restart picks up the chain head.
+  // Errors are non-fatal: stdout still has the entry + hash.
+  persistPreviousHash(hash).catch((err) => {
+    console.error(`${AUDIT_PREFIX} Failed to persist integrity chain head:`, (err as Error).message);
+  });
   return hash;
+}
+
+let integrityLoaded = false;
+async function persistPreviousHash(hash: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO audit_log_integrity (id, previous_hash, updated_at)
+     VALUES (1, $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET previous_hash = EXCLUDED.previous_hash, updated_at = NOW()`,
+    [hash]
+  );
+}
+
+/** Load the persisted integrity chain head from PostgreSQL. Idempotent. */
+export async function loadAuditIntegrityChain(): Promise<void> {
+  if (integrityLoaded) return;
+  const pool = getPool();
+  if (!pool) {
+    integrityLoaded = true;
+    return;
+  }
+  try {
+    const r = await pool.query<{ previous_hash: string }>(
+      `SELECT previous_hash FROM audit_log_integrity WHERE id = 1`
+    );
+    if (r.rows[0]?.previous_hash) {
+      previousHash = r.rows[0].previous_hash;
+    }
+    integrityLoaded = true;
+  } catch (err) {
+    console.error(`${AUDIT_PREFIX} loadAuditIntegrityChain failed:`, (err as Error).message);
+  }
 }
 
 const MAX_AUDIT_RETRIES = 3;
@@ -118,37 +166,46 @@ export async function flushAuditQueue(): Promise<void> {
   if (!pool || queue.length === 0) return;
 
   const now = Date.now();
-  // Process entries that are ready (not waiting for retry backoff)
-  const readyCount = queue.filter(e => e.nextRetryAt <= now).length;
-  if (readyCount === 0) return;
-
-  // Drain ready entries from the front of the queue
+  // Drain ready entries strictly from the head of the queue (FIFO).
+  // We stop at the first entry that isn't ready so retry-backoff entries don't
+  // jump ahead of fresh entries waiting behind them.
   const toProcess: QueuedEntry[] = [];
-  const remaining: QueuedEntry[] = [];
-  for (const entry of queue) {
-    if (entry.nextRetryAt <= now && toProcess.length < 100) {
-      toProcess.push(entry);
-    } else {
-      remaining.push(entry);
-    }
+  while (queue.length > 0 && toProcess.length < 100) {
+    const head = queue[0];
+    if (head.nextRetryAt > now) break;
+    toProcess.push(queue.shift()!);
   }
-  // Replace queue contents (keep entries not yet ready + overflow)
-  queue.length = 0;
-  queue.push(...remaining);
+  if (toProcess.length === 0) return;
 
-  for (const entry of toProcess) {
-    try {
-      await pool.query(INSERT_SQL, entry.params);
-    } catch (err) {
-      entry.attempt++;
-      if (entry.attempt < MAX_AUDIT_RETRIES) {
-        // Exponential backoff: 500ms, 1s, 2s
-        entry.nextRetryAt = Date.now() + 500 * Math.pow(2, entry.attempt - 1);
-        queue.push(entry);
-      } else {
-        droppedEntries++;
-        console.error(`${AUDIT_PREFIX} CRITICAL: Failed to write audit entry to database after ${MAX_AUDIT_RETRIES} attempts:`, (err as Error).message);
-        console.error(`${AUDIT_PREFIX} Entry preserved in stdout log above — manual reconciliation required.`);
+  // Batch INSERT: one query for the whole drained chunk. Builds a parameterized
+  // VALUES list (10 cols × N rows). On batch failure we fall back per-row so a
+  // single bad entry can't poison the whole batch.
+  try {
+    const cols = 10;
+    const valuesSql = toProcess
+      .map((_, i) => `(${Array.from({ length: cols }, (_, c) => `$${i * cols + c + 1}`).join(",")})`)
+      .join(",");
+    const params: (string | undefined)[] = [];
+    for (const e of toProcess) params.push(...e.params);
+    await pool.query(
+      `INSERT INTO audit_log (timestamp, event, user_id, username, role, resource_type, resource_id, ip, user_agent, detail) VALUES ${valuesSql}`,
+      params
+    );
+  } catch (batchErr) {
+    console.error(`${AUDIT_PREFIX} Batch insert failed, falling back to per-row:`, (batchErr as Error).message);
+    for (const entry of toProcess) {
+      try {
+        await pool.query(INSERT_SQL, entry.params);
+      } catch (err) {
+        entry.attempt++;
+        if (entry.attempt < MAX_AUDIT_RETRIES) {
+          entry.nextRetryAt = Date.now() + 500 * Math.pow(2, entry.attempt - 1);
+          queue.push(entry);
+        } else {
+          droppedEntries++;
+          console.error(`${AUDIT_PREFIX} CRITICAL: Failed to write audit entry after ${MAX_AUDIT_RETRIES} attempts:`, (err as Error).message);
+          console.error(`${AUDIT_PREFIX} Entry preserved in stdout log above — manual reconciliation required.`);
+        }
       }
     }
   }

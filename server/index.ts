@@ -421,6 +421,10 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();
 
+  // A6: Restore audit-log HMAC chain head from persistent storage so a restart
+  // doesn't reset to 'genesis' and break sequential chain verification.
+  await (await import("./services/audit-log")).loadAuditIntegrityChain();
+
   // A7/F09: explicit startup wiring of webhook service. Previously this ran
   // as a side effect of importing storage.ts; moved here so module load order
   // is no longer load-bearing.

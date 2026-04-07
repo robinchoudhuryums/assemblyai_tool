@@ -260,8 +260,9 @@ export async function setupAuth(app: Express) {
 
   // Local strategy: authenticate against PostgreSQL users FIRST, then fall back to env-var users
   passport.use(
-    new LocalStrategy(async (username, password, done) => {
+    new LocalStrategy({ passReqToCallback: true }, async (req, username, password, done) => {
       try {
+        const ip = (req.ip || (req.socket && req.socket.remoteAddress) || undefined) as string | undefined;
         // HIPAA: Check account lockout before attempting authentication
         if (isAccountLocked(username)) {
           logPhiAccess({
@@ -292,7 +293,7 @@ export async function setupAuth(app: Express) {
 
             const isValid = await comparePasswords(password, dbUser.passwordHash);
             if (!isValid) {
-              recordFailedAttempt(username);
+              recordFailedAttempt(username, ip);
               logPhiAccess({
                 timestamp: new Date().toISOString(),
                 event: "login_failed",
@@ -326,7 +327,7 @@ export async function setupAuth(app: Express) {
         // --- Step 2: Fall back to AUTH_USERS env var ---
         const user = envUsers.find((u) => u.username === username);
         if (!user) {
-          recordFailedAttempt(username);
+          recordFailedAttempt(username, ip);
           logPhiAccess({
             timestamp: new Date().toISOString(),
             event: "login_failed",
@@ -337,7 +338,7 @@ export async function setupAuth(app: Express) {
         }
         const isValid = await comparePasswords(password, user.passwordHash);
         if (!isValid) {
-          recordFailedAttempt(username);
+          recordFailedAttempt(username, ip);
           logPhiAccess({
             timestamp: new Date().toISOString(),
             event: "login_failed",
@@ -388,8 +389,13 @@ export async function setupAuth(app: Express) {
           role: dbUser.role,
         });
       }
-    } catch {
-      // DB lookup failed — fall through to env users
+    } catch (err) {
+      // Transient DB error — log and propagate so the request 500s instead of
+      // silently falling through to env users (which would give a stale user a
+      // valid session whenever the DB blips). Env-user fallback is reserved for
+      // "DB has no such user" (success path), not "DB unreachable".
+      console.error("[AUTH] deserializeUser DB lookup failed:", (err as Error).message);
+      return done(err as Error);
     }
 
     // Fall back to env users
