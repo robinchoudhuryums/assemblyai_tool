@@ -83,10 +83,10 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== UPDATE USER (admin only) ====================
-  router.patch("/api/users/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  router.patch("/api/users/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
     try {
       // Prevent route collision with /api/users/me/password
-      if (req.params.id === "me") return;
+      if (req.params.id === "me") return next();
 
       // Validate UUID format (can't use middleware because "me" must pass through first)
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) {
