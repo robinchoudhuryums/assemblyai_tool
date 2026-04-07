@@ -17,6 +17,13 @@
  * https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem on the
  * EC2 host. This env var MUST be set in the process environment (pm2 env
  * block), NOT in .env — Node reads it at startup before dotenv runs.
+ *
+ * exec_mode: "fork" is REQUIRED — pm2 cluster mode (the default when
+ * `instances` is set) does NOT propagate env-block variables to workers
+ * reliably. Confirmed empirically via /proc/<pid>/environ: cluster workers
+ * had only PATH + cluster IPC vars; fork workers have the full env block.
+ * Do not change this to "cluster" without first verifying NODE_EXTRA_CA_CERTS
+ * still reaches the worker process.
  */
 const RDS_CA_BUNDLE = "/home/ec2-user/global-bundle.pem";
 
@@ -25,19 +32,20 @@ module.exports = {
     {
       name: "callanalyzer",
       script: "dist/index.js",
+      exec_mode: "fork",
       env: {
         NODE_ENV: "production",
         NODE_EXTRA_CA_CERTS: RDS_CA_BUNDLE,
       },
       node_args: "--max-old-space-size=1024",
       max_memory_restart: "768M",
-      instances: 1,
       autorestart: true,
       watch: false,
     },
     {
       name: "callanalyzer-blue",
       script: "dist/index.js",
+      exec_mode: "fork",
       env: {
         PORT: 5000,
         NODE_ENV: "production",
@@ -45,13 +53,13 @@ module.exports = {
       },
       node_args: "--max-old-space-size=1024",
       max_memory_restart: "768M",
-      instances: 1,
       autorestart: true,
       watch: false,
     },
     {
       name: "callanalyzer-green",
       script: "dist/index.js",
+      exec_mode: "fork",
       env: {
         PORT: 5001,
         NODE_ENV: "production",
@@ -59,7 +67,6 @@ module.exports = {
       },
       node_args: "--max-old-space-size=1024",
       max_memory_restart: "768M",
-      instances: 1,
       autorestart: true,
       watch: false,
     },
