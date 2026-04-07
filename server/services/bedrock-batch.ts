@@ -18,7 +18,7 @@ import { randomUUID } from "crypto";
 import { parseJsonResponse } from "./ai-provider";
 import type { CallAnalysis } from "./ai-provider";
 import { signRequest, sha256, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
-import type { AwsCredentials } from "./aws-credentials.js";
+import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 
 const BATCH_TIMEOUT_MS = 30_000; // 30s for batch management API calls
 
@@ -44,23 +44,43 @@ export class BedrockBatchService {
   private credentials: AwsCredentials | null = null;
   private model: string;
   private bucketName: string;
+  private misconfigLogged = false;
 
   constructor() {
     this.model = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
     this.bucketName = process.env.S3_BUCKET || "ums-call-archive";
-
-    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
-      this.credentials = {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID.trim(),
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY.trim(),
-        sessionToken: process.env.AWS_SESSION_TOKEN?.trim(),
-        region: process.env.AWS_REGION || "us-east-1",
-      };
-    }
   }
 
+  /**
+   * Resolve credentials lazily via shared provider (env vars → IMDSv2).
+   * A1/F02/F16: previously read env vars directly in constructor, breaking
+   * EC2 instance-profile deployments.
+   */
+  private async ensureCredentials(): Promise<AwsCredentials> {
+    if (this.credentials) return this.credentials;
+    const creds = await getAwsCredentials();
+    if (!creds) {
+      throw new Error("Bedrock batch: no AWS credentials available (env vars or IMDS)");
+    }
+    this.credentials = creds;
+    return creds;
+  }
+
+  /**
+   * A1/F02: fail loudly when batch mode is on but BEDROCK_BATCH_ROLE_ARN is missing.
+   * Returns false and logs once so callers gracefully fall back to on-demand instead
+   * of submitting jobs that will be rejected by Bedrock with a less obvious error.
+   */
   get isAvailable(): boolean {
-    return this.credentials !== null && process.env.BEDROCK_BATCH_MODE === "true";
+    if (process.env.BEDROCK_BATCH_MODE !== "true") return false;
+    if (!process.env.BEDROCK_BATCH_ROLE_ARN) {
+      if (!this.misconfigLogged) {
+        console.error("[BATCH] BEDROCK_BATCH_MODE=true but BEDROCK_BATCH_ROLE_ARN is not set — batch mode disabled");
+        this.misconfigLogged = true;
+      }
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -92,10 +112,13 @@ export class BedrockBatchService {
    * Submit a batch inference job to Bedrock.
    */
   async createJob(inputS3Uri: string, batchId: string, callIds: string[]): Promise<BatchJob> {
-    if (!this.credentials) throw new Error("Bedrock batch not configured");
+    const creds = await this.ensureCredentials();
+    if (!process.env.BEDROCK_BATCH_ROLE_ARN) {
+      throw new Error("Bedrock batch: BEDROCK_BATCH_ROLE_ARN is not set");
+    }
 
     const outputS3Uri = `s3://${this.bucketName}/batch-inference/output/${batchId}/`;
-    const region = this.credentials.region;
+    const region = creds.region;
     const host = `bedrock.${region}.amazonaws.com`;
     const path = "/model-invocation-job";
 
@@ -117,7 +140,7 @@ export class BedrockBatchService {
       modelInvocationType: "Converse",
     });
 
-    const headers = signRequest({ method: "POST", host, rawPath: path, service: "bedrock", region, creds: this.credentials!, body, extraHeaders: [["content-type", "application/json"]] });
+    const headers = signRequest({ method: "POST", host, rawPath: path, service: "bedrock", region, creds, body, extraHeaders: [["content-type", "application/json"]] });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
@@ -157,14 +180,14 @@ export class BedrockBatchService {
    * Check the status of a batch inference job.
    */
   async getJobStatus(jobArn: string): Promise<{ status: BatchJob["status"]; message?: string }> {
-    if (!this.credentials) throw new Error("Bedrock batch not configured");
+    const creds = await this.ensureCredentials();
 
-    const region = this.credentials.region;
+    const region = creds.region;
     const host = `bedrock.${region}.amazonaws.com`;
     const jobId = jobArn.split("/").pop();
     const path = `/model-invocation-job/${jobId}`;
 
-    const headers = signRequest({ method: "GET", host, rawPath: path, service: "bedrock", region, creds: this.credentials!, extraHeaders: [["content-type", "application/json"]] });
+    const headers = signRequest({ method: "GET", host, rawPath: path, service: "bedrock", region, creds, extraHeaders: [["content-type", "application/json"]] });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
@@ -260,8 +283,8 @@ export class BedrockBatchService {
   }
 
   private async s3Put(key: string, body: Buffer, contentType: string): Promise<void> {
-    if (!this.credentials) throw new Error("Not configured");
-    const region = this.credentials.region;
+    await this.ensureCredentials();
+    const region = this.credentials!.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
     const path = `/${key}`;
 
@@ -273,8 +296,8 @@ export class BedrockBatchService {
   }
 
   private async s3Get(key: string): Promise<Buffer | undefined> {
-    if (!this.credentials) throw new Error("Not configured");
-    const region = this.credentials.region;
+    await this.ensureCredentials();
+    const region = this.credentials!.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
     const path = `/${key}`;
 
@@ -286,19 +309,43 @@ export class BedrockBatchService {
   }
 
   private async s3List(prefix: string): Promise<string[]> {
-    if (!this.credentials) throw new Error("Not configured");
-    const region = this.credentials.region;
+    await this.ensureCredentials();
+    const region = this.credentials!.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
-    const qs = `list-type=2&prefix=${encodeURIComponent(prefix)}`;
 
-    const headers = this.signS3Headers("GET", host, "/", region, undefined, undefined, qs);
-    const response = await fetch(`https://${host}/?${qs}`, { method: "GET", headers });
-    if (!response.ok) throw new Error(`S3 LIST failed: ${await response.text()}`);
-
-    const xml = await response.text();
+    // A3/F08: paginate via continuation token. Hard safety cap prevents
+    // runaway loops if S3 returns an unexpected response shape.
+    const MAX_PAGES = 50; // 50 pages × 1000 default = up to 50k keys
     const keys: string[] = [];
-    const matches = xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g);
-    for (const m of matches) keys.push(m[1]);
+    let continuationToken: string | undefined;
+    let page = 0;
+
+    while (page < MAX_PAGES) {
+      let qs = `list-type=2&prefix=${encodeURIComponent(prefix)}`;
+      if (continuationToken) qs += `&continuation-token=${encodeURIComponent(continuationToken)}`;
+
+      const headers = this.signS3Headers("GET", host, "/", region, undefined, undefined, qs);
+      const response = await fetch(`https://${host}/?${qs}`, { method: "GET", headers });
+      if (!response.ok) throw new Error(`S3 LIST failed: ${await response.text()}`);
+
+      const xml = await response.text();
+      const matches = xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g);
+      for (const m of matches) keys.push(m[1]);
+
+      const truncatedMatch = xml.match(/<IsTruncated>(true|false)<\/IsTruncated>/);
+      const isTruncated = truncatedMatch?.[1] === "true";
+      if (!isTruncated) break;
+
+      const nextTokenMatch = xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/);
+      if (!nextTokenMatch) break; // truncated but no token — defensive break
+      continuationToken = nextTokenMatch[1];
+      page++;
+    }
+
+    if (page >= MAX_PAGES) {
+      console.warn(`[BATCH] s3List hit safety cap of ${MAX_PAGES} pages for prefix ${prefix}; results may be incomplete`);
+    }
+
     return keys;
   }
 }

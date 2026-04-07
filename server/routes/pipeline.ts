@@ -442,7 +442,24 @@ export async function processAudioFile(
     // Step 5: Process combined results
     broadcastCallUpdate(callId, "processing", { step: 5, totalSteps: 6, label: "Processing results..." });
     console.log(`[${callId}] Step 5/6: Processing combined transcript and analysis data...`);
-    const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, aiAnalysis, callId);
+
+    // A4/F06: Identify agent speaker label *before* processTranscriptData so
+    // talkTimeRatio is computed against the correct speaker (or null if unknown).
+    let agentSpeakerLabel: string | undefined;
+    if (aiAnalysis?.detected_agent_name && transcriptResponse.words && transcriptResponse.words.length > 0) {
+      const detectedName = aiAnalysis.detected_agent_name.toLowerCase();
+      const earlyWords = transcriptResponse.words.slice(0, 50);
+      for (let i = 0; i < earlyWords.length; i++) {
+        const w = earlyWords[i];
+        if (w.text.toLowerCase().includes(detectedName) ||
+            (i > 0 && `${earlyWords[i - 1].text} ${w.text}`.toLowerCase().includes(detectedName))) {
+          agentSpeakerLabel = w.speaker || undefined;
+          break;
+        }
+      }
+    }
+
+    const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, aiAnalysis, callId, agentSpeakerLabel);
 
     // Compute confidence score (shared formula from utils.ts)
     const { score: confidenceScore, factors: confidenceFactors } = computeConfidenceScore({
@@ -468,24 +485,10 @@ export async function processAudioFile(
 
     if (aiAnalysis?.detected_agent_name) {
       analysis.detectedAgentName = aiAnalysis.detected_agent_name;
-
-      // Named speaker identification (#6): determine which speaker (A/B) is the agent
-      if (transcriptResponse.words && transcriptResponse.words.length > 0) {
-        const detectedName = aiAnalysis.detected_agent_name.toLowerCase();
-        // Look for the agent's name in the first 50 words to identify their speaker label
-        const earlyWords = transcriptResponse.words.slice(0, 50);
-        for (let i = 0; i < earlyWords.length; i++) {
-          const w = earlyWords[i];
-          if (w.text.toLowerCase().includes(detectedName) ||
-              (i > 0 && `${earlyWords[i - 1].text} ${w.text}`.toLowerCase().includes(detectedName))) {
-            const agentSpeaker = w.speaker || "?";
-            console.log(`[${callId}] Agent "${aiAnalysis.detected_agent_name}" identified as Speaker ${agentSpeaker}`);
-            // Store agent speaker label in analysis for downstream use
-            if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
-            (analysis.confidenceFactors as Record<string, unknown>).agentSpeakerLabel = agentSpeaker;
-            break;
-          }
-        }
+      if (agentSpeakerLabel) {
+        console.log(`[${callId}] Agent "${aiAnalysis.detected_agent_name}" identified as Speaker ${agentSpeakerLabel}`);
+        if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
+        (analysis.confidenceFactors as Record<string, unknown>).agentSpeakerLabel = agentSpeakerLabel;
       }
     }
 
