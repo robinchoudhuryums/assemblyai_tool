@@ -39,6 +39,10 @@ Hardcoded values that should be config or environment variables
 Security concerns specific to this module (auth gaps, unvalidated inputs, exposed sensitive data)
 Inconsistencies between documentation/CLAUDE.md and actual implementation
 Code quality issues: overly complex functions, poor separation of concerns, naming that obscures intent
+Parallel sources of truth that can drift: schema definitions vs migration functions, Zod schemas vs TypeScript types, env var lists in docs vs startup validation, route definitions vs API docs. For anything with a "fresh install" path and an "existing install" path, verify both reach the same end state.
+Startup ordering assumptions: any module that assumes an env var, table, service connection, or initialized singleton exists at boot that isn't guaranteed by the initialization sequence. Flag assumptions that would cause silent failure or degraded behavior rather than a hard crash.
+Silent degradation on infrastructure mismatch: code paths where the app starts and reports healthy but is operating with broken or missing state — log lines that look like noise but indicate a real problem, health checks that return 200 while a subsystem is silently disabled, graceful fallbacks that mask a required dependency being absent.
+Operator-only state: table seeds, feature flags, config values, or service connections that must be set manually outside of deployment and are not covered by startup validation, migration scripts, or documented runbooks. These are invisible to CI and easy to miss in new environments.
 Anything that will compound into a larger problem if not addressed before this module scales
 
 For each finding:
