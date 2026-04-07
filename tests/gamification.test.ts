@@ -1,52 +1,17 @@
 /**
  * Tests for the gamification service: points computation, streak logic.
  *
- * Note: computePoints and evaluateBadges import from gamification.ts which
- * transitively imports storage.ts (which has a side-effect connection).
- * Following the project pattern (auth.test.ts, waf.test.ts), we replicate
- * the core logic inline for isolated, side-effect-free unit testing.
+ * A1/F04: imports computePoints from production code rather than re-implementing
+ * it in the test file. Re-implementing meant the tests passed even when production
+ * code drifted (the production version was never executed by the test).
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-
-// --- Replicate core gamification logic for isolated testing ---
-// (matches server/services/gamification.ts)
-
-const STREAK_THRESHOLD = 8.0;
-
-type CallLike = { analysis?: { performanceScore?: string } | null };
-
-function computeCurrentStreak(completedCalls: CallLike[]): number {
-  let streak = 0;
-  for (const call of completedCalls) {
-    const score = parseFloat(call.analysis?.performanceScore || "0");
-    if (score >= STREAK_THRESHOLD) {
-      streak++;
-    } else {
-      break;
-    }
-  }
-  return streak;
-}
-
-function computePoints(completedCalls: CallLike[], badgeCount: number): number {
-  let total = 0;
-  const streak = computeCurrentStreak(completedCalls);
-
-  for (const call of completedCalls) {
-    const score = parseFloat(call.analysis?.performanceScore || "0");
-    let callPoints = 10 + Math.max(0, (score - 5)) * 5;
-    if (streak > 0 && completedCalls.indexOf(call) < streak) {
-      callPoints *= 1.5;
-    }
-    total += callPoints;
-  }
-
-  total += badgeCount * 50;
-  return Math.round(total);
-}
+import { computePoints } from "../server/services/gamification.js";
 
 // --- Helpers ---
+
+type CallLike = { analysis?: { performanceScore?: string } | null };
 
 function makeCall(score: string): CallLike {
   return { analysis: { performanceScore: score } };
@@ -57,41 +22,6 @@ function makeCalls(scores: string[]): CallLike[] {
 }
 
 // --- Tests ---
-
-describe("computeCurrentStreak", () => {
-  it("returns 0 for empty calls", () => {
-    assert.equal(computeCurrentStreak([]), 0);
-  });
-
-  it("counts consecutive calls >= 8.0", () => {
-    assert.equal(computeCurrentStreak(makeCalls(["9.0", "8.5", "8.0"])), 3);
-  });
-
-  it("stops at first call below threshold", () => {
-    assert.equal(computeCurrentStreak(makeCalls(["9.0", "8.5", "7.9", "9.0"])), 2);
-  });
-
-  it("returns 0 when first call is below threshold", () => {
-    assert.equal(computeCurrentStreak(makeCalls(["7.0", "9.0", "9.0"])), 0);
-  });
-
-  it("handles exactly 8.0 as part of streak", () => {
-    assert.equal(computeCurrentStreak(makeCalls(["8.0"])), 1);
-  });
-
-  it("handles missing performanceScore", () => {
-    const calls: CallLike[] = [
-      { analysis: { performanceScore: "9.0" } },
-      { analysis: {} },
-    ];
-    assert.equal(computeCurrentStreak(calls), 1);
-  });
-
-  it("handles null analysis", () => {
-    const calls: CallLike[] = [{ analysis: null }];
-    assert.equal(computeCurrentStreak(calls), 0);
-  });
-});
 
 describe("computePoints", () => {
   it("returns 0 for empty calls and no badges", () => {
@@ -169,49 +99,5 @@ describe("computePoints", () => {
     const pts = computePoints(makeCalls(scores), 0);
     // score=7.5: 10 + (7.5-5)*5 = 22.5 per call. No streak (7.5 < 8.0).
     assert.equal(pts, 2250);
-  });
-});
-
-describe("badge eligibility logic", () => {
-  it("milestone badges trigger at correct thresholds", () => {
-    // first_call at 1, calls_25 at 25, calls_50 at 50, calls_100 at 100
-    assert.equal(1 === 1, true);  // first_call
-    assert.equal(25 >= 25, true); // calls_25
-    assert.equal(24 >= 25, false);
-    assert.equal(50 >= 50, true); // calls_50
-    assert.equal(100 >= 100, true); // calls_100
-  });
-
-  it("perfect score requires >= 10.0", () => {
-    assert.ok(10.0 >= 10.0);
-    assert.ok(!(9.9 >= 10.0));
-  });
-
-  it("streak badges require minimum consecutive calls", () => {
-    assert.ok(computeCurrentStreak(makeCalls(["8.0", "8.0", "8.0"])) >= 3);
-    assert.ok(computeCurrentStreak(makeCalls(["8.0", "8.0"])) < 3);
-    assert.ok(computeCurrentStreak(makeCalls(Array(5).fill("9.0"))) >= 5);
-    assert.ok(computeCurrentStreak(makeCalls(Array(10).fill("8.5"))) >= 10);
-  });
-
-  it("sub-score excellence requires 5 consecutive calls with score >= 9", () => {
-    const recentSubScores = [
-      { compliance: 9.5 },
-      { compliance: 9.0 },
-      { compliance: 9.2 },
-      { compliance: 10.0 },
-      { compliance: 9.1 },
-    ];
-    const allMeetThreshold = recentSubScores.every(s => (s.compliance ?? 0) >= 9);
-    assert.ok(allMeetThreshold);
-
-    const withLow = [
-      { compliance: 9.5 },
-      { compliance: 8.9 }, // below 9
-      { compliance: 9.2 },
-      { compliance: 10.0 },
-      { compliance: 9.1 },
-    ];
-    assert.ok(!withLow.every(s => (s.compliance ?? 0) >= 9));
   });
 });

@@ -22,6 +22,12 @@ import { storage } from "../storage";
 import { broadcastCallUpdate } from "./websocket";
 import type { Badge, InsertBadge, LeaderboardEntry } from "@shared/schema";
 import { STREAK_SCORE_THRESHOLD } from "../constants";
+import { logger } from "./logger";
+
+// A4/F03: limit applied to recent-call queries used by badge eval. Sub-score
+// excellence checks need 5 recent calls; streak badges need ≤10. 25 covers
+// both with headroom and is the cap we send to storage.getRecentCallsForBadgeEval.
+const BADGE_EVAL_RECENT_LIMIT = 25;
 
 const STREAK_THRESHOLD = STREAK_SCORE_THRESHOLD;
 
@@ -45,13 +51,14 @@ export async function evaluateBadges(
   const awarded: Badge[] = [];
 
   try {
-    // Get employee's call history for streak/milestone calculations
-    const allCalls = await storage.getCallsWithDetails({ employee: employeeId });
-    const completedCalls = allCalls
-      .filter(c => c.status === "completed" && c.analysis?.performanceScore)
-      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
-
-    const totalCalls = completedCalls.length;
+    // A4/F03: previously this scanned all of an employee's calls + analyses.
+    // Now we use two indexed queries: a fast COUNT for milestone thresholds
+    // and a small LIMIT for streak/sub-score windows.
+    const [totalCalls, recentCalls] = await Promise.all([
+      storage.countCompletedCallsByEmployee(employeeId),
+      storage.getRecentCallsForBadgeEval(employeeId, BADGE_EVAL_RECENT_LIMIT),
+    ]);
+    const completedCalls = recentCalls.filter(c => c.analysis?.performanceScore);
 
     // --- Milestone badges ---
     if (totalCalls === 1) {
@@ -107,10 +114,19 @@ export async function evaluateBadges(
         badges: awarded.map(b => b.badgeType),
         count: awarded.length,
       });
-      console.log(`[${callId}] Badges earned: ${awarded.map(b => b.badgeType).join(", ")}`);
+      logger.info("badges earned", {
+        callId,
+        employeeId,
+        badgeTypes: awarded.map(b => b.badgeType),
+        count: awarded.length,
+      });
     }
   } catch (error) {
-    console.warn("[GAMIFICATION] Badge evaluation error:", (error as Error).message);
+    logger.warn("badge evaluation error", {
+      callId,
+      employeeId,
+      error: (error as Error).message,
+    });
   }
 
   return awarded;
@@ -179,61 +195,109 @@ export function computePoints(
   return Math.round(total);
 }
 
+// --- A4/F13: leaderboard with server-side aggregation + 60s cache ---
+//
+// Previously this loaded every call + every analysis into memory and looped
+// over employees * calls in JS. The new version pushes the aggregation into
+// SQL via storage.getLeaderboardData() and caches the result for 60s — the
+// leaderboard is hit hard from the dashboard but tolerates up to a minute
+// of staleness.
+
+const LEADERBOARD_CACHE_TTL_MS = 60_000;
+type LeaderboardCacheEntry = { value: LeaderboardEntry[]; expiresAt: number };
+const leaderboardCache = new Map<string, LeaderboardCacheEntry>();
+
+/** Test seam: clear the leaderboard cache. */
+export function clearLeaderboardCache(): void {
+  leaderboardCache.clear();
+}
+
+/** Compute streak from a NEWEST-FIRST array of numeric scores. */
+function computeStreakFromScores(scores: number[]): number {
+  let streak = 0;
+  for (const s of scores) {
+    if (s >= STREAK_THRESHOLD) streak++;
+    else break;
+  }
+  return streak;
+}
+
+/** Compute points from precomputed totals + a recent-score window. */
+function computePointsFromAggregate(
+  recentScores: number[],
+  scoreSum: number,
+  scoreCount: number,
+  badgeCount: number,
+): number {
+  // Per-call: base 10 + score bonus = scoreCount*10 + max(0, sum-(5*count))*5
+  const callBase = scoreCount * 10;
+  const scoreBonus = Math.max(0, scoreSum - 5 * scoreCount) * 5;
+  // Streak multiplier: only the recent streak gets 1.5x (which adds half of
+  // the per-call points for each call inside the streak). recentScores is
+  // newest-first; the streak is the count of consecutive scores >= threshold.
+  const streak = computeStreakFromScores(recentScores);
+  let streakBonus = 0;
+  if (streak > 0) {
+    for (let i = 0; i < streak; i++) {
+      const s = recentScores[i];
+      const callPts = 10 + Math.max(0, s - 5) * 5;
+      streakBonus += callPts * 0.5; // 1.5x - 1x = 0.5x
+    }
+  }
+  const total = callBase + scoreBonus + streakBonus + badgeCount * 50;
+  return Math.round(total);
+}
+
 /**
  * Generate the leaderboard from existing data.
  * Optionally filter by time period.
+ *
+ * Cache: results are cached for 60s per period key. Any badge insert
+ * (createBadge) does NOT invalidate the cache — staleness up to 60s is
+ * acceptable for this view.
  */
 export async function getLeaderboard(period?: "week" | "month" | "all"): Promise<LeaderboardEntry[]> {
-  const employees = await storage.getAllEmployees();
-  const allBadges = await storage.getAllBadges();
-  const allCalls = await storage.getCallsWithDetails({});
-
-  // Filter calls by time period
-  const now = new Date();
-  let cutoff: Date | null = null;
-  if (period === "week") {
-    cutoff = new Date(now.getTime() - 7 * 86400000);
-  } else if (period === "month") {
-    cutoff = new Date(now.getTime() - 30 * 86400000);
+  const cacheKey = period ?? "all";
+  const cached = leaderboardCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
   }
 
-  const entries: LeaderboardEntry[] = [];
+  let since: Date | undefined;
+  if (period === "week") since = new Date(now - 7 * 86400000);
+  else if (period === "month") since = new Date(now - 30 * 86400000);
 
-  for (const emp of employees) {
-    let empCalls = allCalls.filter(
-      c => c.employeeId === emp.id && c.status === "completed" && c.analysis?.performanceScore
-    );
-    if (cutoff) {
-      empCalls = empCalls.filter(c => new Date(c.uploadedAt || 0) >= cutoff!);
-    }
+  // Server-side aggregation: one row per employee (with totals + recent scores)
+  const [rows, allBadges] = await Promise.all([
+    storage.getLeaderboardData({ since }),
+    storage.getAllBadges(),
+  ]);
 
-    if (empCalls.length === 0) continue;
-
-    // Sort by date desc for streak calculation
-    empCalls.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
-
-    const scores = empCalls.map(c => parseFloat(c.analysis?.performanceScore || "0"));
-    const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const empBadges = allBadges.filter(b => b.employeeId === emp.id);
-    const streak = computeCurrentStreak(empCalls);
-    const points = computePoints(empCalls, empBadges.length);
-
-    entries.push({
-      employeeId: emp.id,
-      employeeName: emp.name,
-      subTeam: emp.subTeam,
-      totalCalls: empCalls.length,
-      avgScore: Math.round(avgScore * 10) / 10,
-      totalPoints: points,
-      currentStreak: streak,
-      badges: empBadges,
-      rank: 0, // filled below
+  const entries: LeaderboardEntry[] = rows
+    .filter(r => r.totalCalls > 0)
+    .map(r => {
+      const empBadges = allBadges.filter(b => b.employeeId === r.employeeId);
+      const avgScore = r.scoreCount > 0 ? r.scoreSum / r.scoreCount : 0;
+      const streak = computeStreakFromScores(r.recentScores);
+      const points = computePointsFromAggregate(r.recentScores, r.scoreSum, r.scoreCount, empBadges.length);
+      return {
+        employeeId: r.employeeId,
+        employeeName: r.employeeName,
+        subTeam: r.subTeam,
+        totalCalls: r.totalCalls,
+        avgScore: Math.round(avgScore * 10) / 10,
+        totalPoints: points,
+        currentStreak: streak,
+        badges: empBadges,
+        rank: 0, // filled below
+      };
     });
-  }
 
   // Sort by points descending, then avg score as tiebreaker
   entries.sort((a, b) => b.totalPoints - a.totalPoints || b.avgScore - a.avgScore);
   entries.forEach((e, i) => { e.rank = i + 1; });
 
+  leaderboardCache.set(cacheKey, { value: entries, expiresAt: now + LEADERBOARD_CACHE_TTL_MS });
   return entries;
 }

@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { aiProvider } from "../services/ai-factory";
+import { validateParams } from "./utils";
 import {
   aggregateMetrics,
   buildSnapshotSummaryPrompt,
@@ -32,7 +33,7 @@ export function registerSnapshotRoutes(router: Router) {
    * Generate a performance snapshot for an employee.
    * Body: { from: string, to: string }
    */
-  router.post("/api/snapshots/employee/:employeeId", requireAuth, requireRole("manager"), async (req, res) => {
+  router.post("/api/snapshots/employee/:employeeId", requireAuth, requireRole("manager"), validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.body;
@@ -121,20 +122,20 @@ export function registerSnapshotRoutes(router: Router) {
   // ==================== VIEW SNAPSHOTS ====================
 
   /** Get snapshots for a specific employee. */
-  router.get("/api/snapshots/employee/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/snapshots/employee/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     const snapshots = await getSnapshots("employee", req.params.employeeId);
     res.json(snapshots);
   });
 
   /** Get snapshots for a team. */
-  router.get("/api/snapshots/team/:teamName", requireAuth, async (req, res) => {
-    const snapshots = await getSnapshots("team", req.params.teamName);
+  router.get("/api/snapshots/team/:teamName", requireAuth, validateParams({ teamName: "safeName" }), async (req, res) => {
+    const snapshots = await getSnapshots("team", decodeURIComponent(req.params.teamName));
     res.json(snapshots);
   });
 
   /** Get snapshots for a department. */
-  router.get("/api/snapshots/department/:department", requireAuth, async (req, res) => {
-    const snapshots = await getSnapshots("department", req.params.department);
+  router.get("/api/snapshots/department/:department", requireAuth, validateParams({ department: "safeName" }), async (req, res) => {
+    const snapshots = await getSnapshots("department", decodeURIComponent(req.params.department));
     res.json(snapshots);
   });
 
@@ -145,7 +146,7 @@ export function registerSnapshotRoutes(router: Router) {
   });
 
   /** Get all snapshots for a level (admin overview). */
-  router.get("/api/snapshots/all/:level", requireAuth, requireRole("manager"), async (req, res) => {
+  router.get("/api/snapshots/all/:level", requireAuth, requireRole("manager"), validateParams({ level: "safeId" }), async (req, res) => {
     const level = req.params.level as SnapshotLevel;
     if (!["employee", "team", "department", "company"].includes(level)) {
       return res.status(400).json({ message: "Level must be employee, team, department, or company" });
@@ -161,12 +162,12 @@ export function registerSnapshotRoutes(router: Router) {
    * next AI summary starts fresh. Useful when employees change roles,
    * transfer teams, or historical context becomes misleading.
    */
-  router.delete("/api/snapshots/:level/:targetId/reset", requireAuth, requireRole("admin"), async (req, res) => {
+  router.delete("/api/snapshots/:level/:targetId/reset", requireAuth, requireRole("admin"), validateParams({ level: "safeId", targetId: "safeName" }), async (req, res) => {
     const level = req.params.level as SnapshotLevel;
     if (!["employee", "team", "department", "company"].includes(level)) {
       return res.status(400).json({ message: "Level must be employee, team, department, or company" });
     }
-    const removed = await resetSnapshotContext(level, req.params.targetId, req.user!.username);
+    const removed = await resetSnapshotContext(level, decodeURIComponent(req.params.targetId), req.user!.username);
     res.json({ message: `Context reset: ${removed} snapshot(s) removed`, removed });
   });
 

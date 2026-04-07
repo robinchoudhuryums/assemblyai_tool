@@ -5,7 +5,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 
 export function registerReportRoutes(router: Router) {
@@ -231,7 +231,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   });
 
   // Agent profile: aggregated feedback across all calls for an employee
-  router.get("/api/reports/agent-profile/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.query;
@@ -357,7 +357,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   });
 
   // Generate AI narrative summary for an agent's performance
-  router.post("/api/reports/agent-summary/:employeeId", requireAuth, async (req, res) => {
+  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       if (!aiProvider.isAvailable || !aiProvider.generateText) {
         res.status(503).json({ message: "AI provider not configured. Set up Bedrock or Gemini credentials." });

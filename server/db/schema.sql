@@ -276,6 +276,45 @@ CREATE INDEX IF NOT EXISTS idx_call_tags_call_id ON call_tags (call_id);
 CREATE INDEX IF NOT EXISTS idx_call_tags_tag ON call_tags (tag);
 
 -- ============================================================
+-- Scheduled Reports (A3/F02 — periodic weekly/monthly summaries)
+-- ============================================================
+-- Persists generated weekly/monthly performance reports so they survive
+-- restarts and so the scheduler can detect missed slots and catch up.
+-- The UNIQUE(type, period_start) constraint guarantees that re-running the
+-- scheduler for the same period is idempotent.
+CREATE TABLE IF NOT EXISTS scheduled_reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type VARCHAR(20) NOT NULL,                  -- "weekly" | "monthly"
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  generated_by VARCHAR(255) NOT NULL,
+  data JSONB NOT NULL,
+  UNIQUE (type, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_reports_type_period ON scheduled_reports (type, period_start DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_reports_generated_at ON scheduled_reports (generated_at DESC);
+
+-- ============================================================
+-- Gamification Badges (A2/F01 — moved here from runMigrations)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS badges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  badge_type VARCHAR(100) NOT NULL,
+  call_id UUID REFERENCES calls(id) ON DELETE SET NULL,
+  earned_at TIMESTAMPTZ DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_badges_employee_id ON badges (employee_id);
+CREATE INDEX IF NOT EXISTS idx_badges_badge_type ON badges (badge_type);
+-- Milestone badges are once-per-employee. Score/streak/sub-score badges have
+-- no uniqueness constraint by design (they accumulate).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_badges_unique_milestone
+  ON badges (employee_id, badge_type)
+  WHERE badge_type IN ('first_call', 'calls_25', 'calls_50', 'calls_100');
+
+-- ============================================================
 -- Performance Snapshots (periodic reviews for employees, teams, company)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS performance_snapshots (

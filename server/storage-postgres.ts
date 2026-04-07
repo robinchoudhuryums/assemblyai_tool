@@ -16,7 +16,7 @@ import type {
   PromptTemplate, InsertPromptTemplate,
   CoachingSession, InsertCoachingSession,
   PerformerSummary, ABTest, InsertABTest, UsageRecord,
-  Badge, InsertBadge,
+  Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient } from "./storage";
 import { safeFloat } from "./routes/utils";
@@ -474,6 +474,122 @@ export class PostgresStorage implements IStorage {
       [externalId],
     );
     return rows.length > 0 ? mapCall(rows[0]) : undefined;
+  }
+
+  // ── A4/F03/F13/F15: hot-path helpers ──────────────────────
+  async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    const { rows } = await this.db.query(
+      `SELECT COUNT(*)::int AS c FROM calls WHERE employee_id = $1 AND status = 'completed'`,
+      [employeeId],
+    );
+    return rows[0]?.c ?? 0;
+  }
+
+  async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
+    const cappedLimit = Math.max(1, Math.min(limit, 200));
+    // Joins only the analysis (not transcript/sentiment) — badge evaluation
+    // needs sub_scores + performance_score, nothing more.
+    const { rows } = await this.db.query(
+      `SELECT c.*,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+       FROM calls c
+       LEFT JOIN call_analyses a ON a.call_id = c.id
+       WHERE c.employee_id = $1 AND c.status = 'completed'
+       ORDER BY c.uploaded_at DESC
+       LIMIT $2`,
+      [employeeId, cappedLimit],
+    );
+    return rows.map(mapCallWithDetailsRow);
+  }
+
+  async getLeaderboardData(options: { since?: Date }): Promise<LeaderboardRow[]> {
+    // One row per employee with totals + a JSON array of recent scores.
+    // The recent_scores subquery returns up to 50 most recent scores per
+    // employee — used downstream by the streak calculator. The since filter
+    // is applied uniformly to both aggregates and the recent-scores window.
+    const params: unknown[] = [];
+    let sinceClause = "";
+    if (options.since) {
+      params.push(options.since);
+      sinceClause = `AND c.uploaded_at >= $${params.length}`;
+    }
+    const { rows } = await this.db.query(
+      `WITH ranked AS (
+         SELECT c.employee_id,
+                CAST(a.performance_score AS NUMERIC) AS score,
+                c.uploaded_at,
+                ROW_NUMBER() OVER (PARTITION BY c.employee_id ORDER BY c.uploaded_at DESC) AS rn
+         FROM calls c
+         JOIN call_analyses a ON a.call_id = c.id
+         WHERE c.status = 'completed'
+           AND c.employee_id IS NOT NULL
+           AND a.performance_score IS NOT NULL
+           AND a.performance_score <> ''
+           ${sinceClause}
+       )
+       SELECT
+         e.id AS employee_id,
+         e.name AS employee_name,
+         e.sub_team,
+         COUNT(r.score)::int AS total_calls,
+         COALESCE(SUM(r.score), 0)::float AS score_sum,
+         COUNT(r.score)::int AS score_count,
+         COALESCE(
+           (SELECT json_agg(score ORDER BY rn ASC)
+            FROM ranked r2
+            WHERE r2.employee_id = e.id AND r2.rn <= 50),
+           '[]'::json
+         ) AS recent_scores
+       FROM employees e
+       LEFT JOIN ranked r ON r.employee_id = e.id
+       GROUP BY e.id, e.name, e.sub_team
+       HAVING COUNT(r.score) > 0
+       ORDER BY score_sum DESC NULLS LAST`,
+      params,
+    );
+    return rows.map((row: any) => ({
+      employeeId: row.employee_id,
+      employeeName: row.employee_name,
+      subTeam: row.sub_team ?? undefined,
+      totalCalls: row.total_calls,
+      scoreSum: parseFloat(row.score_sum) || 0,
+      scoreCount: row.score_count,
+      recentScores: Array.isArray(row.recent_scores)
+        ? row.recent_scores.map((s: unknown) => parseFloat(String(s))).filter(Number.isFinite)
+        : [],
+    }));
+  }
+
+  async getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]> {
+    const params: unknown[] = [since];
+    let extra = "";
+    if (employeeId) {
+      params.push(employeeId);
+      extra = ` AND c.employee_id = $2`;
+    }
+    const { rows } = await this.db.query(
+      `SELECT c.*,
+        e.id AS e_id, e.name AS e_name, e.role AS e_role, e.email AS e_email,
+        e.initials AS e_initials, e.status AS e_status, e.sub_team AS e_sub_team, e.created_at AS e_created_at,
+        t.id AS t_id, t.text AS t_text, t.confidence AS t_confidence, t.words AS t_words, t.created_at AS t_created_at,
+        s.id AS s_id, s.overall_sentiment, s.overall_score, s.segments AS s_segments, s.created_at AS s_created_at,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+       FROM calls c
+       LEFT JOIN employees e ON c.employee_id = e.id
+       LEFT JOIN transcripts t ON t.call_id = c.id
+       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+       LEFT JOIN call_analyses a ON a.call_id = c.id
+       WHERE c.uploaded_at >= $1${extra}
+       ORDER BY c.uploaded_at DESC`,
+      params,
+    );
+    return rows.map(mapCallWithDetailsRow);
   }
 
   async getCallsWithDetails(

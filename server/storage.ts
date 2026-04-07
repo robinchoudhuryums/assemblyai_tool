@@ -27,6 +27,7 @@ import {
   type UsageRecord,
   type Badge,
   type InsertBadge,
+  type LeaderboardRow,
 } from "@shared/schema";
 import { S3Client } from "./services/s3";
 import { getPool } from "./db/pool";
@@ -120,6 +121,34 @@ export interface IStorage {
    */
   findCallByExternalId(externalId: string): Promise<Call | undefined>;
   getCallsWithDetails(filters?: { status?: string; sentiment?: string; employee?: string }): Promise<CallWithDetails[]>;
+  /**
+   * A4/F03: count completed calls for one employee. Replaces a
+   * `getCallsWithDetails({ employee }).filter(...)` scan in the badge
+   * evaluator. PostgresStorage uses an indexed COUNT.
+   */
+  countCompletedCallsByEmployee(employeeId: string): Promise<number>;
+  /**
+   * A4/F03: return the N most recent completed calls for one employee
+   * with their analyses joined. Replaces full call+analysis scans in
+   * gamification + coaching weakness checks.
+   */
+  getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]>;
+  /**
+   * A4/F13: server-side leaderboard aggregation. Returns one row per
+   * employee with totals for calls, scores, and recent-streak input.
+   * The window applied here is "all completed calls" — `period` filtering
+   * (week / month / all) is applied at the SQL level by callers because
+   * it's cheaper to push down than to compute over an O(employees * calls)
+   * in-memory scan.
+   */
+  getLeaderboardData(options: { since?: Date }): Promise<LeaderboardRow[]>;
+  /**
+   * A4/F15: return calls completed since a given date with all
+   * details joined. Replaces 6 hot-path `getCallsWithDetails()` scans
+   * (insights, scheduled reports, analytics fallback) that were loading
+   * the full call universe to filter by date in JS.
+   */
+  getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]>;
   getCallsPaginated(options: {
     filters?: { status?: string; sentiment?: string; employee?: string };
     cursor?: string; // ISO timestamp:id cursor
@@ -387,6 +416,78 @@ export class MemStorage implements IStorage {
     // Sentiment filter requires the joined data (can't pre-filter)
     if (filters.sentiment) results = results.filter((c) => c.sentiment?.overallSentiment === filters.sentiment);
     return results;
+  }
+
+  // ── A4/F03/F13/F15: hot-path helpers ───────────────────────
+  async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    let count = 0;
+    for (const call of this.calls.values()) {
+      if (call.employeeId === employeeId && call.status === "completed") count++;
+    }
+    return count;
+  }
+
+  async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
+    const calls = [...this.calls.values()]
+      .filter(c => c.employeeId === employeeId && c.status === "completed")
+      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+      .slice(0, Math.max(1, Math.min(limit, 200)));
+    return Promise.all(calls.map(async (call) => {
+      const analysis = this.analyses.get(call.id);
+      return { ...call, employee: undefined, transcript: undefined, sentiment: undefined, analysis } as CallWithDetails;
+    }));
+  }
+
+  async getLeaderboardData(options: { since?: Date }): Promise<LeaderboardRow[]> {
+    const sinceMs = options.since ? options.since.getTime() : 0;
+    const byEmployee = new Map<string, LeaderboardRow>();
+    const sortedCalls = [...this.calls.values()]
+      .filter(c => c.status === "completed" && c.employeeId)
+      .filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs)
+      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+    for (const call of sortedCalls) {
+      const empId = call.employeeId!;
+      const analysis = this.analyses.get(call.id);
+      if (!analysis?.performanceScore) continue;
+      const score = parseFloat(analysis.performanceScore);
+      if (!Number.isFinite(score)) continue;
+      let row = byEmployee.get(empId);
+      if (!row) {
+        const emp = this.employees.get(empId);
+        if (!emp) continue;
+        row = {
+          employeeId: empId,
+          employeeName: emp.name,
+          subTeam: emp.subTeam,
+          totalCalls: 0,
+          scoreSum: 0,
+          scoreCount: 0,
+          recentScores: [],
+        };
+        byEmployee.set(empId, row);
+      }
+      row.totalCalls++;
+      row.scoreSum += score;
+      row.scoreCount++;
+      if (row.recentScores.length < 50) row.recentScores.push(score);
+    }
+    return Array.from(byEmployee.values());
+  }
+
+  async getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]> {
+    const sinceMs = since.getTime();
+    const calls = [...this.calls.values()]
+      .filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs)
+      .filter(c => !employeeId || c.employeeId === employeeId);
+    return Promise.all(calls.map(async (call) => {
+      const [employee, transcript, sentiment, analysis] = await Promise.all([
+        call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
+        this.getTranscript(call.id),
+        this.getSentimentAnalysis(call.id),
+        this.getCallAnalysis(call.id),
+      ]);
+      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+    }));
   }
 
   async getCallsPaginated(options: {
@@ -903,6 +1004,60 @@ export class CloudStorage implements IStorage {
     }
 
     return filtered;
+  }
+
+  // ── A4/F03/F13/F15: hot-path helpers (CloudStorage) ─────
+  // Note: S3-only backend has no secondary indexes, so all of these are
+  // O(N) over the call set. Acceptable because CloudStorage is the
+  // legacy/dev fallback — production runs PostgresStorage.
+  async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    const calls = await this.getCallsWithDetails({ employee: employeeId, status: "completed" });
+    return calls.length;
+  }
+
+  async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
+    const calls = await this.getCallsWithDetails({ employee: employeeId, status: "completed" });
+    return calls.slice(0, Math.max(1, Math.min(limit, 200)));
+  }
+
+  async getLeaderboardData(options: { since?: Date }): Promise<LeaderboardRow[]> {
+    const sinceMs = options.since ? options.since.getTime() : 0;
+    const all = await this.getCallsWithDetails({ status: "completed" });
+    const byEmployee = new Map<string, LeaderboardRow>();
+    const sorted = all
+      .filter(c => c.employee && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
+      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+    for (const call of sorted) {
+      const empId = call.employeeId!;
+      const score = call.analysis?.performanceScore ? parseFloat(call.analysis.performanceScore) : NaN;
+      if (!Number.isFinite(score)) continue;
+      let row = byEmployee.get(empId);
+      if (!row) {
+        row = {
+          employeeId: empId,
+          employeeName: call.employee!.name,
+          subTeam: call.employee!.subTeam,
+          totalCalls: 0,
+          scoreSum: 0,
+          scoreCount: 0,
+          recentScores: [],
+        };
+        byEmployee.set(empId, row);
+      }
+      row.totalCalls++;
+      row.scoreSum += score;
+      row.scoreCount++;
+      if (row.recentScores.length < 50) row.recentScores.push(score);
+    }
+    return Array.from(byEmployee.values());
+  }
+
+  async getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]> {
+    const filters: { status?: string; employee?: string } = {};
+    if (employeeId) filters.employee = employeeId;
+    const all = await this.getCallsWithDetails(filters);
+    const sinceMs = since.getTime();
+    return all.filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
   }
 
   async getCallsPaginated(options: {

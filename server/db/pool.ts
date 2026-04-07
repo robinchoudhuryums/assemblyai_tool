@@ -138,7 +138,11 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates (call_category) WHERE is_active = TRUE",
     "CREATE INDEX IF NOT EXISTS idx_usage_call_id ON usage_records (call_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log (user_id)",
-    // Gamification badges table
+    // A2/F01: badges table now lives in schema.sql as the source of truth.
+    // The block below is an idempotent MIRROR for databases that were
+    // initialized before A2 (i.e. existing deployments where the calls table
+    // already exists, so initializeDatabase() short-circuits past the
+    // schema.sql apply step). Keep these in sync with schema.sql.
     `CREATE TABLE IF NOT EXISTS badges (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
@@ -163,6 +167,19 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // Unique partial index lets multiple non-telephony rows with NULL coexist.
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_external_id_unique ON calls (external_id) WHERE external_id IS NOT NULL",
+    // A3/F02: scheduled_reports — mirror of schema.sql for existing DBs.
+    `CREATE TABLE IF NOT EXISTS scheduled_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      type VARCHAR(20) NOT NULL,
+      period_start TIMESTAMPTZ NOT NULL,
+      period_end TIMESTAMPTZ NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      generated_by VARCHAR(255) NOT NULL,
+      data JSONB NOT NULL,
+      UNIQUE (type, period_start)
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_reports_type_period ON scheduled_reports (type, period_start DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_reports_generated_at ON scheduled_reports (generated_at DESC)",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

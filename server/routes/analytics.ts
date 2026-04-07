@@ -721,15 +721,13 @@ export function registerHeatmapRoutes(router: Router) {
           }
         }
       } else {
-        // In-memory fallback
-        const allCalls = await storage.getCallsWithDetails(
-          employeeId ? { employee: employeeId } : undefined
-        );
-        const cutoff = Date.now() - days * 86400000;
+        // A4/F15: in-memory fallback now uses a windowed query so we don't
+        // load every call only to filter by date in JS.
+        const since = new Date(Date.now() - days * 86400000);
+        const allCalls = await storage.getCallsSinceWithDetails(since, employeeId);
         for (const call of allCalls) {
           if (call.status !== "completed") continue;
           const date = new Date(call.uploadedAt || 0);
-          if (date.getTime() < cutoff) continue;
           const d = date.getDay();
           const h = date.getHours();
           grid[d][h].count++;

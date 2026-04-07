@@ -589,6 +589,23 @@ export type LeaderboardEntry = {
   rank: number;
 };
 
+/**
+ * A4/F13: Storage-level row for the leaderboard. Aggregated server-side so
+ * the gamification service doesn't have to scan every call in memory.
+ * `recentScores` is the most recent N performance scores in DESC order
+ * by uploaded_at — used by the streak calculation. `recentScoresLimit`
+ * documents how many were fetched (the storage layer caps this).
+ */
+export type LeaderboardRow = {
+  employeeId: string;
+  employeeName: string;
+  subTeam?: string;
+  totalCalls: number;
+  scoreSum: number;
+  scoreCount: number;
+  recentScores: number[]; // newest first
+};
+
 export type DashboardMetrics = {
   totalCalls: number;
   avgSentiment: number;

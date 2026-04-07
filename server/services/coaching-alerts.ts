@@ -13,6 +13,7 @@ import { aiProvider } from "./ai-factory";
 import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
 import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
 import { fetchRagContext, isRagEnabled, type RagSource } from "./rag-client";
+import { logger } from "./logger";
 
 interface SubScores {
   compliance?: number;
@@ -80,7 +81,11 @@ export async function checkAndCreateCoachingAlert(
           aiNotes = aiPlan.notes;
         }
       } catch (err) {
-        console.warn(`[${callId}] AI coaching plan generation failed (using defaults):`, (err as Error).message);
+        logger.warn("ai coaching plan generation failed", {
+          callId,
+          employeeId,
+          error: (err as Error).message,
+        });
       }
     }
 
@@ -96,7 +101,12 @@ export async function checkAndCreateCoachingAlert(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${callId}] Coaching alert created for low score (${score.toFixed(1)}): session ${created.id}`);
+    logger.info("coaching alert created (low score)", {
+      callId,
+      employeeId,
+      coachingSessionId: created.id,
+      score,
+    });
 
     broadcastCallUpdate(callId, "coaching_alert", {
       coachingSessionId: created.id,
@@ -120,7 +130,12 @@ export async function checkAndCreateCoachingAlert(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${callId}] Recognition alert created for high score (${score.toFixed(1)}): session ${created.id}`);
+    logger.info("recognition alert created (high score)", {
+      callId,
+      employeeId,
+      coachingSessionId: created.id,
+      score,
+    });
 
     broadcastCallUpdate(callId, "recognition_alert", {
       coachingSessionId: created.id,
@@ -224,7 +239,11 @@ Requirements:
       };
     }
   } catch (parseErr) {
-    console.warn(`[${callId}] Failed to parse AI coaching plan:`, (parseErr as Error).message);
+    logger.warn("failed to parse ai coaching plan", {
+      callId,
+      employeeId,
+      error: (parseErr as Error).message,
+    });
   }
 
   return null;
@@ -240,11 +259,11 @@ async function checkRecurringWeaknesses(
   employeeId: string,
 ): Promise<void> {
   try {
-    const allCalls = await storage.getCallsWithDetails({ employee: employeeId });
-    const recentCalls = allCalls
-      .filter(c => c.status === "completed" && c.analysis?.subScores)
-      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
-      .slice(0, LOOKBACK_CALLS);
+    // A4/F03: indexed lookup of the agent's last N completed calls instead of
+    // a full per-employee scan. LOOKBACK_CALLS is the analysis window; we
+    // ask the storage layer for that many rows directly.
+    const recentCallsRaw = await storage.getRecentCallsForBadgeEval(employeeId, LOOKBACK_CALLS);
+    const recentCalls = recentCallsRaw.filter(c => c.analysis?.subScores);
 
     if (recentCalls.length < WEAKNESS_CALL_THRESHOLD) return;
 
@@ -347,7 +366,14 @@ async function checkRecurringWeaknesses(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${triggerCallId}] AI coaching plan created for ${primary.label} weakness: session ${created.id}`);
+    logger.info("ai coaching plan created (recurring weakness)", {
+      callId: triggerCallId,
+      employeeId,
+      coachingSessionId: created.id,
+      dimension: primary.label,
+      avgSubScore: Math.round(primary.avgScore * 10) / 10,
+      weakCallCount: primary.count,
+    });
 
     broadcastCallUpdate(triggerCallId, "coaching_plan", {
       coachingSessionId: created.id,
@@ -357,7 +383,11 @@ async function checkRecurringWeaknesses(
     });
   } catch (error) {
     // Non-critical — don't fail the pipeline
-    console.error("Error checking recurring weaknesses:", error instanceof Error ? error.message : error);
+    logger.error("recurring weaknesses check failed", {
+      callId: triggerCallId,
+      employeeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -450,7 +480,11 @@ Requirements:
       }
     }
   } catch (parseErr) {
-    console.warn(`[COACHING] Failed to parse AI recurring weakness plan:`, (parseErr as Error).message);
+    logger.warn("failed to parse ai recurring weakness plan", {
+      employeeId,
+      dimension: primary.dim,
+      error: (parseErr as Error).message,
+    });
   }
 
   return null;

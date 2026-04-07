@@ -133,18 +133,17 @@ describe("CSV export", () => {
   });
 });
 
-describe("Role-based access control pattern", () => {
-  function requireRole(...roles: string[]) {
-    return (req: any, res: any, next: any) => {
-      if (!req.user) return res.status(401).json({ message: "Authentication required" });
-      if (!roles.includes(req.user.role)) return res.status(403).json({ message: "Insufficient permissions" });
-      next();
-    };
-  }
-
+describe("Role-based access control (production requireRole)", () => {
+  // A1/F04: replaced a local copy of requireRole with the production export.
+  // Previous version tested its own inline implementation, never the real one.
   it("returns 403 when user role is insufficient", async () => {
+    const { requireRole } = await import("../server/auth.js");
     const app = createTestApp();
-    app.use((req: any, _res, next) => { req.user = { role: "viewer" }; next(); });
+    app.use((req: any, _res, next) => {
+      req.user = { role: "viewer" };
+      req.isAuthenticated = () => true;
+      next();
+    });
     app.get("/api/admin/test", requireRole("admin"), (_req, res) => res.json({ ok: true }));
 
     const { status, body } = await request(app, "GET", "/api/admin/test");
@@ -153,21 +152,59 @@ describe("Role-based access control pattern", () => {
   });
 
   it("returns 200 when user role matches", async () => {
+    const { requireRole } = await import("../server/auth.js");
     const app = createTestApp();
-    app.use((req: any, _res, next) => { req.user = { role: "admin" }; next(); });
+    app.use((req: any, _res, next) => {
+      req.user = { role: "admin" };
+      req.isAuthenticated = () => true;
+      next();
+    });
     app.get("/api/admin/test", requireRole("admin"), (_req, res) => res.json({ ok: true }));
 
     const { status } = await request(app, "GET", "/api/admin/test");
     assert.equal(status, 200);
   });
 
-  it("manager can access manager routes", async () => {
+  it("manager can access manager routes (hierarchy)", async () => {
+    const { requireRole } = await import("../server/auth.js");
     const app = createTestApp();
-    app.use((req: any, _res, next) => { req.user = { role: "manager" }; next(); });
+    app.use((req: any, _res, next) => {
+      req.user = { role: "manager" };
+      req.isAuthenticated = () => true;
+      next();
+    });
     app.get("/api/calls/export", requireRole("manager", "admin"), (_req, res) => res.json({ ok: true }));
 
     const { status } = await request(app, "GET", "/api/calls/export");
     assert.equal(status, 200);
+  });
+
+  it("admin can access manager routes (hierarchy)", async () => {
+    const { requireRole } = await import("../server/auth.js");
+    const app = createTestApp();
+    app.use((req: any, _res, next) => {
+      req.user = { role: "admin" };
+      req.isAuthenticated = () => true;
+      next();
+    });
+    app.get("/api/calls/export", requireRole("manager"), (_req, res) => res.json({ ok: true }));
+
+    const { status } = await request(app, "GET", "/api/calls/export");
+    assert.equal(status, 200);
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    const { requireRole } = await import("../server/auth.js");
+    const app = createTestApp();
+    app.use((req: any, _res, next) => {
+      req.isAuthenticated = () => false;
+      next();
+    });
+    app.get("/api/admin/test", requireRole("admin"), (_req, res) => res.json({ ok: true }));
+
+    const { status, body } = await request(app, "GET", "/api/admin/test");
+    assert.equal(status, 401);
+    assert.equal(body.message, "Authentication required");
   });
 });
 
@@ -272,18 +309,32 @@ describe("Storage: Transcript + Analysis lifecycle", () => {
 
 describe("Storage: Coaching sessions", () => {
   it("creates and retrieves coaching session by employee", async () => {
+    // A1/F05: payload now matches the production InsertCoachingSession schema
+    // — actionPlan (not actionItems), task (not text), valid category enum,
+    // and required title + assignedBy. Previously the test passed by accident
+    // because MemStorage doesn't validate inputs.
     const emp = await globalStorage.createEmployee({ name: "Coach Target", email: "coach@test.com", role: "Agent", status: "Active" });
     const session = await globalStorage.createCoachingSession({
       employeeId: emp.id,
-      category: "quality",
+      assignedBy: "test-manager",
+      category: "communication",
+      title: "Active listening practice",
       notes: "Needs improvement on empathy",
-      actionItems: [{ text: "Practice active listening", completed: false }],
+      actionPlan: [{ task: "Practice active listening", completed: false }],
+      status: "pending",
     });
     assert.ok(session.id);
 
     const sessions = await globalStorage.getCoachingSessionsByEmployee(emp.id);
     assert.ok(sessions.length >= 1);
     assert.equal(sessions[0].employeeId, emp.id);
+    // Verify the schema-correct fields round-tripped
+    const created = sessions.find(s => s.id === session.id);
+    assert.ok(created);
+    assert.equal(created!.title, "Active listening practice");
+    assert.equal(created!.assignedBy, "test-manager");
+    assert.equal(created!.category, "communication");
+    assert.deepEqual(created!.actionPlan, [{ task: "Practice active listening", completed: false }]);
   });
 });
 

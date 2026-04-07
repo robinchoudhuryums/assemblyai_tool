@@ -161,7 +161,7 @@ export function registerOperationsRoutes(
   });
 
   router.get("/api/admin/reports/:id", requireRole("manager", "admin"), async (req, res) => {
-    const report = getReport(req.params.id);
+    const report = await getReport(req.params.id);
     if (!report) {
       res.status(404).json({ message: "Report not found" });
       return;
