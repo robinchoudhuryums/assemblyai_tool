@@ -22,6 +22,21 @@ const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL?.replace(/\/$/, "");
 const RAG_API_KEY = process.env.RAG_API_KEY || "";
 const RAG_TIMEOUT_MS = 8_000;
 
+// A6/F10: In production, reject plaintext http:// RAG URLs. The API key is sent
+// in the X-API-Key header on every request — over http:// it would leak in
+// transit. Boot-fail in prod; warn in dev so localhost workflows still work.
+if (RAG_SERVICE_URL && RAG_SERVICE_URL.startsWith("http://")) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      `RAG_SERVICE_URL must use https:// in production (got: ${RAG_SERVICE_URL}). ` +
+      `Plaintext http would leak the RAG_API_KEY in transit.`
+    );
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn(`[RAG] RAG_SERVICE_URL is plaintext http:// — only allowed outside production (${RAG_SERVICE_URL})`);
+  }
+}
+
 // --- LFU (Least Frequently Used) Cache with metrics ---
 
 const RAG_CACHE_TTL_MS = (parseInt(process.env.RAG_CACHE_TTL_MIN || "30", 10) || 30) * 60 * 1000;
@@ -76,7 +91,11 @@ export function getRagCacheMetrics() {
 // --- Types ---
 
 export function isRagEnabled(): boolean {
-  return process.env.RAG_ENABLED === "true" && !!RAG_SERVICE_URL && !!RAG_API_KEY;
+  if (process.env.RAG_ENABLED !== "true") return false;
+  if (!RAG_SERVICE_URL || !RAG_API_KEY) return false;
+  // In production, refuse to enable against a plaintext http:// URL.
+  if (process.env.NODE_ENV === "production" && RAG_SERVICE_URL.startsWith("http://")) return false;
+  return true;
 }
 
 export interface RagSource {

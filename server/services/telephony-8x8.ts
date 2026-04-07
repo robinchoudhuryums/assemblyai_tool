@@ -22,7 +22,8 @@
  *   TELEPHONY_8X8_BASE_URL=https://...  — 8x8 API base URL (override for testing)
  */
 import { storage } from "../storage";
-import { randomUUID } from "crypto";
+import { createHash } from "crypto";
+import { isUrlSafe } from "./url-validator";
 
 export interface TelephonyConfig {
   enabled: boolean;
@@ -59,21 +60,33 @@ export interface IngestionResult {
 }
 
 function getConfig(): TelephonyConfig {
+  // A4/F06: NaN-guard the poll interval — parseInt("abc",10)=NaN would later
+  // become NaN ms in setInterval, which Node treats as 1ms (busy-loop polling).
+  const rawPoll = parseInt(process.env.TELEPHONY_8X8_POLL_MINUTES || "15", 10);
+  const pollIntervalMinutes = Number.isFinite(rawPoll) && rawPoll > 0 ? rawPoll : 15;
   return {
     enabled: process.env.TELEPHONY_8X8_ENABLED === "true",
     apiKey: process.env.TELEPHONY_8X8_API_KEY || "",
     subaccountId: process.env.TELEPHONY_8X8_SUBACCOUNT_ID || "",
     baseUrl: process.env.TELEPHONY_8X8_BASE_URL || "https://api.8x8.com/analytics/v2",
-    pollIntervalMinutes: parseInt(process.env.TELEPHONY_8X8_POLL_MINUTES || "15", 10),
+    pollIntervalMinutes,
   };
 }
 
 /**
  * Check if 8x8 integration is configured and available.
+ *
+ * HARD DISABLED (A1/F05): The 8x8 integration is a stub pending API access
+ * confirmation. Even if TELEPHONY_8X8_ENABLED=true, ingestion will not run
+ * unless the explicit acknowledgement flag TELEPHONY_8X8_STUB_ACKNOWLEDGED=true
+ * is also set. This prevents accidentally activating an unverified integration
+ * that would call provisional API endpoints with provisional response shapes.
  */
 export function is8x8Enabled(): boolean {
   const config = getConfig();
-  return config.enabled && !!config.apiKey && !!config.subaccountId;
+  if (!config.enabled || !config.apiKey || !config.subaccountId) return false;
+  if (process.env.TELEPHONY_8X8_STUB_ACKNOWLEDGED !== "true") return false;
+  return true;
 }
 
 /**
@@ -136,6 +149,13 @@ export async function downloadRecordingAudio(recording: Recording8x8): Promise<B
     headers["Authorization"] = `Bearer ${config.apiKey}`;
   }
 
+  // A4/F17: SSRF guard. recording.audioUrl comes from the upstream 8x8 API
+  // response — treat as untrusted. Block private IPs, metadata endpoints,
+  // localhost, .internal/.local, IPv6-mapped IPv4, etc. via the shared validator.
+  if (!recording.audioUrl || !isUrlSafe(recording.audioUrl)) {
+    throw new Error(`Refusing to fetch recording ${recording.recordingId}: audioUrl failed SSRF validation`);
+  }
+
   const response = await fetch(recording.audioUrl, { headers });
   if (!response.ok) {
     throw new Error(`Failed to download recording ${recording.recordingId}: HTTP ${response.status}`);
@@ -173,32 +193,41 @@ export async function ingestRecording(
       return { recordingId: recording.recordingId, callId: null, status: "skipped", reason: "Too short (<10s)" };
     }
 
-    // Check for duplicate by recording ID in filename convention
     const externalFileName = `8x8-${recording.recordingId}.wav`;
-    const existingCalls = await storage.getAllCalls();
-    const duplicate = existingCalls.find(c => c.fileName === externalFileName);
+
+    // Download audio first so we can content-hash for dedupe.
+    // A4/F03: Replaces the prior O(n) getAllCalls() scan with the indexed
+    // findCallByContentHash() lookup. This is the temporary dedupe mechanism
+    // until A10 (Batch 2) adds findCallByExternalId for recording-id-based
+    // dedupe without needing to download bytes first.
+    const audioBuffer = await downloadRecordingAudio(recording);
+    const contentHash = createHash("sha256").update(audioBuffer).digest("hex");
+
+    const duplicate = await storage.findCallByContentHash(contentHash);
     if (duplicate) {
       return { recordingId: recording.recordingId, callId: duplicate.id, status: "duplicate" };
     }
 
-    // Download audio
-    const audioBuffer = await downloadRecordingAudio(recording);
-
     // Map extension to employee
     const employeeId = await mapExtensionToEmployee(recording.extension);
 
-    // Create call record
-    const callId = randomUUID();
     const callCategory = recording.direction === "outbound" ? "outbound" : "inbound";
 
-    await storage.createCall({
+    // A4/F01: Use the id assigned by storage.createCall() — the previous code
+    // generated a UUID locally and discarded the storage-assigned id, leading
+    // to id mismatch between the call row, the audio S3 key, and the pipeline.
+    // A4/F02: Status must be "processing" to match the upload route contract;
+    // "pending" is not a valid call status in the pipeline state machine.
+    const created = await storage.createCall({
       employeeId,
       fileName: externalFileName,
       filePath: `telephony/8x8/${recording.recordingId}`,
-      status: "pending",
+      status: "processing",
       duration: recording.durationSeconds,
       callCategory,
-    });
+      contentHash,
+    } as any);
+    const callId = created.id;
 
     // Archive to S3 if available
     try {
@@ -273,7 +302,13 @@ export function startTelephonyScheduler(
   processAudioFn: (callId: string, audioBuffer: Buffer, options: { originalName: string; mimeType: string; callCategory?: string; uploadedBy?: string; processingMode?: string; language?: string; filePath?: string }) => Promise<void>,
 ): () => void {
   if (!is8x8Enabled()) {
-    console.log("[8x8] Telephony integration disabled (set TELEPHONY_8X8_ENABLED=true to enable).");
+    const acked = process.env.TELEPHONY_8X8_STUB_ACKNOWLEDGED === "true";
+    const enabled = process.env.TELEPHONY_8X8_ENABLED === "true";
+    if (enabled && !acked) {
+      console.warn("[8x8] Integration is a STUB pending API access. Refusing to start scheduler. Set TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to override.");
+    } else {
+      console.log("[8x8] Telephony integration disabled (set TELEPHONY_8X8_ENABLED=true and TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to enable).");
+    }
     return () => {};
   }
 

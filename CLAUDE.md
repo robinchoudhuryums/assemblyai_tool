@@ -829,7 +829,6 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Scoring** | `server/services/scoring-calibration.ts`, `server/services/auto-calibration.ts`, `server/services/scoring-feedback.ts` | Score normalization, periodic distribution analysis, manager correction capture for future prompt injection |
 | **AWS Infrastructure** | `server/services/s3.ts`, `server/services/sigv4.ts`, `server/services/aws-credentials.ts` | Custom S3 REST client (single consumer: `storage.ts`), SigV4 signing, credential resolution (env vars + IMDS with caching) |
 | **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
-| **RAG Hybrid** | `server/services/rag-hybrid.ts` | Hybrid vector+BM25 retrieval — **dead code**: not imported by any production file (only referenced in tests) |
 | **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain, persistent integrity head), brute-force/credential stuffing detection (wired to client IP via `passReqToCallback`), automated vuln scanning (history retains hollow entries past cap, summary kept), incident lifecycle management (DB-first persist; randomUUID IDs; throws on persist failure) |
 | **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection, used-token cache. `requireMFASetup` (in `server/auth.ts`) is mounted on `/api/admin/*` and gates admin routes when `isMFARoleRequired(role)` returns true |
 | **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
@@ -1004,7 +1003,6 @@ Every subsequent request:
 - `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback wired from `server/index.ts` startup — VERIFIED
 - `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
 - `server/services/audit-log.ts` → exports `logPhiAccess`, `flushAuditQueue`, `auditContext` (used by `routes/auth.ts` and other route files for extracting audit context), `AuditEntry`, `getDroppedAuditEntryCount`, `getPendingAuditEntryCount` — VERIFIED
-- `server/services/rag-hybrid.ts` → **DEAD CODE**: not imported by any production file (only referenced in `tests/oqa-adaptations.test.ts` via dynamic `import()`) — VERIFIED
 
 ### Complexity & Risk Rankings
 
@@ -1024,7 +1022,7 @@ Every subsequent request:
 
 ### Known Discrepancies
 
-- `server/services/rag-hybrid.ts` is listed in Architecture but is dead code (no production imports)
+- `server/services/rag-hybrid.ts` was deleted in A8 (was dead code; never imported by any production file)
 - `server/services/durable-queue.ts` was deleted in Batch 2 (A40) — any lingering references in older docs should be treated as stale
 - `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
 - `server/services/scheduled-reports.ts` is not documented in API routes (dynamically imported by `routes.ts`)

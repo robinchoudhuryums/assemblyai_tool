@@ -45,6 +45,7 @@ export type InsertWebhookConfig = Omit<WebhookConfig, "id" | "createdAt">;
 // --- S3 client accessor ---
 
 let getS3Client: (() => any) | null = null;
+let initialized = false;
 
 /**
  * Initialize the webhook service with an S3 client accessor.
@@ -52,15 +53,48 @@ let getS3Client: (() => any) | null = null;
  */
 export function initWebhooks(s3ClientAccessor: () => any): void {
   getS3Client = s3ClientAccessor;
+  initialized = true;
+}
+
+function requireS3Client(op: string): any {
+  if (!initialized || !getS3Client) {
+    throw new Error(`[Webhooks] S3 client not initialized — call initWebhooks() at startup before ${op}`);
+  }
+  const client = getS3Client();
+  if (!client) {
+    throw new Error(`[Webhooks] S3 client unavailable for ${op} — webhook persistence requires S3`);
+  }
+  return client;
+}
+
+// --- Config cache (A5/F09) ---
+// Webhook configs are read on every triggerWebhook() call. Cache the list for
+// 30s to avoid hammering S3 listAndDownloadJson on every event.
+const CONFIG_CACHE_TTL_MS = 30_000;
+let configCache: { configs: WebhookConfig[]; expiresAt: number } | null = null;
+
+function invalidateConfigCache(): void {
+  configCache = null;
 }
 
 // --- Config CRUD (S3-backed) ---
 
 export async function getAllWebhookConfigs(): Promise<WebhookConfig[]> {
-  const client = getS3Client?.();
+  // Serve from 30s TTL cache if fresh
+  if (configCache && Date.now() < configCache.expiresAt) {
+    return configCache.configs;
+  }
+  if (!initialized || !getS3Client) {
+    // No S3 wired up yet — return empty list rather than throwing on read paths
+    // (triggerWebhook is fire-and-forget and shouldn't crash callers).
+    return [];
+  }
+  const client = getS3Client();
   if (!client) return [];
   try {
-    return await (client.listAndDownloadJson as Function).call(client, "webhooks/") as WebhookConfig[];
+    const configs = await (client.listAndDownloadJson as Function).call(client, "webhooks/") as WebhookConfig[];
+    configCache = { configs, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
+    return configs;
   } catch (err) {
     console.warn("[Webhooks] Failed to list configs:", (err as Error).message);
     return [];
@@ -68,7 +102,8 @@ export async function getAllWebhookConfigs(): Promise<WebhookConfig[]> {
 }
 
 export async function getWebhookConfig(id: string): Promise<WebhookConfig | undefined> {
-  const client = getS3Client?.();
+  if (!initialized || !getS3Client) return undefined;
+  const client = getS3Client();
   if (!client) return undefined;
   try {
     return await (client.downloadJson as Function).call(client, `webhooks/${id}.json`) as WebhookConfig;
@@ -78,25 +113,25 @@ export async function getWebhookConfig(id: string): Promise<WebhookConfig | unde
 }
 
 export async function createWebhookConfig(config: WebhookConfig): Promise<void> {
-  const client = getS3Client?.();
-  if (!client) throw new Error("S3 client not available for webhook storage");
+  const client = requireS3Client("createWebhookConfig");
   await client.uploadJson(`webhooks/${config.id}.json`, config);
+  invalidateConfigCache();
 }
 
 export async function updateWebhookConfig(id: string, updates: Partial<WebhookConfig>): Promise<WebhookConfig | undefined> {
   const existing = await getWebhookConfig(id);
   if (!existing) return undefined;
   const updated = { ...existing, ...updates, id }; // prevent id change
-  const client = getS3Client?.();
-  if (!client) throw new Error("S3 client not available for webhook storage");
+  const client = requireS3Client("updateWebhookConfig");
   await client.uploadJson(`webhooks/${id}.json`, updated);
+  invalidateConfigCache();
   return updated;
 }
 
 export async function deleteWebhookConfig(id: string): Promise<void> {
-  const client = getS3Client?.();
-  if (!client) return;
+  const client = requireS3Client("deleteWebhookConfig");
   await client.deleteObject(`webhooks/${id}.json`);
+  invalidateConfigCache();
 }
 
 // --- Webhook Delivery ---
@@ -105,8 +140,17 @@ export async function deleteWebhookConfig(id: string): Promise<void> {
  * Trigger webhooks for a given event. Non-blocking — logs failures but never throws.
  * Retries once on failure after a 3-second delay.
  */
+let warnedUninitialized = false;
+
 export async function triggerWebhook(event: string, payload: any): Promise<void> {
   try {
+    if (!initialized) {
+      if (!warnedUninitialized) {
+        console.warn(`[Webhooks] triggerWebhook("${event}") called before initWebhooks() — webhook delivery is disabled until initWebhooks() runs at startup`);
+        warnedUninitialized = true;
+      }
+      return;
+    }
     const configs = await getAllWebhookConfigs();
     const matching = configs.filter(c => c.active && c.events.includes(event));
 
@@ -148,7 +192,18 @@ async function deliverWebhook(config: WebhookConfig, event: string, body: string
     return;
   }
 
-  const signature = createHmac("sha256", config.secret).update(body).digest("hex");
+  // v1 signature (legacy): HMAC-SHA256 over body only.
+  // Kept for backward compatibility with existing consumers.
+  const signatureV1 = createHmac("sha256", config.secret).update(body).digest("hex");
+
+  // v2 signature (A3/F07): HMAC-SHA256 over `${timestamp}.${body}`.
+  // The timestamp prevents replay attacks: receivers should reject deliveries
+  // with a timestamp older than ~5 minutes. Dual-emit until all consumers
+  // migrate; v1 deprecation timeline to be announced separately.
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signatureV2 = createHmac("sha256", config.secret)
+    .update(`${timestamp}.${body}`)
+    .digest("hex");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
@@ -159,7 +214,9 @@ async function deliverWebhook(config: WebhookConfig, event: string, body: string
       headers: {
         "Content-Type": "application/json",
         "X-Webhook-Event": event,
-        "X-Webhook-Signature": signature,
+        "X-Webhook-Signature": signatureV1,
+        "X-Webhook-Timestamp": timestamp,
+        "X-Webhook-Signature-V2": signatureV2,
       },
       body,
       signal: controller.signal,

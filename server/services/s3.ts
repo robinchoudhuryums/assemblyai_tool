@@ -11,6 +11,7 @@
  */
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, generatePresignedUrl } from "./sigv4.js";
+import { logger } from "./logger.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
 
@@ -38,17 +39,19 @@ export class S3Client {
       }
       // Refresh failed — fall back to last known good credentials if available
       if (this.credentials) {
-        console.warn("[S3] Credential refresh failed, using cached credentials");
+        logger.warn("S3 credential refresh failed, using cached credentials", { bucket: this.bucketName });
         return this.credentials;
       }
       throw new Error("S3 credentials expired and refresh failed. Check IAM instance profile or AWS env vars.");
     }
 
-    // First initialization
-    this.initialized = true;
+    // First initialization — only mark initialized after credential fetch succeeds,
+    // so a transient failure (e.g. IMDS hiccup at boot) doesn't permanently flip
+    // this client into the "refresh-only" code path with no cached credentials.
     const creds = await getAwsCredentials();
     if (creds) {
       this.credentials = creds;
+      this.initialized = true;
       return creds;
     }
     throw new Error("S3 authentication not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
@@ -230,7 +233,7 @@ export class S3Client {
     const response = await this.request("GET", `/${objectName}`);
     if (response.status === 404) return undefined;
     if (response.status === 403) {
-      console.error(`[S3] Access denied (403) for ${objectName} — check IAM permissions`);
+      logger.error("S3 access denied (403) — check IAM permissions", { object: objectName, bucket: this.bucketName });
       return undefined;
     }
     if (!response.ok) {
