@@ -25,6 +25,7 @@
 import { createHmac } from "crypto";
 import { getPool } from "../db/pool";
 import { redactPhi } from "./phi-redactor";
+import { logger } from "./logger";
 
 export interface AuditEntry {
   timestamp: string;
@@ -66,7 +67,7 @@ function computeIntegrityHash(content: string): string {
   // Fire-and-forget persist so a process restart picks up the chain head.
   // Errors are non-fatal: stdout still has the entry + hash.
   persistPreviousHash(hash).catch((err) => {
-    console.error(`${AUDIT_PREFIX} Failed to persist integrity chain head:`, (err as Error).message);
+    logger.error("audit-log: failed to persist integrity chain head", { error: (err as Error).message });
   });
   return hash;
 }
@@ -100,7 +101,7 @@ export async function loadAuditIntegrityChain(): Promise<void> {
     }
     integrityLoaded = true;
   } catch (err) {
-    console.error(`${AUDIT_PREFIX} loadAuditIntegrityChain failed:`, (err as Error).message);
+    logger.error("audit-log: loadAuditIntegrityChain failed", { error: (err as Error).message });
   }
 }
 
@@ -135,7 +136,7 @@ function enqueue(params: (string | undefined)[]): void {
     // Shed oldest entry to prevent unbounded memory growth
     queue.shift();
     droppedEntries++;
-    console.error(`${AUDIT_PREFIX} CRITICAL: Audit queue full (${MAX_QUEUE_SIZE}), dropping oldest entry`);
+    logger.error("audit-log: queue full, dropping oldest entry", { maxQueueSize: MAX_QUEUE_SIZE });
   }
   queue.push({ params, attempt: 0, nextRetryAt: 0 });
   ensureFlushTimer();
@@ -145,7 +146,7 @@ function ensureFlushTimer(): void {
   if (flushTimer) return;
   flushTimer = setInterval(() => {
     flushAuditQueue().catch((err) => {
-      console.error(`${AUDIT_PREFIX} Flush error:`, (err as Error).message);
+      logger.error("audit-log: flush error", { error: (err as Error).message });
     });
   }, FLUSH_INTERVAL_MS);
   // Don't prevent process exit
@@ -192,7 +193,7 @@ export async function flushAuditQueue(): Promise<void> {
       params
     );
   } catch (batchErr) {
-    console.error(`${AUDIT_PREFIX} Batch insert failed, falling back to per-row:`, (batchErr as Error).message);
+    logger.warn("audit-log: batch insert failed, falling back to per-row", { error: (batchErr as Error).message });
     for (const entry of toProcess) {
       try {
         await pool.query(INSERT_SQL, entry.params);
@@ -203,8 +204,7 @@ export async function flushAuditQueue(): Promise<void> {
           queue.push(entry);
         } else {
           droppedEntries++;
-          console.error(`${AUDIT_PREFIX} CRITICAL: Failed to write audit entry after ${MAX_AUDIT_RETRIES} attempts:`, (err as Error).message);
-          console.error(`${AUDIT_PREFIX} Entry preserved in stdout log above — manual reconciliation required.`);
+          logger.error("audit-log: failed to write entry after max retries — preserved in stdout, manual reconciliation required", { maxRetries: MAX_AUDIT_RETRIES, error: (err as Error).message });
         }
       }
     }

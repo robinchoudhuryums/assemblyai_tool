@@ -6,7 +6,7 @@
  *   for a cooldown period. After the cooldown, one test call is allowed through
  *   (half-open). If it succeeds, the circuit closes; if it fails, it re-opens.
  *
- * - withRetry: exponential backoff with jitter for transient failures.
+ * (A15: withRetry was removed as dead code — zero callers in production.)
  *
  * Ported from ums-knowledge-reference/backend/src/utils/resilience.ts.
  */
@@ -79,42 +79,3 @@ export class CircuitBreaker {
   }
 }
 
-// ---------------------------------------------------------------------------
-// withRetry
-// ---------------------------------------------------------------------------
-
-export interface RetryOptions {
-  maxRetries?: number;
-  baseDelayMs?: number;
-  label?: string;
-}
-
-/**
- * Retry an async function with exponential backoff and jitter.
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {},
-): Promise<T> {
-  const { maxRetries = 3, baseDelayMs = 1000, label = "operation" } = options;
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      if (attempt < maxRetries) {
-        const exponentialDelay = baseDelayMs * Math.pow(2, attempt);
-        const jitter = exponentialDelay * (0.75 + Math.random() * 0.5);
-        const delay = Math.round(jitter);
-
-        console.warn(`[Retry] ${label} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${lastError.message}`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}

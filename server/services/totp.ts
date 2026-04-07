@@ -57,9 +57,10 @@ function base32Decode(encoded: string): Buffer {
 export function generateTOTP(secret: string, timeStep = 30, digits = 6, now?: number): string {
   const time = Math.floor((now ?? Date.now()) / 1000 / timeStep);
   const timeBuffer = Buffer.alloc(8);
-  // Write as big-endian 64-bit integer
-  timeBuffer.writeUInt32BE(Math.floor(time / 0x100000000), 0);
-  timeBuffer.writeUInt32BE(time >>> 0, 4);
+  // A13: writeBigUInt64BE handles the full 64-bit range natively. The old
+  // split-into-two-UInt32 dance was correct for now but fragile (the high
+  // half used JS float division which lost precision past 2^53).
+  timeBuffer.writeBigUInt64BE(BigInt(time), 0);
 
   const key = base32Decode(secret);
   const hmac = createHmac("sha1", key).update(timeBuffer).digest();

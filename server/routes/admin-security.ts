@@ -8,7 +8,19 @@ import {
   updateIncidentDetails, getAllIncidents, getIncident, getEscalationContacts, getResponseProcedures,
 } from "../services/incident-response";
 import { logPhiAccess } from "../services/audit-log";
-import { validateParams } from "./utils";
+import { validateParams, sendValidationError } from "./utils";
+import { z } from "zod";
+
+// A9: Zod schemas for WAF mutation endpoints. durationMs has an upper bound of
+// 30 days to prevent operators from accidentally creating effectively-permanent
+// "temporary" blocks (and to keep the LRU eviction story honest).
+const MAX_BLOCK_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+const blockIpSchema = z.object({
+  ip: z.string().min(1),
+  reason: z.string().min(1).max(500),
+  durationMs: z.number().int().positive().max(MAX_BLOCK_DURATION_MS).optional(),
+});
+const unblockIpSchema = z.object({ ip: z.string().min(1) });
 
 const validateSafeId = validateParams({ id: "safeId" });
 const validateIncidentParams = validateParams({ incidentId: "safeId", itemId: "safeId" });
@@ -98,15 +110,11 @@ export function registerSecurityRoutes(router: Router) {
   }
 
   router.post("/api/admin/waf/block-ip", requireAuth, requireRole("admin"), (req, res) => {
-    const { ip, reason, durationMs } = req.body;
+    const parsed = blockIpSchema.safeParse(req.body);
+    if (!parsed.success) return sendValidationError(res, "Invalid block-ip request", parsed.error);
+    const { ip, reason, durationMs } = parsed.data;
     if (!isValidIpFormat(ip)) {
       return res.status(400).json({ message: "Valid IPv4 or IPv6 address is required" });
-    }
-    if (!reason || typeof reason !== "string") {
-      return res.status(400).json({ message: "Reason is required" });
-    }
-    if (durationMs !== undefined && (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0)) {
-      return res.status(400).json({ message: "durationMs must be a positive number" });
     }
     if (durationMs) {
       temporaryBlockIP(ip, durationMs, `Manual block by ${req.user!.username}: ${reason}`);
@@ -125,7 +133,9 @@ export function registerSecurityRoutes(router: Router) {
   });
 
   router.post("/api/admin/waf/unblock-ip", requireAuth, requireRole("admin"), (req, res) => {
-    const { ip } = req.body;
+    const parsed = unblockIpSchema.safeParse(req.body);
+    if (!parsed.success) return sendValidationError(res, "Invalid unblock-ip request", parsed.error);
+    const { ip } = parsed.data;
     if (!isValidIpFormat(ip)) return res.status(400).json({ message: "Valid IPv4 or IPv6 address is required" });
     const removed = unblockIP(ip);
     if (!removed) return res.status(404).json({ message: "IP not found in blocklist" });

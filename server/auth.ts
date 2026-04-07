@@ -8,6 +8,7 @@ import { promisify } from "util";
 import type { Express, RequestHandler } from "express";
 import { logPhiAccess } from "./services/audit-log";
 import { recordFailedLogin } from "./services/security-monitor";
+import { logger } from "./services/logger";
 import { getPool } from "./db/pool";
 import { getMFASecret, isMFARoleRequired } from "./services/totp";
 import { storage } from "./storage";
@@ -69,7 +70,7 @@ function recordFailedAttempt(username: string, ip?: string): void {
   record.lastAttempt = Date.now();
   if (record.count >= MAX_FAILED_ATTEMPTS) {
     record.lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
-    console.warn(`[SECURITY] Account "${username}" locked after ${record.count} failed attempts.`);
+    logger.warn("auth: account locked after failed attempts", { username, attempts: record.count });
   }
   loginAttempts.set(username, record);
   // Feed into security monitor for pattern detection
@@ -106,7 +107,7 @@ async function hashPassword(password: string): Promise<string> {
 async function comparePasswords(supplied: string, stored: string): Promise<boolean> {
   const parts = stored.split(".");
   if (parts.length !== 2) {
-    console.error("[AUTH] Corrupted password hash format (expected hash.salt)");
+    logger.error("auth: corrupted password hash format (expected hash.salt)");
     return false;
   }
   const [hashedPassword, salt] = parts;
@@ -135,7 +136,7 @@ export async function isPasswordReused(password: string, currentHash: string, hi
 async function loadUsersFromEnv(): Promise<void> {
   const authUsersRaw = process.env.AUTH_USERS;
   if (!authUsersRaw) {
-    console.warn("AUTH_USERS not set. No users will be able to log in.");
+    logger.warn("auth: AUTH_USERS not set, no users will be able to log in");
     return;
   }
 
@@ -144,7 +145,7 @@ async function loadUsersFromEnv(): Promise<void> {
   for (const entry of userEntries) {
     const parts = entry.split(":");
     if (parts.length < 3) {
-      console.warn(`Skipping malformed AUTH_USERS entry (expected username:password:role[:displayName]): ${parts[0] || entry}`);
+      logger.warn("auth: skipping malformed AUTH_USERS entry", { username: parts[0] || "(empty)" });
       continue;
     }
 
@@ -155,7 +156,7 @@ async function loadUsersFromEnv(): Promise<void> {
     // Weak dev passwords can leak to production via .env files.
     const complexity = validatePasswordComplexity(password);
     if (!complexity.valid) {
-      console.error(`[SECURITY] Rejecting AUTH_USERS entry "${username}": weak password (missing ${complexity.errors.join(", ")}). HIPAA requires strong passwords.`);
+      logger.error("auth: rejecting AUTH_USERS entry due to weak password", { username, missing: complexity.errors });
       continue; // Skip this user entirely
     }
 
@@ -168,7 +169,7 @@ async function loadUsersFromEnv(): Promise<void> {
       role,
     });
 
-    console.log(`Loaded user from AUTH_USERS: ${username} (${role})`);
+    logger.info("auth: loaded user from AUTH_USERS", { username, role });
   }
 }
 
@@ -185,10 +186,10 @@ export async function setupAuth(app: Express) {
   const sessionSecret = process.env.SESSION_SECRET;
   if (!sessionSecret) {
     if (process.env.NODE_ENV === "production") {
-      console.error("FATAL: SESSION_SECRET must be set in production");
+      logger.error("auth: FATAL — SESSION_SECRET must be set in production");
       process.exit(1);
     }
-    console.warn("SESSION_SECRET not set - using random secret (sessions will not persist across restarts)");
+    logger.warn("auth: SESSION_SECRET not set, using random secret (sessions will not persist across restarts)");
   }
   const effectiveSessionSecret = sessionSecret || randomBytes(32).toString("hex");
 
@@ -206,13 +207,13 @@ export async function setupAuth(app: Express) {
       tableName: "session",
       pruneSessionInterval: 60, // Prune expired sessions every 60 seconds
     });
-    console.log("[AUTH] Using PostgreSQL session store (sessions persist across restarts)");
+    logger.info("auth: using PostgreSQL session store (sessions persist across restarts)");
   } else {
     const MemoryStore = createMemoryStore(session);
     sessionStore = new MemoryStore({
       checkPeriod: 60 * 1000,
     });
-    console.log("[AUTH] Using in-memory session store (sessions lost on restart)");
+    logger.info("auth: using in-memory session store (sessions lost on restart)");
   }
 
   sessionMiddleware = session({
@@ -321,7 +322,7 @@ export async function setupAuth(app: Express) {
           }
         } catch (dbErr) {
           // DB lookup failed (e.g., no DATABASE_URL) — fall through to env users
-          console.warn("[AUTH] DB user lookup failed, falling back to env users:", (dbErr as Error).message);
+          logger.warn("auth: DB user lookup failed, falling back to env users", { error: (dbErr as Error).message });
         }
 
         // --- Step 2: Fall back to AUTH_USERS env var ---
@@ -394,7 +395,7 @@ export async function setupAuth(app: Express) {
       // silently falling through to env users (which would give a stale user a
       // valid session whenever the DB blips). Env-user fallback is reserved for
       // "DB has no such user" (success path), not "DB unreachable".
-      console.error("[AUTH] deserializeUser DB lookup failed:", (err as Error).message);
+      logger.error("auth: deserializeUser DB lookup failed", { error: (err as Error).message });
       return done(err as Error);
     }
 
@@ -424,6 +425,13 @@ export function getSessionFingerprint(req: import("express").Request): string {
   // causing false-positive session kills for legitimate users.
   const ua = req.headers["user-agent"] || "";
   const lang = req.headers["accept-language"] || "";
+  // A14: 16 hex chars = 64 bits of fingerprint entropy. This is intentionally
+  // truncated for storage efficiency in the session record. Collision space at
+  // 64 bits is ~1.8e19, far larger than any realistic session population, and
+  // an attacker who could brute-force a collision would still need to replay
+  // the matching session cookie. Do not shorten below 16 chars without
+  // re-evaluating the birthday-bound collision probability for total session
+  // count. Do not lengthen without bumping the comparison length in requireAuth.
   return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
 }
 
@@ -452,7 +460,7 @@ export const requireAuth: RequestHandler = (req, res, next) => {
     req.logout(() => {});
     req.session.destroy((err) => {
       if (err) {
-        console.error("[AUTH] Failed to destroy hijacked session:", (err as Error).message);
+        logger.error("auth: failed to destroy hijacked session", { error: (err as Error).message });
       }
     });
     return res.status(401).json({ message: "Session expired. Please log in again." });

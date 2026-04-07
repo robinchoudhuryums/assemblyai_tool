@@ -7,6 +7,8 @@
  */
 import { logPhiAccess } from "./audit-log";
 import { getPool } from "../db/pool";
+import { randomUUID } from "crypto";
+import { logger } from "./logger";
 
 // --- Suspicious Activity Detection ---
 
@@ -181,7 +183,7 @@ const MAX_RECENT_ALERTS = 100;
 
 function raiseSecurityAlert(type: string, details: Record<string, unknown>): void {
   const alert: SecurityAlert = {
-    id: `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `alert-${randomUUID()}`,
     timestamp: new Date().toISOString(),
     type,
     severity: SEVERITY_MAP[type] || "medium",
@@ -193,7 +195,7 @@ function raiseSecurityAlert(type: string, details: Record<string, unknown>): voi
   if (recentAlerts.length > MAX_RECENT_ALERTS) recentAlerts.shift();
 
   // Log to HIPAA audit trail
-  console.error(`[SECURITY] ALERT [${alert.severity.toUpperCase()}] ${type}: ${JSON.stringify(details)}`);
+  logger.error("security: alert raised", { severity: alert.severity, type, details });
   logPhiAccess({
     timestamp: alert.timestamp,
     event: `security_alert:${type}`,
@@ -242,7 +244,7 @@ const breachReports: BreachReport[] = [];
 export async function createBreachReport(report: Omit<BreachReport, "id" | "reportedAt" | "notificationStatus" | "timeline">): Promise<BreachReport> {
   const breach: BreachReport = {
     ...report,
-    id: `breach-${Date.now()}`,
+    id: `breach-${randomUUID()}`,
     reportedAt: new Date().toISOString(),
     notificationStatus: "pending",
     timeline: [
@@ -250,19 +252,26 @@ export async function createBreachReport(report: Omit<BreachReport, "id" | "repo
     ],
   };
 
-  breachReports.push(breach);
-
-  // Persist to database
+  // A7: DB-first persist so a write failure doesn't leave the in-memory store
+  // ahead of the durable record. Errors propagate to the caller (admin route)
+  // instead of being silently swallowed.
   const pool = getPool();
   if (pool) {
-    await pool.query(
-      `INSERT INTO breach_reports (id, reported_at, reported_by, description, affected_individuals, data_types, discovery_date, containment_actions, notification_status, timeline)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [breach.id, breach.reportedAt, breach.reportedBy, breach.description, breach.affectedIndividuals,
-       JSON.stringify(breach.dataTypes), breach.discoveryDate, breach.containmentActions,
-       breach.notificationStatus, JSON.stringify(breach.timeline)]
-    );
+    try {
+      await pool.query(
+        `INSERT INTO breach_reports (id, reported_at, reported_by, description, affected_individuals, data_types, discovery_date, containment_actions, notification_status, timeline)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [breach.id, breach.reportedAt, breach.reportedBy, breach.description, breach.affectedIndividuals,
+         JSON.stringify(breach.dataTypes), breach.discoveryDate, breach.containmentActions,
+         breach.notificationStatus, JSON.stringify(breach.timeline)]
+      );
+    } catch (err) {
+      logger.error("security: persistBreachReport failed", { breachId: breach.id, error: (err as Error).message });
+      throw err;
+    }
   }
+
+  breachReports.push(breach);
 
   // Critical alert
   raiseSecurityAlert("breach_reported", {
