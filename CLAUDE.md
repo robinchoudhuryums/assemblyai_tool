@@ -561,6 +561,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 - **`updateCall` is employeeId-free** (A6/F14): all three storage backends throw if `employeeId` appears in the updates payload. The manager-facing PATCH /api/calls/:id/assign route uses the new `setCallEmployee` method; pipeline auto-assignment uses `atomicAssignEmployee`. Closes a silent-clobber race where status updates would re-write a stale `employee_id` from a prior read.
 - **PostgresStorage password history is JS-side** (A3/F02): `updateDbUserPassword` reads the existing history, prepends + slices to 5, and writes it back in a single UPDATE. Replaces an opaque jsonb_array_elements_text aggregation. Trade-off: small lost-update window on concurrent password changes (admin reset racing self-change). Acceptable because concurrent rotations are vanishingly rare.
 - **Production requires `S3_BUCKET`** (A1/F03): `createStorage()` throws at boot when `NODE_ENV=production` and `DATABASE_URL` is set but `S3_BUCKET` is not. Replaces a silent-degraded path where audio uploads would fail at runtime instead of at startup.
+- **CloudStorage deprecated behind `s3-legacy` opt-in** (A12/F08, F17): the `STORAGE_BACKEND=s3` value now throws at startup; `s3-legacy` activates CloudStorage with a deprecation WARN. The implicit `S3_BUCKET`-only trigger was also removed because it was the same silent-degraded path the deprecation closes. Trade-off: an operator updating a stale `.env` will see boot fail rather than silently activate the deprecated backend — intentional, but requires comms before deploy.
 
 ## Deployment
 
@@ -766,6 +767,9 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **Production boot requires `S3_BUCKET`** (A1) — when `DATABASE_URL` is set in production, missing `S3_BUCKET` causes `createStorage()` to throw at startup. Set it in `.env` on EC2 before deploy.
 - **`updateCallAnalysis` throws on unknown keys** (A5) — only `embedding`, `manualEdits`, `performanceScore`, `summary` are accepted (`UPDATE_ANALYSIS_COLUMNS`). Adding a new updateable analysis field requires both a COLUMN_MAP entry and an `UpdateCallAnalysisInput` type addition.
 - **PostgresStorage `updateCall` silently ignores unknown keys** — only keys in COLUMN_MAP are sent to SQL. Adding a new persisted call field requires both a schema migration and a COLUMN_MAP entry, or the value will appear to save but vanish on re-read.
+- **`STORAGE_BACKEND=s3` now throws at boot** (A12) — old value is rejected with a migration message. To run the deprecated CloudStorage backend, use `STORAGE_BACKEND=s3-legacy` (which logs a deprecation WARN). Bare `S3_BUCKET` no longer activates CloudStorage either — without `DATABASE_URL` or an explicit `STORAGE_BACKEND`, the app falls through to MemStorage.
+- **`PostgresStorage.createBadge` only handles ON CONFLICT for milestone badge types** (A14) — `MILESTONE_BADGE_TYPES` is a static set (`first_call`, `calls_25`, `calls_50`, `calls_100`). Adding a new milestone-style badge requires updating both that set *and* the corresponding `UNIQUE (employee_id, badge_type)` partial constraint in `schema.sql`, or the new type will throw on duplicate insert.
+- **`MemStorage.createCall` enforces `content_hash` uniqueness** (A13) — throws a pg-23505-shaped error on duplicate hash, mirroring the PostgresStorage UNIQUE INDEX. Dev fixtures that intentionally create duplicate-hash calls will now fail.
 
 ## Systems Map
 
