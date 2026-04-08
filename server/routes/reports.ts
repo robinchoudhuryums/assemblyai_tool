@@ -5,7 +5,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 
 export function registerReportRoutes(router: Router) {
@@ -80,10 +80,24 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   }
 });
 
-  // Filtered reports: accepts date range, employee, department filters
+  // Filtered reports: accepts date range, employee, role filters
   router.get("/api/reports/filtered", requireAuth, async (req, res) => {
     try {
-      const { from, to, employeeId, department, callPartyType } = req.query;
+      // A15/F14: query param renamed from `department` to `role` because
+      // the filter actually compares against employees.role (not a separate
+      // department field). Accept both names during the transition window —
+      // `role` takes precedence. Also decodeURIComponent so percent-encoded
+      // values from URL bookmarks (e.g. "Customer%20Service") match.
+      const { from, to, employeeId, callPartyType } = req.query;
+      const rawRole = (req.query.role as string | undefined) ?? (req.query.department as string | undefined);
+      let role: string | undefined;
+      if (rawRole) {
+        try {
+          role = decodeURIComponent(rawRole);
+        } catch {
+          role = rawRole; // malformed encoding — fall back to literal value
+        }
+      }
 
       const allCalls = await storage.getCallsWithDetails({ status: "completed" });
       const employees = await storage.getAllEmployees();
@@ -97,12 +111,12 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         filtered = filtered.filter(c => c.employeeId === employeeId);
       }
 
-      // Filter by department
-      if (department) {
+      // Filter by role (formerly department)
+      if (role) {
         filtered = filtered.filter(c => {
           if (!c.employeeId) return false;
           const emp = employeeMap.get(c.employeeId);
-          return emp?.role === department;
+          return emp?.role === role;
         });
       }
 
@@ -231,7 +245,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   });
 
   // Agent profile: aggregated feedback across all calls for an employee
-  router.get("/api/reports/agent-profile/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.query;
@@ -357,7 +371,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   });
 
   // Generate AI narrative summary for an agent's performance
-  router.post("/api/reports/agent-summary/:employeeId", requireAuth, async (req, res) => {
+  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       if (!aiProvider.isAvailable || !aiProvider.generateText) {
         res.status(503).json({ message: "AI provider not configured. Set up Bedrock or Gemini credentials." });

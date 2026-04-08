@@ -1,55 +1,29 @@
 /**
  * Tests for authentication and authorization logic.
+ *
  * Run with: npx tsx --test tests/auth.test.ts
+ *
+ * NOTE: prior versions of this file contained ~5 describe blocks that
+ * re-implemented production logic locally (Role hierarchy, Account
+ * lockout, CSRF check, Session secret validation, Session fingerprinting)
+ * and tested the local copies. They passed even when production was
+ * broken. The Role hierarchy + CSRF + Session secret blocks were
+ * removed because they were tautological. Session fingerprinting was
+ * rewritten to call the exported `getSessionFingerprint` directly.
+ * Account lockout was left in place pending a fixture-based rewrite —
+ * see follow-on audit items.
  */
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { getSessionFingerprint } from "../server/auth.js";
 
-// We test the role hierarchy logic directly since the auth module depends on Express
-describe("Role hierarchy", () => {
-  const ROLE_HIERARCHY: Record<string, number> = {
-    admin: 3,
-    manager: 2,
-    viewer: 1,
-  };
-
-  function hasAccess(userRole: string, ...allowedRoles: string[]): boolean {
-    const userLevel = ROLE_HIERARCHY[userRole] ?? 0;
-    const requiredLevel = Math.min(...allowedRoles.map(r => ROLE_HIERARCHY[r] ?? 0));
-    return userLevel >= requiredLevel;
-  }
-
-  it("admin can access all roles", () => {
-    assert.ok(hasAccess("admin", "admin"));
-    assert.ok(hasAccess("admin", "manager"));
-    assert.ok(hasAccess("admin", "viewer"));
-  });
-
-  it("manager can access manager and viewer roles", () => {
-    assert.ok(hasAccess("manager", "manager"));
-    assert.ok(hasAccess("manager", "viewer"));
-    assert.ok(!hasAccess("manager", "admin"));
-  });
-
-  it("viewer can only access viewer role", () => {
-    assert.ok(hasAccess("viewer", "viewer"));
-    assert.ok(!hasAccess("viewer", "manager"));
-    assert.ok(!hasAccess("viewer", "admin"));
-  });
-
-  it("unknown role has no access", () => {
-    assert.ok(!hasAccess("unknown", "viewer"));
-    assert.ok(!hasAccess("", "viewer"));
-  });
-
-  it("handles combined role requirements (manager OR admin)", () => {
-    // requireRole("manager", "admin") means min level = manager(2)
-    assert.ok(hasAccess("admin", "manager", "admin"));
-    assert.ok(hasAccess("manager", "manager", "admin"));
-    assert.ok(!hasAccess("viewer", "manager", "admin"));
-  });
-});
+// Helper: build a minimal Express Request shape with the headers
+// getSessionFingerprint actually reads. The function only touches
+// req.headers["user-agent"] and req.headers["accept-language"].
+function makeReq(ua: string, lang: string) {
+  return { headers: { "user-agent": ua, "accept-language": lang } } as any;
+}
 
 describe("Account lockout logic", () => {
   const MAX_FAILED_ATTEMPTS = 5;
@@ -128,79 +102,50 @@ describe("Account lockout logic", () => {
   });
 });
 
-describe("CSRF protection logic", () => {
-  it("JSON Content-Type should pass CSRF check", () => {
-    const contentType = "application/json";
-    const isJson = contentType.includes("application/json");
-    assert.ok(isJson);
-  });
-
-  it("empty Content-Type should fail CSRF check", () => {
-    const contentType = "";
-    const isJson = contentType.includes("application/json");
-    assert.ok(!isJson);
-  });
-
-  it("multipart/form-data is exempt from CSRF", () => {
-    const contentType = "multipart/form-data; boundary=----WebKitFormBoundary";
-    const isMultipart = contentType.includes("multipart/form-data");
-    assert.ok(isMultipart);
-  });
-});
-
-describe("Session secret validation", () => {
-  it("rejects empty session secret in production", () => {
-    const sessionSecret = "";
-    const isProduction = true;
-    const shouldFail = !sessionSecret && isProduction;
-    assert.ok(shouldFail);
-  });
-
-  it("allows missing session secret in development", () => {
-    const sessionSecret = "";
-    const isProduction = false;
-    const shouldFail = !sessionSecret && isProduction;
-    assert.ok(!shouldFail);
-  });
-});
-
-// ── Session fingerprinting (single source of truth) ──
+// ── Session fingerprinting (production function) ──
+//
+// These tests now exercise the exported `getSessionFingerprint` directly
+// (see helper `makeReq` at the top of this file). The previous version
+// re-implemented the algorithm in a local `computeFingerprint` and tested
+// that copy — so a regression in `getSessionFingerprint` would not have
+// been caught.
 
 describe("Session fingerprinting", () => {
-  // Import the exported getSessionFingerprint to verify it's the single source of truth
-  // (bindSessionFingerprint in routes/auth.ts must use this same function)
-
-  // Replicate the algorithm to test determinism
-  function computeFingerprint(ua: string, lang: string): string {
-    return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
-  }
-
   it("produces deterministic fingerprint from user-agent and accept-language", () => {
-    const fp1 = computeFingerprint("Mozilla/5.0", "en-US,en;q=0.9");
-    const fp2 = computeFingerprint("Mozilla/5.0", "en-US,en;q=0.9");
+    const fp1 = getSessionFingerprint(makeReq("Mozilla/5.0", "en-US,en;q=0.9"));
+    const fp2 = getSessionFingerprint(makeReq("Mozilla/5.0", "en-US,en;q=0.9"));
     assert.equal(fp1, fp2);
   });
 
   it("produces different fingerprints for different user-agents", () => {
-    const fp1 = computeFingerprint("Mozilla/5.0", "en-US");
-    const fp2 = computeFingerprint("Chrome/120", "en-US");
+    const fp1 = getSessionFingerprint(makeReq("Mozilla/5.0", "en-US"));
+    const fp2 = getSessionFingerprint(makeReq("Chrome/120", "en-US"));
+    assert.notEqual(fp1, fp2);
+  });
+
+  it("produces different fingerprints for different accept-language values", () => {
+    const fp1 = getSessionFingerprint(makeReq("Mozilla/5.0", "en-US"));
+    const fp2 = getSessionFingerprint(makeReq("Mozilla/5.0", "es-ES"));
     assert.notEqual(fp1, fp2);
   });
 
   it("does NOT include IP in the fingerprint", () => {
-    // This test exists to prevent regression — IP was accidentally included
-    // in bindSessionFingerprint but not getSessionFingerprint, causing every
-    // session to be destroyed after login (fingerprint mismatch).
-    const fpWithoutIp = computeFingerprint("Mozilla/5.0", "en-US");
-    // If someone adds IP back, this hash would change
-    assert.equal(fpWithoutIp.length, 16, "Fingerprint should be 16 hex chars");
-    // Verify the hash is purely from ua+lang by checking a known value
+    // Regression guard: IP was accidentally included in bindSessionFingerprint
+    // (routes/auth.ts) at one point, while getSessionFingerprint did not include
+    // it, causing every session to be destroyed after login. Both call sites
+    // must use the same exported function.
+    const fp = getSessionFingerprint(makeReq("Mozilla/5.0", "en-US"));
+    assert.equal(fp.length, 16, "Fingerprint should be 16 hex chars");
+    // Compute the expected hash purely from `${ua}|${lang}` and verify it
+    // matches — no IP, no other inputs.
     const expected = createHash("sha256").update("Mozilla/5.0|en-US").digest("hex").slice(0, 16);
-    assert.equal(fpWithoutIp, expected, "Fingerprint must be hash of 'ua|lang' only — no IP");
+    assert.equal(fp, expected, "Fingerprint must be hash of 'ua|lang' only — no IP");
   });
 
-  it("handles empty user-agent and accept-language", () => {
-    const fp = computeFingerprint("", "");
+  it("handles missing user-agent and accept-language headers", () => {
+    // Empty/missing headers should still produce a valid 16-char hex fingerprint
+    // (the function defaults to empty string for both).
+    const fp = getSessionFingerprint({ headers: {} } as any);
     assert.equal(fp.length, 16);
     assert.ok(/^[0-9a-f]+$/.test(fp));
   });

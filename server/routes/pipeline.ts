@@ -616,7 +616,13 @@ export async function processAudioFile(
       const performanceScore = performanceScoreNum;
       const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
-      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources).catch(err => {
+      // A12/F11/F21: pass the freshly-built analysis through so the
+      // coaching service doesn't re-fetch it from storage.
+      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources, {
+        feedback: analysis.feedback,
+        subScores: analysis.subScores,
+        flags: analysis.flags,
+      }).catch(err => {
         console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
         captureException(err as Error, { callId, errorType: "coaching_alert" });
       });

@@ -8,6 +8,7 @@ import { requireAuth } from "../auth";
 import { getLeaderboard, computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
 import { STREAK_SCORE_THRESHOLD } from "../constants";
+import { validateParams } from "./utils";
 
 export function registerGamificationRoutes(router: Router): void {
   // GET /api/gamification/leaderboard — ranked list of employees with points, badges, streaks
@@ -25,7 +26,7 @@ export function registerGamificationRoutes(router: Router): void {
   });
 
   // GET /api/gamification/badges/:employeeId — badges for a specific employee
-  router.get("/api/gamification/badges/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/gamification/badges/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const badges = await storage.getBadgesByEmployee(req.params.employeeId);
       // Enrich with badge metadata (label, description, icon)
@@ -51,7 +52,7 @@ export function registerGamificationRoutes(router: Router): void {
   });
 
   // GET /api/gamification/stats/:employeeId — gamification stats for a single employee
-  router.get("/api/gamification/stats/:employeeId", requireAuth, async (req, res) => {
+  router.get("/api/gamification/stats/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const [badges, employee] = await Promise.all([

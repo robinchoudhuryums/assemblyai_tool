@@ -1,14 +1,20 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth } from "../auth";
-import { safeFloat } from "./utils";
+import { logger } from "../services/logger";
+import { safeFloat, clampInt } from "./utils";
 
 export function register(router: Router) {
   // ==================== COMPANY INSIGHTS API ====================
 
-  router.get("/api/insights", requireAuth, async (_req, res) => {
+  router.get("/api/insights", requireAuth, async (req, res) => {
     try {
-      const allCalls = await storage.getCallsWithDetails();
+      // A4/F15: was loading every call ever uploaded. The insights endpoint
+      // is a rolling-window view; default 90 days, max 365. Callers can
+      // pass ?days=N to widen or narrow the window.
+      const days = clampInt(req.query.days as string | undefined, 90, 1, 365);
+      const since = new Date(Date.now() - days * 86400000);
+      const allCalls = await storage.getCallsSinceWithDetails(since);
       const completed = allCalls.filter(c => c.status === "completed" && c.analysis);
 
       // Aggregate topic frequency across all calls
@@ -117,6 +123,13 @@ export function register(router: Router) {
         },
       });
     } catch (error) {
+      // A14/F24: was silently swallowing the error and returning 500 with
+      // no trace anywhere. Log the underlying message so we can debug
+      // failures in production.
+      logger.error("company insights endpoint failed", {
+        error: (error as Error).message,
+        days: req.query.days,
+      });
       res.status(500).json({ message: "Failed to compute company insights" });
     }
   });

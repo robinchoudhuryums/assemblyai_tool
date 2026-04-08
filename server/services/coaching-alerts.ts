@@ -10,9 +10,21 @@
 import { storage } from "../storage";
 import { broadcastCallUpdate } from "./websocket";
 import { aiProvider } from "./ai-factory";
-import type { InsertCoachingSession, CallWithDetails } from "@shared/schema";
+import type { InsertCoachingSession, CallAnalysis } from "@shared/schema";
 import { LOW_SCORE_THRESHOLD, HIGH_SCORE_THRESHOLD, WEAKNESS_CALL_THRESHOLD, WEAKNESS_SCORE_THRESHOLD, LOOKBACK_CALLS } from "../constants";
 import { fetchRagContext, isRagEnabled, type RagSource } from "./rag-client";
+import { logger } from "./logger";
+
+/**
+ * A12/F11/F21: shape passed from the pipeline so we don't re-fetch the
+ * analysis from storage. The caller already has the freshly-built analysis
+ * record in scope; loading it again is wasteful and racy if the pipeline
+ * is mid-update.
+ */
+type CoachingAnalysisInput = Pick<
+  CallAnalysis,
+  "feedback" | "subScores" | "flags"
+> | undefined;
 
 interface SubScores {
   compliance?: number;
@@ -61,6 +73,7 @@ export async function checkAndCreateCoachingAlert(
   employeeId: string | undefined,
   summary: string,
   ragSources?: RagSource[],
+  analysis?: CoachingAnalysisInput,
 ): Promise<void> {
   if (!employeeId) return;
 
@@ -74,13 +87,17 @@ export async function checkAndCreateCoachingAlert(
 
     if (aiProvider.isAvailable && aiProvider.generateText) {
       try {
-        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score, ragSources);
+        const aiPlan = await generateAICoachingPlan(employeeId, callId, summary, score, ragSources, analysis);
         if (aiPlan) {
           actionPlan = aiPlan.tasks.map(t => ({ task: t, completed: false }));
           aiNotes = aiPlan.notes;
         }
       } catch (err) {
-        console.warn(`[${callId}] AI coaching plan generation failed (using defaults):`, (err as Error).message);
+        logger.warn("ai coaching plan generation failed", {
+          callId,
+          employeeId,
+          error: (err as Error).message,
+        });
       }
     }
 
@@ -96,7 +113,12 @@ export async function checkAndCreateCoachingAlert(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${callId}] Coaching alert created for low score (${score.toFixed(1)}): session ${created.id}`);
+    logger.info("coaching alert created (low score)", {
+      callId,
+      employeeId,
+      coachingSessionId: created.id,
+      score,
+    });
 
     broadcastCallUpdate(callId, "coaching_alert", {
       coachingSessionId: created.id,
@@ -120,7 +142,12 @@ export async function checkAndCreateCoachingAlert(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${callId}] Recognition alert created for high score (${score.toFixed(1)}): session ${created.id}`);
+    logger.info("recognition alert created (high score)", {
+      callId,
+      employeeId,
+      coachingSessionId: created.id,
+      score,
+    });
 
     broadcastCallUpdate(callId, "recognition_alert", {
       coachingSessionId: created.id,
@@ -143,6 +170,7 @@ async function generateAICoachingPlan(
   callSummary: string,
   score: number,
   ragSources?: RagSource[],
+  analysis?: CoachingAnalysisInput,
 ): Promise<{ tasks: string[]; notes: string } | null> {
   if (!aiProvider.generateText) return null;
 
@@ -153,22 +181,22 @@ async function generateAICoachingPlan(
     if (emp) employeeName = emp.name;
   } catch {}
 
-  // Get the call analysis for more detail
+  // A12/F11/F21: previously this re-fetched the analysis from storage.
+  // The pipeline already has it in scope and now passes it through —
+  // saves a DB round-trip and avoids racing the pipeline's own update.
   let analysisContext = "";
-  try {
-    const analysis = await storage.getCallAnalysis(callId);
-    if (analysis) {
-      const feedback = analysis.feedback as { strengths?: string[]; suggestions?: string[] } | undefined;
-      const suggestions = feedback?.suggestions || [];
-      const strengths = feedback?.strengths || [];
-      const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
-      analysisContext = `
-Sub-scores: Compliance ${analysis.subScores?.compliance ?? "N/A"}/10, Customer Experience ${analysis.subScores?.customerExperience ?? "N/A"}/10, Communication ${analysis.subScores?.communication ?? "N/A"}/10, Resolution ${analysis.subScores?.resolution ?? "N/A"}/10
+  if (analysis) {
+    const feedback = analysis.feedback as { strengths?: string[]; suggestions?: string[] } | undefined;
+    const suggestions = feedback?.suggestions || [];
+    const strengths = feedback?.strengths || [];
+    const flags = Array.isArray(analysis.flags) ? analysis.flags : [];
+    const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
+    analysisContext = `
+Sub-scores: Compliance ${subScores?.compliance ?? "N/A"}/10, Customer Experience ${subScores?.customerExperience ?? "N/A"}/10, Communication ${subScores?.communication ?? "N/A"}/10, Resolution ${subScores?.resolution ?? "N/A"}/10
 Suggestions from AI: ${suggestions.slice(0, 4).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Strengths observed: ${strengths.slice(0, 3).map(s => typeof s === "string" ? s : JSON.stringify(s)).join("; ")}
 Flags: ${flags.join(", ") || "none"}`;
-    }
-  } catch {}
+  }
 
   // Reuse RAG sources from the analysis (avoids duplicate API call)
   // Falls back to fetching if sources weren't passed from the pipeline
@@ -224,7 +252,11 @@ Requirements:
       };
     }
   } catch (parseErr) {
-    console.warn(`[${callId}] Failed to parse AI coaching plan:`, (parseErr as Error).message);
+    logger.warn("failed to parse ai coaching plan", {
+      callId,
+      employeeId,
+      error: (parseErr as Error).message,
+    });
   }
 
   return null;
@@ -240,11 +272,11 @@ async function checkRecurringWeaknesses(
   employeeId: string,
 ): Promise<void> {
   try {
-    const allCalls = await storage.getCallsWithDetails({ employee: employeeId });
-    const recentCalls = allCalls
-      .filter(c => c.status === "completed" && c.analysis?.subScores)
-      .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
-      .slice(0, LOOKBACK_CALLS);
+    // A4/F03: indexed lookup of the agent's last N completed calls instead of
+    // a full per-employee scan. LOOKBACK_CALLS is the analysis window; we
+    // ask the storage layer for that many rows directly.
+    const recentCallsRaw = await storage.getRecentCallsForBadgeEval(employeeId, LOOKBACK_CALLS);
+    const recentCalls = recentCallsRaw.filter(c => c.analysis?.subScores);
 
     if (recentCalls.length < WEAKNESS_CALL_THRESHOLD) return;
 
@@ -347,7 +379,14 @@ async function checkRecurringWeaknesses(
     };
 
     const created = await storage.createCoachingSession(sessionData);
-    console.log(`[${triggerCallId}] AI coaching plan created for ${primary.label} weakness: session ${created.id}`);
+    logger.info("ai coaching plan created (recurring weakness)", {
+      callId: triggerCallId,
+      employeeId,
+      coachingSessionId: created.id,
+      dimension: primary.label,
+      avgSubScore: Math.round(primary.avgScore * 10) / 10,
+      weakCallCount: primary.count,
+    });
 
     broadcastCallUpdate(triggerCallId, "coaching_plan", {
       coachingSessionId: created.id,
@@ -357,7 +396,11 @@ async function checkRecurringWeaknesses(
     });
   } catch (error) {
     // Non-critical — don't fail the pipeline
-    console.error("Error checking recurring weaknesses:", error instanceof Error ? error.message : error);
+    logger.error("recurring weaknesses check failed", {
+      callId: triggerCallId,
+      employeeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -450,7 +493,11 @@ Requirements:
       }
     }
   } catch (parseErr) {
-    console.warn(`[COACHING] Failed to parse AI recurring weakness plan:`, (parseErr as Error).message);
+    logger.warn("failed to parse ai recurring weakness plan", {
+      employeeId,
+      dimension: primary.dim,
+      error: (parseErr as Error).message,
+    });
   }
 
   return null;

@@ -173,6 +173,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           language,
           filePath,
         });
+      } else if (job.type === "batch_snapshots") {
+        // A8/F18: batch snapshot generation runs as a background job so the
+        // request that triggers it doesn't sit waiting for minutes. Results
+        // are persisted via saveSnapshot inside generateBatchSnapshots; the
+        // caller polls /api/admin/jobs/:id for status.
+        const { from, to, generatedBy } = job.payload as {
+          from: string; to: string; generatedBy: string;
+        };
+        const { generateBatchSnapshots } = await import("./routes/snapshots");
+        const results = await generateBatchSnapshots(from, to, generatedBy);
+        // Best-effort: stash results back onto the job payload so the
+        // status endpoint can return them. Errors are logged + tolerated.
+        try {
+          await dbPool.query(
+            `UPDATE jobs SET payload = jsonb_set(payload, '{results}', $2::jsonb) WHERE id = $1`,
+            [job.id, JSON.stringify(results)],
+          );
+        } catch (err) {
+          console.warn(`[JOB_QUEUE] Failed to stash batch_snapshots results for ${job.id}:`, (err as Error).message);
+        }
       } else {
         console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
       }
@@ -191,7 +211,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerCoachingRoutes(router);
   registerInsightRoutes(router);
   registerUserRoutes(router);
-  registerSnapshotRoutes(router);
+  registerSnapshotRoutes(router, { getJobQueue: () => jobQueue });
   registerGamificationRoutes(router);
   // HIPAA: enforce MFA enrollment on /api/admin/* before any admin handler runs.
   // Mounted directly before registerAdminRoutes so it intercepts all admin paths

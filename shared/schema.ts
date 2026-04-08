@@ -554,7 +554,9 @@ export const BADGE_TYPES = [
   { value: "calls_25", label: "Quarter Century", description: "25 calls analyzed", icon: "trophy" },
   { value: "calls_50", label: "Half Century", description: "50 calls analyzed", icon: "trophy" },
   { value: "calls_100", label: "Century Club", description: "100 calls analyzed", icon: "crown" },
-  { value: "most_improved", label: "Most Improved", description: "Biggest score improvement over 30 days", icon: "trend-up" },
+  // A13/F10/D1: most_improved was never implemented in evaluateBadges — there
+  // is no code path that awards it. Removing it from BADGE_TYPES so the badge
+  // catalog matches the actual evaluation logic.
   { value: "compliance_star", label: "Compliance Star", description: "Compliance sub-score 9+ on 5 consecutive calls", icon: "shield" },
   { value: "empathy_champion", label: "Empathy Champion", description: "Customer Experience sub-score 9+ on 5 consecutive calls", icon: "heart" },
   { value: "resolution_ace", label: "Resolution Ace", description: "Resolution sub-score 9+ on 5 consecutive calls", icon: "check-circle" },
@@ -587,6 +589,23 @@ export type LeaderboardEntry = {
   currentStreak: number;
   badges: Badge[];
   rank: number;
+};
+
+/**
+ * A4/F13: Storage-level row for the leaderboard. Aggregated server-side so
+ * the gamification service doesn't have to scan every call in memory.
+ * `recentScores` is the most recent N performance scores in DESC order
+ * by uploaded_at — used by the streak calculation. `recentScoresLimit`
+ * documents how many were fetched (the storage layer caps this).
+ */
+export type LeaderboardRow = {
+  employeeId: string;
+  employeeName: string;
+  subTeam?: string;
+  totalCalls: number;
+  scoreSum: number;
+  scoreCount: number;
+  recentScores: number[]; // newest first
 };
 
 export type DashboardMetrics = {

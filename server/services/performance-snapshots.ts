@@ -23,6 +23,8 @@ import type { CallWithDetails } from "../../shared/schema";
 import { getPool } from "../db/pool";
 import { logPhiAccess } from "./audit-log";
 import { safeFloat, safeJsonParse } from "../routes/utils";
+import { logger } from "./logger";
+import { captureException } from "./sentry";
 
 // --- Types ---
 
@@ -45,6 +47,11 @@ export interface PerformanceMetrics {
   commonTopics: Array<{ text: string; count: number }>;
   flaggedCallCount: number;
   exceptionalCallCount: number;
+  // A11/F25: quality + safety signal counts. The pipeline applies these
+  // flags but the snapshot was previously ignoring them.
+  lowConfidenceCallCount: number;
+  promptInjectionCallCount: number;
+  outputAnomalyCallCount: number;
 }
 
 export interface PerformanceSnapshot {
@@ -63,13 +70,23 @@ export interface PerformanceSnapshot {
 }
 
 // --- In-memory store (falls back when no DB) ---
-
+// A6/F08: bounded to MAX_IN_MEMORY_SNAPSHOTS to prevent unbounded growth on
+// long-running processes that don't have a DB pool. FIFO eviction (oldest
+// first) — DB-backed storage is the source of truth when configured.
+const MAX_IN_MEMORY_SNAPSHOTS = 200;
 const snapshotStore: PerformanceSnapshot[] = [];
+
+function pushBounded(snapshot: PerformanceSnapshot): void {
+  snapshotStore.push(snapshot);
+  while (snapshotStore.length > MAX_IN_MEMORY_SNAPSHOTS) {
+    snapshotStore.shift();
+  }
+}
 
 // --- Storage ---
 
 export async function saveSnapshot(snapshot: PerformanceSnapshot): Promise<void> {
-  snapshotStore.push(snapshot);
+  pushBounded(snapshot);
 
   const pool = getPool();
   if (pool) {
@@ -86,8 +103,24 @@ export async function saveSnapshot(snapshot: PerformanceSnapshot): Promise<void>
           snapshot.generatedBy, snapshot.generatedAt,
         ]
       );
-    } catch {
-      // Table may not exist — snapshot lives in memory
+    } catch (err) {
+      // A6/F09: bare catch was hiding both "table missing" and real DB errors.
+      // performance_snapshots is in schema.sql now, so a missing-table error
+      // means the schema migration didn't run — that's a real bug, not a
+      // graceful degradation. Log + alert Sentry; rethrow so callers see it.
+      const error = err instanceof Error ? err : new Error(String(err));
+      logger.warn("snapshot DB persist failed", {
+        snapshotId: snapshot.id,
+        level: snapshot.level,
+        targetId: snapshot.targetId,
+        error: error.message,
+      });
+      captureException(error, {
+        op: "saveSnapshot",
+        snapshotId: snapshot.id,
+        level: snapshot.level,
+      });
+      throw error;
     }
   }
 }
@@ -110,8 +143,17 @@ export async function getSnapshots(
       if (result.rows.length > 0) {
         return result.rows.map(rowToSnapshot);
       }
-    } catch {
-      // Fall through to in-memory
+    } catch (err) {
+      // A6/F09: log real DB errors instead of swallowing them silently. We
+      // still fall through to the in-memory cache so callers don't see
+      // hard failures during transient DB issues, but the warning surfaces
+      // the underlying problem in observability.
+      logger.warn("snapshot DB read failed (falling back to memory)", {
+        op: "getSnapshots",
+        level,
+        targetId,
+        error: (err as Error).message,
+      });
     }
   }
 
@@ -144,8 +186,13 @@ export async function getAllSnapshotsForLevel(level: SnapshotLevel): Promise<Per
         [level]
       );
       if (result.rows.length > 0) return result.rows.map(rowToSnapshot);
-    } catch {
-      // Fall through
+    } catch (err) {
+      // A6/F09: surface DB errors but fall through to memory.
+      logger.warn("snapshot DB read failed (falling back to memory)", {
+        op: "getAllSnapshotsForLevel",
+        level,
+        error: (err as Error).message,
+      });
     }
   }
   return snapshotStore
@@ -181,8 +228,19 @@ export async function resetSnapshotContext(
         [level, targetId]
       );
       removed = Math.max(removed, result.rowCount || 0);
-    } catch {
-      // Table may not exist
+    } catch (err) {
+      // A6/F09: surface real DB errors. Reset is admin-triggered, so we
+      // log loudly and rethrow — the operator should know if the persist
+      // didn't go through.
+      const error = err instanceof Error ? err : new Error(String(err));
+      logger.error("snapshot context reset DB delete failed", {
+        op: "resetSnapshotContext",
+        level,
+        targetId,
+        error: error.message,
+      });
+      captureException(error, { op: "resetSnapshotContext", level, targetId });
+      throw error;
     }
   }
 
@@ -212,6 +270,9 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
   const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
   let flaggedCount = 0;
   let exceptionalCount = 0;
+  let lowConfidenceCount = 0;
+  let promptInjectionCount = 0;
+  let outputAnomalyCount = 0;
   const subScoreSums = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0 };
   let subScoreCount = 0;
 
@@ -221,11 +282,15 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     }
 
     // Sub-scores
+    // A10/F22: pipeline normalizes Bedrock's snake_case sub_scores to
+    // camelCase before persistence (routes/pipeline.ts:489), so the
+    // stored JSONB has `customerExperience`. The aggregator was reading
+    // `customer_experience` and silently producing 0 for the CX column.
     if (call.analysis?.subScores) {
       const sub = safeJsonParse<Record<string, number>>(call.analysis.subScores, {});
-      if (sub.compliance !== undefined || sub.customer_experience !== undefined) {
+      if (sub.compliance !== undefined || sub.customerExperience !== undefined) {
         subScoreSums.compliance += safeFloat(sub.compliance);
-        subScoreSums.customerExperience += safeFloat(sub.customer_experience);
+        subScoreSums.customerExperience += safeFloat(sub.customerExperience);
         subScoreSums.communication += safeFloat(sub.communication);
         subScoreSums.resolution += safeFloat(sub.resolution);
         subScoreCount++;
@@ -252,14 +317,20 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     }
 
     // Flags
+    // A11/F25: also count quality/safety signals so the snapshot UI can
+    // surface them. These are emitted by the pipeline (low transcript
+    // confidence, prompt injection detection, AI output anomalies) and
+    // were previously dropped.
     if (call.analysis?.flags) {
       const flags = safeJsonParse<string[]>(call.analysis.flags, []);
       if (Array.isArray(flags)) {
         for (const f of flags) {
-          if (typeof f === "string") {
-            if (f === "low_score" || f.startsWith("agent_misconduct")) flaggedCount++;
-            if (f === "exceptional_call") exceptionalCount++;
-          }
+          if (typeof f !== "string") continue;
+          if (f === "low_score" || f.startsWith("agent_misconduct")) flaggedCount++;
+          if (f === "exceptional_call") exceptionalCount++;
+          if (f === "low_confidence") lowConfidenceCount++;
+          if (f === "prompt_injection_detected") promptInjectionCount++;
+          if (f === "output_anomaly") outputAnomalyCount++;
         }
       }
     }
@@ -290,6 +361,9 @@ export function aggregateMetrics(calls: Pick<CallWithDetails, "analysis" | "sent
     commonTopics: countFrequency(allTopics),
     flaggedCallCount: flaggedCount,
     exceptionalCallCount: exceptionalCount,
+    lowConfidenceCallCount: lowConfidenceCount,
+    promptInjectionCallCount: promptInjectionCount,
+    outputAnomalyCallCount: outputAnomalyCount,
   };
 }
 
