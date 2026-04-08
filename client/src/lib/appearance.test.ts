@@ -77,9 +77,12 @@ describe("appearance", () => {
       expect(parsed.background).toBe("softWaves");
     });
 
-    it("keeps legacy theme key in sync", () => {
+    it("does NOT write the legacy 'theme' key (A23)", () => {
+      // The legacy key is read once for migration in loadAppearance and
+      // then never touched again; saveAppearance must not keep mirroring it,
+      // or the two keys can drift on partial writes.
       saveAppearance({ theme: "dark", background: "none", glass: "strong" });
-      expect(localStorage.getItem("theme")).toBe("dark");
+      expect(localStorage.getItem("theme")).toBeNull();
     });
 
     it("round-trips through load", () => {
@@ -90,14 +93,12 @@ describe("appearance", () => {
   });
 
   describe("VALID_BACKGROUNDS", () => {
-    it("includes expected patterns", () => {
-      expect(VALID_BACKGROUNDS).toContain("none");
-      expect(VALID_BACKGROUNDS).toContain("hexagons");
-      expect(VALID_BACKGROUNDS).toContain("softWaves");
-    });
-
-    it("has at least 3 options", () => {
-      expect(VALID_BACKGROUNDS.length).toBeGreaterThanOrEqual(3);
+    it("matches the BackgroundPattern union exactly", () => {
+      // If the union grows or shrinks, this should fail loudly so the
+      // schema, the runtime list, and the validator all stay in sync.
+      expect([...VALID_BACKGROUNDS].sort()).toEqual(
+        ["hexagons", "neonFlow", "none", "softWaves", "topoMesh"].sort(),
+      );
     });
   });
 });

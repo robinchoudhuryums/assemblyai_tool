@@ -5,6 +5,18 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: vi.fn(() => ({ data: [], isLoading: false, error: null })),
   useQueryClient: vi.fn(() => ({ invalidateQueries: vi.fn() })),
   useMutation: vi.fn(() => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false })),
+  // Stub QueryClient so importing @/lib/queryClient (which constructs one
+  // at module load) doesn't blow up. A10 added a getCsrfToken import from
+  // queryClient, which transitively pulls in the full module.
+  QueryClient: class { constructor() { /* noop */ } },
+}));
+
+// A10: file-upload.tsx now imports getCsrfToken from @/lib/queryClient.
+// Stub the module so the test doesn't need the real QueryClient construction.
+vi.mock("@/lib/queryClient", () => ({
+  getCsrfToken: () => undefined,
+  apiRequest: vi.fn(),
+  queryClient: { invalidateQueries: vi.fn() },
 }));
 
 vi.mock("wouter", () => ({

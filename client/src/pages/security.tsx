@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Bell, CheckCircle, FileX, Key, Shield, Warning, XCircle } from "@phosphor-icons/react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toDisplayString } from "@/lib/display-utils";
 
 interface SecuritySummary {
   totalAlerts: number;
@@ -204,7 +205,7 @@ export default function SecurityPage() {
                         </p>
                         <div className="mt-1 text-sm text-muted-foreground">
                           {Object.entries(alert.details).map(([k, v]) => (
-                            <span key={k} className="mr-3">{k}: <strong>{String(v)}</strong></span>
+                            <span key={k} className="mr-3">{k}: <strong>{toDisplayString(v)}</strong></span>
                           ))}
                         </div>
                       </div>

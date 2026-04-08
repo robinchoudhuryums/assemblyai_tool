@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useTranslation } from "@/lib/i18n";
 import { z } from "zod";
@@ -13,8 +13,6 @@ const callUpdateSchema = z.object({
   label: z.string().optional(),
 });
 
-type CallUpdate = z.infer<typeof callUpdateSchema>;
-
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -22,7 +20,12 @@ const MAX_BACKOFF_MS = 30_000;
 const MAX_RECONNECT_ATTEMPTS = 20;
 const JITTER_FACTOR = 0.3; // ±30% jitter
 
-function backoffWithJitter(attempt: number): number {
+/**
+ * Exported for unit tests so the backoff curve can be exercised without
+ * standing up a real WebSocket. Pure function: deterministic except for the
+ * single Math.random() call.
+ */
+export function backoffWithJitter(attempt: number): number {
   const base = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
   const jitter = base * JITTER_FACTOR * (Math.random() * 2 - 1);
   return Math.round(base + jitter);
@@ -38,6 +41,21 @@ export function useWebSocket() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const mountedRef = useRef(true);
 
+  // Capture toast / translator / queryClient in refs so the connect/reconnect
+  // callbacks can stay stable across renders. Without this, every locale
+  // change re-creates `connect`, which re-runs the mount effect, which tears
+  // down and re-establishes the WebSocket — pointlessly noisy and racy.
+  const toastRef = useRef(toast);
+  const tRef = useRef(t);
+  const qcRef = useRef<QueryClient>(queryClient);
+  useEffect(() => { toastRef.current = toast; }, [toast]);
+  useEffect(() => { tRef.current = t; }, [t]);
+  useEffect(() => { qcRef.current = queryClient; }, [queryClient]);
+
+  // Forward declaration so connect() can call scheduleReconnect() and
+  // scheduleReconnect() can call connect() without an init-order trap.
+  const connectRef = useRef<() => void>(() => { /* set below */ });
+
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current || attemptRef.current >= MAX_RECONNECT_ATTEMPTS) return;
     if (reconnectTimer.current) return; // Already scheduled
@@ -45,7 +63,7 @@ export function useWebSocket() {
     attemptRef.current++;
     reconnectTimer.current = setTimeout(() => {
       reconnectTimer.current = undefined;
-      connect();
+      connectRef.current();
     }, delay);
   }, []);
 
@@ -65,9 +83,6 @@ export function useWebSocket() {
         if (!mountedRef.current) return;
         attemptRef.current = 0;
         setConnectionState("connected");
-
-        // Broadcast connection state for other components
-        window.dispatchEvent(new CustomEvent("ws:state", { detail: { state: "connected" } }));
       };
 
       ws.onmessage = (event) => {
@@ -77,24 +92,26 @@ export function useWebSocket() {
           if (!parsed.success) return; // Ignore malformed messages
           const data = parsed.data;
           if (data.type === "call_update") {
-            // Broadcast to other components (e.g., file-upload progress tracking)
+            // Broadcast to other components (e.g., file-upload progress tracking).
+            // CONTRACT: keep `event.detail` shape identical — sidebar / calls-table /
+            // file-upload all read .callId, .status, .step, .totalSteps, .label.
             window.dispatchEvent(new CustomEvent("ws:call_update", { detail: data }));
 
             if (data.status === "completed") {
-              toast({
-                title: t("toast.callComplete"),
-                description: data.label || t("toast.callCompleteDesc"),
+              toastRef.current({
+                title: tRef.current("toast.callComplete"),
+                description: data.label || tRef.current("toast.callCompleteDesc"),
               });
               // Refresh calls and dashboard data
-              queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
+              qcRef.current.invalidateQueries({ queryKey: ["/api/calls"] });
+              qcRef.current.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
             } else if (data.status === "failed") {
-              toast({
-                title: t("toast.callFailed"),
-                description: data.label || t("toast.callFailedDesc"),
+              toastRef.current({
+                title: tRef.current("toast.callFailed"),
+                description: data.label || tRef.current("toast.callFailedDesc"),
                 variant: "destructive",
               });
-              queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+              qcRef.current.invalidateQueries({ queryKey: ["/api/calls"] });
             }
           }
         } catch {
@@ -107,7 +124,6 @@ export function useWebSocket() {
         if (!mountedRef.current) return;
 
         setConnectionState("disconnected");
-        window.dispatchEvent(new CustomEvent("ws:state", { detail: { state: "disconnected" } }));
         scheduleReconnect();
       };
 
@@ -120,7 +136,11 @@ export function useWebSocket() {
       if (!mountedRef.current) return;
       scheduleReconnect();
     }
-  }, [toast, t, queryClient, scheduleReconnect]);
+  }, [scheduleReconnect]);
+
+  // Keep the ref pointing at the latest connect closure so scheduleReconnect
+  // can dispatch through it without depending on connect in its useCallback.
+  connectRef.current = connect;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -134,7 +154,11 @@ export function useWebSocket() {
         wsRef.current = null;
       }
     };
-  }, [connect]);
+    // connect is stable (deps: [scheduleReconnect], which is also stable),
+    // so this effect runs exactly once per mount — locale or query-client
+    // changes no longer recycle the WebSocket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return connectionState;
 }

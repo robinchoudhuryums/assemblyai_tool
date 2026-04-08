@@ -15,6 +15,7 @@ import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
 import { useIdleTimeout } from "@/hooks/use-idle-timeout";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAppearance } from "@/components/appearance-provider";
+import { useTranslation } from "@/lib/i18n";
 import HexBackground from "@/components/hex-background";
 import SoftWavesBackground from "@/components/bg-soft-waves";
 import NeonFlowBackground from "@/components/bg-neon-flow";
@@ -77,25 +78,60 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
   );
 }
 
-const KEYBOARD_SHORTCUTS = [
-  { key: "D", description: "Go to Dashboard" },
-  { key: "K", description: "Go to Search" },
-  { key: "N", description: "Upload new call" },
-  { key: "R", description: "Go to Reports" },
-  { key: "?", description: "Show this help" },
+// Centralized [path, Component] table for the SPA. Replaces the prior 25-line
+// hand-written Switch with one declarative entry per route. Each route is
+// auto-wrapped in <ErrorBoundary><AnimatedPage>...</AnimatedPage></ErrorBoundary>
+// at render time below.
+type RouteEntry = readonly [path: string, Component: React.ComponentType];
+const ROUTE_TABLE: RouteEntry[] = [
+  ["/", Dashboard],
+  ["/upload", Upload],
+  ["/transcripts", Transcripts],
+  ["/transcripts/:id", Transcripts],
+  ["/search", SearchPage],
+  ["/performance", PerformancePage],
+  ["/sentiment", SentimentPage],
+  ["/reports", ReportsPage],
+  ["/employees", EmployeesPage],
+  ["/insights", InsightsPage],
+  ["/coaching", CoachingPage],
+  ["/admin", AdminPage],
+  ["/admin/templates", PromptTemplatesPage],
+  ["/admin/ab-testing", ABTestingPage],
+  ["/admin/spend", SpendTrackingPage],
+  ["/admin/security", SecurityPage],
+  ["/scorecard/:id", AgentScorecardPage],
+  ["/analytics/teams", TeamAnalyticsPage],
+  ["/analytics/compare", AgentComparePage],
+  ["/analytics/heatmap", HeatmapCalendarPage],
+  ["/analytics/clusters", CallClustersPage],
+  ["/my-performance", MyPerformancePage],
+  ["/leaderboard", LeaderboardPage],
+  ["/settings", SettingsPage],
+];
+
+// Keyboard shortcut keys are stable; descriptions live in i18n so they
+// translate alongside the rest of the UI.
+const KEYBOARD_SHORTCUT_KEYS: Array<{ key: string; descriptionKey: string }> = [
+  { key: "D", descriptionKey: "shortcut.dashboard" },
+  { key: "K", descriptionKey: "shortcut.search" },
+  { key: "N", descriptionKey: "shortcut.upload" },
+  { key: "R", descriptionKey: "shortcut.reports" },
+  { key: "?", descriptionKey: "shortcut.help" },
 ];
 
 function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Keyboard Shortcuts</DialogTitle>
+          <DialogTitle>{t("misc.keyboardShortcuts")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-2 mt-2">
-          {KEYBOARD_SHORTCUTS.map(({ key, description }) => (
+          {KEYBOARD_SHORTCUT_KEYS.map(({ key, descriptionKey }) => (
             <div key={key} className="flex items-center justify-between py-1.5">
-              <span className="text-sm text-muted-foreground">{description}</span>
+              <span className="text-sm text-muted-foreground">{t(descriptionKey)}</span>
               <kbd className="px-2 py-1 text-xs font-mono bg-muted rounded border border-border">{key}</kbd>
             </div>
           ))}
@@ -130,7 +166,11 @@ function Router() {
       // Ignore when typing in inputs/textareas
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Ignore any modifier combo so shortcuts don't hijack browser/OS chords.
+      // Shift is included because e.g. Shift+? produces "?" on US layouts and
+      // we still want plain "?" to open the help dialog — fall through there.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.shiftKey && e.key !== "?") return;
 
       switch (e.key) {
         case "Escape":
@@ -196,31 +236,24 @@ function Router() {
         <Suspense fallback={<PageLoader />}>
           <AnimatePresence mode="wait">
             <Switch key={location}>
-              <Route path="/">{() => <ErrorBoundary><AnimatedPage><Dashboard /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/upload">{() => <ErrorBoundary><AnimatedPage><Upload /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/transcripts">{() => <ErrorBoundary><AnimatedPage><Transcripts /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/transcripts/:id">{() => <ErrorBoundary><AnimatedPage><Transcripts /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/search">{() => <ErrorBoundary><AnimatedPage><SearchPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/performance">{() => <ErrorBoundary><AnimatedPage><PerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/sentiment">{() => <ErrorBoundary><AnimatedPage><SentimentPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/reports">{() => <ErrorBoundary><AnimatedPage><ReportsPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/employees">{() => <ErrorBoundary><AnimatedPage><EmployeesPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/insights">{() => <ErrorBoundary><AnimatedPage><InsightsPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/coaching">{() => <ErrorBoundary><AnimatedPage><CoachingPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/admin">{() => <ErrorBoundary><AnimatedPage><AdminPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/admin/templates">{() => <ErrorBoundary><AnimatedPage><PromptTemplatesPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/admin/ab-testing">{() => <ErrorBoundary><AnimatedPage><ABTestingPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/admin/spend">{() => <ErrorBoundary><AnimatedPage><SpendTrackingPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/scorecard/:id">{() => <ErrorBoundary><AnimatedPage><AgentScorecardPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/analytics/teams">{() => <ErrorBoundary><AnimatedPage><TeamAnalyticsPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/analytics/compare">{() => <ErrorBoundary><AnimatedPage><AgentComparePage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/analytics/heatmap">{() => <ErrorBoundary><AnimatedPage><HeatmapCalendarPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/analytics/clusters">{() => <ErrorBoundary><AnimatedPage><CallClustersPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/my-performance">{() => <ErrorBoundary><AnimatedPage><MyPerformancePage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/leaderboard">{() => <ErrorBoundary><AnimatedPage><LeaderboardPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/admin/security">{() => <ErrorBoundary><AnimatedPage><SecurityPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route path="/settings">{() => <ErrorBoundary><AnimatedPage><SettingsPage /></AnimatedPage></ErrorBoundary>}</Route>
-              <Route>{() => <AnimatedPage><NotFound /></AnimatedPage>}</Route>
+              {ROUTE_TABLE.map(([path, Component]) => (
+                <Route key={path} path={path}>
+                  {() => (
+                    <ErrorBoundary>
+                      <AnimatedPage><Component /></AnimatedPage>
+                    </ErrorBoundary>
+                  )}
+                </Route>
+              ))}
+              {/* Wrap NotFound in ErrorBoundary too — a buggy 404 page should
+                  not bring down the whole app shell. */}
+              <Route>
+                {() => (
+                  <ErrorBoundary>
+                    <AnimatedPage><NotFound /></AnimatedPage>
+                  </ErrorBoundary>
+                )}
+              </Route>
             </Switch>
           </AnimatePresence>
         </Suspense>

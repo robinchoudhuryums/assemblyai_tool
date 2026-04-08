@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
-import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/constants";
+import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE, SCORE_EXCELLENT, SCORE_GOOD, SCORE_NEEDS_WORK } from "@/lib/constants";
 import { useTranslation } from "@/lib/i18n";
 import { loadSavedFilters, saveSavedFilter, deleteSavedFilter, type SavedFilter } from "@/lib/saved-filters";
 import { Input } from "@/components/ui/input";
@@ -590,8 +590,14 @@ export default function CallsTable() {
                 <td className="py-3 px-2">
                   {call.analysis?.performanceScore && (() => {
                     const score = Number(call.analysis.performanceScore);
-                    const scoreColor = score >= 8 ? "text-green-600" : score >= 6 ? "text-blue-600" : score >= 4 ? "text-yellow-600" : "text-red-600";
-                    const barColor = score >= 8 ? "from-green-500 to-emerald-400" : score >= 6 ? "from-blue-500 to-cyan-400" : score >= 4 ? "from-yellow-500 to-amber-400" : "from-red-500 to-orange-400";
+                    const scoreColor = score >= SCORE_EXCELLENT ? "text-green-600"
+                      : score >= SCORE_GOOD ? "text-blue-600"
+                      : score >= SCORE_NEEDS_WORK ? "text-yellow-600"
+                      : "text-red-600";
+                    const barColor = score >= SCORE_EXCELLENT ? "from-green-500 to-emerald-400"
+                      : score >= SCORE_GOOD ? "from-blue-500 to-cyan-400"
+                      : score >= SCORE_NEEDS_WORK ? "from-yellow-500 to-amber-400"
+                      : "from-red-500 to-orange-400";
                     return (
                       <div className="space-y-1">
                         <div className="flex items-center space-x-2">

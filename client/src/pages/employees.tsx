@@ -12,11 +12,16 @@ import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
 
-// Departments that use sub-teams
-const DEPARTMENTS_WITH_SUBTEAMS: Record<string, readonly string[]> = {
+// Default sub-team taxonomy used as a fallback while /api/employees/teams
+// is loading. The server is the source of truth — see useTeamsConfig below.
+const FALLBACK_DEPARTMENTS_WITH_SUBTEAMS: Record<string, readonly string[]> = {
   "Intake - Power Mobility": POWER_MOBILITY_SUBTEAMS,
   "Power Mobility": POWER_MOBILITY_SUBTEAMS,
 };
+
+interface TeamsConfig {
+  departmentsWithSubTeams: Record<string, string[]>;
+}
 
 interface DepartmentGroup {
   department: string;
@@ -24,7 +29,10 @@ interface DepartmentGroup {
   employees: Employee[]; // employees without a sub-team (or dept has no sub-teams)
 }
 
-function groupByDepartment(employees: Employee[]): DepartmentGroup[] {
+function groupByDepartment(
+  employees: Employee[],
+  deptsWithSubTeams: Record<string, readonly string[]>,
+): DepartmentGroup[] {
   const deptMap = new Map<string, Employee[]>();
   for (const emp of employees) {
     const dept = emp.role || "Unassigned";
@@ -37,7 +45,7 @@ function groupByDepartment(employees: Employee[]): DepartmentGroup[] {
 
   for (const dept of sortedDepts) {
     const deptEmployees = deptMap.get(dept)!;
-    const subTeamDefs = DEPARTMENTS_WITH_SUBTEAMS[dept];
+    const subTeamDefs = deptsWithSubTeams[dept];
 
     if (subTeamDefs) {
       const subTeamMap = new Map<string, Employee[]>();
@@ -176,10 +184,18 @@ export default function EmployeesPage() {
     queryKey: ["/api/employees"],
   });
 
+  // Server-defined teams config; falls back to the bundled constant while
+  // the request is in flight or if it fails.
+  const { data: teamsConfig } = useQuery<TeamsConfig>({
+    queryKey: ["/api/employees/teams"],
+    staleTime: Infinity,
+  });
+  const deptsWithSubTeams = teamsConfig?.departmentsWithSubTeams ?? FALLBACK_DEPARTMENTS_WITH_SUBTEAMS;
+
   const departments = useMemo(() => {
     if (!employees) return [];
-    return groupByDepartment(employees);
-  }, [employees]);
+    return groupByDepartment(employees, deptsWithSubTeams);
+  }, [employees, deptsWithSubTeams]);
 
   const allDepartments = useMemo(() => {
     if (!employees) return [];
@@ -268,8 +284,17 @@ export default function EmployeesPage() {
       ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
       : trimmedName.slice(0, 2).toUpperCase();
 
-    // Auto-generate email from name for backend storage
-    const autoEmail = `${trimmedName.toLowerCase().replace(/\s+/g, ".")}@company.com`;
+    // Auto-generate a valid local-part by stripping anything outside
+    // [a-z0-9._-], collapsing dots, and trimming leading/trailing dots so
+    // names like "O'Brien, Jr." don't produce malformed emails the backend
+    // schema will reject.
+    const localPart = trimmedName
+      .toLowerCase()
+      .replace(/\s+/g, ".")
+      .replace(/[^a-z0-9._-]/g, "")
+      .replace(/\.{2,}/g, ".")
+      .replace(/^\.+|\.+$/g, "") || "user";
+    const autoEmail = `${localPart}@company.com`;
 
     createMutation.mutate({
       name: trimmedName,
@@ -298,7 +323,7 @@ export default function EmployeesPage() {
   };
 
   const getSubTeamsForDept = (dept: string): readonly string[] | undefined => {
-    return DEPARTMENTS_WITH_SUBTEAMS[dept];
+    return deptsWithSubTeams[dept];
   };
 
   const totalActive = employees?.filter(e => e.status === "Active").length || 0;

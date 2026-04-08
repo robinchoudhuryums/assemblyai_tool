@@ -35,7 +35,10 @@ export function registerAuthRoutes(router: Router) {
       const pending = mfaPendingTokens.get(mfaToken);
       if (!pending || Date.now() > pending.expires) {
         mfaPendingTokens.delete(mfaToken);
-        return res.status(401).json({ message: "MFA session expired. Please log in again." });
+        return res.status(401).json({
+          code: "mfa_session_expired",
+          message: "MFA session expired. Please log in again.",
+        });
       }
       // Verify TOTP
       (async () => {

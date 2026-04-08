@@ -24,6 +24,7 @@ import { register as registerInsightRoutes } from "./routes/insights";
 import { registerUserRoutes } from "./routes/users";
 import { registerSnapshotRoutes } from "./routes/snapshots";
 import { registerGamificationRoutes } from "./routes/gamification";
+import { registerConfigRoutes } from "./routes/config";
 
 // Pipeline
 import { processAudioFile, shouldUseBatchMode } from "./routes/pipeline";
@@ -199,6 +200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Register all route modules
+  registerConfigRoutes(router);
   registerAuthRoutes(router);
   registerDashboardRoutes(router);
   registerEmployeeRoutes(router);

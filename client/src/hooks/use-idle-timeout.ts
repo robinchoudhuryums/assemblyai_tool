@@ -58,11 +58,21 @@ export function useIdleTimeout(onIdle: () => void, enabled: boolean): IdleTimeou
       }, COUNTDOWN_INTERVAL_MS);
     }, IDLE_TIMEOUT_MS - WARNING_BEFORE_MS);
 
-    // Fire logout at timeout
+    // Fire logout at timeout. Fail-closed: if the logout callback throws, do
+    // NOT swallow the error and leave the user in an apparently-still-logged-in
+    // state — hard-redirect to /auth so the session is unambiguously dropped.
     idleTimerRef.current = setTimeout(() => {
       clearAllTimers();
       setShowWarning(false);
-      try { onIdleRef.current(); } catch (err) { console.error("Idle timeout callback failed:", err); }
+      try {
+        onIdleRef.current();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("Idle timeout callback failed; forcing hard redirect:", err);
+        if (typeof window !== "undefined") {
+          window.location.href = "/auth";
+        }
+      }
     }, IDLE_TIMEOUT_MS);
   }, [clearAllTimers]);
 

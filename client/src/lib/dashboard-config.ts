@@ -2,6 +2,7 @@
  * Dashboard widget configuration — persisted to localStorage.
  * Users can toggle visibility and reorder widgets.
  */
+import { safeSet } from "./safe-storage";
 
 export interface WidgetConfig {
   id: string;
@@ -37,7 +38,7 @@ export function loadWidgetConfig(): WidgetConfig[] {
 }
 
 export function saveWidgetConfig(config: WidgetConfig[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  safeSet(STORAGE_KEY, JSON.stringify(config));
 }
 
 export function moveWidget(config: WidgetConfig[], id: string, direction: "up" | "down"): WidgetConfig[] {

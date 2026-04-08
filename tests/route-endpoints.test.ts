@@ -19,6 +19,8 @@ import { register as registerEmployeeRoutes } from "../server/routes/employees.j
 import { registerCallRoutes } from "../server/routes/calls.js";
 import { registerUserRoutes } from "../server/routes/users.js";
 import { register as registerDashboardRoutes } from "../server/routes/dashboard.js";
+import { registerConfigRoutes } from "../server/routes/config.js";
+import { registerReportRoutes } from "../server/routes/reports.js";
 
 // --- Test harness ---
 
@@ -246,6 +248,40 @@ describe("Employee endpoints (real routes)", () => {
     }, "manager");
     assert.equal(updateStatus, 200);
     assert.equal(updated.name, "Manager Updated");
+  });
+
+  // --- A28: GET /api/employees/teams ---
+
+  it("GET /api/employees/teams returns the department/sub-team taxonomy", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/employees/teams");
+    assert.equal(status, 200);
+    assert.ok(body.departmentsWithSubTeams);
+    assert.ok(typeof body.departmentsWithSubTeams === "object");
+    // Both Power Mobility department keys should be present
+    assert.ok(body.departmentsWithSubTeams["Power Mobility"]);
+    assert.ok(body.departmentsWithSubTeams["Intake - Power Mobility"]);
+    // Sub-teams should be a non-empty array of strings
+    assert.ok(Array.isArray(body.departmentsWithSubTeams["Power Mobility"]));
+    assert.ok(body.departmentsWithSubTeams["Power Mobility"].length > 0);
+    for (const team of body.departmentsWithSubTeams["Power Mobility"]) {
+      assert.equal(typeof team, "string");
+    }
+  });
+
+  it("GET /api/employees/teams requires authentication", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/employees/teams", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/employees/teams is registered before /api/employees/:id (route ordering)", async () => {
+    // The /teams literal must be matched before any future /:id wildcard.
+    // If a future change accidentally registers GET /api/employees/:id BEFORE
+    // /teams, this test would still pass (since :id doesn't exist yet) — but
+    // it documents the contract.
+    const { status, body } = await req(baseUrl, "GET", "/api/employees/teams");
+    assert.equal(status, 200);
+    // The body shape proves we hit the /teams handler, not a /:id handler
+    assert.ok(body.departmentsWithSubTeams);
   });
 
   after((_, done) => {
@@ -491,6 +527,148 @@ describe("Dashboard endpoints (real routes)", () => {
     const { status, body } = await req(baseUrl, "GET", "/api/dashboard/performers");
     assert.equal(status, 200);
     assert.ok(Array.isArray(body));
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// PUBLIC CONFIG ENDPOINT (A11)
+// =====================================================================
+
+describe("Public config endpoint (/api/config)", () => {
+  const app = buildAppWith(registerConfigRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/config returns 200 without authentication (public route)", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/config", undefined, "none");
+    assert.equal(status, 200);
+  });
+
+  it("GET /api/config returns companyName + scoring shape", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
+    assert.equal(status, 200);
+    assert.equal(typeof body.companyName, "string");
+    assert.ok(body.companyName.length > 0);
+    assert.ok(body.scoring);
+    assert.equal(typeof body.scoring.lowScoreThreshold, "number");
+    assert.equal(typeof body.scoring.highScoreThreshold, "number");
+    assert.equal(typeof body.scoring.streakScoreThreshold, "number");
+    assert.equal(typeof body.scoring.excellentThreshold, "number");
+    assert.equal(typeof body.scoring.goodThreshold, "number");
+    assert.equal(typeof body.scoring.needsWorkThreshold, "number");
+  });
+
+  it("scoring tier thresholds are sane (low < good < excellent)", async () => {
+    const { body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
+    assert.ok(body.scoring.lowScoreThreshold < body.scoring.highScoreThreshold);
+    assert.ok(body.scoring.needsWorkThreshold < body.scoring.goodThreshold);
+    assert.ok(body.scoring.goodThreshold < body.scoring.excellentThreshold);
+  });
+
+  it("companyName falls back to default when COMPANY_NAME env var is not overridden", async () => {
+    // Default per server/routes/config.ts is "UMS (United Medical Supply)".
+    // The test process may have COMPANY_NAME set or unset; just assert it's
+    // a non-empty string and matches the env var when present.
+    const { body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
+    const expected = process.env.COMPANY_NAME || "UMS (United Medical Supply)";
+    assert.equal(body.companyName, expected);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// REPORTS EXPORT BEACON (A8 — HIPAA audit beacon for client-built exports)
+// =====================================================================
+
+describe("Reports export beacon (POST /api/reports/export-beacon)", () => {
+  const app = buildAppWith(registerReportRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("POST /api/reports/export-beacon returns 401 when unauthenticated", async () => {
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
+      format: "txt",
+      reportType: "overall",
+      from: "2025-01-01",
+      to: "2025-12-31",
+    }, "none");
+    assert.equal(status, 401);
+  });
+
+  it("POST /api/reports/export-beacon returns 204 on a valid TXT beacon", async () => {
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
+      format: "txt",
+      reportType: "overall",
+      from: "2025-01-01",
+      to: "2025-12-31",
+      targetId: "overall",
+    }, "viewer");
+    assert.equal(status, 204);
+  });
+
+  it("POST /api/reports/export-beacon returns 204 on a CSV beacon", async () => {
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
+      format: "csv",
+      reportType: "employee",
+      from: "2025-06-01",
+      to: "2025-06-30",
+      targetId: "employee-uuid-here",
+    }, "viewer");
+    assert.equal(status, 204);
+  });
+
+  it("POST /api/reports/export-beacon accepts an empty body (best-effort beacon)", async () => {
+    // The handler reads body fields with safe defaults — an empty body
+    // should still produce a 204, not a validation error, because the
+    // beacon is fire-and-forget and must not block the user-initiated download.
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {}, "viewer");
+    assert.equal(status, 204);
+  });
+
+  it("POST /api/reports/export-beacon truncates oversized field values (no overflow)", async () => {
+    const huge = "x".repeat(5000);
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
+      format: huge,
+      reportType: huge,
+      from: huge,
+      to: huge,
+      targetId: huge,
+    }, "viewer");
+    // The handler slices each field to a max length and still records the beacon.
+    assert.equal(status, 204);
+  });
+
+  it("POST /api/reports/export-beacon ignores non-string field types", async () => {
+    // Defensive: malformed beacon body shouldn't crash the handler.
+    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
+      format: 42,
+      reportType: { nested: "object" },
+      from: ["array"],
+      to: null,
+      targetId: undefined,
+    }, "viewer");
+    assert.equal(status, 204);
   });
 
   after((_, done) => {

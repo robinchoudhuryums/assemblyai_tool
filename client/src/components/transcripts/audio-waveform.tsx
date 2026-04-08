@@ -17,21 +17,28 @@ export default function AudioWaveformDisplay({ audioRef, currentTime, duration, 
   const [waveformData, setWaveformData] = useState<number[] | null>(null);
   const [failed, setFailed] = useState(false);
 
-  // Decode the audio buffer to extract waveform amplitudes
+  // Decode the audio buffer to extract waveform amplitudes.
+  // Uses an AbortController to cancel the in-flight fetch on unmount and
+  // closes the AudioContext on cleanup so we don't leak the audio thread.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio?.src) return;
 
-    let cancelled = false;
+    const controller = new AbortController();
+    let audioCtx: AudioContext | null = null;
+
     const decode = async () => {
       try {
-        const response = await fetch(audio.src, { credentials: "include" });
+        const response = await fetch(audio.src, {
+          credentials: "include",
+          signal: controller.signal,
+        });
         if (!response.ok) return;
         const arrayBuffer = await response.arrayBuffer();
-        const audioCtx = new AudioContext();
+        if (controller.signal.aborted) return;
+        audioCtx = new AudioContext();
         const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        audioCtx.close();
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
 
         // Down-sample to ~200 bars
         const rawData = decoded.getChannelData(0);
@@ -48,12 +55,24 @@ export default function AudioWaveformDisplay({ audioRef, currentTime, duration, 
         // Normalize to 0-1
         const max = Math.max(...bars, 0.001);
         setWaveformData(bars.map(b => b / max));
-      } catch {
-        if (!cancelled) setFailed(true);
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
+        if (!controller.signal.aborted) setFailed(true);
+      } finally {
+        // Close the AudioContext as soon as decoding finishes (or fails) —
+        // we only need it for the one-shot decodeAudioData call.
+        if (audioCtx && audioCtx.state !== "closed") {
+          audioCtx.close().catch(() => { /* already closed */ });
+        }
       }
     };
     decode();
-    return () => { cancelled = true; };
+    return () => {
+      controller.abort();
+      if (audioCtx && audioCtx.state !== "closed") {
+        audioCtx.close().catch(() => { /* already closed */ });
+      }
+    };
   }, [audioRef]);
 
   // Draw the waveform

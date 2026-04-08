@@ -1,6 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
-import { DEFAULT_STALE_TIME_MS } from "@/lib/constants";
+import { DEFAULT_STALE_TIME_MS, LOGIN_GRACE_MS } from "@/lib/constants";
 
 /** Read the CSRF token from the double-submit cookie set by the server. */
 export function getCsrfToken(): string | undefined {
@@ -8,11 +8,27 @@ export function getCsrfToken(): string | undefined {
   return match ? match.slice("csrf_token=".length) : undefined;
 }
 
-/** Sentinel error so components can distinguish session expiry from real errors. */
+/** Sentinel error so components can distinguish session expiry from real errors.
+ * Optional `code` carries the server's structured reason ("mfa_session_expired",
+ * etc.) so callers don't need to substring-match the human message. */
 export class SessionExpiredError extends Error {
-  constructor() {
-    super("Session expired. Please log in again.");
+  code?: string;
+  constructor(code?: string, message?: string) {
+    super(message || "Session expired. Please log in again.");
     this.name = "SessionExpiredError";
+    if (code) this.code = code;
+  }
+}
+
+/** Generic API error carrying the server's structured `code` field. */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -28,8 +44,17 @@ let hadSession = false;
 /** Timestamp of last successful login — used to suppress transient 401s during login transition. */
 let lastLoginAt = 0;
 
-/** Grace period after login during which transient 401s don't trigger "session expired" toast. */
-const LOGIN_GRACE_MS = 5000;
+/** Test hooks for the sessionExpired/hadSession transitions. Exported only
+ * so unit tests can drive the state machine without faking real network
+ * activity. Production code must not call these. */
+export function _peekSessionState() {
+  return { sessionExpired, hadSession, lastLoginAt };
+}
+export function _resetSessionStateForTests() {
+  sessionExpired = false;
+  hadSession = false;
+  lastLoginAt = 0;
+}
 
 /** Called after successful login to reset the flag. */
 export function resetSessionExpired() {
@@ -44,6 +69,19 @@ async function throwIfResNotOk(res: Response) {
     if (res.status >= 502 && res.status <= 504) {
       throw new Error("Server is temporarily unavailable. Please try again in a moment.");
     }
+
+    // Try to parse the response body once so all error paths can read code/message.
+    // Body is consumed exactly once — falls through to text() if it isn't JSON.
+    let bodyMessage: string | undefined;
+    let bodyCode: string | undefined;
+    try {
+      const body = await res.clone().json();
+      bodyMessage = body?.message ?? body?.error?.message;
+      bodyCode = body?.code ?? body?.error?.code;
+    } catch {
+      // Not JSON — leave undefined; we'll fall back to text below.
+    }
+
     // On 401, clear auth cache so AuthenticatedApp renders login page.
     // No full page reload — just invalidate the auth query.
     if (res.status === 401) {
@@ -51,7 +89,12 @@ async function throwIfResNotOk(res: Response) {
       // queries that fire immediately after login may get transient 401s
       // before the session cookie fully propagates.
       if (lastLoginAt && Date.now() - lastLoginAt < LOGIN_GRACE_MS) {
-        throw new SessionExpiredError();
+        throw new SessionExpiredError(bodyCode, bodyMessage);
+      }
+      // MFA-step 401s are not "session expired" — there's no session yet.
+      // Skip the toast / cache clear and just propagate the structured code.
+      if (bodyCode === "mfa_session_expired") {
+        throw new SessionExpiredError(bodyCode, bodyMessage);
       }
       if (!sessionExpired) {
         sessionExpired = true;
@@ -67,16 +110,11 @@ async function throwIfResNotOk(res: Response) {
           });
         }
       }
-      throw new SessionExpiredError();
+      throw new SessionExpiredError(bodyCode, bodyMessage);
     }
-    let text: string;
-    try {
-      const body = await res.json();
-      text = body.message || res.statusText;
-    } catch {
-      text = (await res.text().catch(() => "")) || res.statusText;
-    }
-    throw new Error(`${res.status}: ${text}`);
+
+    const text = bodyMessage || (await res.text().catch(() => "")) || res.statusText;
+    throw new ApiError(res.status, `${res.status}: ${text}`, bodyCode);
   }
 }
 

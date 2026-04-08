@@ -474,6 +474,37 @@ router.get("/api/performance", requireAuth, async (req, res) => {
     }
   });
 
+  // HIPAA audit beacon for client-side report exports.
+  // The export file is built in the browser today (see client/src/pages/reports.tsx),
+  // so the server never sees the bytes leave. This endpoint receives a beacon BEFORE
+  // the download fires, so the access still lands in the audit log. Full server-side
+  // export generation is the long-term fix and is tracked in the roadmap.
+  router.post("/api/reports/export-beacon", requireAuth, async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const format = typeof body.format === "string" ? body.format.slice(0, 16) : "unknown";
+      const reportType = typeof body.reportType === "string" ? body.reportType.slice(0, 32) : "unknown";
+      const fromDate = typeof body.from === "string" ? body.from.slice(0, 32) : "";
+      const toDate = typeof body.to === "string" ? body.to.slice(0, 32) : "";
+      const targetId = typeof body.targetId === "string" ? body.targetId.slice(0, 64) : "";
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "export_report_clientside",
+        resourceType: "report",
+        resourceId: targetId || undefined,
+        detail: `format=${format}; reportType=${reportType}; from=${fromDate}; to=${toDate}`,
+      });
+
+      res.status(204).send();
+    } catch (error) {
+      // Don't leak details — beacon is fire-and-forget. Log on the server side.
+      console.error("Failed to record export beacon:", (error as Error).message);
+      res.status(500).json({ message: "Failed to record export" });
+    }
+  });
+
   // HIPAA: Only managers and admins can delete call records
   router.delete("/api/calls/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
   try {

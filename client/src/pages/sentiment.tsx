@@ -36,10 +36,11 @@ export default function SentimentPage() {
       const sent = call.sentiment?.overallSentiment;
       if (!sent) continue;
 
-      // Week key: ISO week start
+      // Week key: ISO week start, full YYYY-MM-DD so weeks across year boundaries
+      // sort correctly and don't collide (the prior slice(5,10) dropped the year).
       const weekStart = new Date(date);
       weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-      const key = weekStart.toISOString().slice(5, 10);
+      const key = weekStart.toISOString().slice(0, 10);
       const entry = weekMap.get(key) || { positive: 0, neutral: 0, negative: 0 };
       if (sent === "positive") entry.positive++;
       else if (sent === "neutral") entry.neutral++;
