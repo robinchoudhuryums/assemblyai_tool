@@ -20,13 +20,14 @@ Produce a classification table before doing any work:
 Test fileTest name/descriptionCategoryReason(one row per failing test)
 State the total count per category. If any Category D failures exist, list them prominently — these represent real bugs that will remain after this session.
 --- STEP 2: FIX CATEGORIES A, B, C, E ---
-Work through fixable failures in this order: E first (unblock the test runner), then A (highest volume after an implementation cycle), then B (structural improvements), then C (pre-existing if well-scoped).
+Work through fixable failures in this order: E first (unblock the test runner), then A (highest volume after an implementation cycle), then B (structural rewrites), then C (pre-existing if well-scoped).
 For each fix:
 
 State what the test originally asserted and why that was wrong or stale
 State what it now correctly asserts
 Confirm the new assertion actually reflects intended production behavior (not just making the test pass)
 
+Category B tests (tautological) must always be rewritten in this session — a test that passes when production is broken is actively harmful and should not be left in place. Rewrite it to import constants and expected values from production code rather than redefining them locally.
 Do not make a test pass by weakening its assertions. If the only way to make a test pass is to remove meaningful assertions, stop and classify it as Category D instead.
 --- STEP 3: COVERAGE GAPS ---
 After fixing failures, check whether any of the production code changes from the recent implementation cycle are covered by at least one test. Focus on:
@@ -36,7 +37,8 @@ New error handling paths (especially graceful degradation changes)
 New or modified data transformations
 Any behavior change flagged in the Implementation Summary Block
 
-For each gap found: describe what behavior is uncovered, suggest a specific test assertion that would cover it, and note whether writing that test is simple (< 30 min) or requires significant fixture setup.
+For each gap found: describe what behavior is uncovered, note whether writing the test is simple (< 30 min, no new fixtures needed) or complex (requires significant fixture setup or cross-module mocking).
+Implement simple coverage gaps immediately in this session. Do not just suggest them — write the test. Complex gaps go in FOLLOW-ON ITEMS with enough detail that they can be picked up in the next session without re-investigation.
 --- STEP 4: CI CONFIGURATION CHECK ---
 If CI is failing on checks beyond unit tests (linting, type checking, build), run each check and address failures in this order:
 
@@ -52,10 +54,13 @@ Tests fixed: [count and categories]
 Tests not fixed — Category D (production bugs): [list with file and behavior description]
 FIXES APPLIED:
 [Test file] | [Category] | [What changed and why]
-(repeat for each fixed test)
-COVERAGE GAPS IDENTIFIED:
-[Behavior] | [Suggested test] | [Effort: simple / needs fixtures]
-(or "None found")
+(repeat for each fixed test, including newly written coverage tests)
+COVERAGE GAPS — IMPLEMENTED:
+[Behavior covered] | [Test file] | [What the test asserts]
+(or "None")
+COVERAGE GAPS — DEFERRED (complex, needs fixtures):
+[Behavior] | [Why deferred] | [What's needed to implement]
+(or "None")
 CI STATUS AFTER THIS SESSION:
 [Expected passing / Still failing on Category D items / Other blockers remaining]
 FOLLOW-ON ITEMS FOR AUDIT/PLAN/IMPLEMENT:
