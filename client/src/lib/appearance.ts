@@ -1,3 +1,5 @@
+import { safeSet } from "./safe-storage";
+
 export type Theme = "light" | "dark";
 export type BackgroundPattern = "none" | "hexagons" | "softWaves" | "neonFlow" | "topoMesh";
 export type GlassEffect = "subtle" | "medium" | "strong";
@@ -46,7 +48,7 @@ export function loadAppearance(): AppearancePrefs {
 }
 
 export function saveAppearance(prefs: AppearancePrefs): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  safeSet(STORAGE_KEY, JSON.stringify(prefs));
   // Keep old key in sync for backwards compat
-  localStorage.setItem("theme", prefs.theme);
+  safeSet("theme", prefs.theme);
 }

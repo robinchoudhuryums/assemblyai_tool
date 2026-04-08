@@ -65,9 +65,6 @@ export function useWebSocket() {
         if (!mountedRef.current) return;
         attemptRef.current = 0;
         setConnectionState("connected");
-
-        // Broadcast connection state for other components
-        window.dispatchEvent(new CustomEvent("ws:state", { detail: { state: "connected" } }));
       };
 
       ws.onmessage = (event) => {
@@ -107,7 +104,6 @@ export function useWebSocket() {
         if (!mountedRef.current) return;
 
         setConnectionState("disconnected");
-        window.dispatchEvent(new CustomEvent("ws:state", { detail: { state: "disconnected" } }));
         scheduleReconnect();
       };
 

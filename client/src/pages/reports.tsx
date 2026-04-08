@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { Employee } from "@shared/schema";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { toDisplayString } from "@/lib/display-utils";
 import {
   type ReportType, type DatePreset, type FilteredReportData, type AgentProfileData,
   getDateRange, formatMonth, PRESET_LABELS,
@@ -123,9 +124,40 @@ export default function ReportsPage() {
     enabled: reportType === "employee" && !!selectedEmployee,
   });
 
-  // DownloadSimple handler
-  const handleDownloadReport = () => {
+  // HIPAA: emit a server-side audit beacon before any client-built export.
+  // The TXT and CSV downloads are constructed in the browser, so without
+  // this beacon the access never lands in the audit log. Best-effort: a
+  // failed beacon does not block the user-initiated download.
+  const sendExportBeacon = async (format: "txt" | "csv") => {
+    try {
+      const { getCsrfToken } = await import("@/lib/queryClient");
+      const targetId = reportType === "employee" ? selectedEmployee
+        : reportType === "department" ? selectedDepartment
+        : "overall";
+      await fetch("/api/reports/export-beacon", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}),
+        },
+        body: JSON.stringify({
+          format,
+          reportType,
+          from: dateRange.from,
+          to: dateRange.to,
+          targetId,
+        }),
+      });
+    } catch {
+      // Audit beacon is best-effort; don't block the download on failure.
+    }
+  };
+
+  // Download handler
+  const handleDownloadReport = async () => {
     if (!report) return;
+    await sendExportBeacon("txt");
     const lines: string[] = [];
     const typeLabel = reportType === "employee"
       ? `Employee Report: ${employees?.find(e => e.id === selectedEmployee)?.name || selectedEmployee}`
@@ -196,8 +228,9 @@ export default function ReportsPage() {
   };
 
   // CSV export of performers + trends for spreadsheet analysis
-  const handleDownloadCSV = () => {
+  const handleDownloadCSV = async () => {
     if (!report) return;
+    await sendExportBeacon("csv");
     const rows: string[][] = [];
     // Performers sheet
     rows.push(["Performers"]);
@@ -761,7 +794,7 @@ export default function ReportsPage() {
               )}
               {aiSummary && (
                 <div className="bg-muted/50 rounded-lg p-4 text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                  {aiSummary}
+                  {toDisplayString(aiSummary)}
                 </div>
               )}
               {!aiSummary && !summaryMutation.isPending && (

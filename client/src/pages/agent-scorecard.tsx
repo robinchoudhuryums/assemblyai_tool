@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { toDisplayString } from "@/lib/display-utils";
 import type { Employee } from "@shared/schema";
 
 interface AgentProfileData {
@@ -245,7 +246,7 @@ export default function AgentScorecard() {
                 {topStrengths.slice(0, 5).map((s, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm">
                     <span className="text-green-500 mt-0.5 shrink-0">+</span>
-                    <span className="text-muted-foreground flex-1">{s.text}</span>
+                    <span className="text-muted-foreground flex-1">{toDisplayString(s.text)}</span>
                     <Badge variant="secondary" className="text-[10px] shrink-0">{s.count}x</Badge>
                   </li>
                 ))}
@@ -265,7 +266,7 @@ export default function AgentScorecard() {
                 {topSuggestions.slice(0, 5).map((s, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm">
                     <span className="text-amber-500 mt-0.5 shrink-0">!</span>
-                    <span className="text-muted-foreground flex-1">{s.text}</span>
+                    <span className="text-muted-foreground flex-1">{toDisplayString(s.text)}</span>
                     <Badge variant="secondary" className="text-[10px] shrink-0">{s.count}x</Badge>
                   </li>
                 ))}

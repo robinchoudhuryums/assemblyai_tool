@@ -2,6 +2,7 @@
  * Saved search filters — persisted to localStorage.
  * Users can save, load, and delete named filter presets.
  */
+import { safeSet } from "./safe-storage";
 
 export interface SavedFilter {
   id: string;
@@ -31,11 +32,11 @@ export function saveSavedFilter(filter: Omit<SavedFilter, "id" | "createdAt">): 
     createdAt: new Date().toISOString(),
   };
   filters.push(newFilter);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+  safeSet(STORAGE_KEY, JSON.stringify(filters));
   return newFilter;
 }
 
 export function deleteSavedFilter(id: string): void {
   const filters = loadSavedFilters().filter(f => f.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+  safeSet(STORAGE_KEY, JSON.stringify(filters));
 }

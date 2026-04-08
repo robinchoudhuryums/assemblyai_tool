@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { safeSet } from "./safe-storage";
 
 export type Locale = "en" | "es";
 
@@ -407,7 +408,7 @@ export function getSavedLocale(): Locale {
 }
 
 export function saveLocale(locale: Locale): void {
-  localStorage.setItem("locale", locale);
+  safeSet("locale", locale);
 }
 
 export const I18nContext = createContext<I18nContextValue>({

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Warning, ArrowCounterClockwise, House } from "@phosphor-icons/react";
 import { getTranslation, getSavedLocale } from "@/lib/i18n";
+import { captureException } from "@/lib/sentry";
 
 interface Props {
   children: React.ReactNode;
@@ -29,6 +30,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("ErrorBoundary caught:", error.message, errorInfo.componentStack);
+    // Report to Sentry through the PHI-scrubbed wrapper. The wrapper no-ops
+    // when Sentry is not initialized (e.g. dev mode without VITE_SENTRY_DSN).
+    captureException(error, {
+      componentStack: errorInfo.componentStack,
+    });
   }
 
   private handleRetry = () => {

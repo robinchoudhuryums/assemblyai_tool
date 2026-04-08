@@ -2,6 +2,7 @@ import { useState, useRef, type ComponentType } from "react";
 import { CaretDown, CaretUp, Eye, Pause, Play, Trophy, Warning } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
+import { toDisplayString } from "@/lib/display-utils";
 
 // ---- Types shared across report components ----
 
@@ -186,7 +187,7 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
             </div>
           </div>
           {call.summary && (
-            <p className="text-xs text-muted-foreground line-clamp-2">{call.summary}</p>
+            <p className="text-xs text-muted-foreground line-clamp-2">{toDisplayString(call.summary)}</p>
           )}
           <Link href={`/transcripts/${call.id}`} className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1">
             <Eye className="w-3 h-3" /> View Full Call
