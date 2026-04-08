@@ -49,6 +49,8 @@ export function loadAppearance(): AppearancePrefs {
 
 export function saveAppearance(prefs: AppearancePrefs): void {
   safeSet(STORAGE_KEY, JSON.stringify(prefs));
-  // Keep old key in sync for backwards compat
-  safeSet("theme", prefs.theme);
+  // The legacy "theme" key is read once at first load (see loadAppearance
+  // migration branch above) and then never written again. Continuing to
+  // sync it on every save risks the two keys drifting if a future code
+  // path mutates one and not the other.
 }

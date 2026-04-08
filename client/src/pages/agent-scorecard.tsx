@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toDisplayString } from "@/lib/display-utils";
+import { SCORE_EXCELLENT, SCORE_GOOD, SCORE_NEEDS_WORK } from "@/lib/constants";
 import type { Employee } from "@shared/schema";
 
 interface AgentProfileData {
@@ -90,7 +91,10 @@ export default function AgentScorecard() {
 
   const scoreColor = (s: number | null) => {
     if (s == null) return "text-muted-foreground";
-    return s >= 8 ? "text-green-600" : s >= 6 ? "text-blue-600" : s >= 4 ? "text-yellow-600" : "text-red-600";
+    return s >= SCORE_EXCELLENT ? "text-green-600"
+      : s >= SCORE_GOOD ? "text-blue-600"
+      : s >= SCORE_NEEDS_WORK ? "text-yellow-600"
+      : "text-red-600";
   };
 
   const goodFlags = flaggedCalls.filter(f => f.flagType === "good");
@@ -300,7 +304,10 @@ export default function AgentScorecard() {
             <div className="flex items-end gap-1 h-20">
               {scoreTrend.slice(-12).map((point, i) => {
                 const height = point.avgScore ? `${(point.avgScore / 10) * 100}%` : "0%";
-                const color = point.avgScore >= 8 ? "bg-green-500" : point.avgScore >= 6 ? "bg-blue-500" : point.avgScore >= 4 ? "bg-yellow-500" : "bg-red-500";
+                const color = point.avgScore >= SCORE_EXCELLENT ? "bg-green-500"
+                  : point.avgScore >= SCORE_GOOD ? "bg-blue-500"
+                  : point.avgScore >= SCORE_NEEDS_WORK ? "bg-yellow-500"
+                  : "bg-red-500";
                 return (
                   <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
                     <span className="text-[9px] text-muted-foreground">{point.avgScore?.toFixed(1)}</span>

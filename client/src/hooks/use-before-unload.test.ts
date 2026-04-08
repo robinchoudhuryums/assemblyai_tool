@@ -16,12 +16,14 @@ describe("useBeforeUnload", () => {
     removeSpy.mockRestore();
   });
 
-  it("adds beforeunload listener when isDirty is true", () => {
+  it("adds exactly one beforeunload listener when isDirty is true", () => {
     renderHook(() => useBeforeUnload(true));
-    expect(addSpy).toHaveBeenCalledWith("beforeunload", expect.any(Function));
+    const calls = addSpy.mock.calls.filter(([event]) => event === "beforeunload");
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toEqual(expect.any(Function));
   });
 
-  it("does not add listener when isDirty is false", () => {
+  it("does not add a beforeunload listener when isDirty is false", () => {
     renderHook(() => useBeforeUnload(false));
     const calls = addSpy.mock.calls.filter(([event]) => event === "beforeunload");
     expect(calls.length).toBe(0);

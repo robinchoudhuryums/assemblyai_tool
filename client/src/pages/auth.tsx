@@ -4,10 +4,11 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-icons/react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, SessionExpiredError } from "@/lib/queryClient";
 import { extractErrorMessage } from "@/lib/display-utils";
 import { USER_ROLES } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
+import { useConfig } from "@/hooks/use-config";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface AuthPageProps {
@@ -22,6 +23,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const { companyName } = useConfig();
 
   // MFA state
   const [mfaRequired, setMfaRequired] = useState(false);
@@ -81,8 +83,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       });
       // Always clear code so user can retry immediately
       setTotpCode("");
-      // If session expired, go back to login form entirely
-      if (message?.includes("expired")) {
+      // If the server signaled the MFA token has expired (structured code,
+      // not substring matching), go back to the username/password form so
+      // the user re-authenticates from scratch.
+      const isMfaExpired =
+        error instanceof SessionExpiredError && error.code === "mfa_session_expired";
+      if (isMfaExpired) {
         setMfaRequired(false);
         setMfaToken("");
       } else {
@@ -138,7 +144,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
                 <Waveform className="w-6 h-6 text-primary" />
               </div>
             </div>
-            <CardTitle className="text-2xl">CallAnalyzer</CardTitle>
+            <CardTitle className="text-2xl">{companyName}</CardTitle>
             <CardDescription>
               {mfaRequired
                 ? "Enter the verification code from your authenticator app"

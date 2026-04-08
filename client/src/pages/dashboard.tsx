@@ -30,9 +30,12 @@ export default function Dashboard() {
 
   const isVisible = useCallback((id: string) => widgets.find(w => w.id === id)?.visible ?? true, [widgets]);
 
-  // Fetch recent calls to extract flagged ones for the dashboard alert panel
+  // Fetch recent calls to extract flagged ones for the dashboard alert panel.
+  // Convention: omit filter params from the query key when none are set —
+  // empty-string sentinels create cache-key noise that doesn't match the
+  // filter-less variants used by sidebar / mutations.
   const { data: callsResponse } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
+    queryKey: ["/api/calls"],
   });
   const calls = callsResponse?.calls;
 

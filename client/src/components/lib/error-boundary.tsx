@@ -1,6 +1,6 @@
 import React from 'react';
 import { Warning, ArrowCounterClockwise, House } from "@phosphor-icons/react";
-import { getTranslation, getSavedLocale } from "@/lib/i18n";
+import { getTranslation, getSavedLocale, type Locale } from "@/lib/i18n";
 import { captureException } from "@/lib/sentry";
 
 interface Props {
@@ -14,6 +14,8 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorCount: number;
+  /** Locale captured at catch time so re-renders don't re-read localStorage. */
+  locale: Locale;
 }
 
 const MAX_RETRIES = 3;
@@ -21,7 +23,7 @@ const MAX_RETRIES = 3;
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null, errorCount: 0 };
+    this.state = { hasError: false, error: null, errorCount: 0, locale: "en" };
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -30,6 +32,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("ErrorBoundary caught:", error.message, errorInfo.componentStack);
+    // Cache the locale once at catch time. Reading localStorage on every
+    // fallback render is wasteful and risks throwing in restricted contexts
+    // (private mode / sandboxed iframes).
+    this.setState({ locale: getSavedLocale() });
     // Report to Sentry through the PHI-scrubbed wrapper. The wrapper no-ops
     // when Sentry is not initialized (e.g. dev mode without VITE_SENTRY_DSN).
     captureException(error, {
@@ -55,8 +61,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
       if (this.props.fallback) return this.props.fallback;
 
       const canRetry = this.state.errorCount < MAX_RETRIES;
-      const locale = getSavedLocale();
-      const t = (key: string) => getTranslation(locale, key);
+      const t = (key: string) => getTranslation(this.state.locale, key);
 
       return (
         <div className="flex flex-col items-center justify-center p-8 min-h-[200px]" role="alert">

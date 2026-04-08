@@ -10,6 +10,7 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
+import { SPEED_OPTIONS } from "@/lib/constants";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
@@ -36,14 +37,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const queryClient = useQueryClient();
 
-  const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   /** Milliseconds of silence before splitting into a new transcript segment */
   const SEGMENT_GAP_MS = 2000;
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate(prev => {
-      const idx = SPEED_OPTIONS.indexOf(prev);
-      const next = SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length];
+      // SPEED_OPTIONS is `as const`, so its element type is the literal
+      // union, not `number`. Widen for indexOf since `prev` is just a number.
+      const speeds: readonly number[] = SPEED_OPTIONS;
+      const idx = speeds.indexOf(prev);
+      const next = speeds[(idx + 1) % speeds.length];
       if (audioRef.current) audioRef.current.playbackRate = next;
       return next;
     });

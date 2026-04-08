@@ -53,8 +53,13 @@ describe("toDisplayString", () => {
 
   it("strips encoded HTML entities", () => {
     const result = toDisplayString("&lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(result).not.toContain("<script>");
-    expect(result).not.toContain("&lt;script");
+    // Stronger assertion: nothing that resembles a script tag in any
+    // encoding should survive. Previously we just spot-checked two
+    // substrings, which let `&LT;` / `&#x3C;` / etc. pass through.
+    expect(result.toLowerCase()).not.toContain("<script");
+    expect(result.toLowerCase()).not.toContain("&lt;script");
+    expect(result.toLowerCase()).not.toContain("&#x3c");
+    expect(result.toLowerCase()).not.toContain("&#60");
   });
 
   it("removes javascript: URIs", () => {
