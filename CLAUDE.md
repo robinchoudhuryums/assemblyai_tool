@@ -813,6 +813,19 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **`BEDROCK_BATCH_MODE=true` requires `BEDROCK_BATCH_ROLE_ARN`** (A1/F02) — `bedrockBatchService.isAvailable` returns false (and logs an error once) if the role ARN is missing. Mode silently disables itself and falls back to on-demand. Previous behavior submitted jobs that AWS rejected with cryptic 4xx errors.
 - **`bedrockBatchService` resolves credentials lazily** (A1/F16) — credentials come from `getAwsCredentials()` (env vars → IMDSv2) on the first AWS call, not at module construction. EC2 instance profiles now work for batch mode. First batch op pays one IMDS round-trip.
 - **Scoring corrections survive restarts** (A2/F11) — `loadPersistedCorrections()` is called from `server/index.ts` startup as fire-and-forget after `initWebhooks`; it lists `corrections/` from S3 and rehydrates the in-memory feedback store (capped at MAX_CORRECTIONS=200). Without it, the feedback loop only worked for the lifetime of one process.
+- **`/api/admin/jobs/:id` bypasses `requireMFASetup`** (Engagement Batch 2 / A8) — registered inside `registerSnapshotRoutes` BEFORE `router.use("/api/admin", requireMFASetup)` runs in `server/routes.ts`. Express middleware only applies to routes registered after the mount, so this admin-gated route can be hit without MFA enrollment when `REQUIRE_MFA=true`. Mitigation pending: move into `admin-operations.ts` or move the MFA mount higher in `routes.ts`.
+- **`PerformanceMetrics` has 3 fields with no historical defaults** (A11/F25) — `lowConfidenceCallCount`, `promptInjectionCallCount`, `outputAnomalyCallCount` were added as required `number` fields. `rowToSnapshot` does NOT default them when reading historical snapshots from `performance_snapshots`, so old rows return `undefined` where the type promises `number`. Frontend code reading these will see `undefined`/`NaN` until the JSONB is backfilled or the mapper defaults them.
+- **`aggregateMetrics` was reading wrong sub-score key for months** (A10/F22) — `aggregateMetrics` was reading `sub.customer_experience` (snake_case) but the pipeline normalizes to `customerExperience` (camelCase) before persistence (`routes/pipeline.ts:489`). Every snapshot generated before this fix has CX sub-score frozen at 0 in its JSONB `metrics`. **No backfill was performed.** New snapshots are correct; old snapshots lie about CX.
+- **Sub-scores are camelCase in storage but snake_case at the AI provider boundary** — `assemblyai.ts` and `scoring-calibration.ts` work in snake_case (`customer_experience`); `pipeline.ts:489` normalizes to camelCase (`customerExperience`) before storing. Anything reading `analysis.subScores` from storage must use camelCase keys; anything reading the raw AI response must use snake_case. The dual representation is a footgun for the next person — A10 was a one-off fix in the aggregator, the inconsistency remains.
+- **`POST /api/snapshots/batch` returns 202 + jobId when DATABASE_URL is set** (A8/F18) — was previously `201 + { employees, teams, departments, company, errors }` synchronously. Frontend must detect 202 and poll `GET /api/admin/jobs/:id` until `status === "completed"`, then read `payload.results`. Synchronous fallback only fires without a job queue (i.e. dev). The "Generate Batch Snapshots" admin button is broken until the frontend updates.
+- **`/api/insights` defaults to a 90-day window** (A4/F15) — was previously unbounded (full-table scan over every call ever uploaded). Pass `?days=N` (max 365) to widen. Existing dashboards that depended on all-time data will visibly change.
+- **Leaderboard cached for 60s, not invalidated on badge insert** (A4/F13) — `getLeaderboard(period)` uses an in-memory cache keyed by period (`week`/`month`/`all`). Newly earned badges or completed calls take up to 60s to appear on the leaderboard. `clearLeaderboardCache()` is exported as a test seam but is NOT called from `evaluateBadges`. If real-time updates are needed, add the call there.
+- **`saveSnapshot`/`resetSnapshotContext` rethrow DB errors now** (A6/F09) — was silently swallowed before. Snapshot generation routes wrap `saveSnapshot` in try/catch; the `DELETE /api/snapshots/:level/:targetId/reset` route does NOT, so failures now propagate as 500 via the global error handler (was silent 200 with `removed: 0`). The HIPAA `logPhiAccess` audit entry for `snapshot_context_reset` is written AFTER the DB delete, so a DB failure also skips the audit log.
+- **`scheduled_reports` has `UNIQUE(type, period_start)`** (A3/F02) — concurrent scheduler triggers and catch-up runs are idempotent (`INSERT … ON CONFLICT DO NOTHING`); duplicate periods return the existing row. Catch-up runs at startup to recover missed weekly Monday-00:00 / monthly 1st-of-month boundaries during downtime.
+- **Snapshot generation helpers are module-level exports** (A8/F18) — `generateEmployeeSnapshot`, `generateTeamSnapshot`, `generateDepartmentSnapshot`, `generateCompanySnapshot`, `generateBatchSnapshots` exported from `server/routes/snapshots.ts`. The job worker dynamically imports them; other services may also call them directly. Lifted out of the `registerSnapshotRoutes` closure.
+- **`most_improved` removed from `BADGE_TYPES`** (A13/F10) — never had a code path that awarded it. Pre-existing rows in `badges` with `badge_type='most_improved'` (if any) render with the raw string instead of a label/icon/description because `BADGE_TYPES.find()` returns undefined. Run `SELECT count(*) FROM badges WHERE badge_type='most_improved'` before deploy.
+- **`/api/reports/filtered` `?role` query param** (A15/F14) — was `?department`; renamed because the filter compares against `employees.role`, not a separate department column. Old name accepted as a deprecated alias during the transition. `decodeURIComponent` applied so percent-encoded values like `Customer%20Service` match.
+- **`validateDate` clamps to 2000–2100** (A14/F23) — values outside the window are treated as undefined. `parseDate` in `routes/utils.ts` does NOT have the same clamp; parallel validation paths exist for historical reasons.
 
 ## Systems Map
 
@@ -833,10 +846,10 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Reports** | `server/routes/reports.ts` | Search, agent profiles, filtered reports, AI-generated agent summaries |
 | **Coaching** | `server/routes/coaching.ts` | Coaching session CRUD, action item toggling, webhook triggers |
 | **Users** | `server/routes/users.ts` | User management (admin CRUD, password reset/change, MFA) |
-| **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company) |
+| **Snapshots** | `server/routes/snapshots.ts` | Performance snapshot generation/retrieval (employee/team/dept/company). Generation helpers (`generateEmployeeSnapshot`/`generateTeamSnapshot`/`generateDepartmentSnapshot`/`generateCompanySnapshot`/`generateBatchSnapshots`) are module-level exports — callable from the job worker. `POST /api/snapshots/batch` enqueues a `batch_snapshots` job and returns `202 { jobId, statusUrl }` when DATABASE_URL is set; sync fallback otherwise (A8). Hosts `GET /api/admin/jobs/:id` for generic job polling. |
 | **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
-| **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends |
-| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~35 methods, A7 added `getCallsByStatus(status)` and `getCallsSince(date)` — indexed lookups that replaced `getAllCalls` scans in batch orphan recovery and auto-calibration), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. A10: `findCallByExternalId(externalId)` added to all backends, backed by `calls.external_id` + unique partial index for upstream-source dedupe (e.g. 8x8 recording ids). |
+| **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends. Defaults to a rolling 90-day window via `?days` (max 365); previously was an unbounded full-table scan (A4). |
+| **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~40 methods, A7 added `getCallsByStatus(status)` and `getCallsSince(date)` — indexed lookups that replaced `getAllCalls` scans in batch orphan recovery and auto-calibration), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. A10: `findCallByExternalId(externalId)` added to all backends, backed by `calls.external_id` + unique partial index for upstream-source dedupe (e.g. 8x8 recording ids). Engagement & Reporting cycle: `countCompletedCallsByEmployee`, `getRecentCallsForBadgeEval`, `getLeaderboardData`, `getCallsSinceWithDetails` added — these are the preferred indexed-lookup primitives over `getCallsWithDetails()` for hot paths (gamification, coaching, insights, scheduled reports, analytics heatmap fallback). |
 | **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
 | **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
 | **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory |
@@ -849,17 +862,17 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **PHI Protection** | `server/services/phi-redactor.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction for audit logs; 16-pattern prompt injection detection + output anomaly scanning |
 | **SSRF Protection** | `server/services/url-validator.ts` | URL validator blocking private IPs, metadata endpoints, DNS resolution to private ranges |
 | **Resilience** | `server/services/resilience.ts` | Circuit breaker (5 failures → 30s open → half-open test) wrapping Bedrock calls (single consumer: `bedrock.ts`) |
-| **Job Queue** | `server/services/job-queue.ts` | PostgreSQL-backed durable queue with `FOR UPDATE SKIP LOCKED`, 30s worker heartbeat, 2min stale reap, attempts-on-failJob contract (A18). |
+| **Job Queue** | `server/services/job-queue.ts` | PostgreSQL-backed durable queue with `FOR UPDATE SKIP LOCKED`, 30s worker heartbeat, 2min stale reap, attempts-on-failJob contract (A18). `getJob(jobId)` lookup added (A8) for polling-based async job patterns. Worker handlers in `routes.ts`: `process_audio` (audio pipeline) and `batch_snapshots` (snapshot generation). |
 | **WebSocket** | `server/services/websocket.ts` | Authenticated WebSocket server broadcasting real-time call processing status |
 | **Webhooks** | `server/services/webhooks.ts` | HMAC-signed HTTP POST notifications on call events with retry logic and SSRF validation |
 | **Coaching Alerts** | `server/services/coaching-alerts.ts` | Auto-creates coaching sessions for low/high-score calls, detects recurring weaknesses |
-| **Gamification Service** | `server/services/gamification.ts` | Badge evaluation (12 types), points/streak computation, leaderboard queries |
-| **Snapshots Service** | `server/services/performance-snapshots.ts` | AI-generated narrative + numerical performance snapshots at multiple levels |
+| **Gamification Service** | `server/services/gamification.ts` | Badge evaluation (11 types — A13 removed `most_improved`), points/streak computation, leaderboard queries with 60s in-memory cache (`clearLeaderboardCache()` test seam). Cache is NOT invalidated by badge inserts. |
+| **Snapshots Service** | `server/services/performance-snapshots.ts` | AI-generated narrative + numerical performance snapshots at multiple levels. In-memory cache bounded to 200 (FIFO) (A6). `saveSnapshot` and `resetSnapshotContext` rethrow real DB errors — was silent before (A6). `aggregateMetrics` includes `lowConfidenceCallCount`/`promptInjectionCallCount`/`outputAnomalyCallCount` (A11) — historical snapshots persisted before A11 do not have these keys, so consumers must default to 0. |
 | **Best Practice Ingest** | `server/services/best-practice-ingest.ts` | Auto-ingests exceptional calls (score ≥9.0) to knowledge base |
 | **Call Clustering** | `server/services/call-clustering.ts` | Groups calls by topic similarity using TF-IDF cosine similarity |
 | **Medical Synonyms** | `server/services/medical-synonyms.ts` | Expands medical abbreviations in search queries |
 | **Telephony** | `server/services/telephony-8x8.ts` | 8x8 auto-ingestion framework (stub, pending API access) |
-| **Scheduled Reports** | `server/services/scheduled-reports.ts` | Weekly/monthly performance summary generation (dynamically imported by `routes.ts`) |
+| **Scheduled Reports** | `server/services/scheduled-reports.ts` | Weekly/monthly performance summary generation persisted to `scheduled_reports` table with `UNIQUE(type, period_start)` for idempotent re-runs (A3). On startup the scheduler hydrates the in-memory cache from DB and runs catch-up for any missed Monday-00:00 / 1st-of-month boundary. `getReport(id)` is async (DB lookup on cache miss). `getReports()` returns a defensive copy. Cache bounded to 50 entries. |
 | **Observability** | `server/services/logger.ts`, `server/services/correlation-id.ts`, `server/services/tracing.ts`, `server/services/trace-span.ts`, `server/services/sentry.ts` | Structured JSON logging, per-request correlation IDs, OpenTelemetry tracing, PHI-scrubbing Sentry integration |
 | **Middleware** | `server/middleware/waf.ts`, `server/middleware/rate-limit.ts`, `server/middleware/error-handler.ts` | WAF split into `wafPreBody`/`wafPostBody` passes (pre runs before body parser, post after — no-ops on multipart); per-user rate limiting with LRU-bounded maps (10k cap); `AppError` + `globalErrorHandler` with transitional `{message, error:{code,message,detail?}}` response shape and prod 5xx sanitization. |
 | **Shared Schema** | `shared/schema.ts` | Zod schemas for all entities, shared between client and server |
@@ -912,8 +925,8 @@ Job worker [routes.ts:180] or in-memory TaskQueue [pipeline.ts:21]
     20. [Fire-and-forget] generateCallEmbedding()
     21. Auto-assign employee by detected name [utils.ts:autoAssignEmployee] (awaited)
     22. storage.updateCall() → status: "completed"
-    23. [Fire-and-forget] Coaching alerts [coaching-alerts.ts]
-    24. [Fire-and-forget] Badge evaluation [gamification.ts]
+    23. [Fire-and-forget] Coaching alerts [coaching-alerts.ts] — analysis fields (`feedback`/`subScores`/`flags`) passed through; no re-fetch from storage (A12)
+    24. [Fire-and-forget] Badge evaluation [gamification.ts] — uses indexed `countCompletedCallsByEmployee` + `getRecentCallsForBadgeEval(25)` (A4)
     25. [Fire-and-forget] Best practice ingestion if score ≥9.0 [best-practice-ingest.ts]
     26. [Fire-and-forget] Webhook triggers: call.completed (+ score.low ≤4, score.exceptional ≥9)
     27. Track usage record [storage.createUsageRecord]
@@ -988,6 +1001,9 @@ Every subsequent request:
 - `POST /api/access-requests` — public submission
 - `POST /api/webhooks/assemblyai` — webhook-secret-verified
 
+**Unintentional MFA bypass (security gap, pending fix):**
+- `GET /api/admin/jobs/:id` — registered in `registerSnapshotRoutes` BEFORE `router.use("/api/admin", requireMFASetup)` mounts in `routes.ts`. Express middleware only applies to routes registered after the `router.use` call on the same router instance. Admin role check via `requireRole("admin")` still applies; MFA enrollment enforcement does not. Mitigation: move route into `admin-operations.ts` or move the MFA mount higher.
+
 **Where PHI is touched:**
 - Audio files in S3 (call recordings)
 - Transcripts in PostgreSQL/S3 (spoken content)
@@ -1018,12 +1034,13 @@ Every subsequent request:
 - `server/services/s3.ts` → `S3Client` consumed by `storage.ts` ONLY. `bedrock-batch.ts` uses `sigv4.ts` directly; `webhooks.ts` receives an S3 client via `initWebhooks()` callback wired from `server/index.ts` startup — VERIFIED
 - `server/services/resilience.ts` → circuit breaker consumed by `bedrock.ts` ONLY — VERIFIED
 - `server/services/audit-log.ts` → exports `logPhiAccess`, `flushAuditQueue`, `auditContext` (used by `routes/auth.ts` and other route files for extracting audit context), `AuditEntry`, `getDroppedAuditEntryCount`, `getPendingAuditEntryCount` — VERIFIED
+- `server/routes.ts` → dynamically imports `./routes/snapshots` to call `generateBatchSnapshots` from the `batch_snapshots` job worker handler — creates a route-coordinator → route-module dependency edge that didn't exist before A8 — VERIFIED
 
 ### Complexity & Risk Rankings
 
 **Highest-complexity subsystems (most likely to contain hidden issues):**
 1. **Audio Processing Pipeline** (`server/routes/pipeline.ts`) — 600+ lines, 10+ async steps, dual-mode, 6 fire-and-forget side effects, quality gates, cost optimization branching
-2. **Storage Abstraction** (`server/storage.ts` + `server/storage-postgres.ts`) — 30+ method interface, 3 backends, manual SQL with dynamic WHERE clauses, no query builder
+2. **Storage Abstraction** (`server/storage.ts` + `server/storage-postgres.ts`) — 35+ method interface, 3 backends, manual SQL with dynamic WHERE clauses, no query builder
 3. **AWS SigV4 + Custom S3/Bedrock** (`sigv4.ts`, `s3.ts`, `bedrock.ts`, `aws-credentials.ts`) — Hand-rolled cryptographic signing, credential refresh, IMDS caching
 4. **Security Middleware Stack** (`server/index.ts` lines 25–280) — 10+ ordering-sensitive middleware layers, dual CSRF implementations
 5. **Auth + Session Management** (`server/auth.ts`) — Passport 0.7 compat patches, dual user source, session fingerprinting, MFA integration
@@ -1040,9 +1057,44 @@ Every subsequent request:
 - `server/services/rag-hybrid.ts` was deleted in A8 (was dead code; never imported by any production file)
 - `server/services/durable-queue.ts` was deleted in Batch 2 (A40) — any lingering references in older docs should be treated as stale
 - `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
-- `server/services/scheduled-reports.ts` is not documented in API routes (dynamically imported by `routes.ts`)
+- `server/services/scheduled-reports.ts` is dynamically imported by `routes.ts` for the scheduler init; the admin routes (`/api/admin/reports`, `/api/admin/reports/:id`, `/api/admin/reports/generate`) ARE in the API table as of A16.
 - `@replit/vite-plugin-*` packages remain in devDependencies but are unused in `vite.config.ts`
 - Improvement roadmap lists "Structured observability" and "correlation IDs" as TODO but both are implemented
+
+## Operator State Checklist
+
+State that must exist for the app to function correctly but is not always validated by automated startup checks. Run through this checklist before deploying to a new environment.
+
+### Hard-fail at boot (validated)
+These cause the server to refuse to start if missing in production. No silent degradation.
+
+- [ ] `SESSION_SECRET` — `server/auth.ts:189` (boot-fails in production)
+- [ ] `AUDIT_HMAC_SECRET` — `server/services/audit-log.ts:55` (boot-fails in production, HIPAA §164.312(b))
+- [ ] `S3_BUCKET` when `DATABASE_URL` is set in production — `server/storage.ts:createStorage()` (boot-fails)
+
+### Soft-fail at boot (warning only — silent degradation)
+These log a warning but allow the server to start. The app appears healthy but has broken or degraded functionality.
+
+- [ ] `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (or EC2 instance profile) — needed for Bedrock + S3. Without these, audio uploads queue to "processing" status and never complete. **HIGH risk** — app appears healthy, all uploads silently broken.
+- [ ] `ASSEMBLYAI_WEBHOOK_SECRET` if `APP_BASE_URL` is set in production — webhooks rejected at runtime (transcription falls back to polling). **MEDIUM risk** — slower turnaround but no functional break.
+- [ ] `RAG_SERVICE_URL` and `RAG_API_KEY` if `RAG_ENABLED=true` — RAG silently disabled, AI uses generic prompts. **MEDIUM risk** — analyses lose company-specific grounding.
+- [ ] `AUTH_USERS` env var OR a row in the `users` table seeded manually — without either, no one can log in. **HIGH risk** — fresh deploy is unusable.
+
+### Manual seed required (no startup check, no migration)
+Operator must populate this state outside of any automated path. CI does not catch missing data.
+
+- [ ] **`prompt_templates` table seeded with company-specific rows** — `server/routes/pipeline.ts:261` calls `getPromptTemplateByCategory(callCategory)`. Empty table → fallback to generic default prompt. **MEDIUM risk** — pipeline silently runs against generic rubrics, scores produced are not company-specific. Not validated, not warned about, no admin UI bootstrap.
+
+### One-time migration backfills
+These are SQL scripts that must be run once during a specific upgrade window. Deploying without them leaves orphaned state.
+
+- [ ] **A18 job heartbeat backfill** (pre-A18 → A18 upgrade only): `UPDATE jobs SET last_heartbeat_at = NOW() WHERE status = 'running' AND last_heartbeat_at IS NULL;` — without this, the reaper's `<` comparison skips NULLs and existing 'running' jobs from old deploys are unreapable. **MEDIUM risk** — stale running jobs accumulate.
+- [ ] **A13 most_improved badge cleanup** (Engagement & Reporting Batch 2 deploy): `SELECT count(*) FROM badges WHERE badge_type = 'most_improved'`. If non-zero (almost certainly zero — no evaluator ever existed), decide whether to delete or accept that they render with the raw `badge_type` string and no label/icon. **LOW risk** — cosmetic.
+- [ ] **A11 PerformanceMetrics historical backfill** (Engagement & Reporting Batch 2 deploy): `PerformanceMetrics` gained three new required `number` fields (`lowConfidenceCallCount`, `promptInjectionCallCount`, `outputAnomalyCallCount`). `rowToSnapshot` does NOT default them. Old snapshots return `undefined` where the type promises `number`. Either default in the mapper OR run `UPDATE performance_snapshots SET metrics = jsonb_set(jsonb_set(jsonb_set(metrics, '{lowConfidenceCallCount}', '0'), '{promptInjectionCallCount}', '0'), '{outputAnomalyCallCount}', '0') WHERE NOT (metrics ? 'lowConfidenceCallCount');`. **HIGH risk** — frontend reading these will see `undefined`/`NaN`.
+- [ ] **A10 stale snapshot CX backfill** (optional, Engagement & Reporting Batch 2 deploy): A10 fixed the read path that was looking for `customer_experience` (snake_case) instead of `customerExperience` (camelCase) in `aggregateMetrics`. The bug was in the read path so call-level data is correct, but every snapshot persisted before the fix has `metrics.subScores.customerExperience = 0` baked into its JSONB. Regenerate snapshots if accurate historical CX numbers matter. **MEDIUM risk** for users looking at historical performance reviews.
+
+### Pending fixes (security/correctness gaps introduced this cycle)
+- [ ] **`/api/admin/jobs/:id` MFA bypass** (A8 ordering bug) — registered before `requireMFASetup` middleware mount in `routes.ts`. Admin role check applies; MFA enrollment enforcement does not. **HIGH risk** when `REQUIRE_MFA=true`. Mitigation: move route into `admin-operations.ts` or move the MFA mount higher.
 
 ## Long-Term Improvement Roadmap
 
