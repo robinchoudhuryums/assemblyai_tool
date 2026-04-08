@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, getCsrfToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,11 +47,14 @@ export default function ABTestingPage() {
       formData.append("testModel", modelId);
       if (callCategory) formData.append("callCategory", callCategory);
 
+      const csrf = getCsrfToken();
+      const headers: Record<string, string> = { "X-Requested-With": "XMLHttpRequest" };
+      if (csrf) headers["x-csrf-token"] = csrf;
       const res = await fetch("/api/ab-tests/upload", {
         method: "POST",
         body: formData,
         credentials: "include",
-        headers: (() => { const h: Record<string, string> = { "X-Requested-With": "XMLHttpRequest" }; const m = document.cookie.match(/csrf_token=([^;]+)/); if (m) h["x-csrf-token"] = m[1]; return h; })(),
+        headers,
       });
       if (!res.ok) {
         const err = await res.json();

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import type { Employee, CallWithDetails } from "@shared/schema";
 import { LoadingIndicator } from "@/components/ui/loading";
+import { SCORE_EXCELLENT, SCORE_GOOD, SCORE_NEEDS_WORK } from "@/lib/constants";
 
 interface Performer extends Employee {
   avgPerformanceScore: number;
@@ -110,9 +111,9 @@ export default function PerformancePage() {
   }
 
   const getScoreColor = (score: number) => {
-    if (score >= 8) return "#22c55e";
-    if (score >= 6) return "#3b82f6";
-    if (score >= 4) return "#eab308";
+    if (score >= SCORE_EXCELLENT) return "#22c55e";
+    if (score >= SCORE_GOOD) return "#3b82f6";
+    if (score >= SCORE_NEEDS_WORK) return "#eab308";
     return "#ef4444";
   };
 

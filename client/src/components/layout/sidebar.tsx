@@ -10,6 +10,7 @@ import LanguageSelector from "@/components/language-selector";
 import { useTranslation } from "@/lib/i18n";
 import { useAppearance } from "@/components/appearance-provider";
 import { CALLS_STALE_TIME_MS, EMPLOYEES_STALE_TIME_MS, MAX_NOTIFICATIONS } from "@/lib/constants";
+import { useConfig } from "@/hooks/use-config";
 
 type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?: string }>; sectionKey?: string; requireRole?: string[] };
 
@@ -55,12 +56,21 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(() => {
-    // Auto-expand if user is currently on an admin page
+    // Auto-expand if user is currently on an admin page on first mount.
     return location.startsWith("/admin");
   });
+  // ...and re-expand whenever the user navigates directly to /admin/* later
+  // (e.g. via a deep link, sidebar quick-jump, or programmatic navigation).
+  // Without this, an admin who collapsed the section and then deep-linked to
+  // /admin/users sees the active item highlighted but the section still
+  // collapsed, hiding all the sibling admin pages.
+  useEffect(() => {
+    if (location.startsWith("/admin")) setAdminExpanded(true);
+  }, [location]);
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { theme, setTheme } = useAppearance();
+  const { companyName } = useConfig();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -106,9 +116,11 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
     staleTime: Infinity,
   });
 
-  // Fetch calls for flagged count badge (default queryFn returns null on 401)
+  // Fetch calls for flagged count badge (default queryFn returns null on 401).
+  // Convention: omit filter params from the query key when none are set —
+  // see dashboard.tsx for rationale.
   const { data: callsResponse } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
+    queryKey: ["/api/calls"],
     staleTime: CALLS_STALE_TIME_MS,
   });
   const calls = callsResponse?.calls;
@@ -148,11 +160,12 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
     navigate(`/reports?employee=${employeeId}`);
   };
 
-  // Close sidebar on navigation (mobile)
+  // Close sidebar on navigation (mobile). Only fire onClose if the sidebar
+  // is actually open — calling onClose() while it's already closed re-fires
+  // the parent's setSidebarOpen(false) on every route change for no reason.
   useEffect(() => {
-    if (onClose) onClose();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location]);
+    if (isOpen && onClose) onClose();
+  }, [location, isOpen, onClose]);
 
   return (
     <>
@@ -172,7 +185,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             <Waveform className="text-primary-foreground w-4 h-4" />
           </div>
           <div>
-            <h1 className="font-bold text-lg text-foreground">CallAnalyzer</h1>
+            <h1 className="font-bold text-lg text-foreground">{companyName}</h1>
             <p className="text-xs text-muted-foreground">Pro Dashboard</p>
           </div>
         </div>

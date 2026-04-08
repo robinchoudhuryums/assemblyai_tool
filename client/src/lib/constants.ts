@@ -28,6 +28,9 @@ export const SEARCH_DEBOUNCE_MS = 500;
 // ── Query Caching ─────────────────────────────────────────
 /** Default stale time for TanStack Query (ms) */
 export const DEFAULT_STALE_TIME_MS = 60_000;
+/** Grace period after a successful login during which transient 401s are
+ * treated as in-flight propagation, not session expiry. */
+export const LOGIN_GRACE_MS = 5000;
 /** Stale time for calls query in sidebar (ms) */
 export const CALLS_STALE_TIME_MS = 30_000;
 /** Stale time for employees query (ms) */
@@ -42,6 +45,26 @@ export const MAX_NOTIFICATIONS = 30;
 // ── Sentiment ─────────────────────────────────────────────
 /** Days lookback for the sentiment page */
 export const SENTIMENT_LOOKBACK_DAYS = 90;
+
+// ── Scoring Tiers ─────────────────────────────────────────
+// Mirror of server-side scoring constants. Source of truth lives in
+// server/constants.ts and is exposed via GET /api/config; these values are
+// the static fallback used at module-load time before /api/config resolves.
+// A11/A27: a future cleanup will replace these with values fetched from the
+// config endpoint via useConfig().
+/** Calls scoring at or below this trigger a low-performance coaching alert. */
+export const LOW_SCORE_THRESHOLD = 4.0;
+/** Calls scoring at or above this trigger a recognition/exceptional alert. */
+export const HIGH_SCORE_THRESHOLD = 9.0;
+/** Minimum score for a call to count toward a consecutive streak. */
+export const STREAK_SCORE_THRESHOLD = 8.0;
+/** Score tier breakpoints used by score color/label logic. */
+export const SCORE_EXCELLENT = 8;
+export const SCORE_GOOD = 6;
+export const SCORE_NEEDS_WORK = 4;
+
+/** Default company name (fallback before /api/config resolves). */
+export const DEFAULT_COMPANY_NAME = "CallAnalyzer";
 
 // ── Roles ─────────────────────────────────────────────────
 /** Role display configuration — single source of truth for colors and labels */

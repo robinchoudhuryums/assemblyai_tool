@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
-import { insertEmployeeSchema, assignCallSchema } from "@shared/schema";
+import { insertEmployeeSchema, assignCallSchema, POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import { z } from "zod";
 import { sendError, sendValidationError, validateIdParam, cleanupFile } from "./utils";
 import csv from "csv-parser";
@@ -33,6 +33,18 @@ const csvRowSchema = z.object({
 });
 
 export function register(router: Router) {
+  // Server-defined team / sub-team taxonomy. The frontend used to hardcode
+  // the same list, which meant any tenant rename or addition required a
+  // frontend rebuild. Single source of truth is the shared schema constant.
+  router.get("/api/employees/teams", requireAuth, (_req, res) => {
+    res.json({
+      departmentsWithSubTeams: {
+        "Intake - Power Mobility": [...POWER_MOBILITY_SUBTEAMS],
+        "Power Mobility": [...POWER_MOBILITY_SUBTEAMS],
+      },
+    });
+  });
+
   // Get employees (A20/F31): SQL-level pagination. Silent default limit=50,
   // max=500. Clients not sending limit get X-Pagination-Default: true for
   // visibility while the frontend migrates.

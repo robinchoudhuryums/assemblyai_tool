@@ -9,6 +9,8 @@ import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
+import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
+import { SPEED_OPTIONS } from "@/lib/constants";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
@@ -35,14 +37,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const queryClient = useQueryClient();
 
-  const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   /** Milliseconds of silence before splitting into a new transcript segment */
   const SEGMENT_GAP_MS = 2000;
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate(prev => {
-      const idx = SPEED_OPTIONS.indexOf(prev);
-      const next = SPEED_OPTIONS[(idx + 1) % SPEED_OPTIONS.length];
+      // SPEED_OPTIONS is `as const`, so its element type is the literal
+      // union, not `number`. Widen for indexOf since `prev` is just a number.
+      const speeds: readonly number[] = SPEED_OPTIONS;
+      const idx = speeds.indexOf(prev);
+      const next = speeds[(idx + 1) % speeds.length];
       if (audioRef.current) audioRef.current.playbackRate = next;
       return next;
     });
@@ -173,20 +177,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   // Compute search matches across segments
   // MUST be called before early returns to respect Rules of Hooks
-  const searchMatches = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    const matches: { segmentIndex: number; charIndex: number }[] = [];
-    transcriptSegments.forEach((seg, segIdx) => {
-      const text = seg.text.toLowerCase();
-      let pos = 0;
-      while ((pos = text.indexOf(q, pos)) !== -1) {
-        matches.push({ segmentIndex: segIdx, charIndex: pos });
-        pos += 1;
-      }
-    });
-    return matches;
-  }, [searchQuery, transcriptSegments]);
+  const searchMatches = useMemo(
+    () => computeSearchMatches(transcriptSegments, searchQuery),
+    [searchQuery, transcriptSegments],
+  );
 
   // Navigate between search matches
   // MUST be called before early returns to respect Rules of Hooks
@@ -350,14 +344,42 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   }
 
   const jumpToTime = (timeMs: number) => {
+    if (!Number.isFinite(timeMs) || timeMs < 0) return;
     const audio = audioRef.current;
+    let clampedMs = timeMs;
     if (audio) {
-      audio.currentTime = timeMs / 1000;
+      const durationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : Infinity;
+      clampedMs = Math.min(timeMs, durationMs);
+      audio.currentTime = clampedMs / 1000;
       if (!isPlaying) {
         audio.play().catch(() => {});
       }
     }
-    setCurrentTime(timeMs);
+    setCurrentTime(clampedMs);
+  };
+
+  // Parse an AI-supplied timestamp string ("M:SS", "MM:SS", or "HH:MM:SS") into milliseconds.
+  // Returns null if the string is malformed or out of bounds. Used by feedback jump buttons.
+  const parseTimestampString = (ts: unknown): number | null => {
+    if (typeof ts !== "string") return null;
+    const match = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(ts.trim());
+    if (!match) return null;
+    const a = parseInt(match[1], 10);
+    const b = parseInt(match[2], 10);
+    const c = match[3] !== undefined ? parseInt(match[3], 10) : null;
+    if (!Number.isFinite(a) || !Number.isFinite(b) || (c !== null && !Number.isFinite(c))) return null;
+    let totalSeconds: number;
+    if (c !== null) {
+      // HH:MM:SS
+      if (b > 59 || c > 59) return null;
+      totalSeconds = a * 3600 + b * 60 + c;
+    } else {
+      // M:SS or MM:SS
+      if (b > 59) return null;
+      totalSeconds = a * 60 + b;
+    }
+    if (totalSeconds < 0 || totalSeconds > 24 * 3600) return null; // Cap at 24 hours
+    return totalSeconds * 1000;
   };
 
   // Skip to next segment (skips silence gaps between speakers)
@@ -472,19 +494,22 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     if (patterns.length === 0) return <>{str}</>;
     const regex = new RegExp(`(${patterns.join("|")})`, "gi");
     const parts = str.split(regex);
-    // Track which search occurrence we're at within this segment to highlight the active match
-    let searchOccurrence = 0;
+    // Walk parts tracking running char position so each search-match part can be
+    // mapped back to its (segmentIndex, charIndex) entry in `searchMatches`,
+    // then compared against the global active index `searchMatchIdx`.
+    let runningPos = 0;
     return <>{parts.map((part, i) => {
       const lower = part.toLowerCase();
-      const isSearchMatch = sq && lower === sq;
+      const isSearchMatch = sq.length > 0 && lower === sq;
       const isTopicMatch = topicKeywords.includes(lower);
+      const partStart = runningPos;
+      runningPos += part.length;
       if (isSearchMatch) {
-        const occIdx = segmentIndex !== undefined
-          ? searchMatches.findIndex(m => m.segmentIndex === segmentIndex && m.charIndex === str.toLowerCase().indexOf(sq, searchOccurrence > 0 ? str.toLowerCase().indexOf(sq, 0) + searchOccurrence : 0))
+        const globalIdx = segmentIndex !== undefined
+          ? findGlobalMatchIndex(searchMatches, segmentIndex, partStart)
           : -1;
-        searchOccurrence++;
-        const isActive = searchMatches.length > 0 && searchMatches[searchMatchIdx]?.segmentIndex === segmentIndex;
-        return <mark key={i} className={`rounded px-0.5 ${isActive && occIdx === searchMatchIdx ? "bg-yellow-400 text-black" : "bg-yellow-200 dark:bg-yellow-700 text-foreground"}`}>{part}</mark>;
+        const isActive = globalIdx !== -1 && globalIdx === searchMatchIdx;
+        return <mark key={i} className={`rounded px-0.5 ${isActive ? "bg-yellow-400 text-black" : "bg-yellow-200 dark:bg-yellow-700 text-foreground"}`}>{part}</mark>;
       }
       if (isTopicMatch) {
         return <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>;
@@ -519,9 +544,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             <FileText className="w-4 h-4 mr-1" />
             Export
           </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="DownloadSimple audio file" data-testid="download-audio">
+          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
             <DownloadSimple className="w-4 h-4 mr-1" />
-            DownloadSimple
+            Download
           </Button>
           <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
             {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
@@ -740,7 +765,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     disabled={!editReason.trim() || editMutation.isPending}
                     className="h-7 text-xs"
                   >
-                    <FloppyDisk className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "FloppyDisk"}
+                    <FloppyDisk className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "Save"}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-7 text-xs">
                     <X className="w-3 h-3 mr-1" /> Cancel
@@ -852,18 +877,18 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-green-500 mt-0.5 shrink-0">+</span>
                             <span className="flex-1">{text}</span>
-                            {ts && (
-                              <button
-                                className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                onClick={() => {
-                                  const parts = ts.split(":");
-                                  const ms = (parseInt(parts[0]) * 60 + parseInt(parts[1])) * 1000;
-                                  jumpToTime(ms);
-                                }}
-                              >
-                                <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                              </button>
-                            )}
+                            {ts && (() => {
+                              const parsedMs = parseTimestampString(ts);
+                              if (parsedMs === null) return null;
+                              return (
+                                <button
+                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
+                                  onClick={() => jumpToTime(parsedMs)}
+                                >
+                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
+                                </button>
+                              );
+                            })()}
                           </li>
                         );
                       })}
@@ -881,18 +906,18 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                           <li key={index} className="flex items-start gap-2">
                             <span className="text-amber-500 mt-0.5 shrink-0">!</span>
                             <span className="flex-1">{text}</span>
-                            {ts && (
-                              <button
-                                className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                onClick={() => {
-                                  const parts = ts.split(":");
-                                  const ms = (parseInt(parts[0]) * 60 + parseInt(parts[1])) * 1000;
-                                  jumpToTime(ms);
-                                }}
-                              >
-                                <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                              </button>
-                            )}
+                            {ts && (() => {
+                              const parsedMs = parseTimestampString(ts);
+                              if (parsedMs === null) return null;
+                              return (
+                                <button
+                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
+                                  onClick={() => jumpToTime(parsedMs)}
+                                >
+                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
+                                </button>
+                              );
+                            })()}
                           </li>
                         );
                       })}

@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
 import { CALL_CATEGORIES } from "@shared/schema";
-import type { PromptTemplate } from "@shared/schema";
+import type { PromptTemplate, InsertPromptTemplate } from "@shared/schema";
 
 interface PhraseEntry {
   phrase: string;
@@ -40,7 +40,7 @@ export default function PromptTemplatesPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: InsertPromptTemplate) => {
       const res = await apiRequest("POST", "/api/prompt-templates", data);
       return res.json();
     },
@@ -55,7 +55,7 @@ export default function PromptTemplatesPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+    mutationFn: async ({ id, data }: { id: string; data: Partial<InsertPromptTemplate> }) => {
       const res = await apiRequest("PATCH", `/api/prompt-templates/${id}`, data);
       return res.json();
     },

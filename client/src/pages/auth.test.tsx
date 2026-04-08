@@ -7,8 +7,34 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+// Stub queryClient — A12 added a SessionExpiredError export that auth.tsx
+// imports for the MFA error.code branch.
 vi.mock("@/lib/queryClient", () => ({
   apiRequest: vi.fn(),
+  SessionExpiredError: class SessionExpiredError extends Error {
+    code?: string;
+    constructor(code?: string, message?: string) {
+      super(message || "Session expired");
+      this.name = "SessionExpiredError";
+      if (code) this.code = code;
+    }
+  },
+}));
+
+// A27 made AuthPage call useConfig() to get COMPANY_NAME from /api/config.
+// Stub the hook so we don't need a real QueryClientProvider in the test.
+vi.mock("@/hooks/use-config", () => ({
+  useConfig: () => ({
+    companyName: "CallAnalyzer",
+    scoring: {
+      lowScoreThreshold: 4,
+      highScoreThreshold: 9,
+      streakScoreThreshold: 8,
+      excellentThreshold: 8,
+      goodThreshold: 6,
+      needsWorkThreshold: 4,
+    },
+  }),
 }));
 
 describe("AuthPage", () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { getTranslation, getSavedLocale, saveLocale, type Locale } from "./i18n";
+import { getTranslation, getSavedLocale, saveLocale, TRANSLATIONS, type Locale } from "./i18n";
 
 describe("i18n", () => {
   beforeEach(() => {
@@ -60,6 +60,34 @@ describe("i18n", () => {
     it("can be read back via getSavedLocale", () => {
       saveLocale("es");
       expect(getSavedLocale()).toBe("es");
+    });
+  });
+
+  describe("locale key parity", () => {
+    it("every English key has a Spanish translation", () => {
+      const enKeys = Object.keys(TRANSLATIONS.en).sort();
+      const esKeys = Object.keys(TRANSLATIONS.es).sort();
+      const missingInEs = enKeys.filter((k) => !(k in TRANSLATIONS.es));
+      // Helpful failure message — list the first few missing keys.
+      expect(
+        missingInEs,
+        `Spanish translations missing for: ${missingInEs.slice(0, 10).join(", ")}`,
+      ).toEqual([]);
+      // Spanish should not have keys absent from English (would be dead).
+      const extraInEs = esKeys.filter((k) => !(k in TRANSLATIONS.en));
+      expect(
+        extraInEs,
+        `Spanish has keys not present in English: ${extraInEs.slice(0, 10).join(", ")}`,
+      ).toEqual([]);
+    });
+
+    it("every translation value is a non-empty string", () => {
+      for (const locale of ["en", "es"] as Locale[]) {
+        for (const [key, value] of Object.entries(TRANSLATIONS[locale])) {
+          expect(typeof value, `${locale}.${key} not a string`).toBe("string");
+          expect(value.length, `${locale}.${key} is empty`).toBeGreaterThan(0);
+        }
+      }
     });
   });
 });

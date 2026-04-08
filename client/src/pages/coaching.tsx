@@ -37,11 +37,26 @@ export default function CoachingPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // URL params for pre-filling from transcript viewer
+  // URL params for pre-filling from transcript viewer.
+  // UUIDs are validated against /^[0-9a-f-]{36}$/i so a malformed query
+  // (?employeeId=<script>) can't make it into the prefilled state and
+  // get echoed unsanitized into form fields. Category is whitelisted.
   const urlParams = new URLSearchParams(window.location.search);
-  const prefillEmployeeId = urlParams.get("employeeId") || "";
-  const prefillCallId = urlParams.get("callId") || "";
-  const prefillCategory = urlParams.get("category") || "general";
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ALLOWED_CATEGORIES = new Set([
+    "general",
+    "compliance",
+    "communication",
+    "objection-handling",
+    "rebuttal",
+    "performance",
+  ]);
+  const rawEmployeeId = urlParams.get("employeeId") || "";
+  const rawCallId = urlParams.get("callId") || "";
+  const rawCategory = urlParams.get("category") || "general";
+  const prefillEmployeeId = UUID_RE.test(rawEmployeeId) ? rawEmployeeId : "";
+  const prefillCallId = UUID_RE.test(rawCallId) ? rawCallId : "";
+  const prefillCategory = ALLOWED_CATEGORIES.has(rawCategory) ? rawCategory : "general";
 
   useEffect(() => {
     if (urlParams.get("newSession") === "true") {

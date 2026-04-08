@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { safeSet } from "./safe-storage";
 
 export type Locale = "en" | "es";
 
@@ -200,6 +201,13 @@ const translations: Record<Locale, Record<string, string>> = {
     "misc.jumpToAgentProfile": "Jump to agent profile...",
     "misc.proDashboard": "Pro Dashboard",
     "misc.keyboardShortcuts": "Keyboard Shortcuts",
+
+    // Keyboard shortcut descriptions
+    "shortcut.dashboard": "Go to Dashboard",
+    "shortcut.search": "Go to Search",
+    "shortcut.upload": "Upload new call",
+    "shortcut.reports": "Go to Reports",
+    "shortcut.help": "Show this help",
   },
   es: {
     // Navigation
@@ -392,11 +400,56 @@ const translations: Record<Locale, Record<string, string>> = {
     "misc.jumpToAgentProfile": "Ir al perfil del agente...",
     "misc.proDashboard": "Panel Pro",
     "misc.keyboardShortcuts": "Atajos de Teclado",
+
+    // Keyboard shortcut descriptions
+    "shortcut.dashboard": "Ir al Panel",
+    "shortcut.search": "Ir a Buscar",
+    "shortcut.upload": "Subir nueva llamada",
+    "shortcut.reports": "Ir a Informes",
+    "shortcut.help": "Mostrar esta ayuda",
   },
 };
 
+/**
+ * Exposed for tests / internal helpers (key-parity check, dev tooling).
+ * Production code should still use `getTranslation` or `useTranslation`.
+ */
+export const TRANSLATIONS = translations;
+
+// Track keys we've already warned about so dev console isn't spammed.
+const warnedMissing = new Set<string>();
+
 export function getTranslation(locale: Locale, key: string): string {
-  return translations[locale]?.[key] || translations.en[key] || key;
+  const localeValue = translations[locale]?.[key];
+  if (localeValue) return localeValue;
+
+  const fallback = translations.en[key];
+  if (fallback) {
+    // Locale-specific key is missing — warn once in dev so translators see it.
+    if (
+      typeof import.meta !== "undefined" &&
+      import.meta.env?.DEV &&
+      locale !== "en"
+    ) {
+      const warnKey = `${locale}:${key}`;
+      if (!warnedMissing.has(warnKey)) {
+        warnedMissing.add(warnKey);
+        // eslint-disable-next-line no-console
+        console.warn(`[i18n] Missing '${locale}' translation for key '${key}', falling back to English.`);
+      }
+    }
+    return fallback;
+  }
+
+  // Key missing in both locales — warn once.
+  if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+    if (!warnedMissing.has(key)) {
+      warnedMissing.add(key);
+      // eslint-disable-next-line no-console
+      console.warn(`[i18n] Missing translation key '${key}' in all locales.`);
+    }
+  }
+  return key;
 }
 
 export function getSavedLocale(): Locale {
@@ -407,7 +460,7 @@ export function getSavedLocale(): Locale {
 }
 
 export function saveLocale(locale: Locale): void {
-  localStorage.setItem("locale", locale);
+  safeSet("locale", locale);
 }
 
 export const I18nContext = createContext<I18nContextValue>({

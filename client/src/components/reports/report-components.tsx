@@ -2,6 +2,8 @@ import { useState, useRef, type ComponentType } from "react";
 import { CaretDown, CaretUp, Eye, Pause, Play, Trophy, Warning } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
+import { toDisplayString } from "@/lib/display-utils";
+import { SCORE_EXCELLENT, SCORE_GOOD, SCORE_NEEDS_WORK } from "@/lib/constants";
 
 // ---- Types shared across report components ----
 
@@ -186,7 +188,7 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
             </div>
           </div>
           {call.summary && (
-            <p className="text-xs text-muted-foreground line-clamp-2">{call.summary}</p>
+            <p className="text-xs text-muted-foreground line-clamp-2">{toDisplayString(call.summary)}</p>
           )}
           <Link href={`/transcripts/${call.id}`} className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1">
             <Eye className="w-3 h-3" /> View Full Call
@@ -204,8 +206,8 @@ export function SubScoreCard({ icon: IconComponent, label, score, color, barColo
   color: string;
   barColor: string;
 }) {
-  const level = score >= 8 ? "Excellent" : score >= 6 ? "Good" : score >= 4 ? "Needs Work" : "Critical";
-  const levelColor = score >= 8 ? "text-green-600" : score >= 6 ? "text-blue-600" : score >= 4 ? "text-yellow-600" : "text-red-600";
+  const level = score >= SCORE_EXCELLENT ? "Excellent" : score >= SCORE_GOOD ? "Good" : score >= SCORE_NEEDS_WORK ? "Needs Work" : "Critical";
+  const levelColor = score >= SCORE_EXCELLENT ? "text-green-600" : score >= SCORE_GOOD ? "text-blue-600" : score >= SCORE_NEEDS_WORK ? "text-yellow-600" : "text-red-600";
   return (
     <div className="p-4 bg-muted/30 rounded-lg">
       <div className="flex items-center gap-2 mb-2">

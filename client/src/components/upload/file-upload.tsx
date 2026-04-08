@@ -10,6 +10,7 @@ import { CALL_CATEGORIES } from "@shared/schema";
 import type { Employee } from "@shared/schema";
 import { useTranslation } from "@/lib/i18n";
 import { MAX_BATCH_SIZE, MAX_FILE_SIZE, MAX_CONCURRENT_UPLOADS } from "@/lib/constants";
+import { getCsrfToken } from "@/lib/queryClient";
 
 interface UploadFile {
   file: File;
@@ -89,11 +90,14 @@ export default function FileUpload() {
       if (mode) formData.append('processingMode', mode);
       if (language) formData.append('language', language);
 
+      const csrf = getCsrfToken();
+      const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
+      if (csrf) headers['x-csrf-token'] = csrf;
       const response = await fetch('/api/calls/upload', {
         method: 'POST',
         body: formData,
         credentials: 'include',
-        headers: (() => { const h: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' }; const m = document.cookie.match(/csrf_token=([^;]+)/); if (m) h['x-csrf-token'] = m[1]; return h; })(),
+        headers,
       });
 
       if (!response.ok) {

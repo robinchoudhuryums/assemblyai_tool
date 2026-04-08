@@ -70,8 +70,13 @@ export default function HeatmapCalendar() {
     grid[`${cell.dow}-${cell.hour}`] = cell;
   }
 
-  // Find peak hours
-  const peakHour = cells.reduce((best, c) => c.count > best.count ? c : best, { dow: 0, hour: 0, count: 0, avgScore: null });
+  // Find peak hours. The seed is a properly-typed HeatmapCell (count=0) so
+  // when there are no cells the render path below correctly displays "—".
+  const PEAK_SEED: HeatmapCell = { dow: 0, hour: 0, count: 0, avgScore: null };
+  const peakHour: HeatmapCell = cells.reduce<HeatmapCell>(
+    (best, c) => (c.count > best.count ? c : best),
+    PEAK_SEED,
+  );
   const totalCalls = cells.reduce((sum, c) => sum + c.count, 0);
   const avgCells = cells.filter(c => c.avgScore != null);
   const overallAvgScore = avgCells.length > 0
