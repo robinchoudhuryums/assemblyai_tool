@@ -82,6 +82,12 @@ export class BedrockProvider implements AIAnalysisProvider {
       this.initialized = true;
       return creds;
     }
+    // Refresh failed — fall back to last known good credentials if available
+    // (mirrors the S3Client pattern for transient IMDS failures)
+    if (this.credentials) {
+      logger.warn("Bedrock credential refresh failed, using cached credentials", { model: this.model });
+      return this.credentials;
+    }
     throw new Error("Bedrock provider not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or attach an IAM instance profile.");
   }
 

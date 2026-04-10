@@ -7,6 +7,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
+import { logger } from "../services/logger";
 import { insertAccessRequestSchema } from "@shared/schema";
 
 /** Stamp session with fingerprint at login — uses the shared getSessionFingerprint() to guarantee
@@ -107,7 +108,15 @@ export function registerAuthRoutes(router: Router) {
         res.status(500).json({ message: "Failed to logout" });
         return;
       }
-      res.json({ message: "Logged out" });
+      // Destroy the session so the session ID is immediately invalidated in
+      // the session store (PostgreSQL or memory), not just cleared of user data.
+      req.session.destroy((destroyErr) => {
+        if (destroyErr) {
+          // Session data is already cleared by req.logout(); log and continue
+          logger.warn("Failed to destroy session on logout", { error: (destroyErr as Error).message });
+        }
+        res.json({ message: "Logged out" });
+      });
     });
   });
 

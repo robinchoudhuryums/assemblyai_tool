@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -152,7 +153,7 @@ export default function CallClusters() {
                       </div>
                       <div>
                         <span className="text-muted-foreground">Avg Score</span>
-                        <p className={`font-semibold ${cluster.avgScore != null && cluster.avgScore < 5 ? "text-red-500" : cluster.avgScore != null && cluster.avgScore >= 8 ? "text-green-500" : ""}`}>
+                        <p className={`font-semibold ${cluster.avgScore != null && cluster.avgScore < SCORE_GOOD ? "text-red-500" : cluster.avgScore != null && cluster.avgScore >= SCORE_EXCELLENT ? "text-green-500" : ""}`}>
                           {cluster.avgScore?.toFixed(1) ?? "N/A"}/10
                         </p>
                       </div>

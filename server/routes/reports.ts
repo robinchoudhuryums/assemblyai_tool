@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
@@ -506,7 +506,7 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   });
 
   // HIPAA: Only managers and admins can delete call records
-  router.delete("/api/calls/:id", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.delete("/api/calls/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
   try {
     const callId = req.params.id;
 

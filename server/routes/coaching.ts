@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
@@ -10,7 +10,7 @@ export function register(router: Router) {
   // ==================== COACHING ROUTES ====================
 
   // List all coaching sessions (managers and admins)
-  router.get("/api/coaching", requireAuth, requireRole("manager", "admin"), async (_req, res) => {
+  router.get("/api/coaching", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (_req, res) => {
     try {
       const [sessions, employees] = await Promise.all([
         storage.getAllCoachingSessions(),
@@ -39,7 +39,7 @@ export function register(router: Router) {
   });
 
   // Create a coaching session (managers and admins)
-  router.post("/api/coaching", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.post("/api/coaching", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const parsed = insertCoachingSessionSchema.safeParse({
         ...req.body,
@@ -81,7 +81,7 @@ export function register(router: Router) {
     dueDate: z.string().optional(),
   }).strict();
 
-  router.patch("/api/coaching/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.patch("/api/coaching/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = updateCoachingSchema.safeParse(req.body);
       if (!parsed.success) {

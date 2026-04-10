@@ -300,6 +300,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
 | GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
 | GET | `/api/analytics/heatmap` | authenticated | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`) |
+| GET | `/api/analytics/compare` | manager+ | Compare 2-5 agents side-by-side (query: `ids` comma-separated employee IDs) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
@@ -824,7 +825,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **`BEDROCK_BATCH_MODE=true` requires `BEDROCK_BATCH_ROLE_ARN`** (A1/F02) — `bedrockBatchService.isAvailable` returns false (and logs an error once) if the role ARN is missing. Mode silently disables itself and falls back to on-demand. Previous behavior submitted jobs that AWS rejected with cryptic 4xx errors.
 - **`bedrockBatchService` resolves credentials lazily** (A1/F16) — credentials come from `getAwsCredentials()` (env vars → IMDSv2) on the first AWS call, not at module construction. EC2 instance profiles now work for batch mode. First batch op pays one IMDS round-trip.
 - **Scoring corrections survive restarts** (A2/F11) — `loadPersistedCorrections()` is called from `server/index.ts` startup as fire-and-forget after `initWebhooks`; it lists `corrections/` from S3 and rehydrates the in-memory feedback store (capped at MAX_CORRECTIONS=200). Without it, the feedback loop only worked for the lifetime of one process.
-- **`/api/admin/jobs/:id` bypasses `requireMFASetup`** (Engagement Batch 2 / A8) — registered inside `registerSnapshotRoutes` BEFORE `router.use("/api/admin", requireMFASetup)` runs in `server/routes.ts`. Express middleware only applies to routes registered after the mount, so this admin-gated route can be hit without MFA enrollment when `REQUIRE_MFA=true`. Mitigation pending: move into `admin-operations.ts` or move the MFA mount higher in `routes.ts`.
+- **`/api/admin/jobs/:id` MFA bypass — FIXED** — `requireMFASetup` is now applied directly on the route handler in `snapshots.ts`, independent of the `router.use` mount ordering in `routes.ts`.
 - **`PerformanceMetrics` has 3 fields with no historical defaults** (A11/F25) — `lowConfidenceCallCount`, `promptInjectionCallCount`, `outputAnomalyCallCount` were added as required `number` fields. `rowToSnapshot` does NOT default them when reading historical snapshots from `performance_snapshots`, so old rows return `undefined` where the type promises `number`. Frontend code reading these will see `undefined`/`NaN` until the JSONB is backfilled or the mapper defaults them.
 - **`aggregateMetrics` was reading wrong sub-score key for months** (A10/F22) — `aggregateMetrics` was reading `sub.customer_experience` (snake_case) but the pipeline normalizes to `customerExperience` (camelCase) before persistence (`routes/pipeline.ts:489`). Every snapshot generated before this fix has CX sub-score frozen at 0 in its JSONB `metrics`. **No backfill was performed.** New snapshots are correct; old snapshots lie about CX.
 - **Sub-scores are camelCase in storage but snake_case at the AI provider boundary** — `assemblyai.ts` and `scoring-calibration.ts` work in snake_case (`customer_experience`); `pipeline.ts:489` normalizes to camelCase (`customerExperience`) before storing. Anything reading `analysis.subScores` from storage must use camelCase keys; anything reading the raw AI response must use snake_case. The dual representation is a footgun for the next person — A10 was a one-off fix in the aggregator, the inconsistency remains.
@@ -862,7 +863,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Employee Routes** | `server/routes/employees.ts` | Employee CRUD, bulk CSV import, server-defined team / sub-team taxonomy (`GET /api/employees/teams`) |
 | **Public Config** | `server/routes/config.ts` | `GET /api/config` — public, no auth. Returns `companyName` + scoring tier thresholds for the login page and tenant-tunable UI. Consumed by `client/src/hooks/use-config.ts`. |
 | **Dashboard & Metrics** | `server/routes/dashboard.ts` | Dashboard metrics, sentiment distribution, top performers, flagged calls |
-| **Analytics** | `server/routes/analytics.ts` | Team analytics, trends, speech metrics, call clustering, CSV export, heatmaps |
+| **Analytics** | `server/routes/analytics.ts` | Team analytics, trends, speech metrics, call clustering, CSV export, heatmaps, agent comparison |
 | **Reports** | `server/routes/reports.ts` | Search, agent profiles, filtered reports, AI-generated agent summaries, client-export audit beacon (`POST /api/reports/export-beacon` — HIPAA) |
 | **Coaching** | `server/routes/coaching.ts` | Coaching session CRUD, action item toggling, webhook triggers |
 | **Users** | `server/routes/users.ts` | User management (admin CRUD, password reset/change, MFA) |
@@ -1021,8 +1022,8 @@ Every subsequent request:
 - `POST /api/access-requests` — public submission
 - `POST /api/webhooks/assemblyai` — webhook-secret-verified
 
-**Unintentional MFA bypass (security gap, pending fix):**
-- `GET /api/admin/jobs/:id` — registered in `registerSnapshotRoutes` BEFORE `router.use("/api/admin", requireMFASetup)` mounts in `routes.ts`. Express middleware only applies to routes registered after the `router.use` call on the same router instance. Admin role check via `requireRole("admin")` still applies; MFA enrollment enforcement does not. Mitigation: move route into `admin-operations.ts` or move the MFA mount higher.
+**MFA enforcement scope (when `REQUIRE_MFA=true`):**
+`requireMFASetup` is applied at two levels: (1) blanket on `/api/admin/*` via `router.use` in `routes.ts`, and (2) per-route on all manager/admin-gated mutations outside `/api/admin/*` — calls (assign, delete, edit analysis, bulk reanalyze), employees (create, update, CSV import), users (all CRUD + password reset), coaching (list, create, update), exports (calls, team analytics, compare), snapshots (generate, batch, reset), and `/api/admin/jobs/:id`. Read-only routes (dashboard, transcripts, search, analytics queries) remain accessible during the MFA setup window so the app can render.
 
 **Where PHI is touched:**
 - Audio files in S3 (call recordings)
@@ -1117,7 +1118,7 @@ These are SQL scripts that must be run once during a specific upgrade window. De
 - [ ] **A10 stale snapshot CX backfill** (optional, Engagement & Reporting Batch 2 deploy): A10 fixed the read path that was looking for `customer_experience` (snake_case) instead of `customerExperience` (camelCase) in `aggregateMetrics`. The bug was in the read path so call-level data is correct, but every snapshot persisted before the fix has `metrics.subScores.customerExperience = 0` baked into its JSONB. Regenerate snapshots if accurate historical CX numbers matter. **MEDIUM risk** for users looking at historical performance reviews.
 
 ### Pending fixes (security/correctness gaps introduced this cycle)
-- [ ] **`/api/admin/jobs/:id` MFA bypass** (A8 ordering bug) — registered before `requireMFASetup` middleware mount in `routes.ts`. Admin role check applies; MFA enrollment enforcement does not. **HIGH risk** when `REQUIRE_MFA=true`. Mitigation: move route into `admin-operations.ts` or move the MFA mount higher.
+- [x] **`/api/admin/jobs/:id` MFA bypass** — FIXED: `requireMFASetup` added directly to route handler in `snapshots.ts`. No longer depends on middleware mount ordering in `routes.ts`.
 
 ## Long-Term Improvement Roadmap
 

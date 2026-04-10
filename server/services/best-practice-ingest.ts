@@ -20,6 +20,7 @@
 
 import { isRagEnabled } from "./rag-client";
 import { logger } from "./logger";
+import { redactPhi } from "./phi-redactor";
 
 const INGEST_TIMEOUT_MS = 15_000; // 15 seconds
 
@@ -42,7 +43,12 @@ export async function ingestBestPractice(params: {
 }): Promise<void> {
   if (!isBestPracticeIngestEnabled()) return;
 
-  const { callId, callCategory, score, agentName, summary, transcript, strengths } = params;
+  const { callId, callCategory, score, agentName, strengths } = params;
+
+  // Redact PHI before persisting to the Knowledge Base — transcripts and
+  // summaries may contain patient names, DOBs, MRNs, etc.
+  const summary = redactPhi(params.summary).text;
+  const transcript = redactPhi(params.transcript).text;
 
   // Format as a reference document
   const title = `Best Practice: ${callCategory || "General"} Call — Score ${score.toFixed(1)}/10${agentName ? ` (${agentName})` : ""}`;

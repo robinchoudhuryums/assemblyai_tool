@@ -270,13 +270,28 @@ export class PostgresStorage implements IStorage {
 
   async updateDbUserPassword(id: string, passwordHash: string, oldPasswordHash?: string): Promise<boolean> {
     if (oldPasswordHash) {
-      // Maintain history JS-side: prepend old hash, keep max 5 entries
-      const history = await this.getDbUserPasswordHistory(id);
-      const newHistory = [oldPasswordHash, ...history].slice(0, 5);
-      await this.db.query(
-        `UPDATE users SET password_history = $2, password_hash = $3, updated_at = NOW() WHERE id = $1`,
-        [id, JSON.stringify(newHistory), passwordHash],
-      );
+      // Use a transaction so the history read + write is atomic — prevents a
+      // concurrent password change from clobbering the history array.
+      const client = await this.db.connect();
+      try {
+        await client.query("BEGIN");
+        const { rows } = await client.query(
+          `SELECT password_history FROM users WHERE id = $1 FOR UPDATE`,
+          [id],
+        );
+        const history = Array.isArray(rows[0]?.password_history) ? rows[0].password_history : [];
+        const newHistory = [oldPasswordHash, ...history].slice(0, 5);
+        await client.query(
+          `UPDATE users SET password_history = $2, password_hash = $3, updated_at = NOW() WHERE id = $1`,
+          [id, JSON.stringify(newHistory), passwordHash],
+        );
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
     } else {
       await this.db.query(
         `UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`,

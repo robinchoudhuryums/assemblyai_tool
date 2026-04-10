@@ -35,8 +35,8 @@ export const DOB_PATTERN = /(?:DOB|d\.?o\.?b\.?|date\s+of\s+birth|born\s+on|birt
 // Natural-language DOB: "born in January 1952", "birth date March 3, 1960"
 export const DOB_NATURAL_PATTERN = /(?:born\s+(?:in\s+)?|birth\s*date[:\s]*)(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:\s+\d{1,2},?)?\s+\d{2,4}\b/gi;
 
-// Standalone dates that look like birthdates (MM/DD/YYYY pre-2010)
-export const DATE_PATTERN = /\b(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:19\d{2}|200\d)\b/g;
+// Standalone dates that look like birthdates (MM/DD/YYYY 1900-2099)
+export const DATE_PATTERN = /\b(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:19\d{2}|20\d{2})\b/g;
 
 // Medical Record Number / patient ID with keyword
 export const MRN_PATTERN = /(?:MRN|medical\s+record(?:\s+number)?|patient\s+(?:id|number|#))[:\s#]*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,15}/gi;

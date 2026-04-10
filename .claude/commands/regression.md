@@ -17,7 +17,10 @@ Based on the systems map and your knowledge of the codebase:
 2. For each, describe specifically what could have broken and where to verify (file and function/area)
 3. For each risk item, explicitly confirm whether the risk materialized or was negated by other factors — cascade configs, zero callers, idempotent operations, existing indexes, default values. Don't just list risks; validate them.
 4. Flag anything that warrants a targeted re-audit of the dependent module before the next implementation session
-5. Note any documentation (CLAUDE.md, README, roadmap) that should be updated to reflect these changes
+5. Cross-reference against the project's invariant library. Check whether any of the changes made this cycle could have violated these invariants (from CLAUDE.md Common Gotchas or the cycle process tool). List any invariants at risk, even if you believe the risk is mitigated:
+   - [INV-ID or description] — [which change could affect it] — [risk level: High/Med/Low]
+   If no invariants are at risk, state "No invariants at risk."
+6. Note any documentation (CLAUDE.md, README, roadmap) that should be updated to reflect these changes
 
 Prioritize the verification list by likelihood of breakage. Then produce a FOLLOW-ON AUDIT ITEMS block:
 

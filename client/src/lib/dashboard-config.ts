@@ -2,7 +2,7 @@
  * Dashboard widget configuration — persisted to localStorage.
  * Users can toggle visibility and reorder widgets.
  */
-import { safeSet } from "./safe-storage";
+import { safeSet, safeGet } from "./safe-storage";
 
 export interface WidgetConfig {
   id: string;
@@ -25,7 +25,7 @@ export const DEFAULT_WIDGETS: WidgetConfig[] = [
 
 export function loadWidgetConfig(): WidgetConfig[] {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = safeGet(STORAGE_KEY);
     if (!saved) return DEFAULT_WIDGETS;
     const parsed = JSON.parse(saved) as WidgetConfig[];
     // Merge with defaults (in case new widgets were added)
