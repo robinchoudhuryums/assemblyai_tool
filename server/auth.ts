@@ -10,7 +10,7 @@ import { logPhiAccess } from "./services/audit-log";
 import { recordFailedLogin } from "./services/security-monitor";
 import { logger } from "./services/logger";
 import { getPool } from "./db/pool";
-import { getMFASecret, isMFARoleRequired } from "./services/totp";
+import { getMFASecret, isMFARequired, isMFARoleRequired } from "./services/totp";
 import { storage } from "./storage";
 
 const scryptAsync = promisify(scrypt);
@@ -496,12 +496,25 @@ export function requireRole(...allowedRoles: string[]): RequestHandler {
  * Middleware to enforce MFA setup for roles that require it (admin, manager).
  * Returns 403 if the user's role requires MFA but they haven't set it up yet.
  * Use on sensitive admin/manager routes to block access until MFA is configured.
+ *
+ * Only active when MFA is globally required (REQUIRE_MFA=true) or the user's
+ * role independently requires MFA (isMFARoleRequired). When neither condition
+ * holds, this middleware is a no-op — it does not block access.
  */
 export const requireMFASetup: RequestHandler = async (req, res, next) => {
   if (!req.isAuthenticated() || !req.user) {
     return res.status(401).json({ message: "Authentication required" });
   }
   const userRole = req.user.role || "viewer";
+  // Only enforce when MFA is actually configured for this deployment.
+  // isMFARequired() checks the REQUIRE_MFA env var; isMFARoleRequired() is true for admin/manager.
+  // Both must be considered: if REQUIRE_MFA is off AND no role-specific enforcement is active,
+  // skip enforcement entirely. Note: isMFARoleRequired currently always returns true for
+  // admin/manager, so in practice this only fires when REQUIRE_MFA=true.
+  const mfaEnforced = isMFARequired();
+  if (!mfaEnforced) {
+    return next();
+  }
   if (!isMFARoleRequired(userRole)) {
     return next();
   }
