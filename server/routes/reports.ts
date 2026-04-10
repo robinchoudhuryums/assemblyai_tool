@@ -81,6 +81,8 @@ router.get("/api/performance", requireAuth, async (req, res) => {
 });
 
   // Filtered reports: accepts date range, employee, role filters
+  // F35: uses storage.getFilteredReportMetrics() for SQL-level aggregation
+  // instead of loading all calls into memory.
   router.get("/api/reports/filtered", requireAuth, async (req, res) => {
     try {
       // A15/F14: query param renamed from `department` to `role` because
@@ -99,145 +101,15 @@ router.get("/api/performance", requireAuth, async (req, res) => {
         }
       }
 
-      const allCalls = await storage.getCallsWithDetails({ status: "completed" });
-      const employees = await storage.getAllEmployees();
-
-      // Build employee lookup maps
-      const employeeMap = new Map(employees.map(e => [e.id, e]));
-
-      // Filter by date range and employee
-      let filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
-      if (employeeId) {
-        filtered = filtered.filter(c => c.employeeId === employeeId);
-      }
-
-      // Filter by role (formerly department)
-      if (role) {
-        filtered = filtered.filter(c => {
-          if (!c.employeeId) return false;
-          const emp = employeeMap.get(c.employeeId);
-          return emp?.role === role;
-        });
-      }
-
-      // Filter by call party type
-      if (callPartyType) {
-        filtered = filtered.filter(c => {
-          const partyType = c.analysis?.callPartyType;
-          return partyType === callPartyType;
-        });
-      }
-
-      // Compute metrics from filtered set
-      const totalCalls = filtered.length;
-      const sentiments = filtered.map(c => c.sentiment).filter(Boolean);
-      const analyses = filtered.map(c => c.analysis).filter(Boolean);
-
-      const avgSentiment = sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + safeFloat(s!.overallScore), 0) / sentiments.length) * 10
-        : 0;
-      const avgPerformanceScore = analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + safeFloat(a!.performanceScore), 0) / analyses.length
-        : 0;
-
-      const sentimentDist = { positive: 0, neutral: 0, negative: 0 };
-      for (const s of sentiments) {
-        const key = s!.overallSentiment as keyof typeof sentimentDist;
-        if (key in sentimentDist) sentimentDist[key]++;
-      }
-
-      // Per-employee stats for performers list
-      const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
-      for (const call of filtered) {
-        if (!call.employeeId) continue;
-        const stats = employeeStats.get(call.employeeId) || { totalScore: 0, callCount: 0 };
-        stats.callCount++;
-        if (call.analysis?.performanceScore) {
-          stats.totalScore += safeFloat(call.analysis.performanceScore);
-        }
-        employeeStats.set(call.employeeId, stats);
-      }
-
-      const performers = Array.from(employeeStats.entries())
-        .map(([empId, stats]) => {
-          const emp = employeeMap.get(empId);
-          return {
-            id: empId,
-            name: emp?.name || "Unknown",
-            role: emp?.role || "",
-            avgPerformanceScore: stats.callCount > 0
-              ? Math.round((stats.totalScore / stats.callCount) * 100) / 100
-              : null,
-            totalCalls: stats.callCount,
-          };
-        })
-        .filter(p => p.totalCalls > 0)
-        .sort((a, b) => (b.avgPerformanceScore || 0) - (a.avgPerformanceScore || 0));
-
-      // Trend data: group by month
-      const trendMap = new Map<string, { calls: number; totalScore: number; scored: number; positive: number; neutral: number; negative: number }>();
-      for (const call of filtered) {
-        const date = new Date(call.uploadedAt || 0);
-        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        const entry = trendMap.get(monthKey) || { calls: 0, totalScore: 0, scored: 0, positive: 0, neutral: 0, negative: 0 };
-        entry.calls++;
-        if (call.analysis?.performanceScore) {
-          entry.totalScore += safeFloat(call.analysis.performanceScore);
-          entry.scored++;
-        }
-        if (call.sentiment?.overallSentiment) {
-          const sent = call.sentiment.overallSentiment as "positive" | "neutral" | "negative";
-          if (sent in entry) entry[sent]++;
-        }
-        trendMap.set(monthKey, entry);
-      }
-
-      const trends = Array.from(trendMap.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([month, data]) => ({
-          month,
-          calls: data.calls,
-          avgScore: data.scored > 0 ? Math.round((data.totalScore / data.scored) * 100) / 100 : null,
-          positive: data.positive,
-          neutral: data.neutral,
-          negative: data.negative,
-        }));
-
-      // Aggregate sub-scores across all analyzed calls
-      const subScoreTotals = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0, count: 0 };
-      for (const call of filtered) {
-        const ss = call.analysis?.subScores;
-        if (ss && (ss.compliance || ss.customerExperience || ss.communication || ss.resolution)) {
-          subScoreTotals.compliance += ss.compliance || 0;
-          subScoreTotals.customerExperience += ss.customerExperience || 0;
-          subScoreTotals.communication += ss.communication || 0;
-          subScoreTotals.resolution += ss.resolution || 0;
-          subScoreTotals.count++;
-        }
-      }
-
-      const avgSubScores = subScoreTotals.count > 0 ? {
-        compliance: Math.round((subScoreTotals.compliance / subScoreTotals.count) * 100) / 100,
-        customerExperience: Math.round((subScoreTotals.customerExperience / subScoreTotals.count) * 100) / 100,
-        communication: Math.round((subScoreTotals.communication / subScoreTotals.count) * 100) / 100,
-        resolution: Math.round((subScoreTotals.resolution / subScoreTotals.count) * 100) / 100,
-      } : null;
-
-      // Count auto-assigned calls
-      const autoAssignedCount = filtered.filter(c => c.analysis?.detectedAgentName).length;
-
-      res.json({
-        metrics: {
-          totalCalls,
-          avgSentiment: Math.round(avgSentiment * 100) / 100,
-          avgPerformanceScore: Math.round(avgPerformanceScore * 100) / 100,
-        },
-        sentiment: sentimentDist,
-        performers,
-        trends,
-        avgSubScores,
-        autoAssignedCount,
+      const result = await storage.getFilteredReportMetrics({
+        from: from as string | undefined,
+        to: to as string | undefined,
+        employeeId: employeeId as string | undefined,
+        role,
+        callPartyType: callPartyType as string | undefined,
       });
+
+      res.json(result);
     } catch (error) {
       console.error("Failed to generate filtered report:", error);
       res.status(500).json({ message: "Failed to generate filtered report" });
