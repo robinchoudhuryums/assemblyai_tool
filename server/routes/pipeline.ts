@@ -339,14 +339,18 @@ export async function processAudioFile(
         const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
         await storage.createTranscript(transcript);
         await storage.createSentimentAnalysis(sentiment);
-        analysis.confidenceScore = "0.500"; // A24/F54: batch placeholder — we've verified transcription succeeded, not "unknown"
+        // Use actual transcription confidence as the placeholder score instead of
+        // a misleading hardcoded 0.500. This reflects what we know so far (transcript
+        // quality) and will be recomputed with AI factors when the batch completes.
+        const batchPlaceholderConfidence = Math.max(0, Math.min(1, transcriptResponse.confidence || 0));
+        analysis.confidenceScore = batchPlaceholderConfidence.toFixed(3);
         analysis.confidenceFactors = {
           transcriptConfidence: transcriptResponse.confidence || 0,
           wordCount: transcriptResponse.words?.length || 0,
           callDurationSeconds,
           transcriptLength: (transcriptResponse.text || "").length,
           aiAnalysisCompleted: false,
-          overallScore: 0.5,
+          overallScore: batchPlaceholderConfidence,
         };
         const existingFlags = (analysis.flags as string[]) || [];
         existingFlags.push("awaiting_batch_analysis");

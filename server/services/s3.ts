@@ -33,11 +33,11 @@ function decodeXmlEntities(s: string): string {
       default:
         if (entity.startsWith("#x") || entity.startsWith("#X")) {
           const cp = parseInt(entity.slice(2), 16);
-          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+          return Number.isFinite(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : `&${entity};`;
         }
         if (entity.startsWith("#")) {
           const cp = parseInt(entity.slice(1), 10);
-          return Number.isFinite(cp) ? String.fromCodePoint(cp) : `&${entity};`;
+          return Number.isFinite(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : `&${entity};`;
         }
         return `&${entity};`;
     }
