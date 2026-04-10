@@ -300,6 +300,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
 | GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
 | GET | `/api/analytics/heatmap` | authenticated | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`) |
+| GET | `/api/analytics/compare` | manager+ | Compare 2-5 agents side-by-side (query: `ids` comma-separated employee IDs) |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 

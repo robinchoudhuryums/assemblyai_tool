@@ -376,7 +376,7 @@ export function register(router: Router) {
 
   // ==================== AGENT COMPARISON ====================
   // Compare 2-5 agents side-by-side with detailed metrics
-  router.get("/api/analytics/compare", requireAuth, async (req, res) => {
+  router.get("/api/analytics/compare", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       const ids = (req.query.ids as string || "").split(",").filter(Boolean);
       if (ids.length < 2 || ids.length > 5) {

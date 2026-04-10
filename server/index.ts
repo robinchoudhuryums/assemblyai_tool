@@ -545,9 +545,15 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           const mod = await import("./services/batch-scheduler");
           mod.stopBatchScheduler?.();
         } catch { /* noop */ }
-        // 3. Flush audit log queue
+        // 3. Flush audit log queue (bounded to 10s — if DB is hung, don't waste
+        //    the full 30s hard-exit budget; remaining entries are in stdout via HMAC chain)
         try {
-          await flushAuditQueue();
+          await Promise.race([
+            flushAuditQueue(),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error("flush timed out after 10s")), 10_000)
+            ),
+          ]);
           log("Audit log queue flushed.");
         } catch (err) {
           console.error("[HIPAA_AUDIT] Failed to flush audit queue:", (err as Error).message);
