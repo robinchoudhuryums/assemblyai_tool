@@ -95,6 +95,19 @@ describe("shared/phi-patterns redactPhiText — pattern coverage", () => {
     assert.ok(result.includes("[REDACTED-DATE]") || result.includes("[REDACTED-DOB]"));
   });
 
+  it("redacts standalone post-2009 birthdate-style dates", () => {
+    // Regression: DATE_PATTERN previously capped at year 2009 (200\d),
+    // missing pediatric DOBs and modern dates. Now covers 1900-2099.
+    const cases = ["02/15/2010", "03/20/2015", "12/25/2025", "06/01/2099"];
+    for (const dateStr of cases) {
+      const result = redactPhiText(dateStr);
+      assert.ok(
+        result.includes("[REDACTED-DATE]") || result.includes("[REDACTED-DOB]"),
+        `expected date redaction for ${dateStr}, got: ${result}`,
+      );
+    }
+  });
+
   it("redacts MRN with keyword prefix", () => {
     const result = redactPhiText("MRN 1234567");
     assert.ok(result.includes("[REDACTED-MRN]"), `expected MRN redaction in: ${result}`);
