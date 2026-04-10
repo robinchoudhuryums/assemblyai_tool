@@ -230,9 +230,10 @@ describe("Orphan recovery logic", () => {
   interface MockCall {
     id: string;
     status: string;
-    uploadedAt: string;
+    uploadedAt?: string; // F05: optional — missing uploadedAt treated as epoch
   }
 
+  // Mirrors production logic in server/services/batch-scheduler.ts:recoverOrphans
   function identifyOrphans(
     awaitingCalls: MockCall[],
     pendingCallIds: Set<string>,
@@ -240,7 +241,9 @@ describe("Orphan recovery logic", () => {
   ): string[] {
     const orphanIds: string[] = [];
     for (const call of awaitingCalls) {
-      const age = now - new Date(call.uploadedAt).getTime();
+      // F05: missing uploadedAt → epoch (1970), so age is effectively infinite
+      const uploadedTime = call.uploadedAt ? new Date(call.uploadedAt).getTime() : 0;
+      const age = now - uploadedTime;
       if (age > ORPHAN_THRESHOLD_MS && !pendingCallIds.has(call.id)) {
         orphanIds.push(call.id);
       }
@@ -288,6 +291,25 @@ describe("Orphan recovery logic", () => {
 
   it("returns empty array when no awaiting calls", () => {
     const orphans = identifyOrphans([], new Set());
+    assert.deepEqual(orphans, []);
+  });
+
+  it("treats missing uploadedAt as epoch — always recovered (F05)", () => {
+    const now = Date.now();
+    const calls: MockCall[] = [
+      { id: "no-timestamp", status: "awaiting_analysis" }, // uploadedAt is undefined
+    ];
+    const orphans = identifyOrphans(calls, new Set(), now);
+    // Missing uploadedAt → epoch (1970) → age is ~56 years, far exceeding 2-hour threshold
+    assert.deepEqual(orphans, ["no-timestamp"]);
+  });
+
+  it("does NOT recover missing-uploadedAt call if it has a pending S3 item (F05)", () => {
+    const now = Date.now();
+    const calls: MockCall[] = [
+      { id: "no-timestamp-pending", status: "awaiting_analysis" },
+    ];
+    const orphans = identifyOrphans(calls, new Set(["no-timestamp-pending"]), now);
     assert.deepEqual(orphans, []);
   });
 });

@@ -119,6 +119,30 @@ describe("MemStorage — Transcript, Sentiment, Analysis", () => {
     const found = await storage.getCallAnalysis("c1");
     assert.equal(found?.performanceScore, "7.5");
   });
+
+  it("getCallAnalysesBulk returns map of analyses for given IDs (F03)", async () => {
+    await storage.createCallAnalysis({ callId: "bulk-1", performanceScore: "8.0", summary: "Call 1" });
+    await storage.createCallAnalysis({ callId: "bulk-2", performanceScore: "6.5", summary: "Call 2" });
+    await storage.createCallAnalysis({ callId: "bulk-3", performanceScore: "9.0", summary: "Call 3" });
+    const result = await storage.getCallAnalysesBulk(["bulk-1", "bulk-2", "bulk-3"]);
+    assert.equal(result.size, 3);
+    assert.equal(result.get("bulk-1")?.performanceScore, "8.0");
+    assert.equal(result.get("bulk-2")?.performanceScore, "6.5");
+    assert.equal(result.get("bulk-3")?.performanceScore, "9.0");
+  });
+
+  it("getCallAnalysesBulk omits missing IDs from result map (F03)", async () => {
+    await storage.createCallAnalysis({ callId: "exists-1", performanceScore: "7.0", summary: "Exists" });
+    const result = await storage.getCallAnalysesBulk(["exists-1", "nonexistent-id"]);
+    assert.equal(result.size, 1);
+    assert.ok(result.has("exists-1"));
+    assert.ok(!result.has("nonexistent-id"));
+  });
+
+  it("getCallAnalysesBulk returns empty map for empty input (F03)", async () => {
+    const result = await storage.getCallAnalysesBulk([]);
+    assert.equal(result.size, 0);
+  });
 });
 
 describe("MemStorage — Dashboard metrics", () => {
