@@ -3,7 +3,7 @@ Do not make any changes to any files during the audit phase.
 Read CLAUDE.md (especially Common Gotchas and Key Design Decisions),
 README, and the roadmap carefully before doing anything else.
 
-This audit runs in two stages within this session. Complete Stage 1 fully before starting Stage 2.
+This audit runs in three stages within this session. Complete each stage fully before starting the next.
 
 ═══════════════════════════════════════════
 STAGE 1 — BROAD PASS
@@ -13,10 +13,10 @@ Audit the codebase thoroughly. For each finding:
 - State the issue, cite the file and function/line area
 - Severity: Critical / High / Medium / Low
 - Confidence: High / Medium / Low (flag if you only skimmed this area)
-- Is this a bug that would actually fire in production this month,
-  or a defensive/structural improvement? Be honest about which.
+- Classify: is this a production bug, a structural/quality issue, or
+  a feature/effectiveness gap? Be honest about which.
 
-Focus on:
+Flag:
 - Bugs and logic errors in currently-reachable code paths
 - Security and compliance gaps (auth, sensitive data handling, audit logging)
 - Inconsistencies between CLAUDE.md/docs and actual implementation
@@ -86,6 +86,40 @@ RETRACTED FINDINGS (Stage 1 findings that were wrong on closer read):
 FINAL TOP 5 by production impact (updated if Stage 2 changed the ranking)
 
 One sentence: the single most important thing to fix before anything else.
+
+═══════════════════════════════════════════
+STAGE 3 — EFFECTIVENESS & STRATEGIC REVIEW
+═══════════════════════════════════════════
+
+Shift your lens from "what's broken" to "how well does this work."
+Stages 1-2 assessed code quality. Stage 3 assesses the product.
+
+For each major feature area (use the rating dimensions as a guide):
+1. Does this feature actually accomplish what it's designed to do?
+   Not "is it bug-free" but "does it produce good results for users?"
+2. What's missing that a user or operator would reasonably expect?
+   Completeness gaps, not bugs — things that aren't built yet vs.
+   things that are built wrong.
+3. Where is the UX friction? Workflows that are confusing, slow,
+   or require unnecessary steps — separate from crashes or errors.
+
+Then provide:
+FEATURE EFFECTIVENESS (for each major feature area):
+- [Feature area]: [Working well / Functional but limited / Needs work]
+  [1-2 sentences on how effectively it serves users, not code quality]
+
+COMPLETENESS GAPS (what's not built yet that should be):
+- [Gap] — [impact on users] — [effort: S/M/L]
+(list the top 5 most impactful gaps)
+
+STRATEGIC SUGGESTIONS (what would make this significantly more valuable):
+- [Suggestion] — [why it matters] — [builds on what already exists]
+(3-5 suggestions, grounded in what you observed, not generic advice)
+
+PRODUCTION READINESS ASSESSMENT:
+One paragraph: is this tool ready for production use? What's the gap
+between current state and production-ready? Be specific about what
+"production-ready" means for this type of application.
 
 After I review the audit, I will tell you which findings to implement.
 Do not implement anything until then.
