@@ -649,8 +649,13 @@ export async function processAudioFile(
             summary: callSummary,
             transcript: speakerLabeledText?.slice(0, 5000) || "",
             strengths,
-          }).catch(() => {}); // fire-and-forget
-        }).catch(() => {});
+          }).catch((err) => {
+            console.warn(`[${callId}] Best-practice ingestion failed (non-blocking):`, (err as Error).message);
+            captureException(err as Error, { callId, errorType: "best_practice_ingest" });
+          });
+        }).catch((err) => {
+          console.warn(`[${callId}] Best-practice ingest module import failed:`, (err as Error).message);
+        });
       }
     } catch (alertErr) {
       console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);

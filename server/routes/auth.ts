@@ -107,7 +107,15 @@ export function registerAuthRoutes(router: Router) {
         res.status(500).json({ message: "Failed to logout" });
         return;
       }
-      res.json({ message: "Logged out" });
+      // Destroy the session so the session ID is immediately invalidated in
+      // the session store (PostgreSQL or memory), not just cleared of user data.
+      req.session.destroy((destroyErr) => {
+        if (destroyErr) {
+          // Session data is already cleared by req.logout(); log and continue
+          console.warn("Failed to destroy session on logout:", (destroyErr as Error).message);
+        }
+        res.json({ message: "Logged out" });
+      });
     });
   });
 

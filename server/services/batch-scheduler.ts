@@ -27,6 +27,10 @@ let batchCycleTimeout: ReturnType<typeof setTimeout> | null = null;
 let orphanCheckInterval: ReturnType<typeof setInterval> | null = null;
 let orphanCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 
+// Guard against concurrent batch cycles (setInterval fires regardless of
+// whether the previous async cycle has completed)
+let batchCycleRunning = false;
+
 /**
  * Process a completed batch job: parse results, store analyses, update calls.
  */
@@ -143,10 +147,22 @@ async function processBatchResults(
         }
 
         broadcastCallUpdate(callId, "completed", { label: "Batch analysis complete" });
-        await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
         logger.info("Batch: call analysis stored successfully", { callId });
       } catch (callErr) {
-        logger.warn("Batch: failed to process result", { callId, error: (callErr as Error).message });
+        logger.warn("Batch: failed to process result, marking call failed", { callId, error: (callErr as Error).message });
+        try {
+          await storage.updateCall(callId, { status: "failed" });
+          broadcastCallUpdate(callId, "failed", { label: "Batch result processing failed" });
+        } catch { /* best-effort status update */ }
+      } finally {
+        // Always clean up the pending item so it doesn't get stuck in S3 forever.
+        // If storage writes failed above, the call is marked failed; leaving the
+        // pending item would prevent orphan recovery from detecting it.
+        try {
+          await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+        } catch (delErr) {
+          logger.warn("Batch: failed to delete pending item", { callId, error: (delErr as Error).message });
+        }
       }
     }
 
@@ -154,9 +170,13 @@ async function processBatchResults(
   } else if (status.status === "Failed" || status.status === "Stopped" || status.status === "Expired") {
     logger.error("Batch job failed", { jobId: job.jobId, reason: status.message || status.status });
     for (const callId of job.callIds) {
-      await storage.updateCall(callId, { status: "failed" });
-      broadcastCallUpdate(callId, "failed", { label: "Batch analysis failed" });
-      await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+      try {
+        await storage.updateCall(callId, { status: "failed" });
+        broadcastCallUpdate(callId, "failed", { label: "Batch analysis failed" });
+        await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+      } catch (failErr) {
+        logger.warn("Batch: error marking call as failed", { callId, error: (failErr as Error).message });
+      }
     }
     await s3Client.deleteObject(jobKey);
   }
@@ -166,6 +186,11 @@ async function processBatchResults(
  * Single batch cycle: check active jobs, collect pending items, submit new batch.
  */
 export async function runBatchCycle(): Promise<void> {
+  if (batchCycleRunning) {
+    logger.info("Batch: previous cycle still running, skipping");
+    return;
+  }
+  batchCycleRunning = true;
   try {
     const s3Client = storage.getObjectStorageClient();
     if (!s3Client) return;
@@ -222,6 +247,8 @@ export async function runBatchCycle(): Promise<void> {
 
   } catch (batchErr) {
     logger.error("Batch cycle error", { error: (batchErr as Error).message });
+  } finally {
+    batchCycleRunning = false;
   }
 }
 

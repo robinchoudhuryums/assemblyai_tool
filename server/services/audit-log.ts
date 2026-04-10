@@ -101,7 +101,11 @@ export async function loadAuditIntegrityChain(): Promise<void> {
     }
     integrityLoaded = true;
   } catch (err) {
-    logger.error("audit-log: loadAuditIntegrityChain failed", { error: (err as Error).message });
+    // Mark loaded so we don't retry forever, but warn loudly that the chain is
+    // broken — all subsequent entries will chain from "genesis" instead of the
+    // real chain head, silently forking the integrity trail.
+    integrityLoaded = true;
+    logger.error("CRITICAL: audit-log HMAC integrity chain could not be loaded from DB — chain will fork from genesis. Investigate immediately.", { error: (err as Error).message });
   }
 }
 
