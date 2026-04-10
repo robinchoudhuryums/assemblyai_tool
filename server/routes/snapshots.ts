@@ -9,7 +9,7 @@ import type { Router } from "express";
 import { randomUUID } from "crypto";
 import type { JobQueue } from "../services/job-queue";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { aiProvider } from "../services/ai-factory";
 import { logger } from "../services/logger";
 import { validateParams } from "./utils";
@@ -324,7 +324,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * Generate a performance snapshot for an employee.
    * Body: { from: string, to: string }
    */
-  router.post("/api/snapshots/employee/:employeeId", requireAuth, requireRole("manager"), validateParams({ employeeId: "uuid" }), async (req, res) => {
+  router.post("/api/snapshots/employee/:employeeId", requireAuth, requireMFASetup, requireRole("manager"), validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.body;
@@ -348,7 +348,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * Generate a snapshot for a sub-team.
    * Body: { from: string, to: string, teamName: string }
    */
-  router.post("/api/snapshots/team", requireAuth, requireRole("manager"), async (req, res) => {
+  router.post("/api/snapshots/team", requireAuth, requireMFASetup, requireRole("manager"), async (req, res) => {
     try {
       const { from, to, teamName } = req.body;
       if (!from || !to || !teamName) return res.status(400).json({ message: "Date range and teamName are required" });
@@ -368,7 +368,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * Generate a snapshot for a department (by role).
    * Body: { from: string, to: string, department: string }
    */
-  router.post("/api/snapshots/department", requireAuth, requireRole("manager"), async (req, res) => {
+  router.post("/api/snapshots/department", requireAuth, requireMFASetup, requireRole("manager"), async (req, res) => {
     try {
       const { from, to, department } = req.body;
       if (!from || !to || !department) return res.status(400).json({ message: "Date range and department are required" });
@@ -388,7 +388,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * Generate a company-wide snapshot.
    * Body: { from: string, to: string }
    */
-  router.post("/api/snapshots/company", requireAuth, requireRole("manager"), async (req, res) => {
+  router.post("/api/snapshots/company", requireAuth, requireMFASetup, requireRole("manager"), async (req, res) => {
     try {
       const { from, to } = req.body;
       if (!from || !to) return res.status(400).json({ message: "Date range (from, to) is required" });
@@ -414,7 +414,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * we fall back to running synchronously (legacy behavior). For large
    * orgs the synchronous path can take minutes and risks request timeouts.
    */
-  router.post("/api/snapshots/batch", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/snapshots/batch", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
       const { from, to } = req.body;
       if (!from || !to) return res.status(400).json({ message: "Date range (from, to) is required" });
@@ -471,7 +471,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
   });
 
   /** Get all snapshots for a level (admin overview). */
-  router.get("/api/snapshots/all/:level", requireAuth, requireRole("manager"), validateParams({ level: "safeId" }), async (req, res) => {
+  router.get("/api/snapshots/all/:level", requireAuth, requireMFASetup, requireRole("manager"), validateParams({ level: "safeId" }), async (req, res) => {
     const level = req.params.level as SnapshotLevel;
     if (!["employee", "team", "department", "company"].includes(level)) {
       return res.status(400).json({ message: "Level must be employee, team, department, or company" });
@@ -487,7 +487,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * next AI summary starts fresh. Useful when employees change roles,
    * transfer teams, or historical context becomes misleading.
    */
-  router.delete("/api/snapshots/:level/:targetId/reset", requireAuth, requireRole("admin"), validateParams({ level: "safeId", targetId: "safeName" }), async (req, res) => {
+  router.delete("/api/snapshots/:level/:targetId/reset", requireAuth, requireMFASetup, requireRole("admin"), validateParams({ level: "safeId", targetId: "safeName" }), async (req, res) => {
     const level = req.params.level as SnapshotLevel;
     if (!["employee", "team", "department", "company"].includes(level)) {
       return res.status(400).json({ message: "Level must be employee, team, department, or company" });
@@ -503,7 +503,7 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
    * for completion. Returns 404 if no job queue is configured or job is
    * unknown. Admin-only.
    */
-  router.get("/api/admin/jobs/:id", requireAuth, requireRole("admin"), validateParams({ id: "uuid" }), async (req, res) => {
+  router.get("/api/admin/jobs/:id", requireAuth, requireMFASetup, requireRole("admin"), validateParams({ id: "uuid" }), async (req, res) => {
     const queue = getJobQueue?.();
     if (!queue) {
       return res.status(503).json({ message: "Job queue not configured (no DATABASE_URL)" });

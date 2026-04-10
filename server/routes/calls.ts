@@ -4,7 +4,7 @@ import fs from "fs";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
@@ -375,7 +375,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.patch("/api/calls/:id/analysis", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.patch("/api/calls/:id/analysis", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
 
@@ -467,7 +467,7 @@ export function registerCallRoutes(
 
   // ==================== ASSIGN & DELETE ====================
 
-  router.patch("/api/calls/:id/assign", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.patch("/api/calls/:id/assign", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = assignCallSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -496,7 +496,7 @@ export function registerCallRoutes(
     }
   });
 
-  router.delete("/api/calls/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.delete("/api/calls/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
 
@@ -527,7 +527,7 @@ export function registerCallRoutes(
   });
 
   // ==================== BULK RE-ANALYSIS (admin only) ====================
-  router.post("/api/calls/bulk-reanalyze", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/calls/bulk-reanalyze", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
       const bulkSchema = z.object({
         callIds: z.array(z.string().uuid()).min(1).max(50),

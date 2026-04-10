@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { insertEmployeeSchema, assignCallSchema, POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import { z } from "zod";
 import { sendError, sendValidationError, validateIdParam, cleanupFile } from "./utils";
@@ -70,7 +70,7 @@ export function register(router: Router) {
   });
 
   // HIPAA: Only managers and admins can create employees
-  router.post("/api/employees", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.post("/api/employees", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const validatedData = insertEmployeeSchema.parse(req.body);
       const employee = await storage.createEmployee(validatedData);
@@ -94,7 +94,7 @@ export function register(router: Router) {
     subTeam: z.string().max(100).optional(),
   }).strict();
 
-  router.patch("/api/employees/:id", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.patch("/api/employees/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = updateEmployeeSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -121,6 +121,7 @@ export function register(router: Router) {
   router.post(
     "/api/employees/import-csv",
     requireAuth,
+    requireMFASetup,
     requireRole("admin"),
     csvUpload.single("file"),
     async (req, res) => {

@@ -1,6 +1,6 @@
 import type { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole, validatePasswordComplexity, hashPasswordForDb, comparePasswordsRaw, isPasswordReused, PASSWORD_HISTORY_SIZE } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, validatePasswordComplexity, hashPasswordForDb, comparePasswordsRaw, isPasswordReused, PASSWORD_HISTORY_SIZE } from "../auth";
 import { logPhiAccess } from "../services/audit-log";
 import {
   createDbUserSchema,
@@ -21,7 +21,7 @@ function sanitizeUser(user: any) {
 export function registerUserRoutes(router: Router) {
 
   // ==================== LIST ALL USERS (admin only) ====================
-  router.get("/api/users", requireAuth, requireRole("admin"), async (_req, res) => {
+  router.get("/api/users", requireAuth, requireMFASetup, requireRole("admin"), async (_req, res) => {
     try {
       const users = await storage.getAllDbUsers();
       res.json(users.map(sanitizeUser));
@@ -32,7 +32,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== CREATE USER (admin only) ====================
-  router.post("/api/users", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/users", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
       const parsed = createDbUserSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -83,7 +83,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== UPDATE USER (admin only) ====================
-  router.patch("/api/users/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+  router.patch("/api/users/:id", requireAuth, requireMFASetup, requireRole("admin"), async (req, res, next) => {
     try {
       // Prevent route collision with /api/users/me/password
       if (req.params.id === "me") return next();
@@ -132,7 +132,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== DEACTIVATE USER (admin only, soft delete) ====================
-  router.delete("/api/users/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.delete("/api/users/:id", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const targetUser = await storage.getDbUser(req.params.id);
       if (!targetUser) {
@@ -168,7 +168,7 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== ADMIN RESET PASSWORD (admin only) ====================
-  router.post("/api/users/:id/reset-password", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.post("/api/users/:id/reset-password", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const parsed = resetPasswordSchema.safeParse(req.body);
       if (!parsed.success) {

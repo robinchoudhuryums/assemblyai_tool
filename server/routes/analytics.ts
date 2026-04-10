@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
@@ -276,7 +276,7 @@ export function register(router: Router) {
   // ==================== EXPORT / REPORT ROUTES ====================
 
   // Export calls as CSV
-  router.get("/api/export/calls", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.get("/api/export/calls", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const pool = getPool();
       const dateFrom = validateDate(req.query.from as string | undefined);
@@ -339,7 +339,7 @@ export function register(router: Router) {
   });
 
   // Export team analytics as CSV
-  router.get("/api/export/team-analytics", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.get("/api/export/team-analytics", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.status(503).json({ message: "Team export requires a database connection" });
@@ -376,7 +376,7 @@ export function register(router: Router) {
 
   // ==================== AGENT COMPARISON ====================
   // Compare 2-5 agents side-by-side with detailed metrics
-  router.get("/api/analytics/compare", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+  router.get("/api/analytics/compare", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const ids = (req.query.ids as string || "").split(",").filter(Boolean);
       if (ids.length < 2 || ids.length > 5) {
