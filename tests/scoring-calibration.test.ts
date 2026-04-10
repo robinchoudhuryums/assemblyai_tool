@@ -177,3 +177,45 @@ describe("scoring quality alerts infrastructure", () => {
     assert.equal(warnings.length + criticals.length, alerts.length, "all alerts should be warning or critical");
   });
 });
+
+// --- Scoring Regression Detection ---
+
+import { detectScoringRegression } from "../server/services/scoring-feedback.js";
+
+describe("scoring regression detection", () => {
+  it("detectScoringRegression returns valid result shape with no data", async () => {
+    const result = await detectScoringRegression();
+    assert.equal(typeof result.detected, "boolean");
+    assert.equal(typeof result.currentWeek.mean, "number");
+    assert.equal(typeof result.currentWeek.count, "number");
+    assert.equal(typeof result.currentWeek.stdDev, "number");
+    assert.equal(typeof result.previousWeek.mean, "number");
+    assert.equal(typeof result.previousWeek.count, "number");
+    assert.equal(typeof result.meanShift, "number");
+    assert.equal(typeof result.significanceThreshold, "number");
+    assert.ok(result.significanceThreshold > 0, "threshold should be positive");
+  });
+
+  it("detectScoringRegression does not flag regression with insufficient data", async () => {
+    const result = await detectScoringRegression();
+    // With no calls in storage, there's insufficient data → no regression
+    assert.equal(result.detected, false);
+    assert.equal(result.alert, null);
+  });
+});
+
+// --- Bedrock Circuit Breaker State ---
+
+import { getBedrockCircuitBreakerState } from "../server/services/bedrock.js";
+
+describe("bedrock circuit breaker state export", () => {
+  it("getBedrockCircuitBreakerState returns valid circuit state", () => {
+    const state = getBedrockCircuitBreakerState();
+    assert.ok(["closed", "open", "half-open"].includes(state), `expected valid circuit state, got: ${state}`);
+  });
+
+  it("circuit breaker starts in closed state", () => {
+    const state = getBedrockCircuitBreakerState();
+    assert.equal(state, "closed");
+  });
+});
