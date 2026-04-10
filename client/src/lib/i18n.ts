@@ -34,6 +34,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "nav.modelTesting": "Model Testing",
     "nav.spendTracking": "Spend Tracking",
     "nav.security": "Security",
+    "nav.systemHealth": "System Health",
 
     // Section headers
     "section.analytics": "Analytics",
@@ -234,6 +235,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "nav.modelTesting": "Pruebas de Modelo",
     "nav.spendTracking": "Seguimiento de Gastos",
     "nav.security": "Seguridad",
+    "nav.systemHealth": "Estado del Sistema",
 
     // Section headers
     "section.analytics": "Analitica",

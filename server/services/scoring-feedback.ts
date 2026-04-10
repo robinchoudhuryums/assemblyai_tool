@@ -311,3 +311,94 @@ export async function checkScoringQuality(): Promise<ScoringQualityAlert[]> {
 export function getScoringQualityAlerts(): ScoringQualityAlert[] {
   return latestAlerts;
 }
+
+// --- Automated Scoring Regression Detection ---
+
+export interface ScoringRegressionResult {
+  detected: boolean;
+  currentWeek: { mean: number; count: number; stdDev: number };
+  previousWeek: { mean: number; count: number; stdDev: number };
+  meanShift: number;
+  significanceThreshold: number;
+  alert: ScoringQualityAlert | null;
+}
+
+const REGRESSION_MEAN_SHIFT_THRESHOLD = 0.8; // Flag if mean shifts >0.8 points week-over-week
+const REGRESSION_MIN_SAMPLE_SIZE = 10; // Need at least 10 scored calls per week
+
+/**
+ * Compare last week's score distribution against the previous week.
+ * Detects significant mean shifts that indicate a model regression,
+ * prompt template issue, or calibration drift.
+ *
+ * Called alongside checkScoringQuality() in the calibration scheduler.
+ */
+export async function detectScoringRegression(): Promise<ScoringRegressionResult> {
+  const now = Date.now();
+  const oneWeekMs = 7 * 86400000;
+  const currentWeekStart = new Date(now - oneWeekMs);
+  const previousWeekStart = new Date(now - 2 * oneWeekMs);
+
+  try {
+    const recentCalls = await storage.getCallsSince(previousWeekStart);
+    const completed = recentCalls.filter(c => c.status === "completed");
+
+    // Partition into two weeks and collect scores
+    const currentWeekScores: number[] = [];
+    const previousWeekScores: number[] = [];
+    const analysesMap = await storage.getCallAnalysesBulk(completed.map(c => c.id));
+
+    for (const call of completed) {
+      const analysis = analysesMap.get(call.id);
+      if (!analysis?.performanceScore) continue;
+      const score = parseFloat(String(analysis.performanceScore));
+      if (!Number.isFinite(score) || score < 0 || score > 10) continue;
+
+      const uploadedAt = new Date(call.uploadedAt || 0).getTime();
+      if (uploadedAt >= currentWeekStart.getTime()) {
+        currentWeekScores.push(score);
+      } else if (uploadedAt >= previousWeekStart.getTime()) {
+        previousWeekScores.push(score);
+      }
+    }
+
+    const computeStats = (scores: number[]) => {
+      if (scores.length === 0) return { mean: 0, count: 0, stdDev: 0 };
+      const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const variance = scores.reduce((s, x) => s + (x - mean) ** 2, 0) / scores.length;
+      return { mean: Math.round(mean * 100) / 100, count: scores.length, stdDev: Math.round(Math.sqrt(variance) * 100) / 100 };
+    };
+
+    const current = computeStats(currentWeekScores);
+    const previous = computeStats(previousWeekScores);
+    const meanShift = Math.round(Math.abs(current.mean - previous.mean) * 100) / 100;
+
+    const hasSufficientData = current.count >= REGRESSION_MIN_SAMPLE_SIZE && previous.count >= REGRESSION_MIN_SAMPLE_SIZE;
+    const detected = hasSufficientData && meanShift >= REGRESSION_MEAN_SHIFT_THRESHOLD;
+
+    let alert: ScoringQualityAlert | null = null;
+    if (detected) {
+      const direction = current.mean > previous.mean ? "higher" : "lower";
+      alert = {
+        type: "systematic_bias",
+        severity: meanShift >= 1.5 ? "critical" : "warning",
+        message: `Scoring regression detected: this week's mean (${current.mean}) is ${meanShift} points ${direction} than last week (${previous.mean}). Investigate model changes, prompt template edits, or calibration drift.`,
+        details: {
+          windowDays: 7,
+          totalCalls: current.count + previous.count,
+          avgDelta: meanShift,
+          biasDirection: current.mean > previous.mean ? "upgrades" : "downgrades",
+        },
+        timestamp: new Date().toISOString(),
+      };
+      // Merge into latestAlerts so it shows up in health dashboard
+      latestAlerts = [...latestAlerts.filter(a => a.message !== alert!.message), alert];
+      logger.warn("Scoring regression detected", { currentMean: current.mean, previousMean: previous.mean, shift: meanShift });
+    }
+
+    return { detected, currentWeek: current, previousWeek: previous, meanShift, significanceThreshold: REGRESSION_MEAN_SHIFT_THRESHOLD, alert };
+  } catch (err) {
+    logger.warn("Scoring regression detection failed", { error: (err as Error).message });
+    return { detected: false, currentWeek: { mean: 0, count: 0, stdDev: 0 }, previousWeek: { mean: 0, count: 0, stdDev: 0 }, meanShift: 0, significanceThreshold: REGRESSION_MEAN_SHIFT_THRESHOLD, alert: null };
+  }
+}

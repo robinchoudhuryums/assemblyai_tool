@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
@@ -418,6 +418,19 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 >
                   <ShieldWarning className="w-5 h-5" />
                   <span>{t("nav.security")}</span>
+                </Link>
+                <Link
+                  href="/admin/health"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/health"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-health"
+                >
+                  <Heartbeat className="w-5 h-5" />
+                  <span>{t("nav.systemHealth")}</span>
                 </Link>
               </>
             )}

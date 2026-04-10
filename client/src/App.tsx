@@ -44,6 +44,7 @@ const CallClustersPage = lazy(() => import("@/pages/call-clusters"));
 const MyPerformancePage = lazy(() => import("@/pages/my-performance"));
 const MyCoachingPage = lazy(() => import("@/pages/my-coaching"));
 const SecurityPage = lazy(() => import("@/pages/security"));
+const SystemHealthPage = lazy(() => import("@/pages/system-health"));
 const LeaderboardPage = lazy(() => import("@/pages/leaderboard"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const AuthPage = lazy(() => import("@/pages/auth"));
@@ -101,6 +102,7 @@ const ROUTE_TABLE: RouteEntry[] = [
   ["/admin/ab-testing", ABTestingPage],
   ["/admin/spend", SpendTrackingPage],
   ["/admin/security", SecurityPage],
+  ["/admin/health", SystemHealthPage],
   ["/scorecard/:id", AgentScorecardPage],
   ["/analytics/teams", TeamAnalyticsPage],
   ["/analytics/compare", AgentComparePage],

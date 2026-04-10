@@ -45,6 +45,11 @@ const BEDROCK_EMBEDDING_TIMEOUT_MS = envIntMs("BEDROCK_EMBEDDING_TIMEOUT_MS", 15
 // when Bedrock is down. 5 failures → open for 30s → half-open test → close on success.
 const bedrockCircuitBreaker = new CircuitBreaker("bedrock", 5, 30_000);
 
+/** Expose circuit breaker state for operational health dashboard. */
+export function getBedrockCircuitBreakerState() {
+  return bedrockCircuitBreaker.getState();
+}
+
 export class BedrockProvider implements AIAnalysisProvider {
   readonly name = "bedrock";
   private credentials: AwsCredentials | null = null;

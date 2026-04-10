@@ -17,7 +17,7 @@
  */
 import { storage } from "../storage";
 import { getCalibrationConfig, type ScoringCalibration } from "./scoring-calibration";
-import { checkScoringQuality } from "./scoring-feedback";
+import { checkScoringQuality, detectScoringRegression } from "./scoring-feedback";
 import { logger } from "./logger";
 
 export interface CalibrationSnapshot {
@@ -191,6 +191,10 @@ export function startCalibrationScheduler(): () => void {
     // Scoring quality alerts: check correction patterns alongside calibration
     await checkScoringQuality().catch(err =>
       logger.warn("Scoring quality check failed (non-blocking)", { error: (err as Error).message })
+    );
+    // Scoring regression detection: compare week-over-week score distributions
+    await detectScoringRegression().catch(err =>
+      logger.warn("Scoring regression detection failed (non-blocking)", { error: (err as Error).message })
     );
   };
 
