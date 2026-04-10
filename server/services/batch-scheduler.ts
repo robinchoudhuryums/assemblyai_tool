@@ -271,7 +271,11 @@ export async function recoverOrphans(): Promise<void> {
 
     let recovered = 0;
     for (const call of awaitingCalls) {
-      const age = Date.now() - new Date(call.uploadedAt || Date.now()).getTime();
+      // F05: If uploadedAt is missing, treat as infinitely old so the call is
+      // recovered rather than silently stuck forever. The prior fallback to
+      // Date.now() produced age ≈ 0, preventing recovery.
+      const uploadedTime = call.uploadedAt ? new Date(call.uploadedAt).getTime() : 0;
+      const age = Date.now() - uploadedTime;
       if (age > ORPHAN_THRESHOLD_MS && !pendingKeys.has(call.id)) {
         await storage.updateCall(call.id, { status: "failed" });
         broadcastCallUpdate(call.id, "failed", { label: "Orphaned: batch analysis never completed" });

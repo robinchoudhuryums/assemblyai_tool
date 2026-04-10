@@ -73,19 +73,19 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
     const windowedCalls = await storage.getCallsSince(cutoffDate);
     const recentScoredCalls = windowedCalls.filter(c => c.status === "completed");
 
-    // Extract raw performance scores from analysis
+    // F03: Bulk-fetch analyses in a single query instead of N+1 individual lookups.
+    // With hundreds of calls in the calibration window, this reduces DB round-trips
+    // from O(N) to O(N/500) (chunked IN clause).
+    const callIds = recentScoredCalls.map(c => c.id);
+    const analysesMap = await storage.getCallAnalysesBulk(callIds);
+
     const rawScores: number[] = [];
-    for (const call of recentScoredCalls) {
-      try {
-        const analysis = await storage.getCallAnalysis(call.id);
-        if (analysis?.performanceScore) {
-          const score = parseFloat(String(analysis.performanceScore));
-          if (Number.isFinite(score) && score >= 0 && score <= 10) {
-            rawScores.push(score);
-          }
+    for (const [, analysis] of analysesMap) {
+      if (analysis?.performanceScore) {
+        const score = parseFloat(String(analysis.performanceScore));
+        if (Number.isFinite(score) && score >= 0 && score <= 10) {
+          rawScores.push(score);
         }
-      } catch {
-        // Skip calls with missing analysis
       }
     }
 

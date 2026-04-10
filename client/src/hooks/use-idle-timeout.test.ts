@@ -50,7 +50,7 @@ describe("useIdleTimeout", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
-  it("hard-redirects to /auth if onIdle throws (fail-closed)", () => {
+  it("hard-redirects to /auth if onIdle throws (fail-closed)", async () => {
     const onIdle = vi.fn(() => { throw new Error("logout failed"); });
     // Stub window.location.href via assigning to a writable replacement
     const originalLocation = window.location;
@@ -64,14 +64,22 @@ describe("useIdleTimeout", () => {
       },
     });
     const consoleErrSpy = vi.spyOn(console, "error").mockImplementation(() => { /* swallow */ });
+    // F06: The catch path now calls fetch("/api/auth/logout") before redirecting.
+    // Mock fetch to resolve immediately so the .finally() redirect fires.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
 
     renderHook(() => useIdleTimeout(onIdle, true));
     act(() => { vi.advanceTimersByTime(IDLE_TIMEOUT_MS); });
 
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(hrefSpy).toHaveBeenCalledWith("/auth");
     expect(consoleErrSpy).toHaveBeenCalled();
+    // The redirect happens in fetch().finally(), so flush microtasks
+    await act(async () => { await vi.runAllTimersAsync(); });
 
+    expect(fetchSpy).toHaveBeenCalledWith("/api/auth/logout", expect.objectContaining({ method: "POST" }));
+    expect(hrefSpy).toHaveBeenCalledWith("/auth");
+
+    fetchSpy.mockRestore();
     consoleErrSpy.mockRestore();
     Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
   });

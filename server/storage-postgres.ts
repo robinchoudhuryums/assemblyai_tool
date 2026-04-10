@@ -774,6 +774,26 @@ export class PostgresStorage implements IStorage {
     return rows[0] ? mapAnalysis(rows[0]) : undefined;
   }
 
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    if (callIds.length === 0) return result;
+    // Batch into chunks of 500 to avoid overly large IN clauses
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < callIds.length; i += CHUNK_SIZE) {
+      const chunk = callIds.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(",");
+      const { rows } = await this.db.query(
+        `SELECT * FROM call_analyses WHERE call_id IN (${placeholders})`,
+        chunk
+      );
+      for (const row of rows) {
+        const analysis = mapAnalysis(row);
+        result.set(analysis.callId, analysis);
+      }
+    }
+    return result;
+  }
+
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
     const { rows } = await this.db.query(

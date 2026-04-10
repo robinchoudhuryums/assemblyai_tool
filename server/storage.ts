@@ -165,6 +165,12 @@ export interface IStorage {
 
   // Call analysis operations
   getCallAnalysis(callId: string): Promise<CallAnalysis | undefined>;
+  /**
+   * F03: Bulk fetch analyses for multiple call IDs in a single query.
+   * Returns a Map keyed by callId. Missing analyses are omitted (not undefined).
+   * Used by auto-calibration to avoid N+1 query patterns.
+   */
+  getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>>;
   createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis>;
   updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void>;
 
@@ -543,6 +549,14 @@ export class MemStorage implements IStorage {
 
   async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
     return this.analyses.get(callId);
+  }
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    for (const id of callIds) {
+      const analysis = this.analyses.get(id);
+      if (analysis) result.set(id, analysis);
+    }
+    return result;
   }
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
@@ -1119,6 +1133,17 @@ export class CloudStorage implements IStorage {
   // --- Call Analysis Methods ---
   async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
     return this.client.downloadJson<CallAnalysis>(`analyses/${callId}.json`);
+  }
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    const downloads = await Promise.allSettled(
+      callIds.map(async (id) => {
+        const analysis = await this.client.downloadJson<CallAnalysis>(`analyses/${id}.json`);
+        if (analysis) result.set(id, analysis);
+      })
+    );
+    // Silently skip failed downloads (same as listAndDownloadJson pattern)
+    return result;
   }
 
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {

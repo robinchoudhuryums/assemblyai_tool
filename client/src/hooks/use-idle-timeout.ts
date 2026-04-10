@@ -60,7 +60,8 @@ export function useIdleTimeout(onIdle: () => void, enabled: boolean): IdleTimeou
 
     // Fire logout at timeout. Fail-closed: if the logout callback throws, do
     // NOT swallow the error and leave the user in an apparently-still-logged-in
-    // state — hard-redirect to /auth so the session is unambiguously dropped.
+    // state — call server logout then hard-redirect to /auth so the session is
+    // unambiguously dropped on both client and server.
     idleTimerRef.current = setTimeout(() => {
       clearAllTimers();
       setShowWarning(false);
@@ -68,9 +69,13 @@ export function useIdleTimeout(onIdle: () => void, enabled: boolean): IdleTimeou
         onIdleRef.current();
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error("Idle timeout callback failed; forcing hard redirect:", err);
+        console.error("Idle timeout callback failed; forcing server logout + hard redirect:", err);
         if (typeof window !== "undefined") {
-          window.location.href = "/auth";
+          // F06: Best-effort server-side session invalidation before redirect.
+          // Without this, the session cookie remains valid on the server.
+          fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+            .catch(() => { /* best-effort */ })
+            .finally(() => { window.location.href = "/auth"; });
         }
       }
     }, IDLE_TIMEOUT_MS);
