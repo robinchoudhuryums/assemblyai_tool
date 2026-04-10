@@ -252,6 +252,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/admin/reports/:id` | manager+ | Get a single scheduled report (DB lookup on cache miss) |
 | POST | `/api/admin/reports/generate` | manager+ | Manually generate a weekly or monthly report |
 | GET | `/api/admin/metrics` | admin | Runtime counters + histograms (Prometheus-style) |
+| GET | `/api/admin/health-deep` | admin | Aggregated operational health: audit log, job queue, Bedrock circuit breaker, RAG cache, batch inference, scoring quality + regression alerts, calibration, telephony |
 | GET | `/api/admin/batch-status` | admin | Bedrock batch inference status (pending items, active jobs) |
 | GET | `/api/admin/security-summary` | admin | Security posture summary |
 | GET | `/api/admin/security-alerts` | admin | Recent security alerts |
@@ -851,7 +852,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **Batch orphan recovery treats missing `uploadedAt` as epoch** (F05) — previously `call.uploadedAt || Date.now()` produced age ≈ 0, causing calls without `uploadedAt` to never be recovered. Now uses epoch (1970), making such calls immediately eligible for orphan recovery.
 - **Idle timeout catch path calls server logout** (F06) — the fail-closed `catch` in `useIdleTimeout` now POSTs to `/api/auth/logout` before hard-redirecting to `/auth`. Previously only did the redirect, leaving the server session valid.
 - **`/api/reports/filtered` and `/api/insights` use DB-level aggregation** (F35) — previously loaded all completed calls (with full transcript text) into Node.js memory and filtered/aggregated in JS. Now uses `getFilteredReportMetrics()` (4 parallel SQL queries) and `getInsightsData()` (lightweight SELECT without transcript join). Do not reintroduce `getCallsWithDetails({ status: "completed" })` or `getCallsSinceWithDetails()` in these routes — the old pattern causes OOM at production scale.
-- **Scoring quality alerts run inside the calibration scheduler** — `checkScoringQuality()` in `server/services/scoring-feedback.ts` runs after each `analyzeScoreDistribution()` cycle (default every 24h). Detects high correction rates (>15% warning, >25% critical) and systematic bias (>75% of corrections in the same direction). Results exposed via `GET /api/admin/calibration` response (`qualityAlerts` + `correctionStats` fields). Non-blocking — failures don't affect calibration.
+- **Scoring quality alerts and regression detection run inside the calibration scheduler** — `checkScoringQuality()` and `detectScoringRegression()` in `server/services/scoring-feedback.ts` run after each `analyzeScoreDistribution()` cycle (default every 24h). Quality alerts detect high correction rates (>15% warning, >25% critical) and systematic bias (>75% of corrections in the same direction). Regression detection compares week-over-week mean score distributions and flags shifts >0.8 points (warning) or >1.5 points (critical). Both exposed via `GET /api/admin/calibration` response (`qualityAlerts` + `correctionStats` fields) and `GET /api/admin/health-deep`. Non-blocking — failures don't affect calibration.
 
 ## Systems Map
 
@@ -907,7 +908,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Frontend Entry** | `client/src/main.tsx`, `client/src/App.tsx` | React SPA root: auth gate, 25 lazy-loaded pages, WebSocket connection, idle timeout, keyboard shortcuts |
 | **Frontend Lib** | `client/src/lib/` | TanStack Query setup (`queryClient.ts` — exports `apiRequest`, `getCsrfToken`, `SessionExpiredError` with optional `code`, new `ApiError` class, `LOGIN_GRACE_MS`), i18n (`i18n.ts` with `TRANSLATIONS` export + dev-mode missing-key warning), appearance/theme, Sentry (`sentry.ts` — recursive PHI scrubber via `shared/phi-patterns`, no namespace re-export), saved filters, display utils, constants (scoring tier thresholds + `LOGIN_GRACE_MS` mirror of server config), `safe-storage.ts` (quota-tolerant localStorage wrapper), `transcript-search.ts` (pure helpers for multi-hit search highlight) |
 | **Frontend Hooks** | `client/src/hooks/` | `useWebSocket` (A13 — mount-once-per-mount via refs), `useIdleTimeout` (A16 — fail-closed with server logout + redirect; F06 added POST /api/auth/logout before hard-redirect in catch path), `useBeforeUnload`, `useConfig` (A11 — `/api/config` fetch with `FALLBACK_CONFIG`), `useToast` |
-| **Frontend Pages** | `client/src/pages/` | 26+ page components (dashboard, upload, transcripts, reports, coaching, my-coaching, admin, leaderboard, etc.) |
+| **Frontend Pages** | `client/src/pages/` | 27+ page components (dashboard, upload, transcripts, reports, coaching, my-coaching, admin, system-health, leaderboard, etc.) |
 | **Frontend Components** | `client/src/components/` | Layout (sidebar), UI (shadcn/ui), backgrounds, error boundary, file upload |
 
 ### Data Flow Paths
