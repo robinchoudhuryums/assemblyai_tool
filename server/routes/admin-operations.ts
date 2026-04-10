@@ -7,6 +7,7 @@ import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { metrics } from "../services/logger";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../services/auto-calibration";
+import { getCorrectionStats, getScoringQualityAlerts } from "../services/scoring-feedback";
 import { is8x8Enabled } from "../services/telephony-8x8";
 
 export function registerOperationsRoutes(
@@ -187,11 +188,13 @@ export function registerOperationsRoutes(
 
   // ==================== ADMIN: SCORE CALIBRATION ====================
 
-  // GET /api/admin/calibration — latest calibration snapshot
+  // GET /api/admin/calibration — latest calibration snapshot + scoring quality alerts
   router.get("/api/admin/calibration", requireRole("admin"), async (_req, res) => {
     try {
       const snapshot = await getLatestCalibrationSnapshot();
-      res.json({ snapshot, available: snapshot !== null });
+      const correctionStats = getCorrectionStats();
+      const qualityAlerts = getScoringQualityAlerts();
+      res.json({ snapshot, available: snapshot !== null, correctionStats, qualityAlerts });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch calibration data" });
     }

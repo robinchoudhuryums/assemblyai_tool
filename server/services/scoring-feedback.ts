@@ -196,3 +196,118 @@ export function getCorrectionStats(): {
 
   return { total: corrections.length, upgrades, downgrades, avgDelta: Math.round(avgDelta * 10) / 10, byCategory };
 }
+
+// --- Scoring Quality Alerts ---
+
+export interface ScoringQualityAlert {
+  type: "high_correction_rate" | "systematic_bias";
+  severity: "warning" | "critical";
+  message: string;
+  details: {
+    correctionRate?: number;
+    windowDays: number;
+    totalCalls?: number;
+    totalCorrections?: number;
+    avgDelta?: number;
+    biasDirection?: "upgrades" | "downgrades";
+  };
+  timestamp: string;
+}
+
+const CORRECTION_RATE_WARNING = 0.15; // 15% correction rate triggers warning
+const CORRECTION_RATE_CRITICAL = 0.25; // 25% triggers critical
+const BIAS_THRESHOLD = 0.75; // If >75% of corrections are in same direction, flag bias
+const QUALITY_CHECK_WINDOW_DAYS = 7;
+
+let latestAlerts: ScoringQualityAlert[] = [];
+
+/**
+ * Check recent scoring corrections for quality issues.
+ * Called by the auto-calibration scheduler (every CALIBRATION_INTERVAL_HOURS).
+ * Alerts are stored in-memory and exposed via getCorrectionStats / getScoringQualityAlerts.
+ */
+export async function checkScoringQuality(): Promise<ScoringQualityAlert[]> {
+  const alerts: ScoringQualityAlert[] = [];
+  const windowMs = QUALITY_CHECK_WINDOW_DAYS * 86400000;
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+
+  // Filter corrections within the check window
+  const recentCorrections = corrections.filter(c => c.correctedAt >= cutoff);
+  if (recentCorrections.length < 3) {
+    // Not enough data to draw conclusions
+    latestAlerts = [];
+    return alerts;
+  }
+
+  // Count total completed calls in the window (approximate from storage)
+  let totalCallsInWindow: number;
+  try {
+    const sinceDate = new Date(Date.now() - windowMs);
+    const recentCalls = await storage.getCallsSince(sinceDate);
+    totalCallsInWindow = recentCalls.filter(c => c.status === "completed").length;
+  } catch {
+    totalCallsInWindow = 0;
+  }
+
+  // 1. High correction rate
+  if (totalCallsInWindow > 0) {
+    const correctionRate = recentCorrections.length / totalCallsInWindow;
+    if (correctionRate >= CORRECTION_RATE_CRITICAL) {
+      alerts.push({
+        type: "high_correction_rate",
+        severity: "critical",
+        message: `Critical: ${Math.round(correctionRate * 100)}% of calls in the last ${QUALITY_CHECK_WINDOW_DAYS} days were manually corrected (${recentCorrections.length}/${totalCallsInWindow}). AI scoring may need recalibration or prompt template review.`,
+        details: { correctionRate: Math.round(correctionRate * 100) / 100, windowDays: QUALITY_CHECK_WINDOW_DAYS, totalCalls: totalCallsInWindow, totalCorrections: recentCorrections.length },
+        timestamp: new Date().toISOString(),
+      });
+    } else if (correctionRate >= CORRECTION_RATE_WARNING) {
+      alerts.push({
+        type: "high_correction_rate",
+        severity: "warning",
+        message: `Warning: ${Math.round(correctionRate * 100)}% of calls in the last ${QUALITY_CHECK_WINDOW_DAYS} days were manually corrected (${recentCorrections.length}/${totalCallsInWindow}).`,
+        details: { correctionRate: Math.round(correctionRate * 100) / 100, windowDays: QUALITY_CHECK_WINDOW_DAYS, totalCalls: totalCallsInWindow, totalCorrections: recentCorrections.length },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  // 2. Systematic bias detection
+  const upgrades = recentCorrections.filter(c => c.direction === "upgraded").length;
+  const downgrades = recentCorrections.filter(c => c.direction === "downgraded").length;
+  const total = upgrades + downgrades;
+  if (total >= 5) {
+    const upgradeRate = upgrades / total;
+    const downgradeRate = downgrades / total;
+    if (upgradeRate >= BIAS_THRESHOLD) {
+      const avgDelta = recentCorrections.reduce((s, c) => s + (c.correctedScore - c.originalScore), 0) / total;
+      alerts.push({
+        type: "systematic_bias",
+        severity: "warning",
+        message: `AI consistently scores too low: ${Math.round(upgradeRate * 100)}% of corrections are upgrades (avg +${avgDelta.toFixed(1)} points). Consider increasing SCORE_AI_MODEL_MEAN or reviewing prompt templates.`,
+        details: { windowDays: QUALITY_CHECK_WINDOW_DAYS, totalCorrections: total, avgDelta: Math.round(avgDelta * 10) / 10, biasDirection: "upgrades" },
+        timestamp: new Date().toISOString(),
+      });
+    } else if (downgradeRate >= BIAS_THRESHOLD) {
+      const avgDelta = recentCorrections.reduce((s, c) => s + (c.originalScore - c.correctedScore), 0) / total;
+      alerts.push({
+        type: "systematic_bias",
+        severity: "warning",
+        message: `AI consistently scores too high: ${Math.round(downgradeRate * 100)}% of corrections are downgrades (avg -${avgDelta.toFixed(1)} points). Consider decreasing SCORE_AI_MODEL_MEAN.`,
+        details: { windowDays: QUALITY_CHECK_WINDOW_DAYS, totalCorrections: total, avgDelta: Math.round(avgDelta * 10) / 10, biasDirection: "downgrades" },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  if (alerts.length > 0) {
+    logger.warn("Scoring quality issues detected", { alertCount: alerts.length, alerts: alerts.map(a => a.type) });
+  }
+
+  latestAlerts = alerts;
+  return alerts;
+}
+
+/** Get the latest scoring quality alerts (computed by the last checkScoringQuality run). */
+export function getScoringQualityAlerts(): ScoringQualityAlert[] {
+  return latestAlerts;
+}

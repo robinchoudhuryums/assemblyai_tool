@@ -17,6 +17,7 @@ type NavItem = { nameKey: string; href: string; icon: ComponentType<{ className?
 const navigation: NavItem[] = [
   { nameKey: "nav.dashboard", href: "/", icon: ChartBarHorizontal },
   { nameKey: "nav.myPerformance", href: "/my-performance", icon: User },
+  { nameKey: "nav.myCoaching", href: "/my-coaching", icon: ClipboardText },
   { nameKey: "nav.uploadCalls", href: "/upload", icon: UploadSimple },
   { nameKey: "nav.transcripts", href: "/transcripts", icon: FileText },
   { nameKey: "nav.search", href: "/search", icon: MagnifyingGlass },

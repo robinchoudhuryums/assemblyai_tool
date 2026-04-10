@@ -42,6 +42,7 @@ const AgentComparePage = lazy(() => import("@/pages/agent-compare"));
 const HeatmapCalendarPage = lazy(() => import("@/pages/heatmap-calendar"));
 const CallClustersPage = lazy(() => import("@/pages/call-clusters"));
 const MyPerformancePage = lazy(() => import("@/pages/my-performance"));
+const MyCoachingPage = lazy(() => import("@/pages/my-coaching"));
 const SecurityPage = lazy(() => import("@/pages/security"));
 const LeaderboardPage = lazy(() => import("@/pages/leaderboard"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
@@ -106,6 +107,7 @@ const ROUTE_TABLE: RouteEntry[] = [
   ["/analytics/heatmap", HeatmapCalendarPage],
   ["/analytics/clusters", CallClustersPage],
   ["/my-performance", MyPerformancePage],
+  ["/my-coaching", MyCoachingPage],
   ["/leaderboard", LeaderboardPage],
   ["/settings", SettingsPage],
 ];

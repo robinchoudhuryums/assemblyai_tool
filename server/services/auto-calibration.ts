@@ -17,6 +17,7 @@
  */
 import { storage } from "../storage";
 import { getCalibrationConfig, type ScoringCalibration } from "./scoring-calibration";
+import { checkScoringQuality } from "./scoring-feedback";
 import { logger } from "./logger";
 
 export interface CalibrationSnapshot {
@@ -184,9 +185,18 @@ export function startCalibrationScheduler(): () => void {
   const intervalHours = parseInt(process.env.CALIBRATION_INTERVAL_HOURS || "24", 10);
   logger.info("Auto-calibration analysis scheduled", { intervalHours });
 
+  // Combined calibration + scoring quality check
+  const runCycle = async () => {
+    await analyzeScoreDistribution();
+    // Scoring quality alerts: check correction patterns alongside calibration
+    await checkScoringQuality().catch(err =>
+      logger.warn("Scoring quality check failed (non-blocking)", { error: (err as Error).message })
+    );
+  };
+
   // First run after 2 minutes
-  const timeout = setTimeout(() => analyzeScoreDistribution(), 2 * 60 * 1000);
-  calibrationInterval = setInterval(() => analyzeScoreDistribution(), intervalHours * 3600 * 1000);
+  const timeout = setTimeout(runCycle, 2 * 60 * 1000);
+  calibrationInterval = setInterval(runCycle, intervalHours * 3600 * 1000);
 
   return () => {
     clearTimeout(timeout);
