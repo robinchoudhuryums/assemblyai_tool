@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
 import { Crown, Fire, Lightning, Medal, Rocket, Shield, Star, TrendUp, Trophy, Heart, CheckCircle } from "@phosphor-icons/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -216,7 +217,7 @@ export default function Leaderboard() {
                         </div>
                         <div className="text-right font-bold">{entry.totalPoints.toLocaleString()}</div>
                         <div className="text-right">
-                          <Badge variant={entry.avgScore >= 8 ? "default" : entry.avgScore >= 6 ? "secondary" : "destructive"} className="text-xs">
+                          <Badge variant={entry.avgScore >= SCORE_EXCELLENT ? "default" : entry.avgScore >= SCORE_GOOD ? "secondary" : "destructive"} className="text-xs">
                             {entry.avgScore.toFixed(1)}
                           </Badge>
                         </div>

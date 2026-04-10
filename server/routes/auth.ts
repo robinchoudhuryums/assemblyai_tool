@@ -7,6 +7,7 @@ import { storage } from "../storage";
 import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
+import { logger } from "../services/logger";
 import { insertAccessRequestSchema } from "@shared/schema";
 
 /** Stamp session with fingerprint at login — uses the shared getSessionFingerprint() to guarantee
@@ -112,7 +113,7 @@ export function registerAuthRoutes(router: Router) {
       req.session.destroy((destroyErr) => {
         if (destroyErr) {
           // Session data is already cleared by req.logout(); log and continue
-          console.warn("Failed to destroy session on logout:", (destroyErr as Error).message);
+          logger.warn("Failed to destroy session on logout", { error: (destroyErr as Error).message });
         }
         res.json({ message: "Logged out" });
       });

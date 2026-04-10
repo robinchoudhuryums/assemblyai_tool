@@ -863,7 +863,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Employee Routes** | `server/routes/employees.ts` | Employee CRUD, bulk CSV import, server-defined team / sub-team taxonomy (`GET /api/employees/teams`) |
 | **Public Config** | `server/routes/config.ts` | `GET /api/config` — public, no auth. Returns `companyName` + scoring tier thresholds for the login page and tenant-tunable UI. Consumed by `client/src/hooks/use-config.ts`. |
 | **Dashboard & Metrics** | `server/routes/dashboard.ts` | Dashboard metrics, sentiment distribution, top performers, flagged calls |
-| **Analytics** | `server/routes/analytics.ts` | Team analytics, trends, speech metrics, call clustering, CSV export, heatmaps |
+| **Analytics** | `server/routes/analytics.ts` | Team analytics, trends, speech metrics, call clustering, CSV export, heatmaps, agent comparison |
 | **Reports** | `server/routes/reports.ts` | Search, agent profiles, filtered reports, AI-generated agent summaries, client-export audit beacon (`POST /api/reports/export-beacon` — HIPAA) |
 | **Coaching** | `server/routes/coaching.ts` | Coaching session CRUD, action item toggling, webhook triggers |
 | **Users** | `server/routes/users.ts` | User management (admin CRUD, password reset/change, MFA) |

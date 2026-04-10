@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
 import { getQueryFn } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,7 @@ function formatDuration(seconds: number | null): string {
 
 function ScoreBar({ score }: { score: number | null }) {
   if (score === null) return <span className="text-muted-foreground text-sm">N/A</span>;
-  const color = score >= 80 ? "bg-green-500" : score >= 60 ? "bg-yellow-500" : "bg-red-500";
+  const color = score >= SCORE_EXCELLENT * 10 ? "bg-green-500" : score >= SCORE_GOOD * 10 ? "bg-yellow-500" : "bg-red-500";
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 bg-muted rounded-full h-2 max-w-[100px]">

@@ -2,7 +2,7 @@
  * Saved search filters — persisted to localStorage.
  * Users can save, load, and delete named filter presets.
  */
-import { safeSet } from "./safe-storage";
+import { safeSet, safeGet } from "./safe-storage";
 
 export interface SavedFilter {
   id: string;
@@ -17,7 +17,7 @@ const STORAGE_KEY = "saved-call-filters";
 
 export function loadSavedFilters(): SavedFilter[] {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = safeGet(STORAGE_KEY);
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];

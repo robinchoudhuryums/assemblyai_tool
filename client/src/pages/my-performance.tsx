@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -186,7 +187,7 @@ export default function MyPerformancePage() {
                   <div className="flex items-end gap-2 h-32">
                     {myData.weeklyTrend.map((week, i) => {
                       const height = Math.max(10, (week.avgScore / 10) * 100);
-                      const color = week.avgScore >= 8 ? "bg-green-500" : week.avgScore >= 5 ? "bg-primary" : "bg-red-400";
+                      const color = week.avgScore >= SCORE_EXCELLENT ? "bg-green-500" : week.avgScore >= SCORE_GOOD ? "bg-primary" : "bg-red-400";
                       return (
                         <div key={i} className="flex-1 flex flex-col items-center gap-1">
                           <span className="text-xs font-medium">{week.avgScore}</span>
@@ -244,7 +245,7 @@ export default function MyPerformancePage() {
                                 </Badge>
                               )}
                               {score != null && (
-                                <span className={`text-sm font-bold ${score >= 8 ? "text-green-600" : score >= 5 ? "text-foreground" : "text-red-500"}`}>
+                                <span className={`text-sm font-bold ${score >= SCORE_EXCELLENT ? "text-green-600" : score >= SCORE_GOOD ? "text-foreground" : "text-red-500"}`}>
                                   {score.toFixed(1)}
                                 </span>
                               )}
