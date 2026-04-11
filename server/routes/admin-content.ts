@@ -86,6 +86,152 @@ export function registerContentRoutes(
     }
   });
 
+  // Back-test a prompt template against the last N completed calls in its category.
+  // Re-runs AI analysis with the candidate template against existing transcripts
+  // so admins can see score deltas before publishing. Test results are NOT persisted
+  // and do NOT affect stored analyses, metrics, coaching, or gamification.
+  router.post("/api/prompt-templates/:id/test", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+    try {
+      const template = await storage.getPromptTemplate(req.params.id);
+      if (!template) {
+        res.status(404).json({ message: "Template not found" });
+        return;
+      }
+
+      // Cap sample size: 1-10 calls, default 5. Each call is a full Bedrock analysis
+      // so the upper bound protects against cost blow-up.
+      const requestedSample = typeof req.body?.sampleSize === "number" ? req.body.sampleSize : 5;
+      const sampleSize = Math.max(1, Math.min(10, Math.floor(requestedSample)));
+
+      // Pull completed calls in the template's category, newest first.
+      const allCalls = await storage.getCallsWithDetails({ status: "completed" });
+      const categoryCalls = allCalls
+        .filter(c => (c.callCategory || "") === template.callCategory)
+        .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+        .slice(0, sampleSize);
+
+      if (categoryCalls.length === 0) {
+        res.json({
+          templateId: template.id,
+          templateName: template.name,
+          callCategory: template.callCategory,
+          sampleSize: 0,
+          results: [],
+          summary: { avgCurrentScore: null, avgTestScore: null, avgDelta: null, scoreDirection: "unknown", successfulRuns: 0 },
+          message: `No completed calls in category "${template.callCategory}" to test against.`,
+        });
+        return;
+      }
+
+      const candidateTemplate = {
+        evaluationCriteria: template.evaluationCriteria,
+        requiredPhrases: template.requiredPhrases,
+        scoringWeights: template.scoringWeights,
+        additionalInstructions: template.additionalInstructions,
+      };
+      const testProvider = new BedrockProvider();
+
+      // Run candidate analyses in parallel. Bounded above to 10 samples.
+      const results = await Promise.all(
+        categoryCalls.map(async (call) => {
+          const transcript = await storage.getTranscript(call.id);
+          const transcriptText = transcript?.text || "";
+          if (!transcriptText || transcriptText.length < 10) {
+            return {
+              callId: call.id,
+              fileName: call.fileName,
+              currentScore: call.analysis?.performanceScore
+                ? parseFloat(String(call.analysis.performanceScore))
+                : null,
+              testScore: null,
+              delta: null,
+              currentSummary: (call.analysis?.summary as string) || null,
+              testSummary: null,
+              error: "Transcript unavailable or too short",
+            };
+          }
+
+          try {
+            const candidate = await testProvider.analyzeCallTranscript(
+              transcriptText,
+              `template-test-${template.id}-${call.id}`,
+              template.callCategory,
+              candidateTemplate,
+            );
+            const currentScore = call.analysis?.performanceScore
+              ? parseFloat(String(call.analysis.performanceScore))
+              : null;
+            const testScoreRaw = (candidate as any)?.performance_score;
+            const testScore = typeof testScoreRaw === "number" ? testScoreRaw : null;
+            const delta = currentScore !== null && testScore !== null
+              ? Math.round((testScore - currentScore) * 100) / 100
+              : null;
+            return {
+              callId: call.id,
+              fileName: call.fileName,
+              currentScore,
+              testScore,
+              delta,
+              currentSummary: (call.analysis?.summary as string) || null,
+              testSummary: typeof (candidate as any)?.summary === "string" ? (candidate as any).summary : null,
+              error: null,
+            };
+          } catch (err) {
+            return {
+              callId: call.id,
+              fileName: call.fileName,
+              currentScore: call.analysis?.performanceScore
+                ? parseFloat(String(call.analysis.performanceScore))
+                : null,
+              testScore: null,
+              delta: null,
+              currentSummary: (call.analysis?.summary as string) || null,
+              testSummary: null,
+              error: (err as Error).message || "Analysis failed",
+            };
+          }
+        })
+      );
+
+      // Summary stats across successful runs only.
+      const successful = results.filter(r => r.testScore !== null && r.currentScore !== null);
+      const avgCurrentScore = successful.length > 0
+        ? Math.round((successful.reduce((s, r) => s + (r.currentScore || 0), 0) / successful.length) * 100) / 100
+        : null;
+      const avgTestScore = successful.length > 0
+        ? Math.round((successful.reduce((s, r) => s + (r.testScore || 0), 0) / successful.length) * 100) / 100
+        : null;
+      const avgDelta = avgCurrentScore !== null && avgTestScore !== null
+        ? Math.round((avgTestScore - avgCurrentScore) * 100) / 100
+        : null;
+      const scoreDirection = avgDelta === null
+        ? "unknown"
+        : Math.abs(avgDelta) < 0.1
+          ? "neutral"
+          : avgDelta > 0
+            ? "higher"
+            : "lower";
+
+      res.json({
+        templateId: template.id,
+        templateName: template.name,
+        callCategory: template.callCategory,
+        sampleSize: categoryCalls.length,
+        results,
+        summary: {
+          avgCurrentScore,
+          avgTestScore,
+          avgDelta,
+          scoreDirection,
+          successfulRuns: successful.length,
+        },
+      });
+    } catch (error) {
+      console.error("Error back-testing prompt template:", (error as Error).message);
+      res.status(500).json({ message: "Failed to back-test template" });
+    }
+  });
+
   // ==================== USAGE TRACKING ROUTES (admin only) ====================
 
   router.get("/api/usage", requireAuth, requireRole("admin"), async (_req, res) => {
@@ -186,6 +332,212 @@ export function registerContentRoutes(
     } catch (error) {
       console.error("Error deleting A/B test:", (error as Error).message);
       res.status(500).json({ message: "Failed to delete A/B test" });
+    }
+  });
+
+  // Aggregate A/B test results — compares accumulated test runs across all
+  // model pairs. Returns: per-model-pair summary with avg score delta, avg
+  // latency delta, win count, sample size. Drives the promotion UI.
+  router.get("/api/ab-tests/aggregate", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const tests = await storage.getAllABTests();
+      const completed = tests.filter(t => t.status === "completed");
+
+      // Group by (baselineModel, testModel) pair
+      interface Accumulator {
+        baselineModel: string;
+        testModel: string;
+        sampleSize: number;
+        baselineWins: number;
+        testWins: number;
+        ties: number;
+        baselineScoreSum: number;
+        testScoreSum: number;
+        baselineScoreCount: number;
+        testScoreCount: number;
+        baselineLatencySum: number;
+        testLatencySum: number;
+        latencySampleSize: number;
+      }
+      const groups = new Map<string, Accumulator>();
+
+      for (const t of completed) {
+        const baseline = t.baselineAnalysis as any;
+        const test = t.testAnalysis as any;
+        if (!baseline || !test) continue;
+        if (baseline.error || test.error) continue;
+
+        const key = `${t.baselineModel}||${t.testModel}`;
+        let acc = groups.get(key);
+        if (!acc) {
+          acc = {
+            baselineModel: t.baselineModel,
+            testModel: t.testModel,
+            sampleSize: 0,
+            baselineWins: 0,
+            testWins: 0,
+            ties: 0,
+            baselineScoreSum: 0,
+            testScoreSum: 0,
+            baselineScoreCount: 0,
+            testScoreCount: 0,
+            baselineLatencySum: 0,
+            testLatencySum: 0,
+            latencySampleSize: 0,
+          };
+          groups.set(key, acc);
+        }
+
+        acc.sampleSize++;
+
+        const baselineScoreRaw = baseline.performance_score;
+        const testScoreRaw = test.performance_score;
+        const baselineScore = typeof baselineScoreRaw === "number" ? baselineScoreRaw : null;
+        const testScore = typeof testScoreRaw === "number" ? testScoreRaw : null;
+
+        if (baselineScore !== null) {
+          acc.baselineScoreSum += baselineScore;
+          acc.baselineScoreCount++;
+        }
+        if (testScore !== null) {
+          acc.testScoreSum += testScore;
+          acc.testScoreCount++;
+        }
+
+        if (baselineScore !== null && testScore !== null) {
+          const diff = testScore - baselineScore;
+          if (Math.abs(diff) < 0.25) acc.ties++;
+          else if (diff > 0) acc.testWins++;
+          else acc.baselineWins++;
+        }
+
+        if (typeof t.baselineLatencyMs === "number" && typeof t.testLatencyMs === "number") {
+          acc.baselineLatencySum += t.baselineLatencyMs;
+          acc.testLatencySum += t.testLatencyMs;
+          acc.latencySampleSize++;
+        }
+      }
+
+      const aggregates = Array.from(groups.values()).map(acc => {
+        const avgBaselineScore = acc.baselineScoreCount > 0
+          ? Math.round((acc.baselineScoreSum / acc.baselineScoreCount) * 100) / 100
+          : null;
+        const avgTestScore = acc.testScoreCount > 0
+          ? Math.round((acc.testScoreSum / acc.testScoreCount) * 100) / 100
+          : null;
+        const avgScoreDelta = avgBaselineScore !== null && avgTestScore !== null
+          ? Math.round((avgTestScore - avgBaselineScore) * 100) / 100
+          : null;
+        const avgBaselineLatency = acc.latencySampleSize > 0
+          ? Math.round(acc.baselineLatencySum / acc.latencySampleSize)
+          : null;
+        const avgTestLatency = acc.latencySampleSize > 0
+          ? Math.round(acc.testLatencySum / acc.latencySampleSize)
+          : null;
+        const avgLatencyDelta = avgBaselineLatency !== null && avgTestLatency !== null
+          ? avgTestLatency - avgBaselineLatency
+          : null;
+
+        // Recommendation rules:
+        //  - at least 3 samples needed
+        //  - test model wins if avg delta ≥ 0.2 points (meaningful)
+        //  - baseline wins if avg delta ≤ -0.2 points
+        //  - otherwise inconclusive
+        let recommendation: "promote_test" | "keep_baseline" | "inconclusive" | "insufficient_data";
+        if (acc.sampleSize < 3) {
+          recommendation = "insufficient_data";
+        } else if (avgScoreDelta === null) {
+          recommendation = "inconclusive";
+        } else if (avgScoreDelta >= 0.2) {
+          recommendation = "promote_test";
+        } else if (avgScoreDelta <= -0.2) {
+          recommendation = "keep_baseline";
+        } else {
+          recommendation = "inconclusive";
+        }
+
+        return {
+          baselineModel: acc.baselineModel,
+          testModel: acc.testModel,
+          sampleSize: acc.sampleSize,
+          baselineWins: acc.baselineWins,
+          testWins: acc.testWins,
+          ties: acc.ties,
+          avgBaselineScore,
+          avgTestScore,
+          avgScoreDelta,
+          avgBaselineLatencyMs: avgBaselineLatency,
+          avgTestLatencyMs: avgTestLatency,
+          avgLatencyDeltaMs: avgLatencyDelta,
+          recommendation,
+        };
+      });
+
+      // Sort: promotable winners first, then by sample size
+      aggregates.sort((a, b) => {
+        const rank = (r: string) => r === "promote_test" ? 0 : r === "inconclusive" ? 1 : r === "keep_baseline" ? 2 : 3;
+        const byRec = rank(a.recommendation) - rank(b.recommendation);
+        if (byRec !== 0) return byRec;
+        return b.sampleSize - a.sampleSize;
+      });
+
+      // Current active model (env var or persisted override after startup)
+      const { getCurrentActiveModel } = await import("../services/active-model");
+      const currentActiveModel = getCurrentActiveModel();
+
+      res.json({ aggregates, currentActiveModel });
+    } catch (error) {
+      console.error("Error computing A/B test aggregates:", (error as Error).message);
+      res.status(500).json({ message: "Failed to compute aggregates" });
+    }
+  });
+
+  // Promote a model to production (update aiProvider singleton + persist to S3).
+  // Requires the model to be in BEDROCK_MODEL_PRESETS whitelist — we do NOT
+  // accept arbitrary model IDs here, because a typo would silently cost-bomb.
+  router.post("/api/ab-tests/promote", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { model, baselineModel, sampleSize, avgDelta } = req.body || {};
+
+      if (!model || typeof model !== "string") {
+        res.status(400).json({ message: "model (string) is required" });
+        return;
+      }
+
+      const whitelist = BEDROCK_MODEL_PRESETS.map(m => m.value) as string[];
+      if (!whitelist.includes(model)) {
+        res.status(400).json({
+          message: `Model "${model}" is not in the allowed presets. Use one of: ${whitelist.join(", ")}`,
+        });
+        return;
+      }
+
+      const { promoteActiveModel } = await import("../services/active-model");
+      await promoteActiveModel({
+        model,
+        promotedBy: req.user?.username || "admin",
+        promotedAt: new Date().toISOString(),
+        baselineModel: typeof baselineModel === "string" ? baselineModel : undefined,
+        sampleSize: typeof sampleSize === "number" ? sampleSize : undefined,
+        avgDelta: typeof avgDelta === "number" ? avgDelta : null,
+      });
+
+      // HIPAA audit trail: promotion affects scoring of every future call
+      const { logPhiAccess } = await import("../services/audit-log");
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "ab_test_promote_model",
+        userId: req.user?.id,
+        username: req.user?.username,
+        role: req.user?.role,
+        resourceType: "ab_test",
+        detail: `Promoted ${model}${baselineModel ? ` over ${baselineModel}` : ""}${typeof sampleSize === "number" ? ` (${sampleSize} samples)` : ""}`,
+      });
+
+      res.json({ message: "Model promoted successfully", model });
+    } catch (error) {
+      console.error("Error promoting model:", (error as Error).message);
+      res.status(500).json({ message: "Failed to promote model" });
     }
   });
 

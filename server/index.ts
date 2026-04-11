@@ -433,6 +433,12 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
   void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});
 
+  // Active-model override: if an admin previously promoted a model via
+  // POST /api/ab-tests/promote, rehydrate it now so the aiProvider singleton
+  // reflects the last promotion decision. Non-critical; the env var
+  // BEDROCK_MODEL is the fallback.
+  void import("./services/active-model").then(m => m.loadActiveModelOverride()).catch(() => {});
+
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
 

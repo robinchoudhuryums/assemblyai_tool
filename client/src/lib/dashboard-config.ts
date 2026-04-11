@@ -21,6 +21,7 @@ export const DEFAULT_WIDGETS: WidgetConfig[] = [
   { id: "sentiment", label: "Sentiment Analysis", visible: true, order: 4 },
   { id: "performers", label: "Top Performers", visible: true, order: 5 },
   { id: "calls", label: "Recent Calls Table", visible: true, order: 6 },
+  { id: "weeklyChanges", label: "This Week in Review", visible: true, order: 7 },
 ];
 
 export function loadWidgetConfig(): WidgetConfig[] {

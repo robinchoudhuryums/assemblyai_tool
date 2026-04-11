@@ -9,6 +9,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import MetricsOverview from "@/components/dashboard/metrics-overview";
 import SentimentAnalysis from "@/components/dashboard/sentiment-analysis";
 import PerformanceCard from "@/components/dashboard/performance-card";
+import WeeklyChangesWidget from "@/components/dashboard/weekly-changes";
 import FileUpload from "@/components/upload/file-upload";
 import CallsTable from "@/components/tables/calls-table";
 import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
@@ -265,6 +266,9 @@ export default function Dashboard() {
 
         {/* Metrics Overview */}
         {isVisible("metrics") && <MetricsOverview />}
+
+        {/* Weekly Change Narrative — what changed this week vs last week */}
+        {isVisible("weeklyChanges") && <WeeklyChangesWidget />}
 
         {/* Sentiment & Call Volume Trend (Last 30 Days) */}
         {isVisible("trend") && trendData.length > 0 && trendData.some(d => d.calls > 0) && (
