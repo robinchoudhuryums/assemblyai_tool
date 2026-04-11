@@ -6,7 +6,7 @@ Items below are multi-sprint efforts identified during comprehensive codebase au
 
 ## Testing & Coverage (Target: 70%+ backend, 40%+ frontend)
 
-**Current state**: 850 tests across 36+ files. Backend: 726 tests, ~67% statement coverage, ~85% branch coverage. Frontend: 124 tests across 15 files. Route endpoint integration tests use real route handlers with MemStorage.
+**Current state**: 955 tests across 37+ files. Backend: 781 tests across 168 suites, ~67% statement coverage, ~85% branch coverage. Frontend: 174 tests across 21 files. Route endpoint integration tests use real route handlers with MemStorage.
 
 ### ~~Sprint 1 — Route endpoint tests~~ ✅ MOSTLY DONE
 - ✅ Test app factory and `request()` helper created (`tests/routes.test.ts`)
@@ -107,6 +107,67 @@ Items below are multi-sprint efforts identified during comprehensive codebase au
 
 ---
 
+## Audit Cycle — Recently Completed (Spring 2026)
+
+Fixes shipped across three `/broad-scan` → `/broad-implement` cycles.
+
+### Features shipped
+- ✅ **Prompt template back-testing** — `POST /api/prompt-templates/:id/test` runs a candidate template against the last 1-10 completed calls in its category; results not persisted
+- ✅ **Weekly change dashboard narrative** — `GET /api/dashboard/weekly-changes` + `WeeklyChangesWidget` showing top movers, flag deltas, noteworthy calls, and a one-line narrative
+- ✅ **A/B test winner promotion flow** — `GET /api/ab-tests/aggregate` + `POST /api/ab-tests/promote` + `active-model.ts` S3 persistence + `Promote Winner` UI tab. Both on-demand (`aiProvider`) and batch (`bedrockBatchService`) paths observe promotions.
+
+### Bugs and gaps closed
+- ✅ **S2-C1** Scoring-correction `reason` sanitization + `<<<UNTRUSTED_MANAGER_NOTES>>>` delimiter wrap (prompt injection defense)
+- ✅ **#1** `content_hash` UNIQUE partial index added to `schema.sql` (fresh deploys no longer depend on second-boot `runMigrations`)
+- ✅ **#2** `gracefulShutdown()` drains `JobQueue` before DB pool close (15s cap)
+- ✅ **#6** `BEDROCK_MODEL` validated at startup + runtime `warnOnUnknownBedrockModel()` with once-per-model Sentry alert
+- ✅ **#7** `advanceIncidentPhase`, `addIncidentTimelineEntry`, `addActionItem` refactored to DB-first clone pattern
+- ✅ **#9** `requireAuth` converted to async and awaits `req.logout()` + `req.session.destroy()` before responding 401
+- ✅ **#10** `DELETE /api/calls/:id/tags/:tagId` enforces author-or-manager authorization
+- ✅ **#3** Audit queue `MAX_QUEUE_SIZE` raised to 20000 with one-shot Sentry escalation on first drop per process
+- ✅ **#5** Scheduled reports catch-up walks back 12 weekly + 12 monthly boundaries (was single boundary)
+- ✅ **#8** Batch tracking-write has retry + `orphaned-submissions/` fallback + `promoteOrphanedSubmissions()` self-heal
+- ✅ `/api/users/me/password` enforces `requireMFASetup` (closes last per-route MFA gap)
+- ✅ `bedrockBatchService.setModel()` wired into `promoteActiveModel()` (closes A/B promotion asymmetry)
+- ✅ `isPasswordReused` defensively caps history at `PASSWORD_HISTORY_SIZE` (CPU DoS defense)
+- ✅ `validateTimestamps` no longer silently strips invalid feedback timestamps — logs + flags `output_anomaly:invalid_feedback_timestamps:N`
+
+### Audit findings retracted on close reading
+- ❌ H6 "No hard cap on transcript tokens to Bedrock" — `smartTruncate()` IS called at `ai-provider.ts:132`
+- ❌ #4 (batch A) "Circuit breaker retry accounting" — breaker wraps HTTP call only; `parseJsonResponse()` runs outside breaker so parse failures never touch breaker slots
+- ❌ #1 (batch C) "PHI leak in prompt-injection `console.warn`" — `reasons` are static category labels, not matched transcript substrings
+- ❌ #4 (batch C) "No PHI audit entry on audio streaming" — `logPhiAccess` already present at `routes/calls.ts:232`
+
+---
+
+## Open From Audit Cycles (Spring 2026)
+
+### Remaining incident-response refactor
+- `updateActionItem` in `server/services/incident-response.ts:395-414` still uses the mutate-then-persist anti-pattern. Apply the same clone-then-persist fix as the sibling functions already received. Effort: **S**
+
+### Audit log HMAC chain drift (top-10 #5)
+- `persistPreviousHash` is fire-and-forget between each audit entry. On crash mid-burst, the persisted chain head lags in-memory; next boot re-chains from the older head, creating a gap. **Fix**: persist the head synchronously every N entries OR flush on graceful shutdown. HIPAA §164.312(b) integrity chain matters. Effort: **S–M**
+
+### Audit queue spool-to-disk (non-lossy variant)
+- Current design is drop-oldest with loud Sentry escalation. A truly non-lossy upgrade would spool overflow entries to a local JSONL file and drain them back into the queue on each flush cycle. Complexity: file rotation, atomic writes, PHI-on-disk considerations. Effort: **M**
+
+### Scheduled reports hourly catch-up
+- `runCatchUp()` is only called at startup. If a report fails to generate mid-hour (e.g., transient DB error during the 00:00 Monday tick), nothing retries until the next process restart. **Fix**: call `runCatchUp()` from the hourly `checkAndGenerate` tick as well — cheap when nothing's missing because `reportExistsForPeriod` short-circuits. Effort: **S**
+
+### Batch pre-submit intent file
+- Current batch orphan recovery covers the `createJob` → tracking-write gap with retry + fallback + Sentry, but a narrow window still exists where AWS accepts the job and the process crashes before either write completes. **Fix**: write a "pre-submit intent" file to S3 before calling `createJob`, reconcile on next cycle. Effort: **M**
+
+### Coaching outcomes dashboard (strategic, top-10 #9)
+- No UI currently shows whether coaching sessions actually improved sub-scores. Add a widget on the coaching page showing per-agent sub-score trajectory in the N calls following a coaching session. All data exists in `call_analyses.subScores` and `coaching_sessions`. Effort: **M**
+
+### Weekly digest email — "interesting three"
+- Stage 3 strategic suggestion: passive engagement surface via weekly email with top 3 noteworthy calls (one exceptional, one compliance risk, one coaching opportunity). Builds on existing scheduled-reports + webhooks. Effort: **M**
+
+### `console.warn` pattern in pipeline
+- Although the audit finding about PHI leakage was retracted (`reasons` are static labels), any `console.*` call in PHI-adjacent code paths bypasses the `logger.*` PHI scrubber. A future edit could silently introduce a PHI value into a log message. Defensive migration to structured `logger.*` calls would close the hazard surface. Effort: **S**
+
+---
+
 ## Code Quality & Maintainability
 
 ### ~~Standardized error responses~~ ✅ COMPLETED
@@ -175,10 +236,11 @@ Items below are multi-sprint efforts identified during comprehensive codebase au
 - Benefits: automatic rotation, audit trail, no secrets on disk
 - Requires: IAM policy update, startup code changes to fetch secrets
 
-### Structured observability
-- Add OpenTelemetry or structured logging (JSON) with correlation IDs per request
-- Add metrics endpoint (`/metrics`) for Prometheus/CloudWatch scraping
-- Track: request latency p50/p95/p99, AI analysis duration, queue depth, error rates
+### ~~Structured observability~~ ✅ COMPLETED
+- OpenTelemetry auto-instrumentation via `server/services/tracing.ts`
+- Per-request correlation IDs via `AsyncLocalStorage` in `server/services/correlation-id.ts` — injected into every structured log line
+- Metrics counters + histograms exposed at `GET /api/admin/metrics` (Prometheus-style)
+- Tracks: `http_requests_total` by method/status, `http_request_duration_ms` histogram, `http_errors_total`
 
 ### Automated DR failover
 - Current DR plan (`docs/disaster-recovery.md`) requires manual failover
