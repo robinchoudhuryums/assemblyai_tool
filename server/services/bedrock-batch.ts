@@ -53,6 +53,32 @@ export class BedrockBatchService {
   }
 
   /**
+   * Read the currently-active batch model id (for diagnostics / active-model sync).
+   */
+  get modelId(): string {
+    return this.model;
+  }
+
+  /**
+   * Swap the batch-service model at runtime (A/B test promotion flow).
+   * Called from `active-model.ts:promoteActiveModel()` alongside
+   * `aiProvider.setModel()` so that BATCH jobs submitted after an admin
+   * promotion use the new model. Previously only the on-demand singleton
+   * observed the promotion; batch jobs stayed on the env-var model until
+   * process restart. In-flight jobs (already submitted to AWS Bedrock) are
+   * unaffected — they run to completion on whatever model they were
+   * submitted with. Only NEW batch submissions pick up the new model.
+   */
+  setModel(modelId: string): void {
+    if (!modelId || typeof modelId !== "string") {
+      throw new Error("BedrockBatchService.setModel: modelId must be a non-empty string");
+    }
+    const prev = this.model;
+    this.model = modelId;
+    logger.info("Bedrock batch service model updated", { previous: prev, next: modelId });
+  }
+
+  /**
    * Resolve credentials lazily via shared provider (env vars → IMDSv2).
    * A1/F02/F16: previously read env vars directly in constructor, breaking
    * EC2 instance-profile deployments.

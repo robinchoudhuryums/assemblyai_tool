@@ -16,6 +16,7 @@
 
 import { storage } from "../storage";
 import { aiProvider } from "./ai-factory";
+import { bedrockBatchService } from "./bedrock-batch";
 import { logger } from "./logger";
 
 const S3_KEY = "config/active-model.json";
@@ -51,7 +52,7 @@ export async function promoteActiveModel(override: ActiveModelOverride): Promise
     }
   }
 
-  // 2. Apply to the live aiProvider singleton
+  // 2. Apply to the live aiProvider singleton (on-demand path)
   if (typeof aiProvider.setModel === "function") {
     aiProvider.setModel(override.model);
     logger.info("active-model: promoted", {
@@ -62,6 +63,20 @@ export async function promoteActiveModel(override: ActiveModelOverride): Promise
     });
   } else {
     logger.warn("active-model: aiProvider does not support runtime setModel — override persisted but not applied until restart");
+  }
+
+  // 3. Apply to the batch service (batch-mode path). Previously this was a
+  //    documented asymmetry — the on-demand singleton observed promotions
+  //    but batch jobs continued using the env-var model until restart. Now
+  //    both paths are kept in sync. In-flight batch jobs (already submitted
+  //    to AWS Bedrock) are unaffected; only NEW batch submissions pick up
+  //    the promoted model.
+  try {
+    bedrockBatchService.setModel(override.model);
+  } catch (err) {
+    logger.warn("active-model: bedrockBatchService.setModel threw, batch path may be stale until restart", {
+      error: (err as Error).message,
+    });
   }
 }
 
@@ -83,6 +98,15 @@ export async function loadActiveModelOverride(): Promise<ActiveModelOverride | n
         model: override.model,
         promotedBy: override.promotedBy,
         promotedAt: override.promotedAt,
+      });
+    }
+    // Apply to batch service as well so a persisted override survives
+    // restart across BOTH the on-demand and batch paths, not just on-demand.
+    try {
+      bedrockBatchService.setModel(override.model);
+    } catch (err) {
+      logger.warn("active-model: bedrockBatchService.setModel threw during startup hydration", {
+        error: (err as Error).message,
       });
     }
     return override;

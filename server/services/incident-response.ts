@@ -339,6 +339,12 @@ export async function advanceIncidentPhase(
 
 /**
  * Add a timeline entry to an incident.
+ *
+ * DB-first via clone pattern (mirrors advanceIncidentPhase): build the next
+ * state on a shallow clone with a sliced timeline, persist first, and only
+ * apply the mutation to the in-memory incident on successful persist. If the
+ * persist throws, in-memory state stays at the pre-append state — consistent
+ * with declareIncident() and advanceIncidentPhase().
  */
 export async function addIncidentTimelineEntry(
   incidentId: string,
@@ -350,21 +356,28 @@ export async function addIncidentTimelineEntry(
   if (!incident) return null;
 
   const now = new Date().toISOString();
-  incident.updatedAt = now;
-  incident.timeline.push({
-    timestamp: now,
-    phase: incident.currentPhase,
-    action,
-    actor,
-    automated,
-  });
+  const next: Incident = {
+    ...incident,
+    updatedAt: now,
+    timeline: [
+      ...incident.timeline,
+      { timestamp: now, phase: incident.currentPhase, action, actor, automated },
+    ],
+  };
 
-  await persistIncident(incident);
+  await persistIncident(next);
+
+  // Persist succeeded — apply the mutation to the in-memory cache.
+  incident.updatedAt = next.updatedAt;
+  incident.timeline = next.timeline;
+
   return incident;
 }
 
 /**
  * Add an action item to an incident's post-incident review.
+ *
+ * DB-first via clone pattern — see addIncidentTimelineEntry for rationale.
  */
 export async function addActionItem(
   incidentId: string,
@@ -376,16 +389,21 @@ export async function addActionItem(
   if (!incident) return null;
 
   const now = new Date().toISOString();
-  incident.actionItems.push({
-    id: `AI-${randomUUID()}`,
-    description,
-    assignee,
-    dueDate,
-    status: "open",
-  });
-  incident.updatedAt = now;
+  const next: Incident = {
+    ...incident,
+    updatedAt: now,
+    actionItems: [
+      ...incident.actionItems,
+      { id: `AI-${randomUUID()}`, description, assignee, dueDate, status: "open" as const },
+    ],
+  };
 
-  await persistIncident(incident);
+  await persistIncident(next);
+
+  // Persist succeeded — apply the mutation to the in-memory cache.
+  incident.updatedAt = next.updatedAt;
+  incident.actionItems = next.actionItems;
+
   return incident;
 }
 

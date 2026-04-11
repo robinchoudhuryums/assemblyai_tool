@@ -255,9 +255,20 @@ const CallAnalysisSchema = z.object({
 /**
  * Validate that feedback timestamps (MM:SS) don't exceed call duration.
  * Strips invalid timestamps rather than rejecting the entire analysis.
+ *
+ * Stripping is no longer silent (S2-H5): each strip is counted, a `logger.warn`
+ * summarizes the affected call, and an `output_anomaly:invalid_feedback_timestamps`
+ * flag is appended to the analysis so the pipeline's flag surfacing (UI badges,
+ * admin dashboards, scoring-quality stats) can call it out. The "no silent
+ * defaults" principle (A12/F17) applies here too — stripped fields that look
+ * identical to an AI output that never included timestamps hide a real quality
+ * regression from reviewers.
  */
-function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number): CallAnalysis {
+function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number, callId?: string): CallAnalysis {
   if (!callDurationSeconds || callDurationSeconds <= 0) return analysis;
+
+  let strippedCount = 0;
+  const maxStripped: { timestamp: string; callDurationSeconds: number }[] = [];
 
   const validateItem = (item: string | { text: string; timestamp?: string }) => {
     if (typeof item === "string") return item;
@@ -266,6 +277,11 @@ function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number
       if (match) {
         const totalSeconds = parseInt(match[1]) * 60 + parseInt(match[2]);
         if (totalSeconds > callDurationSeconds) {
+          strippedCount++;
+          // Capture up to 3 examples for the log (keep the log bounded).
+          if (maxStripped.length < 3) {
+            maxStripped.push({ timestamp: item.timestamp, callDurationSeconds });
+          }
           return { text: item.text }; // Strip invalid timestamp
         }
       }
@@ -273,13 +289,31 @@ function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number
     return item;
   };
 
-  return {
+  const validated = {
     ...analysis,
     feedback: {
       strengths: analysis.feedback.strengths.map(validateItem),
       suggestions: analysis.feedback.suggestions.map(validateItem),
     },
   };
+
+  if (strippedCount > 0) {
+    logger.warn("ai-provider: stripped feedback timestamps exceeding call duration", {
+      callId,
+      strippedCount,
+      callDurationSeconds,
+      examples: maxStripped,
+    });
+    const existingFlags = Array.isArray(validated.flags) ? validated.flags : [];
+    // Use the same `output_anomaly:` prefix that prompt-guard.ts uses for
+    // downstream flag-filtering consistency. UI / scoring dashboards already
+    // classify `output_anomaly:*` as a quality-warning badge.
+    if (!existingFlags.some(f => f.startsWith("output_anomaly:invalid_feedback_timestamps"))) {
+      validated.flags = [...existingFlags, `output_anomaly:invalid_feedback_timestamps:${strippedCount}`];
+    }
+  }
+
+  return validated;
 }
 
 /**
@@ -325,5 +359,5 @@ export function parseJsonResponse(text: string, callId: string, callDurationSeco
 
   const analysis = result.data as CallAnalysis;
 
-  return validateTimestamps(analysis, callDurationSeconds);
+  return validateTimestamps(analysis, callDurationSeconds, callId);
 }

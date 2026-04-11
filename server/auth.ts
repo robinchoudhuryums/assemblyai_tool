@@ -126,8 +126,17 @@ export const PASSWORD_HISTORY_SIZE = 5;
 export async function isPasswordReused(password: string, currentHash: string, history: string[]): Promise<boolean> {
   // Check against current password
   if (await comparePasswords(password, currentHash)) return true;
-  // Check against previous passwords
-  for (const oldHash of history) {
+  // Defensive server-side cap: even though the write path
+  // (updateDbUserPassword) trims to PASSWORD_HISTORY_SIZE, a direct DB
+  // write, a buggy migration, or a legacy row could grow the array
+  // unbounded. Without this cap, each entry runs a ~100ms scrypt compare —
+  // an unbounded array turns password reuse checks into a CPU DoS surface.
+  // Take only the most recent N entries (tail of the array, which the
+  // write path stores as `[newHash, ...oldHistory].slice(0, N)`).
+  const bounded = history.length > PASSWORD_HISTORY_SIZE
+    ? history.slice(0, PASSWORD_HISTORY_SIZE)
+    : history;
+  for (const oldHash of bounded) {
     if (await comparePasswords(password, oldHash)) return true;
   }
   return false;
