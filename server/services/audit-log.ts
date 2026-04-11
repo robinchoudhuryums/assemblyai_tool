@@ -139,7 +139,14 @@ export async function loadAuditIntegrityChain(): Promise<void> {
 
 const MAX_AUDIT_RETRIES = 3;
 const FLUSH_INTERVAL_MS = 2_000;  // flush every 2 seconds
-const MAX_QUEUE_SIZE = 5_000;     // cap to prevent unbounded memory growth
+// Cap to prevent unbounded memory growth. At ~1KB/entry this is 20MB of runway
+// under sustained DB outage — enough to absorb several minutes of worst-case
+// write bursts before overflow. When full, the OLDEST entry is dropped from
+// the DB write path; the canonical non-repudiable record is still in stdout
+// via the HMAC chain (see computeIntegrityHash), so operators can reconstruct
+// the missing rows from pm2/CloudWatch logs. The first drop per process emits
+// a Sentry alert to escalate to on-call.
+const MAX_QUEUE_SIZE = 20_000;
 
 // --- Write-ahead queue ---
 
@@ -147,11 +154,17 @@ interface QueuedEntry {
   params: (string | undefined)[];
   attempt: number;
   nextRetryAt: number; // timestamp (ms) — 0 means "ready now"
+  enqueuedAt: number;  // for observability: how long the dropped entry sat in the queue
 }
 
 const queue: QueuedEntry[] = [];
 let droppedEntries = 0;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
+
+// One-shot Sentry escalation: we want on-call paged on the FIRST drop in a
+// process lifetime, but we don't want every subsequent drop during the same
+// outage to spam Sentry and bury the signal. Reset by process restart.
+let alertedQueueFull = false;
 
 /** Number of audit entries that failed all retry attempts (for health checks). */
 export function getDroppedAuditEntryCount(): number {
@@ -164,13 +177,37 @@ export function getPendingAuditEntryCount(): number {
 }
 
 function enqueue(params: (string | undefined)[]): void {
+  const now = Date.now();
   if (queue.length >= MAX_QUEUE_SIZE) {
-    // Shed oldest entry to prevent unbounded memory growth
-    queue.shift();
+    // Shed OLDEST entry. Under sustained DB outage, oldest-drop is preferable
+    // to newest-drop because the head of the queue has typically accumulated
+    // failed retry attempts and is more likely already toxic. The canonical
+    // record remains in stdout via the HMAC chain — operators can reconstruct
+    // dropped rows from captured stdout logs. See MAX_QUEUE_SIZE comment.
+    const shed = queue.shift();
     droppedEntries++;
-    logger.error("audit-log: queue full, dropping oldest entry", { maxQueueSize: MAX_QUEUE_SIZE });
+    const ageMs = shed ? now - shed.enqueuedAt : 0;
+    logger.error("audit-log: queue full, dropping oldest entry (HMAC chain in stdout remains canonical)", {
+      maxQueueSize: MAX_QUEUE_SIZE,
+      totalDropped: droppedEntries,
+      shedEntryAgeMs: ageMs,
+      shedEntryAttempts: shed?.attempt ?? 0,
+    });
+    // One-shot Sentry escalation — first drop per process pages on-call.
+    // Non-blocking dynamic import so a Sentry crash can't cascade into the
+    // audit path. We do NOT await; audit logging must stay fire-and-forget.
+    if (!alertedQueueFull) {
+      alertedQueueFull = true;
+      import("./sentry").then(({ captureMessage }) => {
+        captureMessage(
+          `HIPAA audit queue overflow: oldest entry dropped from DB write path (${MAX_QUEUE_SIZE} entries). ` +
+          `Stdout HMAC chain retains canonical record. Investigate DB write latency or increase MAX_QUEUE_SIZE.`,
+          "error"
+        );
+      }).catch(() => { /* noop — Sentry is optional */ });
+    }
   }
-  queue.push({ params, attempt: 0, nextRetryAt: 0 });
+  queue.push({ params, attempt: 0, nextRetryAt: 0, enqueuedAt: now });
   ensureFlushTimer();
 }
 
@@ -293,6 +330,7 @@ export function auditContext(req: any): Pick<AuditEntry, "userId" | "username" |
 export function _resetAuditQueue(): void {
   queue.length = 0;
   droppedEntries = 0;
+  alertedQueueFull = false;
   if (flushTimer) {
     clearInterval(flushTimer);
     flushTimer = null;

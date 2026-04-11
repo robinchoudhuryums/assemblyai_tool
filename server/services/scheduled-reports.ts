@@ -306,53 +306,93 @@ async function reportExistsForPeriod(type: "weekly" | "monthly", periodStart: st
   return reports.some(r => r.type === type && r.periodStart === periodStart);
 }
 
+// Catch-up lookback windows. Covers realistic production outage durations
+// (a missed weekend, an extended holiday, a quarter of operational silence).
+// generateReport() is pure SQL aggregation — no Bedrock calls — so filling
+// up to 12 weekly + 12 monthly missed slots on first boot is cheap (a few
+// seconds of DB work) and `ON CONFLICT DO NOTHING` on scheduled_reports
+// means re-running catch-up is idempotent across restarts.
+const CATCH_UP_WEEKLY_LOOKBACK = 12;
+const CATCH_UP_MONTHLY_LOOKBACK = 12;
+
 /**
  * Generate any reports whose canonical scheduled boundary has passed but
  * which were not actually generated (e.g. server was down at midnight).
  *
  * Boundaries:
- * - Weekly: most recent Monday at 00:00 local time
- * - Monthly: most recent 1st-of-month at 00:00 local time
+ * - Weekly: Monday at 00:00 local time
+ * - Monthly: 1st-of-month at 00:00 local time
  *
- * If those boundaries are in the past and the corresponding report does not
- * exist, generate it now using the boundary as the reference time.
+ * This walks back up to CATCH_UP_{WEEKLY,MONTHLY}_LOOKBACK boundaries from
+ * "now" and generates each missing report in chronological order. Closes a
+ * gap where the previous single-boundary catch-up silently lost every missed
+ * period older than the most recent Monday / 1st-of-month. A month-long
+ * outage now recovers all affected weeklies and the full missed monthly.
  */
 async function runCatchUp(): Promise<void> {
   const now = new Date();
 
-  // Most recent Monday 00:00 (if today is Monday and time > 00:00, use today; else last Monday)
-  const weeklyBoundary = new Date(now);
-  weeklyBoundary.setHours(0, 0, 0, 0);
-  const dayOfWeek = weeklyBoundary.getDay(); // 0 = Sunday, 1 = Monday
+  // --- Weekly: walk back CATCH_UP_WEEKLY_LOOKBACK Mondays ---
+  const weeklyAnchor = new Date(now);
+  weeklyAnchor.setHours(0, 0, 0, 0);
+  const dayOfWeek = weeklyAnchor.getDay(); // 0 = Sunday, 1 = Monday
   const daysSinceMonday = (dayOfWeek + 6) % 7; // Mon=0, Tue=1, ..., Sun=6
-  weeklyBoundary.setDate(weeklyBoundary.getDate() - daysSinceMonday);
+  weeklyAnchor.setDate(weeklyAnchor.getDate() - daysSinceMonday);
 
-  if (weeklyBoundary.getTime() <= now.getTime()) {
-    const { periodStart } = computePeriod("weekly", weeklyBoundary);
+  // Collect missing boundaries from most-recent back to oldest, then generate
+  // oldest-first so the stored reports have natural chronology.
+  const missingWeekly: Date[] = [];
+  for (let i = 0; i < CATCH_UP_WEEKLY_LOOKBACK; i++) {
+    const boundary = new Date(weeklyAnchor);
+    boundary.setDate(boundary.getDate() - i * 7);
+    if (boundary.getTime() > now.getTime()) continue;
+    const { periodStart } = computePeriod("weekly", boundary);
     if (!(await reportExistsForPeriod("weekly", periodStart))) {
-      try {
-        await generateReport("weekly", "System (Scheduler Catch-up)", weeklyBoundary);
-      } catch (err) {
-        logger.error("weekly catch-up report failed", {
-          error: (err as Error).message,
-        });
-      }
+      missingWeekly.push(boundary);
     }
   }
-
-  // Most recent 1st-of-month 00:00
-  const monthlyBoundary = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  if (monthlyBoundary.getTime() <= now.getTime()) {
-    const { periodStart } = computePeriod("monthly", monthlyBoundary);
-    if (!(await reportExistsForPeriod("monthly", periodStart))) {
-      try {
-        await generateReport("monthly", "System (Scheduler Catch-up)", monthlyBoundary);
-      } catch (err) {
-        logger.error("monthly catch-up report failed", {
-          error: (err as Error).message,
-        });
-      }
+  missingWeekly.reverse();
+  let weeklyGenerated = 0;
+  for (const boundary of missingWeekly) {
+    try {
+      await generateReport("weekly", "System (Scheduler Catch-up)", boundary);
+      weeklyGenerated++;
+    } catch (err) {
+      logger.error("weekly catch-up report failed", {
+        error: (err as Error).message,
+        boundary: boundary.toISOString(),
+      });
     }
+  }
+  if (weeklyGenerated > 0) {
+    logger.info("weekly catch-up: generated missed reports", { count: weeklyGenerated, lookback: CATCH_UP_WEEKLY_LOOKBACK });
+  }
+
+  // --- Monthly: walk back CATCH_UP_MONTHLY_LOOKBACK 1st-of-month boundaries ---
+  const missingMonthly: Date[] = [];
+  for (let i = 0; i < CATCH_UP_MONTHLY_LOOKBACK; i++) {
+    const boundary = new Date(now.getFullYear(), now.getMonth() - i, 1, 0, 0, 0, 0);
+    if (boundary.getTime() > now.getTime()) continue;
+    const { periodStart } = computePeriod("monthly", boundary);
+    if (!(await reportExistsForPeriod("monthly", periodStart))) {
+      missingMonthly.push(boundary);
+    }
+  }
+  missingMonthly.reverse();
+  let monthlyGenerated = 0;
+  for (const boundary of missingMonthly) {
+    try {
+      await generateReport("monthly", "System (Scheduler Catch-up)", boundary);
+      monthlyGenerated++;
+    } catch (err) {
+      logger.error("monthly catch-up report failed", {
+        error: (err as Error).message,
+        boundary: boundary.toISOString(),
+      });
+    }
+  }
+  if (monthlyGenerated > 0) {
+    logger.info("monthly catch-up: generated missed reports", { count: monthlyGenerated, lookback: CATCH_UP_MONTHLY_LOOKBACK });
   }
 }
 
