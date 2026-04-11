@@ -224,7 +224,11 @@ export function registerUserRoutes(router: Router) {
   });
 
   // ==================== SELF-SERVICE PASSWORD CHANGE (any authenticated user) ====================
-  router.patch("/api/users/me/password", requireAuth, async (req, res) => {
+  // requireMFASetup is a no-op unless REQUIRE_MFA=true. When MFA is enforced,
+  // an admin/manager must have MFA set up to change their own password —
+  // consistent with every other manager/admin-gated mutation in the codebase.
+  // Viewers are exempt (requireMFASetup only gates admin/manager roles).
+  router.patch("/api/users/me/password", requireAuth, requireMFASetup, async (req, res) => {
     try {
       const parsed = changePasswordSchema.safeParse(req.body);
       if (!parsed.success) {

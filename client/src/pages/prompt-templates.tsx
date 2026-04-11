@@ -1,17 +1,45 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Chat, FileText, FloppyDisk, PencilSimple, Plus, Scales, ShieldCheck, Trash, X } from "@phosphor-icons/react";
+import { Chat, FileText, Flask, FloppyDisk, PencilSimple, Plus, Scales, ShieldCheck, Trash, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
 import { CALL_CATEGORIES } from "@shared/schema";
 import type { PromptTemplate, InsertPromptTemplate } from "@shared/schema";
+
+interface TemplateTestResult {
+  callId: string;
+  fileName: string | null;
+  currentScore: number | null;
+  testScore: number | null;
+  delta: number | null;
+  currentSummary: string | null;
+  testSummary: string | null;
+  error: string | null;
+}
+
+interface TemplateTestResponse {
+  templateId: string;
+  templateName: string;
+  callCategory: string;
+  sampleSize: number;
+  results: TemplateTestResult[];
+  summary: {
+    avgCurrentScore: number | null;
+    avgTestScore: number | null;
+    avgDelta: number | null;
+    scoreDirection: "higher" | "lower" | "neutral" | "unknown";
+    successfulRuns: number;
+  };
+  message?: string;
+}
 
 interface PhraseEntry {
   phrase: string;
@@ -34,9 +62,34 @@ export default function PromptTemplatesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<TemplateTestResponse | null>(null);
 
   const { data: templates, isLoading, error: templatesError } = useQuery<PromptTemplate[]>({
     queryKey: ["/api/prompt-templates"],
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async (templateId: string) => {
+      const res = await apiRequest("POST", `/api/prompt-templates/${templateId}/test`, { sampleSize: 5 });
+      return (await res.json()) as TemplateTestResponse;
+    },
+    onSuccess: (data) => {
+      setTestResults(data);
+      if (data.sampleSize === 0) {
+        toast({
+          title: "No calls to test against",
+          description: data.message || "No completed calls in this category yet.",
+        });
+      } else {
+        toast({
+          title: "Back-test complete",
+          description: `Tested against ${data.sampleSize} call${data.sampleSize === 1 ? "" : "s"}. Avg delta: ${data.summary.avgDelta ?? "n/a"}`,
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Back-test failed", description: error.message, variant: "destructive" });
+    },
   });
 
   const createMutation = useMutation({
@@ -162,6 +215,8 @@ export default function PromptTemplatesPage() {
                   template={tmpl}
                   onEdit={() => setEditingId(tmpl.id)}
                   onDelete={() => handleDelete(tmpl.id)}
+                  onTest={() => testMutation.mutate(tmpl.id)}
+                  isTesting={testMutation.isPending && testMutation.variables === tmpl.id}
                 />
               )
             ))}
@@ -183,11 +238,104 @@ export default function PromptTemplatesPage() {
           </div>
         ) : null}
       </div>
+
+      {/* Back-test results dialog */}
+      <Dialog open={testResults !== null} onOpenChange={(open) => { if (!open) setTestResults(null); }}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Back-test results: {testResults?.templateName}</DialogTitle>
+            <DialogDescription>
+              Candidate template run against {testResults?.sampleSize ?? 0} recent completed calls in the
+              <span className="mx-1 font-mono">{testResults?.callCategory}</span>
+              category. These results are not persisted and did not affect stored analyses.
+            </DialogDescription>
+          </DialogHeader>
+
+          {testResults && testResults.sampleSize === 0 ? (
+            <div className="py-8 text-center text-muted-foreground">
+              <p>{testResults.message || "No calls available for testing."}</p>
+            </div>
+          ) : testResults ? (
+            <div className="space-y-4">
+              {/* Summary */}
+              <div className="grid grid-cols-4 gap-3 p-3 bg-muted/40 rounded-md">
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Current avg</p>
+                  <p className="text-lg font-bold">{testResults.summary.avgCurrentScore ?? "—"}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Candidate avg</p>
+                  <p className="text-lg font-bold">{testResults.summary.avgTestScore ?? "—"}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg delta</p>
+                  <p className={`text-lg font-bold ${
+                    testResults.summary.scoreDirection === "higher" ? "text-green-600 dark:text-green-400" :
+                    testResults.summary.scoreDirection === "lower" ? "text-amber-600 dark:text-amber-400" :
+                    "text-muted-foreground"
+                  }`}>
+                    {testResults.summary.avgDelta !== null
+                      ? (testResults.summary.avgDelta > 0 ? "+" : "") + testResults.summary.avgDelta
+                      : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Successful runs</p>
+                  <p className="text-lg font-bold">{testResults.summary.successfulRuns} / {testResults.sampleSize}</p>
+                </div>
+              </div>
+
+              {/* Per-call results */}
+              <div className="space-y-2">
+                {testResults.results.map((r) => (
+                  <div key={r.callId} className="p-3 border border-border rounded-md text-sm">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-xs text-muted-foreground truncate max-w-[60%]" title={r.fileName || r.callId}>
+                        {r.fileName || r.callId}
+                      </span>
+                      {r.error ? (
+                        <Badge variant="secondary" className="text-[10px]">Error</Badge>
+                      ) : r.delta !== null ? (
+                        <Badge className={`text-[10px] ${
+                          r.delta > 0.1 ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
+                          r.delta < -0.1 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" :
+                          "bg-muted text-muted-foreground"
+                        }`}>
+                          {r.delta > 0 ? "+" : ""}{r.delta}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {r.error ? (
+                      <p className="text-xs text-muted-foreground">{r.error}</p>
+                    ) : (
+                      <div className="flex gap-4 text-xs">
+                        <span>Current: <span className="font-semibold">{r.currentScore ?? "—"}</span></span>
+                        <span className="text-muted-foreground">→</span>
+                        <span>Candidate: <span className="font-semibold">{r.testScore ?? "—"}</span></span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTestResults(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate; onEdit: () => void; onDelete: () => void }) {
+function TemplateCard({ template, onEdit, onDelete, onTest, isTesting }: {
+  template: PromptTemplate;
+  onEdit: () => void;
+  onDelete: () => void;
+  onTest: () => void;
+  isTesting: boolean;
+}) {
   const category = CALL_CATEGORIES.find(c => c.value === template.callCategory);
   const weights = template.scoringWeights;
   const phrases = (template.requiredPhrases as PhraseEntry[]) || [];
@@ -206,6 +354,9 @@ function TemplateCard({ template, onEdit, onDelete }: { template: PromptTemplate
             )}
           </div>
           <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={onTest} disabled={isTesting} title="Back-test this template against the last 5 completed calls in its category">
+              <Flask className="w-3 h-3 mr-1" /> {isTesting ? "Testing…" : "Test"}
+            </Button>
             <Button size="sm" variant="outline" onClick={onEdit}>
               <PencilSimple className="w-3 h-3 mr-1" /> Edit
             </Button>

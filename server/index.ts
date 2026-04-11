@@ -417,6 +417,21 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
     console.warn("[STARTUP] AWS credentials not set — Bedrock AI analysis and S3 storage will be unavailable.");
   }
+  // Validate BEDROCK_MODEL against the pricing whitelist so a typo doesn't
+  // silently record $0 cost for every analyzed call while AWS still bills.
+  if (process.env.BEDROCK_MODEL) {
+    try {
+      const { isKnownBedrockModel, getKnownBedrockModels } = await import("./routes/utils");
+      if (!isKnownBedrockModel(process.env.BEDROCK_MODEL)) {
+        console.warn(
+          `[STARTUP] BEDROCK_MODEL="${process.env.BEDROCK_MODEL}" is not in the pricing table. ` +
+          `Usage records will show $0 for calls analyzed with this model while AWS still bills. ` +
+          `Known models: ${getKnownBedrockModels().join(", ")}. ` +
+          `Update BEDROCK_PRICING in server/routes/utils.ts to fix.`
+        );
+      }
+    } catch { /* non-critical — runtime warnOnUnknownBedrockModel is the backstop */ }
+  }
 
   // Initialize database schema if PostgreSQL is configured
   await initializeDatabase();
@@ -432,6 +447,12 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
 
   // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
   void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});
+
+  // Active-model override: if an admin previously promoted a model via
+  // POST /api/ab-tests/promote, rehydrate it now so the aiProvider singleton
+  // reflects the last promotion decision. Non-critical; the env var
+  // BEDROCK_MODEL is the fallback.
+  void import("./services/active-model").then(m => m.loadActiveModelOverride()).catch(() => {});
 
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
@@ -545,6 +566,27 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           const mod = await import("./services/batch-scheduler");
           mod.stopBatchScheduler?.();
         } catch { /* noop */ }
+        // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
+        //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s
+        //     internal 30s drain deadline; the outer hard-exit timer (30s) also
+        //     backstops this. Without this step, workers crash mid-pipeline when
+        //     the pool closes under them and the reaper burns a retry attempt
+        //     2 minutes later.
+        try {
+          const { getJobQueue } = await import("./routes");
+          const jq = getJobQueue();
+          if (jq) {
+            await Promise.race([
+              jq.stop(),
+              new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error("jobQueue.stop timed out after 15s")), 15_000)
+              ),
+            ]);
+            log("Job queue stopped.");
+          }
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to stop job queue:", (err as Error).message);
+        }
         // 3. Flush audit log queue (bounded to 10s — if DB is hung, don't waste
         //    the full 30s hard-exit budget; remaining entries are in stdout via HMAC chain)
         try {

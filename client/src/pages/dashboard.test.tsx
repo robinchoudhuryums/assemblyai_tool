@@ -59,6 +59,9 @@ vi.mock("@/components/dashboard/sentiment-analysis", () => ({
 vi.mock("@/components/dashboard/performance-card", () => ({
   default: () => <div data-testid="performance-card">PerformanceCard</div>,
 }));
+vi.mock("@/components/dashboard/weekly-changes", () => ({
+  default: () => <div data-testid="weekly-changes">WeeklyChanges</div>,
+}));
 vi.mock("@/components/upload/file-upload", () => ({
   default: () => <div data-testid="file-upload">FileUpload</div>,
 }));

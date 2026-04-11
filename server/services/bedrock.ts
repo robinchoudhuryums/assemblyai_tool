@@ -101,6 +101,21 @@ export class BedrockProvider implements AIAnalysisProvider {
     return new BedrockProvider(modelId);
   }
 
+  /**
+   * Swap the underlying model at runtime (for A/B test promotion flow).
+   * Credentials are preserved; only the `modelId` used in subsequent Converse
+   * calls changes. Callers are expected to validate the model id against the
+   * BEDROCK_MODEL_PRESETS whitelist before calling.
+   */
+  setModel(modelId: string): void {
+    if (!modelId || typeof modelId !== "string") {
+      throw new Error("setModel: modelId must be a non-empty string");
+    }
+    const prev = this.model;
+    this.model = modelId;
+    logger.info("Bedrock provider model updated", { previous: prev, next: modelId });
+  }
+
   get modelId(): string {
     return this.model;
   }

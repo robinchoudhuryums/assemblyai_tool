@@ -11,7 +11,7 @@ import { broadcastCallUpdate } from "../services/websocket";
 import { bedrockBatchService, type PendingBatchItem } from "../services/bedrock-batch";
 import { type UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, computeConfidenceScore, autoAssignEmployee } from "./utils";
+import { cleanupFile, estimateBedrockCost, estimateAssemblyAICost, TaskQueue, computeConfidenceScore, autoAssignEmployee, warnOnUnknownBedrockModel } from "./utils";
 import {
   MIN_CALL_DURATION_FOR_AI_SEC,
   HAIKU_SHORT_CALL_MAX_SEC,
@@ -728,9 +728,16 @@ export async function processAudioFile(
       const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
       const estimatedOutputTokens = 800;
       const assemblyaiCost = estimateAssemblyAICost(audioDuration);
-      const bedrockCost = (aiAnalysis !== null)
-        ? (estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) ?? 0)
+      const rawBedrockCost = (aiAnalysis !== null)
+        ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens)
         : 0;
+      // Loud-fail on unknown model: null coalesced to 0 silently hid typos
+      // and new-model misconfiguration. Warn once per unique unknown model
+      // id so spend tracking stays trustworthy without spamming Sentry.
+      if (rawBedrockCost === null) {
+        warnOnUnknownBedrockModel(bedrockModel, { callId, phase: "usage_tracking" });
+      }
+      const bedrockCost = rawBedrockCost ?? 0;
 
       const usageRecord: UsageRecord = {
         id: randomUUID(),

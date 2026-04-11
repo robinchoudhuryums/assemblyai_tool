@@ -68,9 +68,25 @@ export function registerCallTagRoutes(router: Router) {
     try {
       const pool = getPool();
       if (!pool) return res.status(503).json({ message: "Tagging requires a database connection" });
-      const result = await pool.query("DELETE FROM call_tags WHERE id = $1 AND call_id = $2 RETURNING tag", [req.params.tagId, req.params.id]);
-      if (result.rows.length === 0) return res.status(404).json({ message: "Tag not found" });
-      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "tag_removed", resourceType: "call", resourceId: req.params.id, detail: result.rows[0].tag });
+      // Author-or-manager check: only the tag's creator or a manager+ may
+      // delete it. Mirrors the annotation delete flow below so viewers can't
+      // remove tags attributed to other users. Previously any authenticated
+      // user could delete any tag because the handler only required auth.
+      const lookup = await pool.query(
+        "SELECT tag, created_by FROM call_tags WHERE id = $1 AND call_id = $2",
+        [req.params.tagId, req.params.id]
+      );
+      if (lookup.rows.length === 0) return res.status(404).json({ message: "Tag not found" });
+      const tagCreatedBy = lookup.rows[0].created_by as string;
+      const userIdentifier = req.user?.name || req.user?.username || "";
+      const userRole = req.user?.role || "viewer";
+      const isAuthor = tagCreatedBy === userIdentifier;
+      const isManagerOrAdmin = userRole === "manager" || userRole === "admin";
+      if (!isAuthor && !isManagerOrAdmin) {
+        return res.status(403).json({ message: "Only the tag's author or a manager can delete this tag" });
+      }
+      await pool.query("DELETE FROM call_tags WHERE id = $1 AND call_id = $2", [req.params.tagId, req.params.id]);
+      logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "tag_removed", resourceType: "call", resourceId: req.params.id, detail: lookup.rows[0].tag });
       res.json({ message: "Tag removed" });
     } catch (error) {
       res.status(500).json({ message: "Failed to remove tag" });

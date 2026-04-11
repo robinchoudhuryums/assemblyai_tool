@@ -126,8 +126,17 @@ export const PASSWORD_HISTORY_SIZE = 5;
 export async function isPasswordReused(password: string, currentHash: string, history: string[]): Promise<boolean> {
   // Check against current password
   if (await comparePasswords(password, currentHash)) return true;
-  // Check against previous passwords
-  for (const oldHash of history) {
+  // Defensive server-side cap: even though the write path
+  // (updateDbUserPassword) trims to PASSWORD_HISTORY_SIZE, a direct DB
+  // write, a buggy migration, or a legacy row could grow the array
+  // unbounded. Without this cap, each entry runs a ~100ms scrypt compare —
+  // an unbounded array turns password reuse checks into a CPU DoS surface.
+  // Take only the most recent N entries (tail of the array, which the
+  // write path stores as `[newHash, ...oldHistory].slice(0, N)`).
+  const bounded = history.length > PASSWORD_HISTORY_SIZE
+    ? history.slice(0, PASSWORD_HISTORY_SIZE)
+    : history;
+  for (const oldHash of bounded) {
     if (await comparePasswords(password, oldHash)) return true;
   }
   return false;
@@ -435,7 +444,7 @@ export function getSessionFingerprint(req: import("express").Request): string {
   return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
 }
 
-export const requireAuth: RequestHandler = (req, res, next) => {
+export const requireAuth: RequestHandler = async (req, res, next) => {
   if (!req.isAuthenticated()) {
     return res.status(401).json({ message: "Authentication required" });
   }
@@ -448,25 +457,47 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   if (!sessionFp) {
     // First request with this session — stamp the fingerprint
     sess.fingerprint = currentFp;
-  } else if (sessionFp !== currentFp) {
-    // Fingerprint changed mid-session — possible session hijacking
-    logPhiAccess({
-      timestamp: new Date().toISOString(),
-      event: "session_fingerprint_mismatch",
-      username: req.user?.username || "unknown",
-      resourceType: "auth",
-      detail: "Session destroyed: user-agent fingerprint mismatch",
-    });
-    req.logout(() => {});
-    req.session.destroy((err) => {
-      if (err) {
-        logger.error("auth: failed to destroy hijacked session", { error: (err as Error).message });
-      }
-    });
-    return res.status(401).json({ message: "Session expired. Please log in again." });
+    return next();
+  }
+  if (sessionFp === currentFp) {
+    return next();
   }
 
-  next();
+  // Fingerprint changed mid-session — possible session hijacking.
+  // Previously logout()/destroy() ran fire-and-forget before the 401 response.
+  // If destroy() failed against the session store, the cookie stayed valid for
+  // a window where concurrent requests could slip through. We now await both
+  // tear-down steps before responding. Destroy failures are escalated to
+  // Sentry because a persistently-compromised session is an incident, not a
+  // logging nuisance.
+  logPhiAccess({
+    timestamp: new Date().toISOString(),
+    event: "session_fingerprint_mismatch",
+    username: req.user?.username || "unknown",
+    resourceType: "auth",
+    detail: "Session destroyed: user-agent fingerprint mismatch",
+  });
+
+  await new Promise<void>((resolve) => {
+    req.logout(() => resolve());
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((err) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
+    const msg = (err as Error).message;
+    logger.error("auth: failed to destroy hijacked session", { error: msg });
+    // Fire-and-forget Sentry alert — the underlying session store is refusing
+    // to evict a session flagged as hijacked. Operators need to know.
+    import("./services/sentry").then(({ captureException }) => {
+      captureException(err instanceof Error ? err : new Error(String(err)), {
+        phase: "fingerprint_mismatch_destroy",
+        username: req.user?.username,
+      });
+    }).catch(() => { /* noop — Sentry optional */ });
+  }
+  return res.status(401).json({ message: "Session expired. Please log in again." });
 };
 
 // HIPAA: Role-based access control middleware

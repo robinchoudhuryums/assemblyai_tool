@@ -197,6 +197,11 @@ export async function runBatchCycle(): Promise<void> {
 
     const batchIntervalMinutes = parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10);
 
+    // 0. Promote any tracking files that ended up in orphaned-submissions/
+    //    during a prior cycle's S3 write failure. This must run before the
+    //    active-jobs scan so a newly-promoted file is immediately picked up.
+    await promoteOrphanedSubmissions(s3Client);
+
     // 1. Check active jobs for completion
     const activeJobKeys = await s3Client.listObjects("batch-inference/active-jobs/");
     for (const jobKey of activeJobKeys) {
@@ -242,13 +247,137 @@ export async function runBatchCycle(): Promise<void> {
     const callIds = items.map(i => i.callId);
     const batchJob = await bedrockBatchService.createJob(s3Uri, batchId, callIds);
 
-    await s3Client.uploadJson(`batch-inference/active-jobs/${batchJob.jobId}.json`, batchJob);
-    logger.info("Batch: submitted job", { jobId: batchJob.jobId, itemCount: items.length });
+    // CRITICAL: the AWS batch job is now running and billable. The only link
+    // between the running job and CallAnalyzer is the tracking file we're
+    // about to write. If this write fails, the job becomes an orphan — AWS
+    // processes it, charges for it, and the results are never collected.
+    //
+    // Recovery strategy (in order of preference):
+    //  1. Retry the primary write 3x with exponential backoff.
+    //  2. On persistent failure, fall back to `orphaned-submissions/` so the
+    //     job is still findable in S3 under a known prefix.
+    //  3. In ALL failure cases, emit a Sentry "fatal" with the jobId — that
+    //     is the manual-recovery key an operator can use in the AWS console.
+    await persistBatchJobTracking(s3Client, batchJob, items.length);
 
   } catch (batchErr) {
     logger.error("Batch cycle error", { error: (batchErr as Error).message });
   } finally {
     batchCycleRunning = false;
+  }
+}
+
+/**
+ * Persist the batch-job tracking file with retry + orphan fallback.
+ *
+ * The AWS Bedrock batch job has already been submitted at this point; losing
+ * the tracking file means the job runs invisibly until a human spots it in
+ * the AWS console. This function ensures the job is recorded SOMEWHERE even
+ * under partial S3 failure.
+ */
+async function persistBatchJobTracking(
+  s3Client: ReturnType<NonNullable<typeof storage.getObjectStorageClient>>,
+  batchJob: BatchJob,
+  itemCount: number,
+): Promise<void> {
+  if (!s3Client) {
+    logger.error("Batch: S3 client vanished after job submission — job is orphaned on AWS", {
+      jobId: batchJob.jobId,
+      jobArn: batchJob.jobArn,
+    });
+    escalateOrphanedJob(batchJob, "s3_client_unavailable");
+    return;
+  }
+
+  const primaryKey = `batch-inference/active-jobs/${batchJob.jobId}.json`;
+  const BATCH_TRACK_RETRIES = 3;
+  const BATCH_TRACK_BASE_DELAY_MS = 1000;
+
+  for (let attempt = 1; attempt <= BATCH_TRACK_RETRIES; attempt++) {
+    try {
+      await s3Client.uploadJson(primaryKey, batchJob);
+      logger.info("Batch: submitted job", { jobId: batchJob.jobId, itemCount, attempt });
+      return;
+    } catch (err) {
+      const isLast = attempt === BATCH_TRACK_RETRIES;
+      logger.warn("Batch: tracking-file write failed", {
+        jobId: batchJob.jobId,
+        attempt,
+        isLast,
+        error: (err as Error).message,
+      });
+      if (!isLast) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_TRACK_BASE_DELAY_MS * Math.pow(2, attempt - 1)));
+      }
+    }
+  }
+
+  // Primary retries exhausted — fall back to the orphan prefix so the job
+  // data still lives somewhere in S3 that a recovery scan can find.
+  const orphanKey = `batch-inference/orphaned-submissions/${batchJob.jobId}.json`;
+  try {
+    await s3Client.uploadJson(orphanKey, { ...batchJob, orphanedAt: new Date().toISOString(), itemCount });
+    logger.error("Batch: tracking-file write fell back to orphan prefix — subsequent cycle will promote to active-jobs", {
+      jobId: batchJob.jobId,
+      orphanKey,
+    });
+    escalateOrphanedJob(batchJob, "primary_write_failed_orphan_fallback");
+  } catch (orphanErr) {
+    logger.error("Batch: tracking-file orphan fallback also failed — job is NOT discoverable in S3", {
+      jobId: batchJob.jobId,
+      jobArn: batchJob.jobArn,
+      error: (orphanErr as Error).message,
+    });
+    escalateOrphanedJob(batchJob, "primary_and_orphan_write_failed");
+  }
+}
+
+/**
+ * Emit a fatal Sentry alert with the batch jobId. This is the recovery key
+ * — with it in Sentry, an operator can find the running job in the AWS
+ * console and manually reconstruct the active-jobs tracking file.
+ */
+function escalateOrphanedJob(batchJob: BatchJob, reason: string): void {
+  import("./sentry").then(({ captureMessage }) => {
+    captureMessage(
+      `Batch inference tracking-file write failed (${reason}): jobId=${batchJob.jobId} jobArn=${batchJob.jobArn}. ` +
+      `AWS Bedrock is processing this job but CallAnalyzer cannot find it. Manually reconstruct ` +
+      `batch-inference/active-jobs/${batchJob.jobId}.json with the BatchJob shape from the AWS console.`,
+      "error"
+    );
+  }).catch(() => { /* noop — Sentry optional */ });
+}
+
+/**
+ * Scan the orphaned-submissions/ prefix and promote any surviving tracking
+ * files back into active-jobs/. Called at the top of each batch cycle so
+ * the next run after a transient S3 failure self-heals.
+ */
+async function promoteOrphanedSubmissions(s3Client: ReturnType<NonNullable<typeof storage.getObjectStorageClient>>): Promise<void> {
+  if (!s3Client) return;
+  try {
+    const orphanKeys = await s3Client.listObjects("batch-inference/orphaned-submissions/");
+    if (orphanKeys.length === 0) return;
+    for (const key of orphanKeys) {
+      try {
+        const job = await s3Client.downloadJson<BatchJob>(key);
+        if (!job?.jobId) {
+          logger.warn("Batch: orphaned-submissions entry missing jobId, skipping", { key });
+          continue;
+        }
+        const activeKey = `batch-inference/active-jobs/${job.jobId}.json`;
+        await s3Client.uploadJson(activeKey, job);
+        await s3Client.deleteObject(key);
+        logger.info("Batch: promoted orphaned submission to active-jobs", { jobId: job.jobId });
+      } catch (promoteErr) {
+        logger.warn("Batch: failed to promote orphaned submission (will retry next cycle)", {
+          key,
+          error: (promoteErr as Error).message,
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn("Batch: failed to list orphaned-submissions prefix", { error: (err as Error).message });
   }
 }
 

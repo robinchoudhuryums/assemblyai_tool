@@ -118,6 +118,7 @@ export default function ABTestingPage() {
             <TabsTrigger value="results">
               Past Tests {tests.length > 0 && <Badge variant="secondary" className="ml-1.5 text-xs">{tests.length}</Badge>}
             </TabsTrigger>
+            <TabsTrigger value="aggregate">Promote Winner</TabsTrigger>
           </TabsList>
 
           <TabsContent value="new" className="space-y-4">
@@ -364,8 +365,228 @@ export default function ABTestingPage() {
               </div>
             )}
           </TabsContent>
+
+          <TabsContent value="aggregate" className="space-y-4">
+            <AggregateResultsPanel />
+          </TabsContent>
         </Tabs>
       </div>
+    </div>
+  );
+}
+
+interface AggregateRow {
+  baselineModel: string;
+  testModel: string;
+  sampleSize: number;
+  baselineWins: number;
+  testWins: number;
+  ties: number;
+  avgBaselineScore: number | null;
+  avgTestScore: number | null;
+  avgScoreDelta: number | null;
+  avgBaselineLatencyMs: number | null;
+  avgTestLatencyMs: number | null;
+  avgLatencyDeltaMs: number | null;
+  recommendation: "promote_test" | "keep_baseline" | "inconclusive" | "insufficient_data";
+}
+
+interface AggregateResponse {
+  aggregates: AggregateRow[];
+  currentActiveModel?: string;
+}
+
+function AggregateResultsPanel() {
+  const { toast } = useToast();
+  const [promoteConfirmRow, setPromoteConfirmRow] = useState<AggregateRow | null>(null);
+
+  const { data, isLoading, error } = useQuery<AggregateResponse>({
+    queryKey: ["/api/ab-tests/aggregate"],
+  });
+
+  const promoteMutation = useMutation({
+    mutationFn: async (row: AggregateRow) => {
+      const csrf = getCsrfToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (csrf) headers["x-csrf-token"] = csrf;
+      const res = await fetch("/api/ab-tests/promote", {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({
+          model: row.testModel,
+          baselineModel: row.baselineModel,
+          sampleSize: row.sampleSize,
+          avgDelta: row.avgScoreDelta,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Promotion failed" }));
+        throw new Error(err.message || "Promotion failed");
+      }
+      return res.json();
+    },
+    onSuccess: (_res, row) => {
+      toast({
+        title: "Model promoted",
+        description: `${BEDROCK_MODEL_PRESETS.find(m => m.value === row.testModel)?.label || row.testModel} is now the active production model.`,
+      });
+      setPromoteConfirmRow(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/ab-tests/aggregate"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Promotion failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center">
+          <SpinnerGap className="w-6 h-6 animate-spin text-muted-foreground mx-auto" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center text-muted-foreground">
+          <p className="font-medium">Failed to load aggregate results</p>
+          <p className="text-sm">{error ? error.message : "No data"}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {data.currentActiveModel && (
+        <Card>
+          <CardContent className="py-3">
+            <p className="text-sm">
+              Currently active production model:{" "}
+              <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{data.currentActiveModel}</span>
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {data.aggregates.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Flask className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <p className="text-muted-foreground">No completed A/B tests yet.</p>
+            <p className="text-xs text-muted-foreground mt-1">Run at least 3 tests with the same model pair to see a recommendation.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {data.aggregates.map((row) => {
+            const key = `${row.baselineModel}||${row.testModel}`;
+            const baselineLabel = BEDROCK_MODEL_PRESETS.find(m => m.value === row.baselineModel)?.label || row.baselineModel;
+            const testLabel = BEDROCK_MODEL_PRESETS.find(m => m.value === row.testModel)?.label || row.testModel;
+            const isActive = data.currentActiveModel === row.testModel;
+            const canPromote = row.recommendation === "promote_test" && !isActive;
+
+            const recBadge = {
+              promote_test: { label: "Promote test", className: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" },
+              keep_baseline: { label: "Keep baseline", className: "bg-muted text-muted-foreground" },
+              inconclusive: { label: "Inconclusive", className: "bg-muted text-muted-foreground" },
+              insufficient_data: { label: "Need more samples", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
+            }[row.recommendation];
+
+            return (
+              <Card key={key}>
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between mb-3 gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm">
+                        <span className="font-semibold truncate">{testLabel}</span>
+                        <span className="text-muted-foreground mx-2">vs</span>
+                        <span className="font-semibold truncate">{baselineLabel}</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {row.sampleSize} test{row.sampleSize === 1 ? "" : "s"} · {row.testWins} test wins · {row.baselineWins} baseline wins · {row.ties} ties
+                      </p>
+                    </div>
+                    <Badge className={`text-[10px] ${recBadge.className}`}>{recBadge.label}</Badge>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className="p-2 bg-muted/40 rounded text-xs">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Baseline avg</p>
+                      <p className="text-base font-bold">{row.avgBaselineScore ?? "—"}</p>
+                    </div>
+                    <div className="p-2 bg-muted/40 rounded text-xs">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Test avg</p>
+                      <p className="text-base font-bold">{row.avgTestScore ?? "—"}</p>
+                    </div>
+                    <div className="p-2 bg-muted/40 rounded text-xs">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Score delta</p>
+                      <p className={`text-base font-bold ${
+                        row.avgScoreDelta !== null && row.avgScoreDelta > 0 ? "text-green-600 dark:text-green-400" :
+                        row.avgScoreDelta !== null && row.avgScoreDelta < 0 ? "text-amber-600 dark:text-amber-400" :
+                        ""
+                      }`}>
+                        {row.avgScoreDelta !== null
+                          ? (row.avgScoreDelta > 0 ? "+" : "") + row.avgScoreDelta
+                          : "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {row.avgBaselineLatencyMs !== null && row.avgTestLatencyMs !== null && (
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Latency: {row.avgBaselineLatencyMs}ms baseline / {row.avgTestLatencyMs}ms test
+                      {row.avgLatencyDeltaMs !== null && (
+                        <span className={row.avgLatencyDeltaMs > 0 ? " text-amber-600 dark:text-amber-400" : " text-green-600 dark:text-green-400"}>
+                          {" "}({row.avgLatencyDeltaMs > 0 ? "+" : ""}{row.avgLatencyDeltaMs}ms)
+                        </span>
+                      )}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end">
+                    {isActive ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        <CheckCircle className="w-3 h-3 mr-1 text-green-600 dark:text-green-400" />
+                        Currently active
+                      </Badge>
+                    ) : promoteConfirmRow?.testModel === row.testModel && promoteConfirmRow.baselineModel === row.baselineModel ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Promote {testLabel}?</span>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          disabled={promoteMutation.isPending}
+                          onClick={() => promoteMutation.mutate(row)}
+                        >
+                          {promoteMutation.isPending ? <SpinnerGap className="w-3 h-3 animate-spin" /> : "Confirm"}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setPromoteConfirmRow(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant={canPromote ? "default" : "outline"}
+                        onClick={() => setPromoteConfirmRow(row)}
+                        disabled={row.recommendation === "insufficient_data"}
+                        title={row.recommendation === "insufficient_data" ? "Need at least 3 samples" : "Promote the test model to production"}
+                      >
+                        Promote test model
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
