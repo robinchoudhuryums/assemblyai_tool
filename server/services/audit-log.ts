@@ -84,7 +84,15 @@ async function persistPreviousHash(hash: string): Promise<void> {
   );
 }
 
-/** Load the persisted integrity chain head from PostgreSQL. Idempotent. */
+/**
+ * Load the persisted integrity chain head from PostgreSQL. Idempotent.
+ *
+ * F01: This function retries on transient DB failure (up to 3 attempts with
+ * exponential backoff) and throws if all attempts fail. A failed load would
+ * fork the HMAC chain from "genesis", silently breaking tamper detection
+ * (HIPAA §164.312(b)). Throwing prevents the server from starting with a
+ * broken integrity chain.
+ */
 export async function loadAuditIntegrityChain(): Promise<void> {
   if (integrityLoaded) return;
   const pool = getPool();
@@ -92,20 +100,40 @@ export async function loadAuditIntegrityChain(): Promise<void> {
     integrityLoaded = true;
     return;
   }
-  try {
-    const r = await pool.query<{ previous_hash: string }>(
-      `SELECT previous_hash FROM audit_log_integrity WHERE id = 1`
-    );
-    if (r.rows[0]?.previous_hash) {
-      previousHash = r.rows[0].previous_hash;
+
+  const MAX_LOAD_RETRIES = 3;
+  const BASE_DELAY_MS = 1000;
+
+  for (let attempt = 1; attempt <= MAX_LOAD_RETRIES; attempt++) {
+    try {
+      const r = await pool.query<{ previous_hash: string }>(
+        `SELECT previous_hash FROM audit_log_integrity WHERE id = 1`
+      );
+      if (r.rows[0]?.previous_hash) {
+        previousHash = r.rows[0].previous_hash;
+      }
+      integrityLoaded = true;
+      return;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (attempt < MAX_LOAD_RETRIES) {
+        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn("audit-log: integrity chain load failed, retrying", {
+          attempt,
+          maxAttempts: MAX_LOAD_RETRIES,
+          nextRetryMs: delayMs,
+          error: msg,
+        });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      } else {
+        // All retries exhausted — throw to prevent server startup with a forked chain.
+        // The server must not run with a broken integrity trail (HIPAA §164.312(b)).
+        throw new Error(
+          `CRITICAL: audit-log HMAC integrity chain could not be loaded after ${MAX_LOAD_RETRIES} attempts. ` +
+          `Last error: ${msg}. Server refusing to start to prevent integrity chain fork.`
+        );
+      }
     }
-    integrityLoaded = true;
-  } catch (err) {
-    // Mark loaded so we don't retry forever, but warn loudly that the chain is
-    // broken — all subsequent entries will chain from "genesis" instead of the
-    // real chain head, silently forking the integrity trail.
-    integrityLoaded = true;
-    logger.error("CRITICAL: audit-log HMAC integrity chain could not be loaded from DB — chain will fork from genesis. Investigate immediately.", { error: (err as Error).message });
   }
 }
 

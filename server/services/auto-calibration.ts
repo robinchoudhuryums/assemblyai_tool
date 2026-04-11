@@ -17,6 +17,7 @@
  */
 import { storage } from "../storage";
 import { getCalibrationConfig, type ScoringCalibration } from "./scoring-calibration";
+import { checkScoringQuality, detectScoringRegression } from "./scoring-feedback";
 import { logger } from "./logger";
 
 export interface CalibrationSnapshot {
@@ -73,19 +74,19 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
     const windowedCalls = await storage.getCallsSince(cutoffDate);
     const recentScoredCalls = windowedCalls.filter(c => c.status === "completed");
 
-    // Extract raw performance scores from analysis
+    // F03: Bulk-fetch analyses in a single query instead of N+1 individual lookups.
+    // With hundreds of calls in the calibration window, this reduces DB round-trips
+    // from O(N) to O(N/500) (chunked IN clause).
+    const callIds = recentScoredCalls.map(c => c.id);
+    const analysesMap = await storage.getCallAnalysesBulk(callIds);
+
     const rawScores: number[] = [];
-    for (const call of recentScoredCalls) {
-      try {
-        const analysis = await storage.getCallAnalysis(call.id);
-        if (analysis?.performanceScore) {
-          const score = parseFloat(String(analysis.performanceScore));
-          if (Number.isFinite(score) && score >= 0 && score <= 10) {
-            rawScores.push(score);
-          }
+    for (const [, analysis] of analysesMap) {
+      if (analysis?.performanceScore) {
+        const score = parseFloat(String(analysis.performanceScore));
+        if (Number.isFinite(score) && score >= 0 && score <= 10) {
+          rawScores.push(score);
         }
-      } catch {
-        // Skip calls with missing analysis
       }
     }
 
@@ -184,9 +185,22 @@ export function startCalibrationScheduler(): () => void {
   const intervalHours = parseInt(process.env.CALIBRATION_INTERVAL_HOURS || "24", 10);
   logger.info("Auto-calibration analysis scheduled", { intervalHours });
 
+  // Combined calibration + scoring quality check
+  const runCycle = async () => {
+    await analyzeScoreDistribution();
+    // Scoring quality alerts: check correction patterns alongside calibration
+    await checkScoringQuality().catch(err =>
+      logger.warn("Scoring quality check failed (non-blocking)", { error: (err as Error).message })
+    );
+    // Scoring regression detection: compare week-over-week score distributions
+    await detectScoringRegression().catch(err =>
+      logger.warn("Scoring regression detection failed (non-blocking)", { error: (err as Error).message })
+    );
+  };
+
   // First run after 2 minutes
-  const timeout = setTimeout(() => analyzeScoreDistribution(), 2 * 60 * 1000);
-  calibrationInterval = setInterval(() => analyzeScoreDistribution(), intervalHours * 3600 * 1000);
+  const timeout = setTimeout(runCycle, 2 * 60 * 1000);
+  calibrationInterval = setInterval(runCycle, intervalHours * 3600 * 1000);
 
   return () => {
     clearTimeout(timeout);

@@ -4,77 +4,57 @@
  * Detects and redacts potential Protected Health Information (PHI) from text
  * before it is written to audit logs, error logs, or API responses.
  *
- * Targets the 18 HIPAA identifiers that commonly appear in free text:
- *   - SSNs
- *   - Phone numbers
- *   - Email addresses
- *   - Dates of birth (multiple formats)
- *   - Medical Record Numbers (MRN)
- *   - Medicare/Medicaid Beneficiary IDs
- *   - Street addresses
- *   - Health plan/account numbers
- *   - Patient names (with clinical context prefixes)
+ * CONSOLIDATED (F31): Imports pattern definitions from shared/phi-patterns.ts
+ * — the single source of truth for all 14 HIPAA identifier regexes. This
+ * eliminates the drift risk where a new pattern added to one file but not the
+ * other would leave PHI unredacted on one side (server audit logs vs. client
+ * Sentry events).
  *
- * This is a defense-in-depth measure. It does NOT replace staff training
- * on avoiding PHI. Some PHI will inevitably slip through regex.
- *
- * Ported from ums-knowledge-reference/backend/src/utils/phiRedactor.ts.
+ * This module adds server-specific functionality on top of the shared patterns:
+ * - RedactionResult with count tracking
+ * - deepRedactPhi for nested object traversal
+ * - Label format: [SSN] (server audit) vs [REDACTED-SSN] (client Sentry)
  */
 
-// --- PHI Patterns (ordered: specific first, broad last) ---
-
-// SSN patterns: 123-45-6789, 123 45 6789, 123456789
-const SSN_PATTERN = /\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/g;
-
-// Phone numbers: (123) 456-7890, 123-456-7890, 123.456.7890, 1234567890
-// A8: leading (?<!\d) lookbehind prevents matching inside longer digit runs
-// (e.g. order numbers, claim IDs) and the trailing (?!\d) prevents bleeding
-// into adjacent digits.
-const PHONE_PATTERN = /(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/g;
-
-// Email addresses
-const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
-
-// DOB with keyword context: DOB 01/15/1952, born on 01-15-1952
-const DOB_PATTERN = /(?:DOB|d\.?o\.?b\.?|date\s+of\s+birth|born\s+on|birthdate)[:\s]*\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}/gi;
-
-// Natural language DOB: "born in January 1952", "birth date March 3, 1960"
-// A8: optional day group is now properly bounded (1-2 digits with optional comma),
-// not lazy `\d{1,2}?` which let "born in 1952" match without a day at all and
-// also under-matched "March 3, 1960" by stopping at the first digit.
-const DOB_NATURAL_PATTERN = /(?:born\s+(?:in\s+)?|birth\s*date[:\s]*)(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:\s+\d{1,2},?)?\s+\d{2,4}\b/gi;
-
-// Standalone dates that look like birthdates (MM/DD/YYYY with year 1900-2099)
-const DATE_PATTERN = /\b(?:0?[1-9]|1[0-2])[/\-](?:0?[1-9]|[12]\d|3[01])[/\-](?:19\d{2}|20\d{2})\b/g;
-
-// MRN / Medical Record Number: require at least one digit
-const MRN_PATTERN = /(?:MRN|medical\s+record(?:\s+number)?|patient\s+(?:id|number|#))[:\s#]*(?=[A-Z0-9-]*\d)[A-Z0-9-]{4,15}/gi;
-
-// Medicare Beneficiary Identifier (MBI): 1AN9-AA0-AA00 format
-const MBI_PATTERN = /\b[1-9][A-Za-z]\w{2}[-\s]?[A-Za-z]\w{2}[-\s]?\w{4}\b/g;
-
-// Medicaid ID: varies by state, 8-12 digits with context
-const MEDICAID_PATTERN = /(?:medicaid|medi-cal)\s*(?:id|#|number)?[:\s]*[A-Z0-9]{6,14}/gi;
-
-// Street addresses: number + street name
-const ADDRESS_PATTERN = /\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,3}(?:St(?:reet)?|Ave(?:nue)?|Blvd|Boulevard|Dr(?:ive)?|Rd|Road|Ln|Lane|Ct|Court|Way|Pl(?:ace)?|Cir(?:cle)?)\b\.?/gi;
-
-// ZIP codes with context (state abbreviation or "zip")
-const ZIP_PATTERN = /(?:(?:[A-Z]{2}\s+)|(?:zip(?:\s*code)?[:\s]*))(\d{5}(?:-\d{4})?)\b/gi;
-
-// Health plan / account numbers with clinical context
-const PLAN_ACCOUNT_PATTERN = /(?:(?:health\s*)?plan|account|policy|group|subscriber|certificate)\s*(?:#|number|num|no\.?)?[:\s]*([A-Z0-9]{5,20})\b/gi;
-
-// Names with clinical context
-const NAME_PREFIX_PATTERN = /(?:patient|pt|member|beneficiary|claimant|insured|subscriber|enrollee)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})/gi;
-
-// "Mr./Mrs./Ms./Dr. Firstname Lastname"
-const TITLE_NAME_PATTERN = /(?:Mr|Mrs|Ms|Miss|Dr|Prof)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})/g;
+import {
+  SSN_PATTERN,
+  PHONE_PATTERN,
+  EMAIL_PATTERN,
+  DOB_PATTERN,
+  DOB_NATURAL_PATTERN,
+  DATE_PATTERN,
+  MRN_PATTERN,
+  MBI_PATTERN,
+  MEDICAID_PATTERN,
+  ADDRESS_PATTERN,
+  ZIP_PATTERN,
+  PLAN_ACCOUNT_PATTERN,
+  NAME_PREFIX_PATTERN,
+  TITLE_NAME_PATTERN,
+} from "@shared/phi-patterns";
 
 export interface RedactionResult {
   text: string;
   redactionCount: number;
 }
+
+// Pattern application order (specific → broad) matches shared/phi-patterns.ts PATTERN_LIST
+const SERVER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: SSN_PATTERN, label: "SSN" },
+  { pattern: DOB_PATTERN, label: "DOB" },
+  { pattern: DOB_NATURAL_PATTERN, label: "DOB" },
+  { pattern: DATE_PATTERN, label: "DATE" },
+  { pattern: MRN_PATTERN, label: "MRN" },
+  { pattern: MBI_PATTERN, label: "MBI" },
+  { pattern: MEDICAID_PATTERN, label: "MEDICAID-ID" },
+  { pattern: EMAIL_PATTERN, label: "EMAIL" },
+  { pattern: PHONE_PATTERN, label: "PHONE" },
+  { pattern: ADDRESS_PATTERN, label: "ADDRESS" },
+  { pattern: ZIP_PATTERN, label: "ZIP" },
+  { pattern: PLAN_ACCOUNT_PATTERN, label: "PLAN-ID" },
+  { pattern: NAME_PREFIX_PATTERN, label: "NAME" },
+  { pattern: TITLE_NAME_PATTERN, label: "NAME" },
+];
 
 /**
  * Redact potential PHI from a text string.
@@ -86,30 +66,13 @@ export function redactPhi(text: string): RedactionResult {
   let redactionCount = 0;
   let result = text;
 
-  const applyPattern = (pattern: RegExp, label: string): void => {
+  for (const { pattern, label } of SERVER_PATTERNS) {
     const matches = result.match(pattern);
     if (matches) {
       redactionCount += matches.length;
       result = result.replace(pattern, `[${label}]`);
     }
-  };
-
-  // Order matters: more specific patterns first, then broader ones
-
-  applyPattern(SSN_PATTERN, "SSN");
-  applyPattern(DOB_PATTERN, "DOB");
-  applyPattern(DOB_NATURAL_PATTERN, "DOB");
-  applyPattern(DATE_PATTERN, "DATE");
-  applyPattern(MRN_PATTERN, "MRN");
-  applyPattern(MBI_PATTERN, "MBI");
-  applyPattern(MEDICAID_PATTERN, "MEDICAID-ID");
-  applyPattern(EMAIL_PATTERN, "EMAIL");
-  applyPattern(PHONE_PATTERN, "PHONE");
-  applyPattern(ADDRESS_PATTERN, "ADDRESS");
-  applyPattern(ZIP_PATTERN, "ZIP");
-  applyPattern(PLAN_ACCOUNT_PATTERN, "PLAN-ID");
-  applyPattern(NAME_PREFIX_PATTERN, "NAME");
-  applyPattern(TITLE_NAME_PATTERN, "NAME");
+  }
 
   return { text: result, redactionCount };
 }

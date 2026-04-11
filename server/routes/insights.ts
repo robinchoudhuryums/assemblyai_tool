@@ -12,10 +12,11 @@ export function register(router: Router) {
       // A4/F15: was loading every call ever uploaded. The insights endpoint
       // is a rolling-window view; default 90 days, max 365. Callers can
       // pass ?days=N to widen or narrow the window.
+      // F35: uses storage.getInsightsData() which returns only the fields needed
+      // (no transcript text/words), avoiding loading full CallWithDetails.
       const days = clampInt(req.query.days as string | undefined, 90, 1, 365);
       const since = new Date(Date.now() - days * 86400000);
-      const allCalls = await storage.getCallsSinceWithDetails(since);
-      const completed = allCalls.filter(c => c.status === "completed" && c.analysis);
+      const completed = await storage.getInsightsData(since);
 
       // Aggregate topic frequency across all calls
       const topicCounts = new Map<string, number>();
@@ -24,29 +25,29 @@ export function register(router: Router) {
       const sentimentByWeek = new Map<string, { positive: number; neutral: number; negative: number; total: number }>();
 
       for (const call of completed) {
-        const topics = (call.analysis?.topics as string[]) || [];
+        const topics = call.topics || [];
         for (const t of topics) {
           topicCounts.set(t, (topicCounts.get(t) || 0) + 1);
         }
 
         // Track negative/frustration calls
-        const sentiment = call.sentiment?.overallSentiment;
+        const sentiment = call.sentiment;
         if (sentiment === "negative") {
           for (const t of topics) {
             complaintsAndFrustrations.push({
               topic: t,
               callId: call.id,
               date: call.uploadedAt || "",
-              sentiment: sentiment,
+              sentiment,
             });
           }
         }
 
         // Track low-score calls as escalation patterns
-        const score = safeFloat(call.analysis?.performanceScore, 10);
+        const score = safeFloat(call.performanceScore, 10);
         if (score <= 4) {
           escalationPatterns.push({
-            summary: call.analysis?.summary || "",
+            summary: call.summary || "",
             callId: call.id,
             date: call.uploadedAt || "",
             score,
@@ -93,15 +94,17 @@ export function register(router: Router) {
       // Low-confidence calls
       const lowConfidenceCalls = completed
         .filter(c => {
-          const conf = safeFloat(c.analysis?.confidenceScore, 1);
+          const conf = safeFloat(c.confidenceScore, 1);
           return conf < 0.7;
         })
         .map(c => ({
           callId: c.id,
           date: c.uploadedAt || "",
-          confidence: safeFloat(c.analysis?.confidenceScore),
-          employee: c.employee?.name || "Unassigned",
+          confidence: safeFloat(c.confidenceScore),
+          employee: c.employeeName || "Unassigned",
         }));
+
+      const negativeCount = completed.filter(c => c.sentiment === "negative").length;
 
       res.json({
         totalAnalyzed: completed.length,
@@ -112,10 +115,10 @@ export function register(router: Router) {
         lowConfidenceCalls: lowConfidenceCalls.slice(0, 20),
         summary: {
           avgScore: completed.length > 0
-            ? completed.reduce((sum, c) => sum + safeFloat(c.analysis?.performanceScore), 0) / completed.length
+            ? completed.reduce((sum, c) => sum + safeFloat(c.performanceScore), 0) / completed.length
             : 0,
           negativeCallRate: completed.length > 0
-            ? completed.filter(c => c.sentiment?.overallSentiment === "negative").length / completed.length
+            ? negativeCount / completed.length
             : 0,
           escalationRate: completed.length > 0
             ? escalationPatterns.length / completed.length

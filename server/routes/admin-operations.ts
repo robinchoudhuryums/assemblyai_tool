@@ -7,6 +7,10 @@ import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
 import { metrics } from "../services/logger";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../services/auto-calibration";
+import { getCorrectionStats, getScoringQualityAlerts } from "../services/scoring-feedback";
+import { getDroppedAuditEntryCount, getPendingAuditEntryCount } from "../services/audit-log";
+import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
+import { getBedrockCircuitBreakerState } from "../services/bedrock";
 import { is8x8Enabled } from "../services/telephony-8x8";
 
 export function registerOperationsRoutes(
@@ -17,6 +21,73 @@ export function registerOperationsRoutes(
   }
 ) {
   const { getJobQueue, shouldUseBatchMode } = deps;
+
+  // ==================== ADMIN: OPERATIONAL HEALTH ====================
+  // Aggregates subsystem health into a single response for the admin dashboard.
+  router.get("/api/admin/health-deep", requireRole("admin"), async (_req, res) => {
+    try {
+      // Audit log health
+      const auditDropped = getDroppedAuditEntryCount();
+      const auditPending = getPendingAuditEntryCount();
+
+      // Job queue health
+      const jobQueue = getJobQueue();
+      let queueStats = { pending: 0, running: 0, completedToday: 0, failedToday: 0, backend: "none" as string };
+      if (jobQueue) {
+        try { queueStats = await jobQueue.getStats(); } catch { /* queue unavailable */ }
+      }
+
+      // Bedrock circuit breaker
+      const bedrockCircuitState = getBedrockCircuitBreakerState();
+
+      // RAG cache
+      const ragEnabled = isRagEnabled();
+      const ragCache = ragEnabled ? getRagCacheMetrics() : null;
+
+      // Batch inference
+      const batchMode = shouldUseBatchMode();
+
+      // Scoring quality
+      const correctionStats = getCorrectionStats();
+      const qualityAlerts = getScoringQualityAlerts();
+
+      // Calibration
+      let calibrationSnapshot = null;
+      try { calibrationSnapshot = await getLatestCalibrationSnapshot(); } catch { /* unavailable */ }
+
+      // 8x8 telephony
+      const telephonyEnabled = is8x8Enabled();
+
+      // Overall status: "healthy" / "degraded" / "unhealthy"
+      let overallStatus: "healthy" | "degraded" | "unhealthy" = "healthy";
+      const issues: string[] = [];
+
+      if (auditDropped > 0) { issues.push(`${auditDropped} audit entries dropped`); overallStatus = "degraded"; }
+      if (auditPending > 100) { issues.push(`${auditPending} audit entries pending flush`); overallStatus = "degraded"; }
+      if (bedrockCircuitState === "open") { issues.push("Bedrock circuit breaker OPEN"); overallStatus = "unhealthy"; }
+      if (bedrockCircuitState === "half-open") { issues.push("Bedrock circuit breaker half-open (testing)"); overallStatus = "degraded"; }
+      if (queueStats.failedToday > 10) { issues.push(`${queueStats.failedToday} jobs failed today`); overallStatus = "degraded"; }
+      if (qualityAlerts.some(a => a.severity === "critical")) { issues.push("Critical scoring quality alert"); overallStatus = "degraded"; }
+
+      res.json({
+        status: overallStatus,
+        timestamp: new Date().toISOString(),
+        issues,
+        subsystems: {
+          auditLog: { droppedEntries: auditDropped, pendingEntries: auditPending, healthy: auditDropped === 0 },
+          jobQueue: queueStats,
+          bedrockAI: { circuitState: bedrockCircuitState, healthy: bedrockCircuitState === "closed" },
+          ragKnowledgeBase: ragEnabled ? { enabled: true, cache: ragCache } : { enabled: false },
+          batchInference: { enabled: batchMode },
+          scoringQuality: { ...correctionStats, alerts: qualityAlerts },
+          calibration: { lastSnapshot: calibrationSnapshot?.timestamp || null, driftDetected: calibrationSnapshot?.driftDetected || false },
+          telephony8x8: { enabled: telephonyEnabled },
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to compute system health" });
+    }
+  });
 
   // ==================== ADMIN: QUEUE STATUS ====================
   router.get("/api/admin/queue-status", requireRole("admin"), async (_req, res) => {
@@ -187,11 +258,13 @@ export function registerOperationsRoutes(
 
   // ==================== ADMIN: SCORE CALIBRATION ====================
 
-  // GET /api/admin/calibration — latest calibration snapshot
+  // GET /api/admin/calibration — latest calibration snapshot + scoring quality alerts
   router.get("/api/admin/calibration", requireRole("admin"), async (_req, res) => {
     try {
       const snapshot = await getLatestCalibrationSnapshot();
-      res.json({ snapshot, available: snapshot !== null });
+      const correctionStats = getCorrectionStats();
+      const qualityAlerts = getScoringQualityAlerts();
+      res.json({ snapshot, available: snapshot !== null, correctionStats, qualityAlerts });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch calibration data" });
     }

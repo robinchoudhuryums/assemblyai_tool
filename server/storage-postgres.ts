@@ -18,7 +18,7 @@ import type {
   PerformerSummary, ABTest, InsertABTest, UsageRecord,
   Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
-import type { IStorage, ObjectStorageClient } from "./storage";
+import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData } from "./storage";
 import { safeFloat } from "./routes/utils";
 import { logPhiAccess } from "./services/audit-log";
 
@@ -774,6 +774,26 @@ export class PostgresStorage implements IStorage {
     return rows[0] ? mapAnalysis(rows[0]) : undefined;
   }
 
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    if (callIds.length === 0) return result;
+    // Batch into chunks of 500 to avoid overly large IN clauses
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < callIds.length; i += CHUNK_SIZE) {
+      const chunk = callIds.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(",");
+      const { rows } = await this.db.query(
+        `SELECT * FROM call_analyses WHERE call_id IN (${placeholders})`,
+        chunk
+      );
+      for (const row of rows) {
+        const analysis = mapAnalysis(row);
+        result.set(analysis.callId, analysis);
+      }
+    }
+    return result;
+  }
+
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
     const { rows } = await this.db.query(
@@ -885,6 +905,139 @@ export class PostgresStorage implements IStorage {
       id: r.id, name: r.name, role: r.role,
       avgPerformanceScore: r.avg_score ? parseFloat(r.avg_score) : null,
       totalCalls: r.total_calls,
+    }));
+  }
+
+  // ── Filtered Report Metrics (F35) ─────────────────────────
+  async getFilteredReportMetrics(filters: {
+    from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
+  }): Promise<FilteredReportResult> {
+    // Build shared WHERE clause for all sub-queries
+    const where: string[] = ["c.status = 'completed'"];
+    const params: unknown[] = [];
+    let idx = 1;
+    if (filters.from) { where.push(`c.uploaded_at >= $${idx++}`); params.push(filters.from); }
+    if (filters.to) { where.push(`c.uploaded_at <= $${idx++}`); params.push(filters.to); }
+    if (filters.employeeId) { where.push(`c.employee_id = $${idx++}`); params.push(filters.employeeId); }
+    if (filters.role) { where.push(`e.role = $${idx++}`); params.push(filters.role); }
+    if (filters.callPartyType) { where.push(`a.call_party_type = $${idx++}`); params.push(filters.callPartyType); }
+    const whereSql = where.join(" AND ");
+
+    // 1. Summary metrics
+    const metricsQ = this.db.query(`
+      SELECT COUNT(*)::int AS total_calls,
+        ROUND(AVG(CAST(NULLIF(s.overall_score,'') AS NUMERIC)) * 10, 2) AS avg_sentiment,
+        ROUND(AVG(CAST(NULLIF(a.performance_score,'') AS NUMERIC)), 2) AS avg_score,
+        COUNT(CASE WHEN s.overall_sentiment = 'positive' THEN 1 END)::int AS positive,
+        COUNT(CASE WHEN s.overall_sentiment = 'neutral' THEN 1 END)::int AS neutral,
+        COUNT(CASE WHEN s.overall_sentiment = 'negative' THEN 1 END)::int AS negative,
+        COUNT(CASE WHEN a.detected_agent_name IS NOT NULL THEN 1 END)::int AS auto_assigned
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE ${whereSql}`, params);
+
+    // 2. Per-employee performers
+    const performersQ = this.db.query(`
+      SELECT e.id, e.name, e.role,
+        COUNT(c.id)::int AS total_calls,
+        ROUND(AVG(CAST(NULLIF(a.performance_score,'') AS NUMERIC)), 2) AS avg_score
+      FROM calls c
+      JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      WHERE ${whereSql}
+      GROUP BY e.id, e.name, e.role
+      HAVING COUNT(c.id) > 0
+      ORDER BY avg_score DESC NULLS LAST`, params);
+
+    // 3. Monthly trends
+    const trendsQ = this.db.query(`
+      SELECT to_char(c.uploaded_at, 'YYYY-MM') AS month,
+        COUNT(*)::int AS calls,
+        ROUND(AVG(CAST(NULLIF(a.performance_score,'') AS NUMERIC)), 2) AS avg_score,
+        COUNT(CASE WHEN s.overall_sentiment = 'positive' THEN 1 END)::int AS positive,
+        COUNT(CASE WHEN s.overall_sentiment = 'neutral' THEN 1 END)::int AS neutral,
+        COUNT(CASE WHEN s.overall_sentiment = 'negative' THEN 1 END)::int AS negative
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE ${whereSql}
+      GROUP BY to_char(c.uploaded_at, 'YYYY-MM')
+      ORDER BY month`, params);
+
+    // 4. Average sub-scores
+    const subScoresQ = this.db.query(`
+      SELECT COUNT(*)::int AS cnt,
+        ROUND(AVG((a.sub_scores->>'compliance')::numeric), 2) AS compliance,
+        ROUND(AVG((a.sub_scores->>'customerExperience')::numeric), 2) AS customer_experience,
+        ROUND(AVG((a.sub_scores->>'communication')::numeric), 2) AS communication,
+        ROUND(AVG((a.sub_scores->>'resolution')::numeric), 2) AS resolution
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      WHERE ${whereSql} AND a.sub_scores IS NOT NULL`, params);
+
+    const [metricsR, performersR, trendsR, subScoresR] = await Promise.all([metricsQ, performersQ, trendsQ, subScoresQ]);
+
+    const m = metricsR.rows[0] || {};
+    const ss = subScoresR.rows[0];
+    return {
+      metrics: {
+        totalCalls: m.total_calls || 0,
+        avgSentiment: parseFloat(m.avg_sentiment) || 0,
+        avgPerformanceScore: parseFloat(m.avg_score) || 0,
+      },
+      sentiment: { positive: m.positive || 0, neutral: m.neutral || 0, negative: m.negative || 0 },
+      performers: performersR.rows.map(r => ({
+        id: r.id, name: r.name, role: r.role || "",
+        avgPerformanceScore: r.avg_score ? parseFloat(r.avg_score) : null,
+        totalCalls: r.total_calls,
+      })),
+      trends: trendsR.rows.map(r => ({
+        month: r.month, calls: r.calls,
+        avgScore: r.avg_score ? parseFloat(r.avg_score) : null,
+        positive: r.positive, neutral: r.neutral, negative: r.negative,
+      })),
+      avgSubScores: ss && ss.cnt > 0 ? {
+        compliance: parseFloat(ss.compliance) || 0,
+        customerExperience: parseFloat(ss.customer_experience) || 0,
+        communication: parseFloat(ss.communication) || 0,
+        resolution: parseFloat(ss.resolution) || 0,
+      } : null,
+      autoAssignedCount: m.auto_assigned || 0,
+    };
+  }
+
+  // ── Insights Data (F35) ─────────────────────────────────
+  async getInsightsData(since: Date): Promise<InsightsCallData[]> {
+    const { rows } = await this.db.query(`
+      SELECT c.id, c.status, c.uploaded_at,
+        e.name AS employee_name,
+        s.overall_sentiment AS sentiment,
+        a.performance_score, a.confidence_score, a.summary,
+        a.topics, a.detected_agent_name
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE c.status = 'completed' AND a.id IS NOT NULL AND c.uploaded_at >= $1
+      ORDER BY c.uploaded_at DESC
+    `, [since]);
+    return rows.map(r => ({
+      id: r.id,
+      status: r.status,
+      uploadedAt: r.uploaded_at?.toISOString?.() ?? r.uploaded_at,
+      employeeName: r.employee_name || null,
+      sentiment: r.sentiment || null,
+      performanceScore: r.performance_score || null,
+      confidenceScore: r.confidence_score || null,
+      summary: r.summary || null,
+      topics: Array.isArray(r.topics) ? r.topics : [],
+      detectedAgentName: r.detected_agent_name || null,
     }));
   }
 

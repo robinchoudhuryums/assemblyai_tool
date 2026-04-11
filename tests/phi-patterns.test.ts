@@ -177,6 +177,36 @@ describe("shared/phi-patterns redactPhiText — pattern coverage", () => {
   });
 });
 
+// --- Server-side phi-redactor consolidation tests ---
+// Verify that server/services/phi-redactor.ts (which now imports from
+// shared/phi-patterns.ts) produces correct redaction with count tracking.
+
+describe("server phi-redactor uses shared patterns (consolidation)", () => {
+  it("redactPhi returns redacted text and count", async () => {
+    const { redactPhi } = await import("../server/services/phi-redactor.js");
+    const result = redactPhi("SSN is 123-45-6789 and phone is 555-123-4567");
+    assert.ok(result.text.includes("[SSN]"), "Should use server label format [SSN]");
+    assert.ok(result.text.includes("[PHONE]"), "Should use server label format [PHONE]");
+    assert.ok(!result.text.includes("123-45-6789"), "SSN should be redacted");
+    assert.ok(!result.text.includes("555-123-4567"), "Phone should be redacted");
+    assert.equal(result.redactionCount, 2, "Should count 2 redactions");
+  });
+
+  it("redactPhi returns 0 count for clean text", async () => {
+    const { redactPhi } = await import("../server/services/phi-redactor.js");
+    const result = redactPhi("This text has no PHI.");
+    assert.equal(result.text, "This text has no PHI.");
+    assert.equal(result.redactionCount, 0);
+  });
+
+  it("redactPhi handles empty input", async () => {
+    const { redactPhi } = await import("../server/services/phi-redactor.js");
+    const result = redactPhi("");
+    assert.equal(result.text, "");
+    assert.equal(result.redactionCount, 0);
+  });
+});
+
 describe("shared/phi-patterns deepScrubPhi", () => {
   it("returns null/undefined unchanged", () => {
     assert.equal(deepScrubPhi(null), null);

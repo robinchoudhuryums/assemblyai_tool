@@ -37,6 +37,30 @@ import { safeFloat } from "./routes/utils";
 
 export type { UpdateCallAnalysisInput };
 
+/** F35: Pre-aggregated result for /api/reports/filtered — avoids loading all calls into memory. */
+export interface FilteredReportResult {
+  metrics: { totalCalls: number; avgSentiment: number; avgPerformanceScore: number };
+  sentiment: { positive: number; neutral: number; negative: number };
+  performers: Array<{ id: string; name: string; role: string; avgPerformanceScore: number | null; totalCalls: number }>;
+  trends: Array<{ month: string; calls: number; avgScore: number | null; positive: number; neutral: number; negative: number }>;
+  avgSubScores: { compliance: number; customerExperience: number; communication: number; resolution: number } | null;
+  autoAssignedCount: number;
+}
+
+/** F35: Lightweight call data for insights — excludes transcript text/words. */
+export interface InsightsCallData {
+  id: string;
+  status: string;
+  uploadedAt: string | null;
+  employeeName: string | null;
+  sentiment: string | null;
+  performanceScore: string | null;
+  confidenceScore: string | null;
+  summary: string | null;
+  topics: string[];
+  detectedAgentName: string | null;
+}
+
 /** Common interface for S3 object storage client */
 export interface ObjectStorageClient {
   uploadJson(objectName: string, data: unknown): Promise<void>;
@@ -165,6 +189,12 @@ export interface IStorage {
 
   // Call analysis operations
   getCallAnalysis(callId: string): Promise<CallAnalysis | undefined>;
+  /**
+   * F03: Bulk fetch analyses for multiple call IDs in a single query.
+   * Returns a Map keyed by callId. Missing analyses are omitted (not undefined).
+   * Used by auto-calibration to avoid N+1 query patterns.
+   */
+  getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>>;
   createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis>;
   updateCallAnalysis(callId: string, updates: UpdateCallAnalysisInput): Promise<void>;
 
@@ -172,6 +202,25 @@ export interface IStorage {
   getDashboardMetrics(): Promise<DashboardMetrics>;
   getSentimentDistribution(): Promise<SentimentDistribution>;
   getTopPerformers(limit?: number): Promise<PerformerSummary[]>;
+
+  /**
+   * F35: SQL-level aggregation for /api/reports/filtered. Replaces loading
+   * all calls into memory then filtering/aggregating in JS.
+   */
+  getFilteredReportMetrics(filters: {
+    from?: string;
+    to?: string;
+    employeeId?: string;
+    role?: string;
+    callPartyType?: string;
+  }): Promise<FilteredReportResult>;
+
+  /**
+   * F35: Lightweight call data for /api/insights — returns only the fields
+   * the insights endpoint needs (no transcript text/words), bounded by date
+   * window. Avoids loading full CallWithDetails for every call.
+   */
+  getInsightsData(since: Date): Promise<InsightsCallData[]>;
 
   // Search and filtering (limit controls max results returned)
   searchCalls(query: string, limit?: number): Promise<CallWithDetails[]>;
@@ -544,6 +593,14 @@ export class MemStorage implements IStorage {
   async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
     return this.analyses.get(callId);
   }
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    for (const id of callIds) {
+      const analysis = this.analyses.get(id);
+      if (analysis) result.set(id, analysis);
+    }
+    return result;
+  }
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
     const newAnalysis: CallAnalysis = { ...analysis, id, createdAt: new Date().toISOString() };
@@ -616,6 +673,97 @@ export class MemStorage implements IStorage {
       .filter((p) => p.totalCalls > 0)
       .sort((a, b) => (b.avgPerformanceScore || 0) - (a.avgPerformanceScore || 0))
       .slice(0, limit);
+  }
+
+  async getFilteredReportMetrics(filters: {
+    from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
+  }): Promise<FilteredReportResult> {
+    let calls = [...this.calls.values()].filter(c => c.status === "completed");
+    if (filters.from) { const d = new Date(filters.from).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() >= d); }
+    if (filters.to) { const d = new Date(filters.to).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() <= d); }
+    if (filters.employeeId) calls = calls.filter(c => c.employeeId === filters.employeeId);
+    if (filters.role) {
+      const empsByRole = new Set([...this.employees.values()].filter(e => e.role === filters.role).map(e => e.id));
+      calls = calls.filter(c => c.employeeId && empsByRole.has(c.employeeId));
+    }
+    if (filters.callPartyType) calls = calls.filter(c => this.analyses.get(c.id)?.callPartyType === filters.callPartyType);
+
+    let totalScore = 0, scoredCount = 0, sentTotal = 0, sentCount = 0;
+    const sentDist = { positive: 0, neutral: 0, negative: 0 };
+    let autoAssigned = 0;
+    const empStats = new Map<string, { total: number; count: number }>();
+    const trendMap = new Map<string, { calls: number; total: number; scored: number; positive: number; neutral: number; negative: number }>();
+    const subTotals = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0, count: 0 };
+
+    for (const c of calls) {
+      const a = this.analyses.get(c.id);
+      const s = this.sentiments.get(c.id);
+      if (a?.performanceScore) { totalScore += safeFloat(a.performanceScore); scoredCount++; }
+      if (s?.overallScore) { sentTotal += safeFloat(s.overallScore); sentCount++; }
+      const sent = s?.overallSentiment as keyof typeof sentDist;
+      if (sent && sent in sentDist) sentDist[sent]++;
+      if (a?.detectedAgentName) autoAssigned++;
+      if (c.employeeId) {
+        const st = empStats.get(c.employeeId) || { total: 0, count: 0 };
+        st.count++; if (a?.performanceScore) st.total += safeFloat(a.performanceScore);
+        empStats.set(c.employeeId, st);
+      }
+      const d = new Date(c.uploadedAt || 0);
+      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const te = trendMap.get(mk) || { calls: 0, total: 0, scored: 0, positive: 0, neutral: 0, negative: 0 };
+      te.calls++; if (a?.performanceScore) { te.total += safeFloat(a.performanceScore); te.scored++; }
+      if (sent === "positive") te.positive++; else if (sent === "neutral") te.neutral++; else if (sent === "negative") te.negative++;
+      trendMap.set(mk, te);
+      const ss = a?.subScores as any;
+      if (ss && (ss.compliance || ss.customerExperience || ss.communication || ss.resolution)) {
+        subTotals.compliance += ss.compliance || 0; subTotals.customerExperience += ss.customerExperience || 0;
+        subTotals.communication += ss.communication || 0; subTotals.resolution += ss.resolution || 0; subTotals.count++;
+      }
+    }
+    return {
+      metrics: {
+        totalCalls: calls.length,
+        avgSentiment: sentCount > 0 ? Math.round(sentTotal / sentCount * 10 * 100) / 100 : 0,
+        avgPerformanceScore: scoredCount > 0 ? Math.round(totalScore / scoredCount * 100) / 100 : 0,
+      },
+      sentiment: sentDist,
+      performers: [...empStats.entries()].map(([id, st]) => {
+        const emp = this.employees.get(id);
+        return { id, name: emp?.name || "Unknown", role: emp?.role || "", avgPerformanceScore: st.count > 0 ? Math.round(st.total / st.count * 100) / 100 : null, totalCalls: st.count };
+      }).filter(p => p.totalCalls > 0).sort((a, b) => (b.avgPerformanceScore || 0) - (a.avgPerformanceScore || 0)),
+      trends: [...trendMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, d]) => ({
+        month, calls: d.calls, avgScore: d.scored > 0 ? Math.round(d.total / d.scored * 100) / 100 : null,
+        positive: d.positive, neutral: d.neutral, negative: d.negative,
+      })),
+      avgSubScores: subTotals.count > 0 ? {
+        compliance: Math.round(subTotals.compliance / subTotals.count * 100) / 100,
+        customerExperience: Math.round(subTotals.customerExperience / subTotals.count * 100) / 100,
+        communication: Math.round(subTotals.communication / subTotals.count * 100) / 100,
+        resolution: Math.round(subTotals.resolution / subTotals.count * 100) / 100,
+      } : null,
+      autoAssignedCount: autoAssigned,
+    };
+  }
+
+  async getInsightsData(since: Date): Promise<InsightsCallData[]> {
+    const sinceMs = since.getTime();
+    const result: InsightsCallData[] = [];
+    for (const c of this.calls.values()) {
+      if (c.status !== "completed") continue;
+      if (new Date(c.uploadedAt || 0).getTime() < sinceMs) continue;
+      const a = this.analyses.get(c.id);
+      if (!a) continue;
+      const s = this.sentiments.get(c.id);
+      const emp = c.employeeId ? this.employees.get(c.employeeId) : undefined;
+      result.push({
+        id: c.id, status: c.status, uploadedAt: c.uploadedAt || null,
+        employeeName: emp?.name || null, sentiment: s?.overallSentiment || null,
+        performanceScore: a.performanceScore || null, confidenceScore: a.confidenceScore || null,
+        summary: a.summary || null, topics: Array.isArray(a.topics) ? a.topics as string[] : [],
+        detectedAgentName: a.detectedAgentName || null,
+      });
+    }
+    return result;
   }
 
   async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
@@ -1120,6 +1268,17 @@ export class CloudStorage implements IStorage {
   async getCallAnalysis(callId: string): Promise<CallAnalysis | undefined> {
     return this.client.downloadJson<CallAnalysis>(`analyses/${callId}.json`);
   }
+  async getCallAnalysesBulk(callIds: string[]): Promise<Map<string, CallAnalysis>> {
+    const result = new Map<string, CallAnalysis>();
+    const downloads = await Promise.allSettled(
+      callIds.map(async (id) => {
+        const analysis = await this.client.downloadJson<CallAnalysis>(`analyses/${id}.json`);
+        if (analysis) result.set(id, analysis);
+      })
+    );
+    // Silently skip failed downloads (same as listAndDownloadJson pattern)
+    return result;
+  }
 
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
@@ -1249,6 +1408,70 @@ export class CloudStorage implements IStorage {
       .slice(0, limit);
 
     return performers;
+  }
+
+  async getFilteredReportMetrics(filters: {
+    from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
+  }): Promise<FilteredReportResult> {
+    // CloudStorage is deprecated (s3-legacy, dev only). Load and filter in JS.
+    const allCalls = await this.getCallsWithDetails({ status: "completed" });
+    const employees = await this.getAllEmployees();
+    const employeeMap = new Map(employees.map(e => [e.id, e]));
+    let filtered = allCalls;
+    if (filters.from) { const d = new Date(filters.from).getTime(); filtered = filtered.filter(c => new Date(c.uploadedAt || 0).getTime() >= d); }
+    if (filters.to) { const d = new Date(filters.to).getTime(); filtered = filtered.filter(c => new Date(c.uploadedAt || 0).getTime() <= d); }
+    if (filters.employeeId) filtered = filtered.filter(c => c.employeeId === filters.employeeId);
+    if (filters.role) filtered = filtered.filter(c => c.employeeId && employeeMap.get(c.employeeId)?.role === filters.role);
+    if (filters.callPartyType) filtered = filtered.filter(c => c.analysis?.callPartyType === filters.callPartyType);
+
+    let totalScore = 0, scoredCount = 0, sentTotal = 0, sentCount = 0, autoAssigned = 0;
+    const sentDist = { positive: 0, neutral: 0, negative: 0 };
+    const empStats = new Map<string, { total: number; count: number }>();
+    const trendMap = new Map<string, { calls: number; total: number; scored: number; positive: number; neutral: number; negative: number }>();
+    const subTotals = { compliance: 0, customerExperience: 0, communication: 0, resolution: 0, count: 0 };
+    for (const c of filtered) {
+      if (c.analysis?.performanceScore) { totalScore += safeFloat(c.analysis.performanceScore); scoredCount++; }
+      if (c.sentiment?.overallScore) { sentTotal += safeFloat(c.sentiment.overallScore); sentCount++; }
+      const sent = c.sentiment?.overallSentiment as keyof typeof sentDist;
+      if (sent && sent in sentDist) sentDist[sent]++;
+      if (c.analysis?.detectedAgentName) autoAssigned++;
+      if (c.employeeId) {
+        const st = empStats.get(c.employeeId) || { total: 0, count: 0 }; st.count++;
+        if (c.analysis?.performanceScore) st.total += safeFloat(c.analysis.performanceScore);
+        empStats.set(c.employeeId, st);
+      }
+      const d = new Date(c.uploadedAt || 0);
+      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const te = trendMap.get(mk) || { calls: 0, total: 0, scored: 0, positive: 0, neutral: 0, negative: 0 };
+      te.calls++; if (c.analysis?.performanceScore) { te.total += safeFloat(c.analysis.performanceScore); te.scored++; }
+      if (sent === "positive") te.positive++; else if (sent === "neutral") te.neutral++; else if (sent === "negative") te.negative++;
+      trendMap.set(mk, te);
+      const ss = c.analysis?.subScores as any;
+      if (ss && (ss.compliance || ss.customerExperience || ss.communication || ss.resolution)) {
+        subTotals.compliance += ss.compliance || 0; subTotals.customerExperience += ss.customerExperience || 0;
+        subTotals.communication += ss.communication || 0; subTotals.resolution += ss.resolution || 0; subTotals.count++;
+      }
+    }
+    return {
+      metrics: { totalCalls: filtered.length, avgSentiment: sentCount > 0 ? Math.round(sentTotal / sentCount * 10 * 100) / 100 : 0, avgPerformanceScore: scoredCount > 0 ? Math.round(totalScore / scoredCount * 100) / 100 : 0 },
+      sentiment: sentDist,
+      performers: [...empStats.entries()].map(([id, st]) => { const emp = employeeMap.get(id); return { id, name: emp?.name || "Unknown", role: emp?.role || "", avgPerformanceScore: st.count > 0 ? Math.round(st.total / st.count * 100) / 100 : null, totalCalls: st.count }; }).filter(p => p.totalCalls > 0).sort((a, b) => (b.avgPerformanceScore || 0) - (a.avgPerformanceScore || 0)),
+      trends: [...trendMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, d]) => ({ month, calls: d.calls, avgScore: d.scored > 0 ? Math.round(d.total / d.scored * 100) / 100 : null, positive: d.positive, neutral: d.neutral, negative: d.negative })),
+      avgSubScores: subTotals.count > 0 ? { compliance: Math.round(subTotals.compliance / subTotals.count * 100) / 100, customerExperience: Math.round(subTotals.customerExperience / subTotals.count * 100) / 100, communication: Math.round(subTotals.communication / subTotals.count * 100) / 100, resolution: Math.round(subTotals.resolution / subTotals.count * 100) / 100 } : null,
+      autoAssignedCount: autoAssigned,
+    };
+  }
+
+  async getInsightsData(since: Date): Promise<InsightsCallData[]> {
+    // CloudStorage is deprecated. Use getCallsSinceWithDetails and map.
+    const allCalls = await this.getCallsSinceWithDetails(since);
+    return allCalls.filter(c => c.status === "completed" && c.analysis).map(c => ({
+      id: c.id, status: c.status, uploadedAt: c.uploadedAt || null,
+      employeeName: c.employee?.name || null, sentiment: c.sentiment?.overallSentiment || null,
+      performanceScore: c.analysis?.performanceScore || null, confidenceScore: c.analysis?.confidenceScore || null,
+      summary: c.analysis?.summary || null, topics: Array.isArray(c.analysis?.topics) ? c.analysis!.topics as string[] : [],
+      detectedAgentName: c.analysis?.detectedAgentName || null,
+    }));
   }
 
   async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
