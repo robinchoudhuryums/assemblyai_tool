@@ -280,6 +280,42 @@ export function estimateBedrockCost(model: string, inputTokens: number, outputTo
   return (inputTokens / 1000) * rates[0] + (outputTokens / 1000) * rates[1];
 }
 
+/** True if `model` is present in BEDROCK_PRICING and will return a non-null cost estimate. */
+export function isKnownBedrockModel(model: string | undefined): boolean {
+  if (!model) return false;
+  return model in BEDROCK_PRICING;
+}
+
+/** Returns the list of known Bedrock model IDs for diagnostics / validation messages. */
+export function getKnownBedrockModels(): string[] {
+  return Object.keys(BEDROCK_PRICING);
+}
+
+// Track unknown-model warnings so we only log once per unique model id per process.
+// Without this guard, every call would spam Sentry + stdout — but operators who
+// typo BEDROCK_MODEL should still see the warning loudly once.
+const warnedUnknownModels = new Set<string>();
+
+/**
+ * Warn (once per unique model) when a model is missing from BEDROCK_PRICING.
+ * Called from the pipeline's usage-tracking path so typos or new models don't
+ * silently record $0 cost while AWS still bills. Does NOT throw — cost
+ * tracking must not block the pipeline.
+ */
+export function warnOnUnknownBedrockModel(model: string | undefined, context: Record<string, unknown> = {}): void {
+  if (!model || warnedUnknownModels.has(model)) return;
+  if (isKnownBedrockModel(model)) return;
+  warnedUnknownModels.add(model);
+  // Direct logger import avoids a circular require against routes/utils.ts
+  // consumers. Kept minimal — this is an operational red flag, not a hot path.
+  import("../services/logger").then(({ logger }) => {
+    logger.warn("bedrock-cost: unknown model, cost tracked as $0", { model, known: Object.keys(BEDROCK_PRICING), ...context });
+  }).catch(() => { /* noop — logger should always import */ });
+  import("../services/sentry").then(({ captureMessage }) => {
+    captureMessage(`Bedrock cost tracking: unknown model "${model}" — usage records will show $0 while AWS still bills`, "warning");
+  }).catch(() => { /* noop — sentry is optional */ });
+}
+
 // AssemblyAI pricing LAST VERIFIED: 2025-11. Base $0.15/hr + sentiment $0.02/hr.
 const ASSEMBLYAI_RATE_PER_SEC_WITH_SENTIMENT = 0.17 / 3600;
 const ASSEMBLYAI_RATE_PER_SEC_BASE = 0.15 / 3600;

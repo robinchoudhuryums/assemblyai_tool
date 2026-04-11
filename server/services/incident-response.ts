@@ -282,6 +282,14 @@ export async function declareIncident(params: {
 
 /**
  * Advance an incident to the next phase.
+ *
+ * DB-first persistence: we build the next state on a clone, persist it, and
+ * only apply the mutation to the in-memory incident if persistIncident()
+ * succeeds. If the DB write throws, the in-memory cache stays at the
+ * pre-advance state and the caller sees the error — consistent with
+ * declareIncident() and createBreachReport(). Without this ordering, a failed
+ * persist left the in-memory cache ahead of the DB and other admins saw an
+ * "advanced" phase until the next restart.
  */
 export async function advanceIncidentPhase(
   incidentId: string,
@@ -293,21 +301,29 @@ export async function advanceIncidentPhase(
   if (!incident) return null;
 
   const now = new Date().toISOString();
-  incident.currentPhase = newPhase;
-  incident.updatedAt = now;
-  if (newPhase === "closed") {
-    incident.closedAt = now;
-  }
 
-  incident.timeline.push({
-    timestamp: now,
-    phase: newPhase,
-    action,
-    actor,
-    automated: false,
-  });
+  // Build the next state on a shallow clone so a persist failure cannot leave
+  // in-memory ahead of DB. timeline is sliced because push() would mutate the
+  // original array even on a spread-shallow clone.
+  const next: Incident = {
+    ...incident,
+    currentPhase: newPhase,
+    updatedAt: now,
+    closedAt: newPhase === "closed" ? now : incident.closedAt,
+    timeline: [
+      ...incident.timeline,
+      { timestamp: now, phase: newPhase, action, actor, automated: false },
+    ],
+  };
 
-  await persistIncident(incident);
+  // Persist first; throws on DB failure and leaves in-memory unchanged.
+  await persistIncident(next);
+
+  // Persist succeeded — apply the mutation to the in-memory cache.
+  incident.currentPhase = next.currentPhase;
+  incident.updatedAt = next.updatedAt;
+  incident.closedAt = next.closedAt;
+  incident.timeline = next.timeline;
 
   logPhiAccess({
     timestamp: now,

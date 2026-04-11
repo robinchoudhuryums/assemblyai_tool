@@ -70,6 +70,16 @@ const upload = multer({
 // Durable job queue (initialized if PostgreSQL is available)
 let jobQueue: JobQueue | null = null;
 
+/**
+ * Accessor for the JobQueue singleton so the graceful-shutdown handler in
+ * server/index.ts can drain in-flight jobs before the DB pool closes.
+ * Returns null when PostgreSQL is not configured (in-memory TaskQueue fallback
+ * path — nothing to stop).
+ */
+export function getJobQueue(): JobQueue | null {
+  return jobQueue;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   const router = Router();
 

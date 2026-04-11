@@ -55,6 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_calls_uploaded_at ON calls (uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_employee_id ON calls (employee_id);
 CREATE INDEX IF NOT EXISTS idx_calls_call_category ON calls (call_category);
 CREATE INDEX IF NOT EXISTS idx_calls_content_hash ON calls (content_hash);
+-- Content-hash upload dedupe (A21). The unique partial index rejects duplicate
+-- uploads at insert time so the route handler can 409 on pg 23505. Mirrored in
+-- server/db/pool.ts:runMigrations for upgrades of pre-A21 deployments.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_content_hash_unique ON calls (content_hash) WHERE content_hash IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_external_id_unique ON calls (external_id) WHERE external_id IS NOT NULL;
 
 -- ============================================================

@@ -435,7 +435,7 @@ export function getSessionFingerprint(req: import("express").Request): string {
   return createHash("sha256").update(`${ua}|${lang}`).digest("hex").slice(0, 16);
 }
 
-export const requireAuth: RequestHandler = (req, res, next) => {
+export const requireAuth: RequestHandler = async (req, res, next) => {
   if (!req.isAuthenticated()) {
     return res.status(401).json({ message: "Authentication required" });
   }
@@ -448,25 +448,47 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   if (!sessionFp) {
     // First request with this session — stamp the fingerprint
     sess.fingerprint = currentFp;
-  } else if (sessionFp !== currentFp) {
-    // Fingerprint changed mid-session — possible session hijacking
-    logPhiAccess({
-      timestamp: new Date().toISOString(),
-      event: "session_fingerprint_mismatch",
-      username: req.user?.username || "unknown",
-      resourceType: "auth",
-      detail: "Session destroyed: user-agent fingerprint mismatch",
-    });
-    req.logout(() => {});
-    req.session.destroy((err) => {
-      if (err) {
-        logger.error("auth: failed to destroy hijacked session", { error: (err as Error).message });
-      }
-    });
-    return res.status(401).json({ message: "Session expired. Please log in again." });
+    return next();
+  }
+  if (sessionFp === currentFp) {
+    return next();
   }
 
-  next();
+  // Fingerprint changed mid-session — possible session hijacking.
+  // Previously logout()/destroy() ran fire-and-forget before the 401 response.
+  // If destroy() failed against the session store, the cookie stayed valid for
+  // a window where concurrent requests could slip through. We now await both
+  // tear-down steps before responding. Destroy failures are escalated to
+  // Sentry because a persistently-compromised session is an incident, not a
+  // logging nuisance.
+  logPhiAccess({
+    timestamp: new Date().toISOString(),
+    event: "session_fingerprint_mismatch",
+    username: req.user?.username || "unknown",
+    resourceType: "auth",
+    detail: "Session destroyed: user-agent fingerprint mismatch",
+  });
+
+  await new Promise<void>((resolve) => {
+    req.logout(() => resolve());
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((err) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
+    const msg = (err as Error).message;
+    logger.error("auth: failed to destroy hijacked session", { error: msg });
+    // Fire-and-forget Sentry alert — the underlying session store is refusing
+    // to evict a session flagged as hijacked. Operators need to know.
+    import("./services/sentry").then(({ captureException }) => {
+      captureException(err instanceof Error ? err : new Error(String(err)), {
+        phase: "fingerprint_mismatch_destroy",
+        username: req.user?.username,
+      });
+    }).catch(() => { /* noop — Sentry optional */ });
+  }
+  return res.status(401).json({ message: "Session expired. Please log in again." });
 };
 
 // HIPAA: Role-based access control middleware
