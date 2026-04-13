@@ -28,19 +28,9 @@ DO NOT flag code for "simplification" or "cleanup" unless the current
 code is actively wrong or creates a maintenance trap. Working code
 that could be written differently is not a finding.
 
-After the broad pass, provide ratings out of 10 with reasoning:
-- Overall
-- Architecture & Code Quality (incl. test coverage)
-- Security & HIPAA Compliance
-- Audio Processing Pipeline
-- AI Analysis Reliability
-- AWS Integration Reliability
-- Data Integrity
-- RAG & Knowledge Base
-- Operational Integrity
-- Operational Readiness
-- Frontend & UX
-- Feature Completeness
+After the broad pass, provide ratings out of 10 with reasoning for
+each dimension listed in the "Health Dimensions" section of CLAUDE.md's
+Cycle Workflow Config. One bullet per dimension.
 
 For each rating include:
 - Your confidence level (did you deeply read this area or infer from partial context?)

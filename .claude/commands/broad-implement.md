@@ -2,7 +2,6 @@ If $ARGUMENTS is empty or missing, respond with exactly this and stop:
 
 Usage: /broad-implement <finding IDs or description of fixes to implement>
 Example: /broad-implement F03, F07, F12
-Example: /broad-implement Fix the auth bypass in auth.ts and the missing input validation in calls.ts
 
 Paste or reference the findings from a prior /broad-scan session.
 
@@ -16,16 +15,21 @@ Read CLAUDE.md (especially Common Gotchas) before starting.
 
 Rules:
 - Implement ONLY the findings specified above — nothing else
-- Do not fix, refactor, or improve anything outside this scope even if you notice other issues — note them at the end
-- If a fix is more complex than expected, stop and describe what you found before continuing
-- If a fix requires touching files that seem unrelated to the finding, explain why before proceeding
-- After each fix, briefly note: what changed, files touched, anything unexpected
+- Do not fix, refactor, or improve anything outside this scope even if
+  you notice other issues — note them at the end
+- If a fix is more complex than expected, stop and describe what you
+  found before continuing
+- If a fix requires touching files that seem unrelated to the finding,
+  explain why before proceeding
+- After each fix, briefly note: what changed, files touched, anything
+  unexpected
 - Check Common Gotchas before each fix to avoid re-introducing known issues
 
 After all fixes are complete, do the following in order:
 
 1. RUN TESTS
-Run the test suite (npm test). Note the result. If tests fail, classify each failure:
+Run the test suite (use the test command from CLAUDE.md's Cycle Workflow
+Config, or `npm test` if not specified). Note the result. If tests fail, classify:
 - Caused by this session's changes (fix now)
 - Pre-existing (note but don't fix)
 - Real production bug exposed by correct test (flag as follow-on, don't fix here)
@@ -33,18 +37,20 @@ Run the test suite (npm test). Note the result. If tests fail, classify each fai
 2. REGRESSION CHECK
 For each file you modified:
 - Could this change break any caller or consumer of this function/export?
-- Did you change any interface, return type, or default value that other modules depend on?
-- Is there any scenario where the old behavior was actually correct and you've made it worse?
-List any risks found, even low-probability ones.
+- Did you change any interface, return type, or default value that other
+  modules depend on?
+- Is there any scenario where the old behavior was actually correct and
+  you've made it worse?
 
 3. REFLECT
 For each fix completed:
-a) Would this bug have actually fired in production this month? YES (describe trigger) or NO (why not)
-b) Did this fix introduce a new failure mode, documented or not? YES (describe it) or NO
+a) Would this bug have actually fired in production this month? YES/NO
+b) Did this fix introduce a new failure mode, documented or not? YES/NO
 Tally: [production fixes] − [new failure modes] = [net score]
 
 4. INVARIANT CHECK
-Check whether any changes could have violated invariants from the project's invariant library (listed in CLAUDE.md Common Gotchas or the cycle process tool). Flag any at risk.
+Check whether any changes could have violated invariants from the project's
+invariant library (listed in CLAUDE.md's Cycle Workflow Config). Flag any at risk.
 
 5. SUMMARY
 Produce a BROAD SCAN IMPLEMENTATION SUMMARY:
@@ -55,16 +61,10 @@ Files modified: [list all files touched]
 
 CHANGES:
 [Finding ID] | [File(s)] | [What changed]
-(repeat for each)
 
 TEST RESULTS: [passed/failed — details if failed]
-
-REGRESSION RISKS:
-[any risks identified, or "None"]
-
-INVARIANTS AT RISK:
-[any invariants potentially affected, or "None"]
-
+REGRESSION RISKS: [any risks identified, or "None"]
+INVARIANTS AT RISK: [any invariants potentially affected, or "None"]
 NET SCORE: [production fixes] − [new failure modes] = [net]
 
 FOLLOW-ON ITEMS:
@@ -76,4 +76,5 @@ DOCUMENTATION UPDATES NEEDED:
 (or "None")
 ---END BROAD SCAN IMPLEMENTATION SUMMARY---
 
-After the summary, suggest running /test-sync if any test failures remain, and /sync-docs if any documentation updates are needed.
+After the summary, suggest running /test-sync if any test failures remain,
+and /sync-docs if any documentation updates are needed.

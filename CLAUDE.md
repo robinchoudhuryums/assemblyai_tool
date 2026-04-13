@@ -1150,3 +1150,63 @@ These are SQL scripts that must be run once during a specific upgrade window. De
 ## Long-Term Improvement Roadmap
 
 See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full multi-sprint improvement plan covering testing, security hardening, code quality, accessibility, and infrastructure.
+
+## Cycle Workflow Config
+
+### Test Commands
+```bash
+npm test                   # Backend (781 tests)
+npm run test:client        # Frontend (174 tests)
+npm run check              # TypeScript type check
+```
+
+### Health Dimensions
+Architecture & Code Quality, Security & HIPAA Compliance, Audio Processing Pipeline, AI Analysis Reliability, AWS Integration Reliability, Data Integrity, RAG & Knowledge Base, Operational Integrity, Operational Readiness, Frontend & UX, Feature Completeness, Scoring & Calibration Accuracy
+
+### Subsystems
+Core Architecture & Pipeline:
+  server/index.ts, server/routes.ts, server/routes/pipeline.ts, server/routes/utils.ts, server/routes/config.ts, server/routes/admin.ts, server/middleware/waf.ts, server/middleware/rate-limit.ts, server/middleware/error-handler.ts, server/types.d.ts, server/vite.ts, server/constants.ts, server/services/job-queue.ts, server/services/logger.ts, server/services/correlation-id.ts, server/services/tracing.ts, server/services/trace-span.ts, server/services/websocket.ts
+Storage Layer / Database:
+  server/storage.ts, server/storage-postgres.ts, server/db/pool.ts, server/db/schema.sql, shared/schema.ts
+AI Processing & Analysis:
+  server/services/assemblyai.ts, server/services/bedrock.ts, server/services/ai-provider.ts, server/services/ai-factory.ts, server/services/active-model.ts, server/services/bedrock-batch.ts, server/services/batch-scheduler.ts, server/services/scoring-calibration.ts, server/services/auto-calibration.ts, server/services/call-clustering.ts
+Security & Compliance:
+  server/auth.ts, server/routes/auth.ts, server/routes/users.ts, server/routes/admin-security.ts, server/services/audit-log.ts, server/services/security-monitor.ts, server/services/vulnerability-scanner.ts, server/services/incident-response.ts, server/services/totp.ts, server/services/phi-redactor.ts, server/services/prompt-guard.ts, server/services/url-validator.ts, server/services/resilience.ts, server/services/sentry.ts, shared/phi-patterns.ts, client/src/lib/sentry.ts
+AWS & External Integrations:
+  server/services/s3.ts, server/services/sigv4.ts, server/services/aws-credentials.ts, server/services/telephony-8x8.ts, server/services/webhooks.ts
+RAG & Knowledge Base:
+  server/services/rag-client.ts, server/services/best-practice-ingest.ts, server/services/medical-synonyms.ts, server/services/scoring-feedback.ts
+Engagement & Reporting:
+  server/services/gamification.ts, server/services/coaching-alerts.ts, server/services/performance-snapshots.ts, server/services/scheduled-reports.ts, server/routes/coaching.ts, server/routes/gamification.ts, server/routes/analytics.ts, server/routes/reports.ts, server/routes/insights.ts, server/routes/snapshots.ts, server/routes/dashboard.ts, server/routes/employees.ts, server/routes/calls.ts, server/routes/calls-tags.ts, server/routes/admin-operations.ts, server/routes/admin-content.ts
+Frontend / UI:
+  client/src/App.tsx, client/src/pages/, client/src/components/, client/src/lib/queryClient.ts, client/src/lib/i18n.ts, client/src/lib/constants.ts, client/src/lib/safe-storage.ts, client/src/lib/transcript-search.ts, client/src/hooks/
+
+### Invariant Library
+INV-01 | updateCall must throw if employeeId is in the updates payload | Subsystem: Storage
+INV-02 | audioProcessingQueue is a shared singleton — never construct a second TaskQueue | Subsystem: Core Architecture
+INV-03 | wafPreBody before express.json(), wafPostBody after — ordering is load-bearing | Subsystem: Core Architecture
+INV-04 | CallAnalysisSchema must NOT have .catch() on summary/performance_score/sub_scores | Subsystem: AI Processing
+INV-05 | requireAuth is async — do not assume sync return | Subsystem: Security
+INV-06 | content_hash UNIQUE index must exist in both schema.sql AND runMigrations | Subsystem: Storage
+INV-07 | Scoring-correction reason must be sanitized + wrapped in <<<UNTRUSTED_MANAGER_NOTES>>> | Subsystem: RAG & KB
+INV-08 | promoteActiveModel must call both aiProvider.setModel() AND bedrockBatchService.setModel() | Subsystem: AI Processing
+INV-09 | gracefulShutdown must call jobQueue.stop() BEFORE closePool() | Subsystem: Core Architecture
+INV-10 | loadAuditIntegrityChain must retry 3x and throw on exhaustion | Subsystem: Security
+INV-11 | AUDIT_HMAC_SECRET must be dedicated in production, not shared with SESSION_SECRET | Subsystem: Security
+INV-12 | Tag delete must enforce author-or-manager authorization | Subsystem: Engagement
+INV-13 | advanceIncidentPhase/addIncidentTimelineEntry/addActionItem must be DB-first clone-then-persist | Subsystem: Security
+INV-14 | Every manager/admin-gated mutation route must include requireMFASetup | Subsystem: Security
+INV-15 | isPasswordReused must slice history to PASSWORD_HISTORY_SIZE before scrypt compares | Subsystem: Security
+INV-16 | validateTimestamps must log + flag (output_anomaly:*) on strip, not silently drop | Subsystem: AI Processing
+INV-17 | persistBatchJobTracking must retry 3x + fall back to orphaned-submissions/ prefix | Subsystem: AI Processing
+INV-18 | runCatchUp must walk back 12 weekly + 12 monthly boundaries, not just one | Subsystem: Engagement
+INV-19 | Audit queue overflow must fire one-shot Sentry captureMessage on first drop | Subsystem: Security
+INV-20 | BEDROCK_MODEL validated against BEDROCK_PRICING at startup with console.warn | Subsystem: Core Architecture
+INV-21 | getSessionFingerprint is the single source of truth for fingerprinting | Subsystem: Security
+INV-22 | Production hard-fails if S3_BUCKET missing when DATABASE_URL is set | Subsystem: Storage
+INV-23 | Sub-scores are camelCase in storage, snake_case at AI boundary — never read storage with snake_case | Subsystem: AI Processing
+INV-24 | queryFn default must use on401: returnNull — never change to throw | Subsystem: Frontend
+
+### Policy Configuration
+Policy threshold: 5/10
+Consecutive cycles: 2

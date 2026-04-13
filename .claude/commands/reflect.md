@@ -12,10 +12,12 @@ For each action completed this cycle, answer two questions:
    Answer YES or NO. If YES: describe the new failure mode, whether it is better or worse than what it replaced, and under what conditions it would fire. Do not bury this in a "tradeoffs" section — if the post-cycle state is worse under any realistic scenario, that is a regression and must be counted as one.
 
 Tally:
-- Production bug fixes (YES to question 1): [count]
-- Speculative/defensive fixes (NO to question 1): [count]
-- Actions that introduced new failure modes (YES to question 2): [count]
+- Production bug fixes (YES to question 1): [count] — severity breakdown: [Critical/High/Medium/Low]
+- New capabilities / feature work: [count]
+- Defensive/structural improvements (NO to question 1, not new capability): [count]
+- Actions that introduced new failure modes (YES to question 2): [count] — severity: [Critical/High/Medium/Low]
 - Net score: [production fixes] − [new failure modes] = [net]
+  Note: a net-positive score with a Critical new failure mode is still a problem — severity matters, not just count.
 
 Flag any fixes that introduced tradeoffs or new failure modes — cases where the new behavior is better in aggregate but worse in specific scenarios. Note what failure mode was replaced and what new one was introduced.
 

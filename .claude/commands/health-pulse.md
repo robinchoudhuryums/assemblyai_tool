@@ -10,7 +10,7 @@ Confidence: High / Medium / Low
 One sentence of reasoning
 Flag any dimension where confidence is Low and a proper audit session is overdue
 
-Dimensions: Overall, Architecture & Code Quality, Security & HIPAA Compliance, Audio Processing Pipeline, AI Analysis Reliability, AWS Integration Reliability, Data Integrity, Operational Readiness, Frontend & UX, Feature Completeness
+Dimensions: For each dimension listed in the "Health Dimensions" section of CLAUDE.md's Cycle Workflow Config, provide a score, confidence level, and one sentence of reasoning. Also provide an Overall score.
 
 AXIS B — HORIZONTAL (Bug-Shape Posture — lightweight scan):
 For each category below, provide a quick directional score (1–10) and one sentence of evidence based on what you can observe from CLAUDE.md, recent commits, and code structure. These are lower-confidence than synthesis scores — flag that explicitly.

@@ -1,97 +1,55 @@
-If $ARGUMENTS is empty or missing AND no TIER 2 HANDOFF BLOCK exists earlier in this session, respond with exactly this and stop:
+If $ARGUMENTS is empty or missing AND no TIER 2 HANDOFF BLOCK exists
+earlier in this session, respond with exactly this and stop:
 
-Usage (same session): /targeted-implement — run immediately after /targeted-audit in the same session; the handoff block is already in context.
-Usage (new session): Paste the ---TIER 2 HANDOFF BLOCK--- from the audit session as the first message, then run /targeted-implement.
+Usage (same session): /targeted-implement — run after /targeted-audit
+Usage (new session): Paste the TIER 2 HANDOFF BLOCK first, then run
 
 ---
 
 Read CLAUDE.md (especially Common Gotchas) before starting.
 
-You are implementing the actions from the TIER 2 HANDOFF BLOCK above. Rules:
+You are implementing the actions from the TIER 2 HANDOFF BLOCK above.
 
-- Implement ONLY the actions in the handoff block, in the order listed
-- Do not fix, refactor, or improve anything outside this scope even if
-  you notice issues — note them at the end instead
-- If an action is more complex than estimated, stop and describe what
-  you found before continuing
-- If an action requires touching files in the DO NOT TOUCH list or
-  outside the listed scope, stop and flag it
-- After each action, briefly note: what changed, files touched, anything
-  unexpected
-- Check Common Gotchas before each action to avoid re-introducing known issues
-- Run tests after completing all actions if a test command is available
+Rules:
+- Implement ONLY the actions in the handoff block, in order
+- Do not fix anything outside scope — note for follow-on
+- Stop on unexpected complexity and describe before continuing
+- Stop if touching DO NOT TOUCH files or out-of-scope files
+- Check Common Gotchas before each action
 
-After all actions are complete (or if you had to stop), do the following in order:
+After all actions complete:
 
-1. RUN TESTS
-Run the test suite (npm test). Note the result. If tests fail, classify:
-- Caused by this session's changes (fix now)
-- Pre-existing (note but don't fix)
-- Real production bug exposed by correct test (flag as follow-on)
-
-2. REGRESSION CHECK
-Review every file you modified. For each change:
-- Could this change break any caller or consumer of this function/export?
-- Did you change any interface, return type, or default value that other
-  modules depend on?
-- Is there any scenario where the old behavior was actually correct and
-  you've made it worse?
-Cross-reference the CROSS-MODULE RISKS section from the handoff block.
-List any risks found, even low-probability ones.
-
-3. REFLECT
-For each action completed:
-a) Would this bug have actually fired in production this month?
-   YES (describe trigger) or NO (why not)
-b) Did this action introduce a new failure mode, documented or not?
-   YES (describe it) or NO
-
-Tally: [production fixes] − [new failure modes] = [net score]
-
-4. INVARIANT CHECK
-Check whether any changes could have violated invariants from the project's
-invariant library (listed in CLAUDE.md Common Gotchas). List any at risk:
-- [invariant description] — [which change could affect it] — [risk: High/Med/Low]
-Or: "No invariants at risk."
-
-5. INVARIANT CANDIDATES
-What rules must now hold as a result of this session's changes that
-should be checked in the future? List as:
-- [one-sentence rule] | [file/function it applies to]
-
-6. SUMMARY
-Produce a TARGETED IMPLEMENTATION SUMMARY:
+1. RUN TESTS — classify failures (this session / pre-existing / real bug)
+2. REGRESSION CHECK — review each modified file for breakage risk,
+   cross-reference CROSS-MODULE RISKS from handoff block
+3. REFLECT — for each action: production bug? (YES/NO) New failure
+   mode? (YES/NO). Tally net score.
+4. INVARIANT CHECK — cross-reference against project invariant library
+   (listed in the Invariant Library section of CLAUDE.md's Cycle Workflow Config)
+5. INVARIANT CANDIDATES — new rules from this session's changes
+6. SUMMARY — produce TARGETED IMPLEMENTATION SUMMARY:
 
 ---TARGETED IMPLEMENTATION SUMMARY---
-Scope: [subsystem from handoff block]
-Actions completed: [list action IDs]
-Actions not completed (if any): [list with reason]
-Files modified: [list all files touched]
+Scope: [subsystem]
+Actions completed: [list IDs]
+Actions not completed: [list with reason, or "All completed"]
+Files modified: [list]
 
 CHANGES:
 [Action ID] | [File(s)] | [What changed] | [Findings addressed]
-(repeat for each)
 
-TEST RESULTS: [passed/failed — details if failed]
-
-REGRESSION RISKS:
-[any risks from the regression check, or "None"]
-
-INVARIANTS AT RISK:
-[any invariants potentially affected, or "None"]
-
+TEST RESULTS: [passed/failed]
+REGRESSION RISKS: [risks or "None"]
+INVARIANTS AT RISK: [any or "None"]
 NET SCORE: [production fixes] − [new failure modes] = [net]
-
-INVARIANT CANDIDATES:
-[new rules to add to the library, or "None"]
+INVARIANT CANDIDATES: [new rules or "None"]
 
 FOLLOW-ON ITEMS:
 - [File: area] — [what to check and why]
 (or "None")
 
 DOCUMENTATION UPDATES NEEDED:
-- [any CLAUDE.md, README, or inline doc changes needed]
-(or "None")
+- [updates or "None"]
 ---END TARGETED IMPLEMENTATION SUMMARY---
 
-After the summary, suggest running /test-sync if any test failures remain, and /sync-docs if any documentation updates are needed.
+Suggest /test-sync and /sync-docs if applicable.
