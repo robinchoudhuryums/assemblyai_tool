@@ -1,38 +1,19 @@
 If $ARGUMENTS is empty or missing, respond with exactly this and stop:
 
 Usage: /audit <subsystem-name>
-Available subsystems:
-
-Core Architecture & Pipeline
-Storage Layer / Database
-AI Processing & Analysis
-Security & Compliance
-AWS & External Integrations
-RAG & Knowledge Base
-Engagement & Reporting
-Frontend / UI
+Available subsystems: See the "Subsystems" section in CLAUDE.md's
+Cycle Workflow Config for the full list and file mappings.
 
 Example: /audit AI Processing & Analysis
 
 
 Refer to the systems map summary in CLAUDE.md under "## Systems Map" for architectural context. Do not make any changes to any files during this session.
 This session's audit scope: $ARGUMENTS
-Use the subsystem file reference below to determine the relevant files. If the scope is ambiguous, ask before proceeding.
-
-SUBSYSTEM FILE REFERENCE:
-
-Core Architecture & Pipeline: server/index.ts, server/routes.ts, server/routes/pipeline.ts, server/routes/utils.ts, server/routes/config.ts, server/routes/admin.ts, server/middleware/waf.ts, server/middleware/rate-limit.ts, server/middleware/error-handler.ts, server/types.d.ts, server/vite.ts, server/constants.ts, server/services/job-queue.ts, server/services/logger.ts, server/services/correlation-id.ts, server/services/tracing.ts, server/services/trace-span.ts, server/services/websocket.ts
-Storage Layer / Database: server/storage.ts, server/storage-postgres.ts, server/db/pool.ts, server/db/schema.sql, shared/schema.ts
-AI Processing & Analysis: server/services/assemblyai.ts, server/services/bedrock.ts, server/services/ai-provider.ts, server/services/ai-factory.ts, server/services/active-model.ts, server/services/bedrock-batch.ts, server/services/batch-scheduler.ts, server/services/scoring-calibration.ts, server/services/auto-calibration.ts, server/services/call-clustering.ts
-Security & Compliance: server/auth.ts, server/routes/auth.ts, server/routes/users.ts, server/routes/admin-security.ts, server/services/audit-log.ts, server/services/security-monitor.ts, server/services/vulnerability-scanner.ts, server/services/incident-response.ts, server/services/totp.ts, server/services/phi-redactor.ts, server/services/prompt-guard.ts, server/services/url-validator.ts, server/services/resilience.ts, server/services/sentry.ts, shared/phi-patterns.ts, client/src/lib/sentry.ts
-AWS & External Integrations: server/services/s3.ts, server/services/sigv4.ts, server/services/aws-credentials.ts, server/services/telephony-8x8.ts, server/services/webhooks.ts
-RAG & Knowledge Base: server/services/rag-client.ts, server/services/best-practice-ingest.ts, server/services/medical-synonyms.ts, server/services/scoring-feedback.ts
-Engagement & Reporting: server/services/gamification.ts, server/services/coaching-alerts.ts, server/services/performance-snapshots.ts, server/services/scheduled-reports.ts, server/routes/coaching.ts, server/routes/gamification.ts, server/routes/analytics.ts, server/routes/reports.ts, server/routes/insights.ts, server/routes/snapshots.ts, server/routes/dashboard.ts, server/routes/employees.ts, server/routes/calls.ts, server/routes/calls-tags.ts, server/routes/admin-operations.ts, server/routes/admin-content.ts
-Frontend / UI: client/src/App.tsx, client/src/pages/, client/src/components/, client/src/lib/queryClient.ts, client/src/lib/i18n.ts, client/src/lib/constants.ts, client/src/lib/safe-storage.ts, client/src/lib/transcript-search.ts, client/src/hooks/
+Use the Subsystems section of CLAUDE.md's Cycle Workflow Config to identify the relevant files for this subsystem. If the scope is ambiguous, ask before proceeding.
 
 [OPTIONAL: PASTE ANY FOLLOW-ON AUDIT ITEMS FROM A PRIOR REGRESSION CHECK]
 
-[OPTIONAL: PASTE ANY POLICY RESPONSE TRIGGERED BLOCKS FROM THE LAST HEALTH SYNTHESIS — if a policy response was triggered for an Axis B category, the prescribed policy fixes are MANDATORY additions to this cycle's scope regardless of subsystem focus]
+[IF TRIGGERED: PASTE ANY POLICY RESPONSE BLOCKS FROM THE LAST HEALTH SYNTHESIS — these are MANDATORY scope additions for this cycle]
 
 [OPTIONAL: PASTE THE "RECOMMENDED FOCUS FOR NEXT SUBSYSTEM CYCLE" SECTION FROM THE LAST SEAMS & INVARIANTS AUDIT — if this subsystem was flagged, check the seam-related findings listed there before running the full audit]
 
