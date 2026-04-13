@@ -14,15 +14,12 @@ import { userRateLimit } from "./middleware/rate-limit";
 import { wafPreBody, wafPostBody } from "./middleware/waf";
 import { globalErrorHandler } from "./middleware/error-handler";
 import { startScheduledScans } from "./services/vulnerability-scanner";
-import { initSentry, captureException as sentryCaptureException } from "./services/sentry";
+import { captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
 import { runWithCorrelationId } from "./services/correlation-id";
 import { flushAuditQueue } from "./services/audit-log";
 import { initWebhooks } from "./services/webhooks";
-
-// Initialize Sentry early (before Express setup) so it catches startup errors
-initSentry();
 
 const app = express();
 
