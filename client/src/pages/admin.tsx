@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CaretRight, CheckCircle, Clock, Eye, Gear, Shield, UserPlus, Users, XCircle } from "@phosphor-icons/react";
+import { CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -11,14 +11,25 @@ import { USER_ROLES } from "@shared/schema";
 import type { AccessRequest } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
-type TabView = "requests" | "roles";
+type TabView = "users" | "requests" | "roles";
+
+interface DbUser {
+  id: string;
+  username: string;
+  role: string;
+  displayName: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<TabView>("requests");
+  const [tab, setTab] = useState<TabView>("users");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: requests, isLoading, error: requestsError } = useQuery<AccessRequest[]>({
+  // ── Access Requests ──
+  const { data: requests, isLoading: requestsLoading, error: requestsError } = useQuery<AccessRequest[]>({
     queryKey: ["/api/access-requests"],
   });
 
@@ -32,7 +43,7 @@ export default function AdminPage() {
       toast({
         title: variables.status === "approved" ? "Request Approved" : "Request Denied",
         description: variables.status === "approved"
-          ? "You can now add this user to AUTH_USERS with the approved role."
+          ? "You can now create a user account in the Users tab."
           : "The access request has been denied.",
       });
     },
@@ -44,6 +55,94 @@ export default function AdminPage() {
   const pendingRequests = requests?.filter(r => r.status === "pending") || [];
   const reviewedRequests = requests?.filter(r => r.status !== "pending") || [];
 
+  // ── Users ──
+  const { data: users, isLoading: usersLoading, error: usersError } = useQuery<DbUser[]>({
+    queryKey: ["/api/users"],
+  });
+
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createForm, setCreateForm] = useState({ username: "", password: "", displayName: "", role: "viewer" });
+  const [editingUser, setEditingUser] = useState<DbUser | null>(null);
+  const [editForm, setEditForm] = useState({ displayName: "", role: "", active: true });
+  const [resetPasswordUser, setResetPasswordUser] = useState<DbUser | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: typeof createForm) => {
+      const res = await apiRequest("POST", "/api/users", data);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to create user");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setShowCreateForm(false);
+      setCreateForm({ username: "", password: "", displayName: "", role: "viewer" });
+      toast({ title: "User Created", description: "The new user account is ready." });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to Create User", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
+      const res = await apiRequest("PATCH", `/api/users/${id}`, data);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to update user");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setEditingUser(null);
+      toast({ title: "User Updated" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to Update User", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ id, newPassword: pw }: { id: string; newPassword: string }) => {
+      const res = await apiRequest("POST", `/api/users/${id}/reset-password`, { newPassword: pw });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to reset password");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setResetPasswordUser(null);
+      setNewPassword("");
+      toast({ title: "Password Reset", description: "The user's password has been updated." });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to Reset Password", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deactivateUserMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/users/${id}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to deactivate user");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: "User Deactivated" });
+    },
+    onError: (error) => {
+      toast({ title: "Failed to Deactivate User", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // ── Shared helpers ──
   const roleIcons: Record<string, React.ReactNode> = {
     viewer: <Eye className="w-4 h-4 text-blue-500" />,
     manager: <Gear className="w-4 h-4 text-amber-500" />,
@@ -68,13 +167,18 @@ export default function AdminPage() {
     return <Badge className={config?.badgeClass || "bg-gray-100 text-gray-800"}>{config?.label || role}</Badge>;
   };
 
+  const startEdit = (user: DbUser) => {
+    setEditingUser(user);
+    setEditForm({ displayName: user.displayName, role: user.role, active: user.active });
+  };
+
   return (
     <div className="min-h-screen" data-testid="admin-page">
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-foreground">Administration</h2>
-            <p className="text-muted-foreground">Manage access requests and user permissions</p>
+            <p className="text-muted-foreground">Manage users, access requests, and permissions</p>
           </div>
           {pendingRequests.length > 0 && (
             <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 text-sm px-3 py-1">
@@ -87,11 +191,11 @@ export default function AdminPage() {
       <div className="p-6 space-y-6">
         {/* Tabs */}
         <div className="flex gap-2">
-          <Button
-            variant={tab === "requests" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setTab("requests")}
-          >
+          <Button variant={tab === "users" ? "default" : "outline"} size="sm" onClick={() => setTab("users")}>
+            <Users className="w-4 h-4 mr-2" />
+            Users
+          </Button>
+          <Button variant={tab === "requests" ? "default" : "outline"} size="sm" onClick={() => setTab("requests")}>
             <UserPlus className="w-4 h-4 mr-2" />
             Access Requests
             {pendingRequests.length > 0 && (
@@ -100,20 +204,278 @@ export default function AdminPage() {
               </span>
             )}
           </Button>
-          <Button
-            variant={tab === "roles" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setTab("roles")}
-          >
+          <Button variant={tab === "roles" ? "default" : "outline"} size="sm" onClick={() => setTab("roles")}>
             <Shield className="w-4 h-4 mr-2" />
             Role Definitions
           </Button>
         </div>
 
-        {/* ACCESS REQUESTS TAB */}
+        {/* ════════════════ USERS TAB ════════════════ */}
+        {tab === "users" && (
+          <div className="space-y-6">
+            {/* Create User */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Users className="w-5 h-5 text-primary" />
+                    User Accounts
+                  </CardTitle>
+                  <CardDescription>Create and manage database-backed user accounts.</CardDescription>
+                </div>
+                <Button size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
+                  <UserPlus className="w-4 h-4 mr-2" />
+                  {showCreateForm ? "Cancel" : "Create User"}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {/* Create form */}
+                {showCreateForm && (
+                  <form
+                    className="mb-6 p-4 rounded-lg border border-border bg-muted/30 space-y-3"
+                    onSubmit={(e) => { e.preventDefault(); createUserMutation.mutate(createForm); }}
+                  >
+                    <h4 className="font-semibold text-sm text-foreground">New User</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Username</label>
+                        <input
+                          type="text"
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={createForm.username}
+                          onChange={(e) => setCreateForm(f => ({ ...f, username: e.target.value }))}
+                          required
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Display Name</label>
+                        <input
+                          type="text"
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={createForm.displayName}
+                          onChange={(e) => setCreateForm(f => ({ ...f, displayName: e.target.value }))}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Password</label>
+                        <input
+                          type="password"
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={createForm.password}
+                          onChange={(e) => setCreateForm(f => ({ ...f, password: e.target.value }))}
+                          required
+                          autoComplete="new-password"
+                          placeholder="Min 12 chars, upper/lower/digit/special"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Role</label>
+                        <select
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={createForm.role}
+                          onChange={(e) => setCreateForm(f => ({ ...f, role: e.target.value }))}
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="manager">Manager / QA</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setShowCreateForm(false)}>Cancel</Button>
+                      <Button type="submit" size="sm" disabled={createUserMutation.isPending}>
+                        {createUserMutation.isPending ? "Creating..." : "Create User"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {/* User list */}
+                {usersError ? (
+                  <div className="text-center py-12 text-destructive">
+                    <Shield className="w-8 h-8 mx-auto mb-2" />
+                    <p className="font-semibold">Failed to load users</p>
+                    <p className="text-sm text-muted-foreground">{usersError.message}</p>
+                  </div>
+                ) : usersLoading ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} className="flex items-center gap-3 py-3">
+                        <Skeleton className="h-10 w-10 rounded-full" />
+                        <div className="space-y-1.5 flex-1"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-48" /></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : !users || users.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Users className="w-10 h-10 mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">No database users yet. Create one above or use AUTH_USERS env var for bootstrapping.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {users.map((user) => (
+                      <div key={user.id} className={`flex items-center gap-4 p-3 rounded-lg border border-border ${!user.active ? "opacity-50 bg-muted/20" : "bg-muted/30"}`}>
+                        <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10 shrink-0">
+                          {roleIcons[user.role] || <Users className="w-5 h-5 text-muted-foreground" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-foreground text-sm">{user.displayName}</p>
+                            {roleBadge(user.role)}
+                            {!user.active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground">@{user.username}</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button variant="ghost" size="sm" onClick={() => startEdit(user)} title="Edit user">
+                            <PencilSimple className="w-4 h-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setResetPasswordUser(user); setNewPassword(""); }} title="Reset password">
+                            <Key className="w-4 h-4" />
+                          </Button>
+                          {user.active && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-500 hover:text-red-600"
+                              onClick={() => {
+                                if (confirm(`Deactivate ${user.displayName}? They will no longer be able to log in.`)) {
+                                  deactivateUserMutation.mutate(user.id);
+                                }
+                              }}
+                              title="Deactivate user"
+                            >
+                              <Trash className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {!user.active && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-green-600"
+                              onClick={() => updateUserMutation.mutate({ id: user.id, data: { active: true } })}
+                              title="Reactivate user"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Edit user dialog (inline) */}
+            {editingUser && (
+              <Card className="border-primary/50">
+                <CardHeader>
+                  <CardTitle className="text-lg">Edit User: {editingUser.displayName}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form
+                    className="space-y-3"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const data: Record<string, unknown> = {};
+                      if (editForm.displayName !== editingUser.displayName) data.displayName = editForm.displayName;
+                      if (editForm.role !== editingUser.role) data.role = editForm.role;
+                      if (editForm.active !== editingUser.active) data.active = editForm.active;
+                      if (Object.keys(data).length === 0) { setEditingUser(null); return; }
+                      updateUserMutation.mutate({ id: editingUser.id, data });
+                    }}
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Display Name</label>
+                        <input
+                          type="text"
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={editForm.displayName}
+                          onChange={(e) => setEditForm(f => ({ ...f, displayName: e.target.value }))}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Role</label>
+                        <select
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={editForm.role}
+                          onChange={(e) => setEditForm(f => ({ ...f, role: e.target.value }))}
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="manager">Manager / QA</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground">Status</label>
+                        <select
+                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          value={editForm.active ? "active" : "inactive"}
+                          onChange={(e) => setEditForm(f => ({ ...f, active: e.target.value === "active" }))}
+                        >
+                          <option value="active">Active</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setEditingUser(null)}>Cancel</Button>
+                      <Button type="submit" size="sm" disabled={updateUserMutation.isPending}>
+                        {updateUserMutation.isPending ? "Saving..." : "Save Changes"}
+                      </Button>
+                    </div>
+                  </form>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Reset password dialog (inline) */}
+            {resetPasswordUser && (
+              <Card className="border-primary/50">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Key className="w-5 h-5" />
+                    Reset Password: {resetPasswordUser.displayName}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form
+                    className="space-y-3"
+                    onSubmit={(e) => { e.preventDefault(); resetPasswordMutation.mutate({ id: resetPasswordUser.id, newPassword }); }}
+                  >
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">New Password</label>
+                      <input
+                        type="password"
+                        className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        required
+                        autoComplete="new-password"
+                        placeholder="Min 12 chars, upper/lower/digit/special"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setResetPasswordUser(null)}>Cancel</Button>
+                      <Button type="submit" size="sm" disabled={resetPasswordMutation.isPending}>
+                        {resetPasswordMutation.isPending ? "Resetting..." : "Reset Password"}
+                      </Button>
+                    </div>
+                  </form>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* ════════════════ ACCESS REQUESTS TAB ════════════════ */}
         {tab === "requests" && (
           <div className="space-y-6">
-            {/* Pending Requests */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
@@ -121,7 +483,7 @@ export default function AdminPage() {
                   Pending Requests ({pendingRequests.length})
                 </CardTitle>
                 <CardDescription>
-                  Review and approve or deny access requests. After approving, add the user to your AUTH_USERS environment variable with their assigned role.
+                  Review and approve or deny access requests. After approving, create the user account in the Users tab with their assigned role.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -131,17 +493,13 @@ export default function AdminPage() {
                     <p className="font-semibold">Failed to load access requests</p>
                     <p className="text-sm text-muted-foreground">{requestsError.message}</p>
                   </div>
-                ) : isLoading ? (
+                ) : requestsLoading ? (
                   <div className="space-y-3">
                     {Array.from({ length: 3 }).map((_, i) => (
                       <div key={i} className="flex items-center gap-3 py-3">
                         <Skeleton className="h-10 w-10 rounded-full" />
-                        <div className="space-y-1.5 flex-1">
-                          <Skeleton className="h-4 w-32" />
-                          <Skeleton className="h-3 w-48" />
-                        </div>
-                        <Skeleton className="h-8 w-20" />
-                        <Skeleton className="h-8 w-20" />
+                        <div className="space-y-1.5 flex-1"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-48" /></div>
+                        <Skeleton className="h-8 w-20" /><Skeleton className="h-8 w-20" />
                       </div>
                     ))}
                   </div>
@@ -165,31 +523,22 @@ export default function AdminPage() {
                             {roleBadge(req.requestedRole)}
                           </div>
                           <p className="text-sm text-muted-foreground">{req.email}</p>
-                          {req.reason && (
-                            <p className="text-xs text-muted-foreground mt-1">"{req.reason}"</p>
-                          )}
+                          {req.reason && <p className="text-xs text-muted-foreground mt-1">"{req.reason}"</p>}
                           <p className="text-xs text-muted-foreground mt-1">
                             Requested {req.createdAt ? new Date(req.createdAt).toLocaleDateString() : "recently"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <Button
-                            size="sm"
-                            onClick={() => reviewMutation.mutate({ id: req.id, status: "approved" })}
-                            disabled={reviewMutation.isPending}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1" />
-                            Approve
+                          <Button size="sm" onClick={() => reviewMutation.mutate({ id: req.id, status: "approved" })} disabled={reviewMutation.isPending}>
+                            <CheckCircle className="w-4 h-4 mr-1" />Approve
                           </Button>
                           <Button
-                            size="sm"
-                            variant="outline"
+                            size="sm" variant="outline"
                             className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
                             onClick={() => reviewMutation.mutate({ id: req.id, status: "denied" })}
                             disabled={reviewMutation.isPending}
                           >
-                            <XCircle className="w-4 h-4 mr-1" />
-                            Deny
+                            <XCircle className="w-4 h-4 mr-1" />Deny
                           </Button>
                         </div>
                       </div>
@@ -199,12 +548,9 @@ export default function AdminPage() {
               </CardContent>
             </Card>
 
-            {/* Reviewed Requests History */}
             {reviewedRequests.length > 0 && (
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Review History</CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="text-lg">Review History</CardTitle></CardHeader>
                 <CardContent>
                   <div className="space-y-2">
                     {reviewedRequests.map((req) => (
@@ -217,40 +563,18 @@ export default function AdminPage() {
                         </div>
                         {roleBadge(req.requestedRole)}
                         {statusBadge(req.status)}
-                        {req.reviewedAt && (
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(req.reviewedAt).toLocaleDateString()}
-                          </span>
-                        )}
-                        {req.reviewedBy && (
-                          <span className="text-xs text-muted-foreground">by {req.reviewedBy}</span>
-                        )}
+                        {req.reviewedAt && <span className="text-xs text-muted-foreground">{new Date(req.reviewedAt).toLocaleDateString()}</span>}
+                        {req.reviewedBy && <span className="text-xs text-muted-foreground">by {req.reviewedBy}</span>}
                       </div>
                     ))}
                   </div>
                 </CardContent>
               </Card>
             )}
-
-            {/* Setup instructions */}
-            <Card className="border-dashed bg-muted/30">
-              <CardContent className="pt-6">
-                <h4 className="text-sm font-semibold text-foreground mb-2">Setting Up New Users</h4>
-                <p className="text-sm text-muted-foreground mb-3">
-                  After approving a request, add the user to your <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">AUTH_USERS</code> environment variable:
-                </p>
-                <div className="bg-background border border-border rounded-md p-3 font-mono text-xs text-foreground">
-                  AUTH_USERS=admin:password:admin:Admin Name,<span className="text-primary">newuser:password:viewer:Their Name</span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Format: <code className="bg-muted px-1 py-0.5 rounded font-mono">username:password:role:displayName</code> — Roles: <strong>viewer</strong>, <strong>manager</strong>, <strong>admin</strong>
-                </p>
-              </CardContent>
-            </Card>
           </div>
         )}
 
-        {/* ROLE DEFINITIONS TAB */}
+        {/* ════════════════ ROLE DEFINITIONS TAB ════════════════ */}
         {tab === "roles" && (
           <div className="space-y-4">
             {USER_ROLES.map((role) => (
@@ -267,7 +591,6 @@ export default function AdminPage() {
                       </div>
                       <p className="text-sm text-muted-foreground mb-3">{role.description}</p>
 
-                      {/* Permission details per role */}
                       {role.value === "viewer" && (
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View dashboard & metrics</div>

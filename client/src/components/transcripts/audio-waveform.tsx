@@ -104,7 +104,7 @@ export default function AudioWaveformDisplay({ audioRef, currentTime, duration, 
       const isPast = (i / barCount) < progress;
       ctx.fillStyle = isPast
         ? "hsl(var(--primary))"
-        : "hsl(var(--muted-foreground) / 0.3)";
+        : "hsl(var(--muted-foreground) / 0.5)";
       ctx.fillRect(x + 0.5, y, Math.max(barWidth - 1, 1), barHeight);
     }
 

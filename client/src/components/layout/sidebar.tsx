@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
+import { MfaSetupDialog } from "@/components/mfa-setup-dialog";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CallWithDetails, Employee, AccessRequest, PaginatedCalls } from "@shared/schema";
@@ -56,6 +57,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const [location, navigate] = useLocation();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [mfaDialogOpen, setMfaDialogOpen] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(() => {
     // Auto-expand if user is currently on an admin page on first mount.
     return location.startsWith("/admin");
@@ -487,6 +489,14 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           </div>
           <button
             className="text-muted-foreground hover:text-foreground"
+            onClick={() => setMfaDialogOpen(true)}
+            title="Security settings (MFA)"
+            aria-label="Security settings"
+          >
+            <Lock className="w-4 h-4" />
+          </button>
+          <button
+            className="text-muted-foreground hover:text-foreground"
             onClick={handleLogout}
             title="Sign out"
             aria-label="Sign out"
@@ -496,6 +506,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           </button>
         </div>
       </div>
+      <MfaSetupDialog open={mfaDialogOpen} onClose={() => setMfaDialogOpen(false)} />
     </aside>
     </>
   );

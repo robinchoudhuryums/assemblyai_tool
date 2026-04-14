@@ -1076,7 +1076,8 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { getCsrfToken: csrf } = await import("@/lib/queryClient");
-      await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include", headers: csrf() ? { "x-csrf-token": csrf()! } : {} });
+      const res = await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include", headers: csrf() ? { "x-csrf-token": csrf()! } : {} });
+      if (!res.ok) throw new Error("Failed to delete annotation");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
   });
