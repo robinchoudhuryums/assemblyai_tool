@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Shield, CheckCircle, Copy, Warning } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import QRCode from "qrcode";
 
 interface MfaStatus {
   enabled: boolean;
@@ -14,6 +15,25 @@ interface MfaStatus {
 interface MfaSetupResponse {
   secret: string;
   otpauthUri: string;
+}
+
+/** Renders otpauth:// URI as a scannable QR code on a canvas element. */
+function QrCodeImage({ uri }: { uri: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (canvasRef.current && uri) {
+      QRCode.toCanvas(canvasRef.current, uri, {
+        width: 200,
+        margin: 2,
+        color: { dark: "#000000", light: "#ffffff" },
+      }).catch(() => { /* QR generation failed — manual entry fallback available */ });
+    }
+  }, [uri]);
+  return (
+    <div className="flex justify-center">
+      <canvas ref={canvasRef} className="rounded-lg border border-border" />
+    </div>
+  );
 }
 
 export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -157,33 +177,40 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
           </div>
         )}
 
-        {/* Verify view — show secret + code input */}
+        {/* Verify view — show QR + secret + code input */}
         {step === "verify" && setupData && (
           <div className="space-y-4">
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">
-                Open your authenticator app and add a new account:
-              </p>
-              <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                <li>Tap <strong>+</strong> to add a new account</li>
-                <li>Choose <strong>"Enter a setup key"</strong></li>
-                <li>For <strong>Account name</strong>, enter your username</li>
-                <li>For <strong>Your key</strong>, paste the secret below</li>
-                <li>Set <strong>Type of key</strong> to <strong>Time based</strong></li>
-              </ol>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.):
+            </p>
 
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Secret Key</label>
-              <div className="flex items-center gap-2 mt-1">
-                <code className="flex-1 px-3 py-2 rounded-md border border-input bg-muted text-sm font-mono break-all select-all">
-                  {setupData.secret}
-                </code>
-                <Button variant="outline" size="sm" onClick={copySecret} title="Copy secret">
-                  {copied ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                </Button>
+            {/* QR Code */}
+            <QrCodeImage uri={setupData.otpauthUri} />
+
+            {/* Manual entry fallback */}
+            <details className="text-sm">
+              <summary className="text-muted-foreground cursor-pointer hover:text-foreground">Can't scan? Enter the key manually</summary>
+              <div className="mt-2 space-y-2">
+                <ol className="text-muted-foreground space-y-1 list-decimal list-inside text-xs">
+                  <li>Tap <strong>+</strong> to add a new account</li>
+                  <li>Choose <strong>"Enter a setup key"</strong></li>
+                  <li>For <strong>Account name</strong>, enter your username</li>
+                  <li>For <strong>Your key</strong>, paste the secret below</li>
+                  <li>Set <strong>Type of key</strong> to <strong>Time based</strong></li>
+                </ol>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Secret Key</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <code className="flex-1 px-3 py-2 rounded-md border border-input bg-muted text-sm font-mono break-all select-all">
+                      {setupData.secret}
+                    </code>
+                    <Button variant="outline" size="sm" onClick={copySecret} title="Copy secret">
+                      {copied ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                </div>
               </div>
-            </div>
+            </details>
 
             <form
               className="space-y-3"

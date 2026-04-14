@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense, useCallback } from "react";
+import { useEffect, useState, useRef, lazy, Suspense, useCallback } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient, getQueryFn, resetSessionExpired, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import I18nProvider from "@/components/i18n-provider";
 import AppearanceProvider from "@/components/appearance-provider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogAction } from "@/components/ui/alert-dialog";
+import { MfaSetupDialog } from "@/components/mfa-setup-dialog";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { LoadingIndicator } from "@/components/ui/loading";
@@ -273,7 +274,25 @@ function AuthenticatedApp() {
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: true,
+    refetchInterval: 60_000, // Detect server-side session expiry within 60s
   });
+
+  // Track whether user was previously authenticated so we can show
+  // "session expired" context on the login page instead of a blank state.
+  const wasAuthenticated = useRef(false);
+  const [sessionExpiredMsg, setSessionExpiredMsg] = useState(false);
+  const [showMfaPrompt, setShowMfaPrompt] = useState(false);
+  useEffect(() => {
+    if (user) {
+      wasAuthenticated.current = true;
+      setSessionExpiredMsg(false);
+    } else if (!isLoading && wasAuthenticated.current) {
+      // User was logged in but /api/auth/me now returns null → session expired
+      wasAuthenticated.current = false;
+      setSessionExpiredMsg(true);
+      queryClient.clear();
+    }
+  }, [user, isLoading]);
 
   // HIPAA: Auto-logout after 15 minutes of inactivity with 2-minute warning
   const handleIdleLogout = useCallback(async () => {
@@ -296,10 +315,13 @@ function AuthenticatedApp() {
     return (
       <Suspense fallback={<PageLoader />}>
         <AuthPage
-          onLogin={() => {
+          onLogin={(options) => {
             resetSessionExpired();
+            setSessionExpiredMsg(false);
+            if (options?.mfaSetupRequired) setShowMfaPrompt(true);
             queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
           }}
+          sessionExpired={sessionExpiredMsg}
         />
       </Suspense>
     );
@@ -323,6 +345,8 @@ function AuthenticatedApp() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Post-login MFA setup prompt for users who haven't enrolled yet */}
+      <MfaSetupDialog open={showMfaPrompt} onClose={() => setShowMfaPrompt(false)} />
     </ErrorBoundary>
   );
 }

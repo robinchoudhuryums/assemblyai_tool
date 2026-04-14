@@ -615,7 +615,7 @@ assemblyai_tool/
 │       │   ├── search/             # Search components (call card, employee filter)
 │       │   └── lib/                # Utility components (confirm dialog, error boundary)
 │       ├── hooks/                  # Custom React hooks (WebSocket, toast)
-│       ├── lib/                    # Utilities (queryClient, helpers, i18n, sentry)
+│       ├── lib/                    # Utilities (queryClient, helpers, i18n)
 │       └── App.tsx                 # Root component with routing
 ├── server/                         # Backend (Express + TypeScript)
 │   ├── index.ts                    # Server entry point (middleware, security headers, retention)
@@ -660,7 +660,7 @@ assemblyai_tool/
 │       ├── job-queue.ts            # PostgreSQL-backed durable job queue
 │       ├── totp.ts                 # TOTP two-factor authentication (RFC 6238)
 │       ├── security-monitor.ts     # Security event tracking and breach reporting
-│       ├── sentry.ts               # Sentry error tracking with PHI scrubbing
+│       ├── sentry.ts               # Error capture stubs (Sentry removed)
 │       ├── gamification.ts         # Badge evaluation, points, streaks, leaderboard
 │       ├── coaching-alerts.ts      # AI-powered coaching plans for low/high-score calls
 │       ├── vulnerability-scanner.ts # Automated security scanning
@@ -760,10 +760,6 @@ BATCH_SCHEDULE_END              # Time-of-day to STOP batch mode (24h format, e.
 
 # === MFA (Two-Factor Authentication) ===
 REQUIRE_MFA                     # Set to "true" to enforce TOTP MFA for all users (default: disabled)
-
-# === Error Tracking (Sentry) ===
-SENTRY_DSN                      # Sentry DSN for server-side error tracking (optional)
-VITE_SENTRY_DSN                 # Sentry DSN for client-side error tracking (set at build time)
 
 # === AssemblyAI Webhooks (faster than polling) ===
 APP_BASE_URL                    # Public URL (e.g. https://umscallanalyzer.com) — enables webhook mode
