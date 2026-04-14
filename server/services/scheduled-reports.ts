@@ -396,6 +396,9 @@ async function runCatchUp(): Promise<void> {
   }
 }
 
+// Scheduler
+let reportSchedulerInterval: ReturnType<typeof setInterval> | null = null;
+
 /**
  * Auto-generate weekly report every Monday at midnight (called from scheduler).
  *
@@ -439,10 +442,23 @@ export function startReportScheduler(): void {
     }
   };
 
-  // Check every hour
-  setInterval(checkAndGenerate, 60 * 60 * 1000);
+  // Check every hour. .unref() so this timer doesn't keep the event loop
+  // alive past graceful shutdown.
+  reportSchedulerInterval = setInterval(checkAndGenerate, 60 * 60 * 1000);
+  reportSchedulerInterval.unref();
   logger.info("scheduled report scheduler started", {
     weekly: "Monday 00:00",
     monthly: "1st of month 00:00",
   });
+}
+
+/**
+ * Stop the scheduled-reports hourly tick. Safe to call multiple times.
+ * Exported for use in graceful shutdown.
+ */
+export function stopReportScheduler(): void {
+  if (reportSchedulerInterval) {
+    clearInterval(reportSchedulerInterval);
+    reportSchedulerInterval = null;
+  }
 }

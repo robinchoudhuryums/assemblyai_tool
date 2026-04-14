@@ -4,8 +4,11 @@
  *
  * Used for HIPAA-compliant Multi-Factor Authentication.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
+import { promisify } from "util";
 import { getPool } from "../db/pool";
+
+const scrypt = promisify(scryptCb) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
 // Base32 alphabet (RFC 4648)
 const BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -195,6 +198,145 @@ export async function listMFAUsers(): Promise<MFARecord[]> {
     return result.rows.map((r: any) => ({ username: r.username, secret: r.secret, enabled: r.enabled, createdAt: r.created_at }));
   }
   return Array.from(mfaMemoryStore.values()).filter((r) => r.enabled);
+}
+
+// --- MFA Recovery Codes ---
+//
+// Recovery codes are single-use 10-character alphanumeric tokens that let a
+// user complete MFA verification without their authenticator app (e.g. lost
+// device). They're generated once at setup, shown to the user exactly once,
+// and stored as scrypt hashes — the plaintext is never recoverable.
+//
+// Format: 10 chars from [A-Z0-9] (no ambiguous 0/O, 1/I excluded for
+// human-readability). Presented as XXXXX-XXXXX groups in the UI.
+
+const RECOVERY_CODE_COUNT = 10;
+const RECOVERY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 32 chars
+const RECOVERY_CODE_SALT_PREFIX = "mfa-recovery-v1:";
+const RECOVERY_CODE_KEYLEN = 32;
+
+interface RecoveryCodeRecord {
+  hash: string;       // scrypt(code, username-salt)
+  used: boolean;
+  usedAt?: string;
+}
+
+function generateOneRecoveryCode(): string {
+  const bytes = randomBytes(RECOVERY_CODE_COUNT);
+  let out = "";
+  for (const b of bytes) {
+    out += RECOVERY_CODE_ALPHABET[b % RECOVERY_CODE_ALPHABET.length];
+  }
+  return out;
+}
+
+async function hashRecoveryCode(code: string, username: string): Promise<string> {
+  const buf = await scrypt(code.toUpperCase(), RECOVERY_CODE_SALT_PREFIX + username, RECOVERY_CODE_KEYLEN);
+  return buf.toString("hex");
+}
+
+/**
+ * Generate a fresh set of recovery codes for the user, store hashed, and
+ * return the plaintext codes (the only time the user will ever see them).
+ *
+ * Overwrites any existing codes. Call this at MFA enable and when the user
+ * explicitly requests regeneration (prior codes become invalid).
+ */
+export async function generateRecoveryCodes(username: string): Promise<string[]> {
+  const plaintexts: string[] = [];
+  const records: RecoveryCodeRecord[] = [];
+  for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
+    const code = generateOneRecoveryCode();
+    plaintexts.push(code);
+    records.push({ hash: await hashRecoveryCode(code, username), used: false });
+  }
+  const pool = getPool();
+  if (pool) {
+    await pool.query(
+      "UPDATE mfa_secrets SET recovery_codes = $2 WHERE username = $1",
+      [username, JSON.stringify(records)]
+    );
+  } else {
+    const existing = mfaMemoryStore.get(username);
+    if (existing) {
+      (existing as any).recoveryCodes = records;
+    }
+  }
+  return plaintexts;
+}
+
+/**
+ * Attempt to consume a recovery code. Returns true on success and marks the
+ * code as used (single-use). Timing-safe on the hash compare — does NOT
+ * short-circuit on a wrong hash so an attacker can't distinguish "no such
+ * code" from "already used".
+ */
+export async function consumeRecoveryCode(username: string, plaintext: string): Promise<boolean> {
+  const normalized = String(plaintext).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (!/^[A-Z0-9]{10}$/.test(normalized)) return false;
+
+  const pool = getPool();
+  let records: RecoveryCodeRecord[];
+  if (pool) {
+    const result = await pool.query(
+      "SELECT recovery_codes FROM mfa_secrets WHERE username = $1 FOR UPDATE",
+      [username]
+    );
+    if (result.rows.length === 0) return false;
+    records = (result.rows[0].recovery_codes as RecoveryCodeRecord[]) || [];
+  } else {
+    const rec = mfaMemoryStore.get(username);
+    records = rec ? ((rec as any).recoveryCodes as RecoveryCodeRecord[]) || [] : [];
+  }
+
+  const candidateHash = await hashRecoveryCode(normalized, username);
+  const candidateBuf = Buffer.from(candidateHash, "hex");
+
+  let matchedIdx = -1;
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (r.used) continue;
+    const storedBuf = Buffer.from(r.hash, "hex");
+    if (storedBuf.length !== candidateBuf.length) continue;
+    if (timingSafeEqual(storedBuf, candidateBuf)) {
+      matchedIdx = i;
+      // Don't break — keep comparing to avoid timing signal on early match.
+    }
+  }
+  if (matchedIdx === -1) return false;
+
+  records[matchedIdx] = { ...records[matchedIdx], used: true, usedAt: new Date().toISOString() };
+  if (pool) {
+    await pool.query(
+      "UPDATE mfa_secrets SET recovery_codes = $2 WHERE username = $1",
+      [username, JSON.stringify(records)]
+    );
+  } else {
+    const rec = mfaMemoryStore.get(username);
+    if (rec) (rec as any).recoveryCodes = records;
+  }
+  return true;
+}
+
+/**
+ * Count remaining (unused) recovery codes. Used to nag the user to
+ * regenerate when running low.
+ */
+export async function countRemainingRecoveryCodes(username: string): Promise<number> {
+  const pool = getPool();
+  let records: RecoveryCodeRecord[];
+  if (pool) {
+    const result = await pool.query(
+      "SELECT recovery_codes FROM mfa_secrets WHERE username = $1",
+      [username]
+    );
+    if (result.rows.length === 0) return 0;
+    records = (result.rows[0].recovery_codes as RecoveryCodeRecord[]) || [];
+  } else {
+    const rec = mfaMemoryStore.get(username);
+    records = rec ? ((rec as any).recoveryCodes as RecoveryCodeRecord[]) || [] : [];
+  }
+  return records.filter(r => !r.used).length;
 }
 
 /**

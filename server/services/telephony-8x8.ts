@@ -322,13 +322,22 @@ export function startTelephonyScheduler(
   const config = getConfig();
   console.log(`[8x8] Telephony auto-ingestion enabled. Polling every ${config.pollIntervalMinutes} minutes.`);
 
-  // First poll after 30 seconds
+  // First poll after 30 seconds. .unref() so timers don't keep the event
+  // loop alive past graceful shutdown.
   pollTimeout = setTimeout(() => pollAndIngest(processAudioFn), 30_000);
+  pollTimeout.unref();
   pollInterval = setInterval(() => pollAndIngest(processAudioFn), config.pollIntervalMinutes * 60 * 1000);
+  pollInterval.unref();
 
-  return () => {
-    if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
-    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-    console.log("[8x8] Telephony scheduler stopped.");
-  };
+  return stopTelephonyScheduler;
+}
+
+/**
+ * Stop the 8x8 telephony polling scheduler. Safe to call multiple times.
+ * Exported for use in graceful shutdown.
+ */
+export function stopTelephonyScheduler(): void {
+  if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  console.log("[8x8] Telephony scheduler stopped.");
 }
