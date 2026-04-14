@@ -15,7 +15,7 @@ interface MfaStatus {
 
 interface MfaSetupResponse {
   secret: string;
-  otpauthUri: string;
+  uri: string;
 }
 
 interface MfaEnableResponse {
@@ -320,7 +320,7 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
             </p>
 
             {/* QR Code */}
-            <QrCodeImage uri={setupData.otpauthUri} />
+            <QrCodeImage uri={setupData.uri} />
 
             {/* Manual entry fallback */}
             <details className="text-sm">
