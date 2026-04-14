@@ -121,7 +121,7 @@ export default function AdminPage() {
                   Pending Requests ({pendingRequests.length})
                 </CardTitle>
                 <CardDescription>
-                  Review and approve or deny access requests. After approving, create the user account in User Management below with their assigned role.
+                  Review and approve or deny access requests. After approving, create the user account via the API (POST /api/users) with their assigned role.
                 </CardDescription>
               </CardHeader>
               <CardContent>
