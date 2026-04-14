@@ -174,9 +174,10 @@ tests/                   # Unit tests (Node test runner)
 ### MFA (authenticated)
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
-| GET | `/api/auth/mfa/status` | authenticated | Check MFA status for current user |
+| GET | `/api/auth/mfa/status` | authenticated | Returns `{ enabled, required, recoveryCodesRemaining }` |
 | POST | `/api/auth/mfa/setup` | authenticated | Generate TOTP secret + otpauth URI |
-| POST | `/api/auth/mfa/enable` | authenticated | Verify TOTP code and enable MFA |
+| POST | `/api/auth/mfa/enable` | authenticated | Verify TOTP code and enable MFA. Returns `{ message, recoveryCodes: string[] }` — plaintext codes shown exactly once |
+| POST | `/api/auth/mfa/recovery-codes/regenerate` | authenticated | Generate a fresh set of single-use recovery codes (invalidates any prior codes). Returns `{ recoveryCodes: string[] }` — plaintext shown once |
 | POST | `/api/auth/mfa/disable` | authenticated | Disable MFA (admin can disable for others) |
 | GET | `/api/auth/mfa/users` | admin | List all MFA-enabled users |
 
@@ -865,6 +866,11 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **`/api/users/me/password` requires `requireMFASetup`** — closes the last per-route MFA enforcement gap. Every manager/admin-gated mutation now passes through `requireMFASetup` (no-op when `REQUIRE_MFA=false`). Viewers are exempt because `isMFARoleRequired()` only returns true for admin/manager. Previously an admin without MFA enrolled could change their password even when `REQUIRE_MFA=true`.
 - **`validateTimestamps` flags `output_anomaly:invalid_feedback_timestamps:N`** (S2-H5) — when Claude returns a feedback timestamp beyond call duration (hallucinated moment), `validateTimestamps` in `server/services/ai-provider.ts` strips the timestamp, emits `logger.warn` with the callId + strip count + up to 3 example stripped timestamps, and appends `output_anomaly:invalid_feedback_timestamps:${count}` to `analysis.flags`. Uses the same `output_anomaly:*` prefix convention as `prompt-guard.ts` so existing flag-surfacing UI picks it up. Previously strips were silent — a hallucinated timestamp looked identical to "AI didn't provide a timestamp" and hid a real model-quality regression from reviewers. Reinforces the "no silent defaults" A12/F17 invariant.
 - **`isPasswordReused` defensively caps history at `PASSWORD_HISTORY_SIZE`** — `server/auth.ts:isPasswordReused` slices the passed-in history array to the first 5 entries before running scrypt compares. The write path (`updateDbUserPassword`) already trims to 5 on every update, so this only differs from old behavior if the stored array has drifted past 5 (migration bug, direct DB write, etc.). Without the cap, each entry runs a ~100ms scrypt compare — an unbounded array would turn password reuse checks into a CPU DoS surface. Ordering: the write path stores `[newestHash, ...oldHistory].slice(0, 5)`, so newest is at index 0 and `slice(0, 5)` gives the most recent 5.
+- **MFA recovery codes are single-use + display-once** — `generateRecoveryCodes` in `server/services/totp.ts` returns plaintext exactly once (at enable or regenerate). Codes are stored scrypt-hashed in `mfa_secrets.recovery_codes` JSONB as `{ hash, used, usedAt? }` records; plaintext is never recoverable. Users MUST save them immediately. `consumeRecoveryCode` marks matched records `used: true` and is timing-safe on the hash compare (does NOT short-circuit on early match) so an attacker cannot distinguish "no such code" from "already used" via timing. Pre-existing MFA-enrolled users after the ae2f30c deploy have 0 recovery codes until they click "Regenerate Recovery Codes" — not broken, just voluntary. `GET /api/auth/mfa/status` surfaces `recoveryCodesRemaining`; the UI nags when ≤2.
+- **MFA per-token attempt counter caps brute force at 5** — `mfaPendingTokens` entries in `server/routes/auth.ts` track `attempts`; the cap is the hardcoded constant `MFA_MAX_ATTEMPTS = 5` (not env-configurable — if stricter is needed, code change required). On exhaustion the token is deleted and the user must re-enter their password for a fresh MFA challenge. The outer per-IP login limit (5/15min) still applies independently. Audit events `mfa_verification_failed` (with `attempt N/5`), `mfa_verification_locked`, `mfa_session_expired` surface the state to compliance review.
+- **Batch result processor skips calls already in "completed" status** — `batch-scheduler.ts:processBatchResults` calls `storage.getCall(callId)` before `createCallAnalysis`. If `call.status === "completed"` (e.g., a manager edited the analysis, an on-demand re-run produced fresh results, or the same call was submitted to batch twice), the result is skipped and the pending S3 item is deleted. Prevents batch results from clobbering manager corrections. Pending cleanup still runs so orphan recovery stays correct.
+- **Graceful shutdown calls four scheduler stop functions in sequence** — `server/index.ts:gracefulShutdown` invokes `stopBatchScheduler`, `stopCalibrationScheduler`, `stopTelephonyScheduler`, `stopReportScheduler` (each wrapped in an independent try/catch so one failure doesn't skip the others) before `jobQueue.stop()` and `flushAuditQueue()`. All scheduler `setTimeout`/`setInterval` handles have `.unref()` as defense-in-depth. Any new scheduler MUST export a top-level `stop*Scheduler()` function and be added to this sequence — in-closure stop callbacks returned by the start function are not reachable from shutdown.
+- **Sentry dynamic-import escalation paths removed** — `audit-log.ts` queue-overflow alert, `batch-scheduler.ts:escalateOrphanedJob`, and `routes/utils.ts:warnOnUnknownBedrockModel` no longer call `import("./sentry").then(({ captureMessage }) => ...)`. Escalation is now via `logger.error`/`logger.warn` with structured `alert:` tags (`audit_queue_overflow`, `batch_orphan_escalation`, `bedrock_unknown_model`). CloudWatch metric filters match these tags. Existing `captureException`/`captureMessage` stub imports in pipeline/auth/snapshot paths are still no-op and compile unchanged.
 
 ## Systems Map
 
@@ -890,7 +896,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Gamification** | `server/routes/gamification.ts` | Leaderboard, badges, points, stats |
 | **Insights** | `server/routes/insights.ts` | Aggregate topic frequency, complaint patterns, escalation trends. Defaults to a rolling 90-day window via `?days` (max 365); previously was an unbounded full-table scan (A4). |
 | **Storage** | `server/storage.ts`, `server/storage-postgres.ts` | `IStorage` interface (~40 methods, A7 added `getCallsByStatus(status)` and `getCallsSince(date)` — indexed lookups that replaced `getAllCalls` scans in batch orphan recovery and auto-calibration), three backends: PostgresStorage (RDS), CloudStorage (S3-only legacy), MemStorage (in-memory dev fallback). New in A21/A20: `findCallByContentHash`, `getEmployeesPaginated`. `atomicAssignEmployee` contract documented for all three backends (A44). Batch 1 (A6/F14): `setCallEmployee` added for explicit reassign/unassign; `updateCall` now throws if `employeeId` is in the updates payload. PostgresStorage `updateCall` uses a dynamic SET clause keyed by COLUMN_MAP — adding a new persisted column requires both a schema migration and a COLUMN_MAP entry. A10: `findCallByExternalId(externalId)` added to all backends, backed by `calls.external_id` + unique partial index for upstream-source dedupe (e.g. 8x8 recording ids). Engagement & Reporting cycle: `countCompletedCallsByEmployee`, `getRecentCallsForBadgeEval`, `getLeaderboardData`, `getCallsSinceWithDetails` added — these are the preferred indexed-lookup primitives over `getCallsWithDetails()` for hot paths (gamification, coaching, insights, scheduled reports, analytics heatmap fallback). F03: `getCallAnalysesBulk(callIds)` added — bulk analysis fetch in single SQL query (chunked IN clause, 500 per chunk), used by auto-calibration to eliminate N+1 queries. F35: `getFilteredReportMetrics(filters)` added — SQL-level aggregation for /api/reports/filtered (4 parallel queries: summary, performers, trends, sub-scores); replaces loading all calls into memory. `getInsightsData(since)` added — lightweight call data (no transcript text/words) for /api/insights; replaces getCallsSinceWithDetails which loaded full CallWithDetails. |
-| **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement |
+| **Database** | `server/db/pool.ts`, `server/db/schema.sql` | PostgreSQL connection pool (singleton), auto-schema initialization, incremental migrations, SSL enforcement. `mfa_secrets.recovery_codes` JSONB column stores an array of `{ hash, used, usedAt? }` records (idempotent `ADD COLUMN IF NOT EXISTS ... DEFAULT '[]'` migration). |
 | **AssemblyAI** | `server/services/assemblyai.ts` | Audio transcription (webhook + polling modes), speaker-labeled transcript building, utterance metrics, transcript data normalization |
 | **Bedrock AI** | `server/services/bedrock.ts`, `server/services/ai-provider.ts`, `server/services/ai-factory.ts`, `server/services/active-model.ts` | AWS Bedrock Converse API (raw SigV4, no SDK), prompt building, JSON response parsing, `aiProvider` singleton factory. `BedrockProvider.setModel()` allows runtime model swap for A/B test promotion. `active-model.ts` persists the promoted model to S3 (`config/active-model.json`) and rehydrates it on startup via `loadActiveModelOverride()` (fire-and-forget in `server/index.ts`). |
 | **Batch Inference** | `server/services/bedrock-batch.ts`, `server/services/batch-scheduler.ts` | Deferred AI analysis via JSONL to S3, periodic job submission/polling/recovery. `bedrock-batch.ts` uses `sigv4.ts` directly for S3 operations, resolves AWS creds lazily via `getAwsCredentials()` (env→IMDS), validates `BEDROCK_BATCH_ROLE_ARN`, and paginates `s3List` via continuation token (50-page safety cap). `batch-scheduler.ts:persistBatchJobTracking()` retries the post-createJob tracking write 3× (1s/2s/4s backoff) with a `batch-inference/orphaned-submissions/${jobId}.json` fallback on persistent failure, and `promoteOrphanedSubmissions()` runs at the top of every batch cycle to self-heal orphans. All tracking-write failures log at `error` level with the jobId + jobArn recovery keys. |
@@ -898,7 +904,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **AWS Infrastructure** | `server/services/s3.ts`, `server/services/sigv4.ts`, `server/services/aws-credentials.ts` | Custom S3 REST client (single consumer: `storage.ts`), SigV4 signing, credential resolution (env vars + IMDS with caching) |
 | **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
 | **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain, persistent integrity head), brute-force/credential stuffing detection (wired to client IP via `passReqToCallback`), automated vuln scanning (history retains hollow entries past cap, summary kept), incident lifecycle management (DB-first persist; randomUUID IDs; throws on persist failure) |
-| **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection, used-token cache. `requireMFASetup` (in `server/auth.ts`) is gated on `isMFARequired()` (REQUIRE_MFA env var) — no-op when unset. When active, mounted blanket on `/api/admin/*` and per-route on all manager/admin-gated mutations (calls, employees, users, coaching, exports, snapshots) |
+| **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection (used-token cache, 2-min auto-cleanup). Recovery codes: 10-char alphanumeric, scrypt-hashed, single-use, generated at enable/regenerate; exports `generateRecoveryCodes`, `consumeRecoveryCode`, `countRemainingRecoveryCodes`. `requireMFASetup` (in `server/auth.ts`) is gated on `isMFARequired()` (REQUIRE_MFA env var) — no-op when unset. When active, mounted blanket on `/api/admin/*` and per-route on all manager/admin-gated mutations (calls, employees, users, coaching, exports, snapshots) |
 | **PHI Protection** | `server/services/phi-redactor.ts`, `shared/phi-patterns.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction — single source of truth in `shared/phi-patterns.ts`, imported by `phi-redactor.ts` (server audit logs, logger). `redactPhi()` adds count tracking. 16-pattern prompt injection detection + output anomaly scanning (`prompt-guard.ts`) |
 | **SSRF Protection** | `server/services/url-validator.ts` | URL validator blocking private IPs, metadata endpoints, DNS resolution to private ranges |
 | **Resilience** | `server/services/resilience.ts` | Circuit breaker (5 failures → 30s open → half-open test) wrapping Bedrock calls (single consumer: `bedrock.ts`) |
@@ -992,16 +998,32 @@ POST /api/webhooks/assemblyai [routes.ts]
 POST /api/auth/login [routes/auth.ts]
   → Rate limit (5/15min/IP) → WAF check → CSRF exempt
   → If mfaToken + totpCode → Step 2 (MFA verification):
-    → Lookup pending token → getMFASecret → verifyTOTP (timing-safe)
-    → req.login(user, { keepSessionInfo: true }) → bindSessionFingerprint
+    → Lookup pending token; if missing or expired →
+      audit mfa_session_expired, return 401 { code: "mfa_session_expired" }
+    → If pending.attempts >= MFA_MAX_ATTEMPTS (5) →
+      delete token, audit mfa_verification_locked, return 401 { code: "mfa_session_expired" }
+    → Branch by code format:
+      - 6-digit numeric → getMFASecret → verifyTOTP (timing-safe, replay-protected)
+      - 10-char alphanumeric → consumeRecoveryCode (scrypt compare, timing-safe,
+        does NOT short-circuit; marks record used: true, single-use enforced)
+    → If verification fails → pending.attempts++, audit mfa_verification_failed
+      (with attempt N/5), return 401
+    → If verified → delete pending token,
+      audit mfa_verification_succeeded OR mfa_recovery_code_used,
+      req.login(user, { keepSessionInfo: true }) → bindSessionFingerprint
   → Else Step 1 (password):
     → passport.authenticate("local") → account lockout check
     → DB user lookup [storage] or AUTH_USERS env var fallback
     → Password verify (scrypt + timingSafeEqual)
-    → If MFA enabled → issue mfaToken, return { mfaRequired: true }
+    → If MFA enabled → issue mfaToken (5-min expiry, attempts: 0),
+      audit mfa_challenge_issued, return { mfaRequired: true, mfaToken }
     → If MFA required but not set up → login + { mfaSetupRequired: true }
     → Standard login → req.login() + bindSessionFingerprint()
   → Session stored in PostgreSQL (connect-pg-simple) or memorystore
+
+POST /api/auth/logout [routes/auth.ts]
+  → req.logout() → session.destroy()
+  → audit logout (extracts username BEFORE logout so it's still available)
 
 Every subsequent request:
   → requireAuth → session validation → deserializeUser:
@@ -1134,6 +1156,7 @@ These log a warning but allow the server to start. The app appears healthy but h
 Operator must populate this state outside of any automated path. CI does not catch missing data.
 
 - [ ] **`prompt_templates` table seeded with company-specific rows** — `server/routes/pipeline.ts:261` calls `getPromptTemplateByCategory(callCategory)`. Empty table → fallback to generic default prompt. **MEDIUM risk** — pipeline silently runs against generic rubrics, scores produced are not company-specific. Not validated, not warned about, no admin UI bootstrap.
+- [ ] **Pre-existing MFA-enrolled users have 0 recovery codes after ae2f30c deploy** — The `mfa_secrets.recovery_codes` column migration is idempotent (`ADD COLUMN IF NOT EXISTS ... DEFAULT '[]'`), so no manual migration is required. However, users who enrolled in MFA before this deploy will see "0 recovery codes remaining" in the MFA dialog until they click "Regenerate Recovery Codes" to self-serve. Login still works via TOTP; recovery-code verification will silently fail until regeneration. **LOW risk** — voluntary feature gap, not functional break. Suggested mitigation: include a note in release notes directing MFA-enrolled users to regenerate.
 
 ### One-time migration backfills
 These are SQL scripts that must be run once during a specific upgrade window. Deploying without them leaves orphaned state.
@@ -1205,6 +1228,12 @@ INV-21 | getSessionFingerprint is the single source of truth for fingerprinting 
 INV-22 | Production hard-fails if S3_BUCKET missing when DATABASE_URL is set | Subsystem: Storage
 INV-23 | Sub-scores are camelCase in storage, snake_case at AI boundary — never read storage with snake_case | Subsystem: AI Processing
 INV-24 | queryFn default must use on401: returnNull — never change to throw | Subsystem: Frontend
+INV-25 | MFA recovery codes must be scrypt-hashed at rest — plaintext never persisted, never recoverable | Subsystem: Security
+INV-26 | consumeRecoveryCode must use timingSafeEqual and must NOT short-circuit on early match | Subsystem: Security
+INV-27 | MFA pending-token attempt counter must cap at MFA_MAX_ATTEMPTS (5) and invalidate the token on exhaustion | Subsystem: Security
+INV-28 | Batch result processor must call storage.getCall(callId) and skip createCallAnalysis when status === "completed" | Subsystem: AI Processing
+INV-29 | gracefulShutdown must call all four scheduler stop functions (batch, calibration, telephony, reports) with independent try/catch before jobQueue.stop() | Subsystem: Core Architecture
+INV-30 | All scheduler setInterval/setTimeout handles must call .unref() | Subsystem: Core Architecture
 
 ### Policy Configuration
 Policy threshold: 5/10
