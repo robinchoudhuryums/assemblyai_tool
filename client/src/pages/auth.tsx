@@ -12,12 +12,13 @@ import { useConfig } from "@/hooks/use-config";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface AuthPageProps {
-  onLogin: () => void;
+  onLogin: (options?: { mfaSetupRequired?: boolean }) => void;
+  sessionExpired?: boolean;
 }
 
 type AuthView = "login" | "request-access";
 
-export default function AuthPage({ onLogin }: AuthPageProps) {
+export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
   const [view, setView] = useState<AuthView>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -54,7 +55,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
         return;
       }
 
-      onLogin();
+      onLogin({ mfaSetupRequired: !!data.mfaSetupRequired });
     } catch (error: unknown) {
       const message = extractErrorMessage(error);
       toast({
@@ -139,6 +140,11 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       <div className="w-full max-w-md space-y-6">
         <Card>
           <CardHeader className="text-center">
+            {sessionExpired && (
+              <div className="mb-4 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm text-yellow-800 dark:text-yellow-400">
+                Your session has expired. Please sign in again.
+              </div>
+            )}
             <div className="flex justify-center mb-4">
               <div className="w-12 h-12 bg-gradient-to-br from-primary/20 to-primary/5 rounded-lg flex items-center justify-center">
                 <Waveform className="w-6 h-6 text-primary" />
