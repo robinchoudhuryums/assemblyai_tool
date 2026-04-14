@@ -384,28 +384,34 @@ export async function setupAuth(app: Express) {
   });
 
   // Deserialize user from session — check PostgreSQL first, then env users
+  // ENV-var users have non-UUID IDs (randomBytes(8).toString("hex") = 16 hex chars).
+  // Skip the DB lookup for non-UUID IDs to avoid a PostgreSQL type error, and
+  // go directly to the env-var user fallback.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   passport.deserializeUser(async (id: string, done) => {
-    // Try DB users first
-    try {
-      const dbUser = await storage.getDbUser(id);
-      if (dbUser) {
-        if (!dbUser.active) {
-          return done(null, false);
+    // Try DB users first — only if the ID looks like a UUID (DB column type)
+    if (UUID_RE.test(id)) {
+      try {
+        const dbUser = await storage.getDbUser(id);
+        if (dbUser) {
+          if (!dbUser.active) {
+            return done(null, false);
+          }
+          return done(null, {
+            id: dbUser.id,
+            username: dbUser.username,
+            name: dbUser.displayName,
+            role: dbUser.role,
+          });
         }
-        return done(null, {
-          id: dbUser.id,
-          username: dbUser.username,
-          name: dbUser.displayName,
-          role: dbUser.role,
-        });
+      } catch (err) {
+        // Transient DB error — log and propagate so the request 500s instead of
+        // silently falling through to env users (which would give a stale user a
+        // valid session whenever the DB blips). Env-user fallback is reserved for
+        // "DB has no such user" (success path), not "DB unreachable".
+        logger.error("auth: deserializeUser DB lookup failed", { error: (err as Error).message });
+        return done(err as Error);
       }
-    } catch (err) {
-      // Transient DB error — log and propagate so the request 500s instead of
-      // silently falling through to env users (which would give a stale user a
-      // valid session whenever the DB blips). Env-user fallback is reserved for
-      // "DB has no such user" (success path), not "DB unreachable".
-      logger.error("auth: deserializeUser DB lookup failed", { error: (err as Error).message });
-      return done(err as Error);
     }
 
     // Fall back to env users
