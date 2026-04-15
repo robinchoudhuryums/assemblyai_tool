@@ -15,8 +15,13 @@ export default function SentimentPage() {
     queryKey: ["/api/dashboard/sentiment"],
   });
 
+  // CLAUDE.md A14: omit the empty-filter object from the cache key so this
+  // query matches the canonical ["/api/calls"] invalidation pattern used by
+  // upload-complete webhooks and call mutations. The previous empty-string
+  // sentinel object created a separate cache slot that never invalidated,
+  // showing stale sentiment data after new calls were uploaded.
   const { data: callsResponse } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", { status: "", sentiment: "", employee: "" }],
+    queryKey: ["/api/calls"],
   });
   const calls = callsResponse?.calls;
 

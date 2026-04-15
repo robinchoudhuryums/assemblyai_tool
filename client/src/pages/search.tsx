@@ -56,9 +56,14 @@ export default function SearchPage() {
     window.history.replaceState(null, "", newPath);
   }, [searchQuery, sentimentFilter, statusFilter, employeeFilter, dateFrom, dateTo, minScore, maxScore]);
 
-  // Build search query params with filters
+  // F-19: Build search query params with ALL filters that affect results
+  // (status + employee were previously sent server-side but missing from
+  // the cache key, causing stale results when toggling them with a search
+  // query active).
   const searchQueryParams: Record<string, string> = { q: debouncedQuery };
   if (sentimentFilter !== "all") searchQueryParams.sentiment = sentimentFilter;
+  if (statusFilter !== "all") searchQueryParams.status = statusFilter;
+  if (employeeFilter !== "all") searchQueryParams.employee = employeeFilter;
   if (minScore) searchQueryParams.minScore = minScore;
   if (maxScore) searchQueryParams.maxScore = maxScore;
   if (dateFrom) searchQueryParams.from = dateFrom;
@@ -75,12 +80,21 @@ export default function SearchPage() {
     }
   }, [searchError, toast]);
 
+  // F-19: When browsing without a search query, the date-range and score
+  // filters are applied client-side (lines below). They MUST be part of the
+  // queryKey or the cache returns wrong-filter results when the user toggles
+  // them. Same for status/employee/sentiment. Empty-string sentinels are
+  // omitted (CLAUDE.md A14) so this matches ["/api/calls"] invalidation.
+  const callsQueryKey: Record<string, string> = {};
+  if (sentimentFilter !== "all") callsQueryKey.sentiment = sentimentFilter;
+  if (statusFilter !== "all") callsQueryKey.status = statusFilter;
+  if (employeeFilter !== "all") callsQueryKey.employee = employeeFilter;
+  if (dateFrom) callsQueryKey.from = dateFrom;
+  if (dateTo) callsQueryKey.to = dateTo;
+  if (minScore) callsQueryKey.minScore = minScore;
+  if (maxScore) callsQueryKey.maxScore = maxScore;
   const { data: allCallsResponse, isLoading: isLoadingCalls } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls", {
-      sentiment: sentimentFilter === "all" ? "" : sentimentFilter,
-      status: statusFilter === "all" ? "" : statusFilter,
-      employee: employeeFilter === "all" ? "" : employeeFilter,
-    }],
+    queryKey: Object.keys(callsQueryKey).length > 0 ? ["/api/calls", callsQueryKey] : ["/api/calls"],
     enabled: debouncedQuery.length === 0,
   });
 

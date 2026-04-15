@@ -26,7 +26,8 @@ function evictOldestUserBucket(): void {
 }
 
 // Clean up expired entries every 5 minutes (TTL correctness — LRU is the
-// hard memory bound below).
+// hard memory bound below). .unref() per INV-30 so this doesn't block
+// graceful shutdown.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of userBuckets) {
@@ -34,7 +35,7 @@ setInterval(() => {
       userBuckets.delete(key);
     }
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 /**
  * Factory that returns Express middleware enforcing per-user rate limiting.

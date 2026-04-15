@@ -796,11 +796,37 @@ export class PostgresStorage implements IStorage {
 
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
     const id = randomUUID();
+    // F-04: ON CONFLICT (call_id) DO UPDATE — bulk-reanalyze on a call that
+    // already has an analysis row used to throw pg 23505 because of the
+    // UNIQUE (call_id) constraint, leaving the call mysteriously "failed".
+    // We now upsert the AI-generated fields. CRITICAL: manual_edits is
+    // preserved via COALESCE so a reanalyze never silently destroys a
+    // manager's score corrections (manualEdits = the human edit history).
+    // Also keep the original id on conflict so existing primary-key
+    // references stay stable.
     const { rows } = await this.db.query(
       `INSERT INTO call_analyses (id, call_id, performance_score, talk_time_ratio, response_time,
        keywords, topics, summary, action_items, feedback, lemur_response, call_party_type,
        flags, manual_edits, confidence_score, confidence_factors, sub_scores, detected_agent_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       ON CONFLICT (call_id) DO UPDATE SET
+         performance_score   = EXCLUDED.performance_score,
+         talk_time_ratio     = EXCLUDED.talk_time_ratio,
+         response_time       = EXCLUDED.response_time,
+         keywords            = EXCLUDED.keywords,
+         topics              = EXCLUDED.topics,
+         summary             = EXCLUDED.summary,
+         action_items        = EXCLUDED.action_items,
+         feedback            = EXCLUDED.feedback,
+         lemur_response      = EXCLUDED.lemur_response,
+         call_party_type     = EXCLUDED.call_party_type,
+         flags               = EXCLUDED.flags,
+         manual_edits        = COALESCE(call_analyses.manual_edits, EXCLUDED.manual_edits),
+         confidence_score    = EXCLUDED.confidence_score,
+         confidence_factors  = EXCLUDED.confidence_factors,
+         sub_scores          = EXCLUDED.sub_scores,
+         detected_agent_name = EXCLUDED.detected_agent_name
+       RETURNING *`,
       [id, analysis.callId, analysis.performanceScore, analysis.talkTimeRatio, analysis.responseTime,
        JSON.stringify(analysis.keywords ?? null), JSON.stringify(analysis.topics ?? null),
        analysis.summary, JSON.stringify(analysis.actionItems ?? null),

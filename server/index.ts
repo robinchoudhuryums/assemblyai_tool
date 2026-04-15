@@ -60,13 +60,15 @@ function rateLimit(windowMs: number, maxRequests: number) {
     return next();
   };
 }
-// Clean up expired rate limit entries every 5 minutes
+// Clean up expired rate limit entries every 5 minutes. .unref() so this
+// background tick doesn't keep the event loop alive past graceful shutdown
+// (INV-30).
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitMap) {
     if (now > entry.resetTime) rateLimitMap.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 // Trust reverse proxy (Caddy on EC2, or Render/Heroku load balancers).
 // "trust proxy" = 1 means trust only the first hop — prevents attackers

@@ -602,6 +602,21 @@ export class MemStorage implements IStorage {
     return result;
   }
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
+    const existing = this.analyses.get(analysis.callId);
+    // F-04: behave like the PostgresStorage UPSERT — if a row already
+    // exists for this call_id (e.g. bulk-reanalyze), replace AI-generated
+    // fields but PRESERVE manual_edits so manager corrections survive.
+    if (existing) {
+      const merged: CallAnalysis = {
+        ...analysis,
+        id: existing.id,
+        createdAt: existing.createdAt,
+        // COALESCE-equivalent: keep existing manualEdits if it has content
+        manualEdits: existing.manualEdits ?? analysis.manualEdits ?? undefined,
+      };
+      this.analyses.set(analysis.callId, merged);
+      return merged;
+    }
     const id = randomUUID();
     const newAnalysis: CallAnalysis = { ...analysis, id, createdAt: new Date().toISOString() };
     this.analyses.set(analysis.callId, newAnalysis);
@@ -1281,11 +1296,18 @@ export class CloudStorage implements IStorage {
   }
 
   async createCallAnalysis(analysis: InsertCallAnalysis): Promise<CallAnalysis> {
-    const id = randomUUID();
+    // F-04: PUT to S3 always overwrites, but we must preserve manual_edits
+    // from any prior analysis (e.g. bulk-reanalyze on a manager-edited
+    // call). Fetch existing first; if present, keep its id/createdAt and
+    // its manualEdits unless the new payload explicitly carries newer ones.
+    const existing = await this.client.downloadJson<CallAnalysis>(`analyses/${analysis.callId}.json`).catch(() => undefined);
+    const id = existing?.id ?? randomUUID();
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
     const newAnalysis: CallAnalysis = {
       ...analysis,
       id,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      manualEdits: existing?.manualEdits ?? analysis.manualEdits ?? undefined,
     };
     await this.client.uploadJson(`analyses/${analysis.callId}.json`, newAnalysis);
     return newAnalysis;

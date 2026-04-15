@@ -45,6 +45,33 @@ const BEDROCK_EMBEDDING_TIMEOUT_MS = envIntMs("BEDROCK_EMBEDDING_TIMEOUT_MS", 15
 // when Bedrock is down. 5 failures → open for 30s → half-open test → close on success.
 const bedrockCircuitBreaker = new CircuitBreaker("bedrock", 5, 30_000);
 
+/**
+ * F-17: Marker error for Bedrock 4xx (client errors — schema rejection,
+ * malformed prompt, etc). The circuit breaker treats these as "not a sign
+ * of an unhealthy upstream" and does NOT count them toward the failure
+ * threshold. Otherwise a single bad prompt would brownout the entire
+ * pipeline for 30 seconds. Surfacing the error to the caller is unchanged.
+ */
+export class BedrockClientError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "BedrockClientError";
+    this.status = status;
+  }
+}
+
+/**
+ * F-17: Predicate the circuit breaker uses to decide whether an error
+ * should count toward the failure threshold. Client errors (4xx except
+ * 429) are NOT counted; 5xx and 429 ARE counted (those indicate Bedrock
+ * itself is unhealthy or rate-limiting us).
+ */
+function isCircuitFailure(err: unknown): boolean {
+  if (err instanceof BedrockClientError) return false;
+  return true;
+}
+
 /** Expose circuit breaker state for operational health dashboard. */
 export function getBedrockCircuitBreakerState() {
   return bedrockCircuitBreaker.getState();
@@ -158,6 +185,14 @@ export class BedrockProvider implements AIAnalysisProvider {
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
+          // F-17: 4xx (except 429 throttling) signals a client problem — bad
+          // prompt, schema rejection, etc. Throw BedrockClientError so the
+          // circuit breaker doesn't count it toward the open threshold.
+          // 5xx + 429 stay as plain Error so they DO count as upstream-health
+          // failures.
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new BedrockClientError(response.status, `Bedrock API error (${response.status}): ${statusCategory}`);
+          }
           throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
         }
 
@@ -166,7 +201,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       } finally {
         clearTimeout(timeout);
       }
-    });
+    }, isCircuitFailure);
     }); // end withSpan
   }
 
@@ -222,7 +257,7 @@ export class BedrockProvider implements AIAnalysisProvider {
       } finally {
         clearTimeout(timeout);
       }
-    });
+    }, isCircuitFailure);
 
     // Converse API response shape:
     // { output: { message: { role: "assistant", content: [{ text: "..." }] } } }
@@ -295,7 +330,7 @@ export class BedrockProvider implements AIAnalysisProvider {
         } finally {
           clearTimeout(timeout);
         }
-      });
+      }, isCircuitFailure);
     } catch (error) {
       // Non-critical — clustering falls back to TF-IDF
       logger.warn("Bedrock embedding generation failed (non-critical)", { error: (error as Error).message });

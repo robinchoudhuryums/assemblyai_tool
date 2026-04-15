@@ -35,7 +35,18 @@ export class CircuitBreaker {
     return this.state;
   }
 
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * Execute `fn` under the circuit breaker.
+   *
+   * F-17: callers can supply `isFailure(err)` to classify errors. Returning
+   * false means "this error doesn't indicate an unhealthy upstream — surface
+   * it but don't count it toward the failure threshold." This prevents
+   * client-side errors (e.g. Bedrock 4xx schema rejections, malformed
+   * prompts) from tripping the breaker and brownout-ing healthy traffic.
+   * Default behavior (no `isFailure`) treats every error as a failure to
+   * preserve existing semantics for other callers.
+   */
+  async execute<T>(fn: () => Promise<T>, isFailure?: (err: unknown) => boolean): Promise<T> {
     const currentState = this.getState();
 
     if (currentState === "open") {
@@ -47,7 +58,8 @@ export class CircuitBreaker {
       this.onSuccess();
       return result;
     } catch (error) {
-      this.onFailure();
+      const counts = isFailure ? isFailure(error) : true;
+      if (counts) this.onFailure();
       throw error;
     }
   }

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { sendValidationError } from "./utils";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { logger } from "../services/logger";
@@ -300,7 +300,12 @@ export function registerAuthRoutes(router: Router) {
   });
 
   // Disable MFA (admin or self)
-  router.post("/api/auth/mfa/disable", requireAuth, async (req, res) => {
+  // INV-14: MFA disable is a high-impact state change. Require the caller
+  // to themselves be MFA-enrolled when REQUIRE_MFA is on, otherwise an
+  // admin without MFA could call this on another admin to lock them out
+  // (privilege escalation surface). requireMFASetup is a no-op when
+  // REQUIRE_MFA is unset, so dev/staging are unaffected.
+  router.post("/api/auth/mfa/disable", requireAuth, requireMFASetup, async (req, res) => {
     try {
       const targetUser = req.body.username || req.user!.username;
       // Only admins can disable MFA for other users
