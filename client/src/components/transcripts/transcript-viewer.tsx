@@ -1033,10 +1033,120 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             );
           })()}
 
+          {/* Score Breakdown — "Why this score?" drill-down */}
+          <ScoreBreakdown call={call} />
+
           {/* Transcript Annotations */}
           <AnnotationsPanel callId={callId} currentTime={currentTime} onJump={jumpToTime} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * ScoreBreakdown — surfaces the signals that drove the composite score:
+ * sub-scores, flags (with human-readable labels), and RAG knowledge-base
+ * sources that grounded the AI analysis. Answers "why did this call get
+ * this score?" without any new backend — all data is already on the
+ * analysis object.
+ */
+function ScoreBreakdown({ call }: { call: CallWithDetails }) {
+  const [expanded, setExpanded] = useState(false);
+  const analysis = call.analysis;
+  if (!analysis) return null;
+
+  const flags = Array.isArray(analysis.flags) ? (analysis.flags as string[]) : [];
+  const ragSources = (analysis.confidenceFactors && typeof analysis.confidenceFactors === "object")
+    ? ((analysis.confidenceFactors as Record<string, unknown>).ragSources as Array<{ title?: string; source?: string }> | undefined)
+    : undefined;
+
+  const flagLabels: Record<string, { label: string; color: string }> = {
+    low_confidence: { label: "Low transcript confidence", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400" },
+    prompt_injection_detected: { label: "Possible prompt injection in transcript", color: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" },
+    awaiting_batch_analysis: { label: "Awaiting batch analysis", color: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400" },
+  };
+
+  const hasAnything = flags.length > 0 || (ragSources && ragSources.length > 0) || analysis.subScores;
+  if (!hasAnything) return null;
+
+  return (
+    <div className="rounded-lg p-4 bg-muted">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center justify-between w-full text-left"
+        aria-expanded={expanded}
+      >
+        <h4 className="font-semibold text-foreground flex items-center gap-1.5">
+          <MagnifyingGlass className="w-4 h-4" /> Why this score?
+        </h4>
+        {expanded ? <CaretUp className="w-4 h-4" /> : <CaretDown className="w-4 h-4" />}
+      </button>
+      {expanded && (
+        <div className="mt-3 space-y-3 text-sm">
+          {/* Flags — classified anomalies detected during analysis */}
+          {flags.length > 0 && (
+            <div>
+              <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Analysis flags</h5>
+              <div className="flex flex-wrap gap-1.5">
+                {flags.map((flag, i) => {
+                  const known = flagLabels[flag];
+                  // output_anomaly:* flags carry a suffix like "invalid_feedback_timestamps:3"
+                  const isOutputAnomaly = flag.startsWith("output_anomaly:");
+                  return (
+                    <Badge
+                      key={`${flag}-${i}`}
+                      className={known?.color ?? (isOutputAnomaly
+                        ? "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400"
+                        : "bg-muted-foreground/10 text-foreground")}
+                    >
+                      {known?.label ?? flag}
+                    </Badge>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Flags record conditions the AI noticed while analyzing. They don't directly change the score but explain its limitations.
+              </p>
+            </div>
+          )}
+
+          {/* RAG sources — knowledge-base docs that grounded the analysis */}
+          {ragSources && ragSources.length > 0 && (
+            <div>
+              <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Reference documents used</h5>
+              <ul className="space-y-1">
+                {ragSources.slice(0, 5).map((src, i) => (
+                  <li key={i} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <FileText className="w-3 h-3 mt-0.5 shrink-0" />
+                    <span>{src.title || src.source || "Untitled source"}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                These company knowledge-base documents were retrieved and passed to the AI alongside the transcript. Scoring reflects compliance with policies in these sources.
+              </p>
+            </div>
+          )}
+
+          {/* Sub-score interpretation guide */}
+          {analysis.subScores && (
+            <div>
+              <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Sub-score weights</h5>
+              <p className="text-xs text-muted-foreground">
+                The performance score combines four dimensions equally: Compliance, Customer Experience, Communication, and Resolution (1–10 each). A sub-score below 5 typically signals an improvement area; the feedback section above highlights what triggered it.
+              </p>
+            </div>
+          )}
+
+          {/* Detected agent — attribution */}
+          {analysis.detectedAgentName && (
+            <div className="text-xs text-muted-foreground">
+              <strong className="text-foreground">Detected speaker:</strong> AI identified "{toDisplayString(analysis.detectedAgentName)}" as the agent. Coaching alerts and employee assignments use this detection.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

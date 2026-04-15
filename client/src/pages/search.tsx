@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Calendar, Funnel, Heart, MagnifyingGlass, Star, Users, X } from "@phosphor-icons/react";
+import { BookmarkSimple, Calendar, FloppyDisk, Funnel, Heart, MagnifyingGlass, Star, Trash, Users, X } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,7 @@ import { LoadingIndicator } from "@/components/ui/loading";
 import { ErrorBoundary } from "@/components/lib/error-boundary";
 import { CallCard } from "@/components/search/call-card";
 import { SEARCH_DEBOUNCE_MS } from "@/lib/constants";
+import { deleteSavedFilter, loadSavedFilters, saveSavedFilter, type SavedFilter } from "@/lib/saved-filters";
 
 export default function SearchPage() {
   const searchParams = useSearch();
@@ -126,6 +127,55 @@ export default function SearchPage() {
 
   const hasActiveFilters = sentimentFilter !== "all" || statusFilter !== "all" || employeeFilter !== "all" || dateFrom || dateTo || minScore || maxScore;
 
+  // ── Saved filter presets (persisted to localStorage via safe-storage) ──
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(() => loadSavedFilters());
+  const [savingName, setSavingName] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+
+  const refreshSavedFilters = () => setSavedFilters(loadSavedFilters());
+
+  const applySavedFilter = (f: SavedFilter) => {
+    setSearchQuery(f.searchQuery ?? "");
+    setSentimentFilter(f.sentiment || "all");
+    setStatusFilter(f.status || "all");
+    setEmployeeFilter(f.employee || "all");
+    setDateFrom(f.dateFrom ?? "");
+    setDateTo(f.dateTo ?? "");
+    setMinScore(f.minScore ?? "");
+    setMaxScore(f.maxScore ?? "");
+    setDebouncedQuery(f.searchQuery ?? "");
+    toast({ title: "Filter loaded", description: `Applied "${f.name}"` });
+  };
+
+  const handleSavePreset = () => {
+    const name = savingName.trim();
+    if (!name) {
+      toast({ title: "Name required", description: "Enter a name for this filter preset.", variant: "destructive" });
+      return;
+    }
+    saveSavedFilter({
+      name,
+      status: statusFilter,
+      sentiment: sentimentFilter,
+      employee: employeeFilter,
+      searchQuery: searchQuery || undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+      minScore: minScore || undefined,
+      maxScore: maxScore || undefined,
+    });
+    refreshSavedFilters();
+    setSavingName("");
+    setShowSaveInput(false);
+    toast({ title: "Filter saved", description: `"${name}" is now in your presets.` });
+  };
+
+  const handleDeletePreset = (id: string, name: string) => {
+    if (!confirm(`Delete saved filter "${name}"?`)) return;
+    deleteSavedFilter(id);
+    refreshSavedFilters();
+  };
+
   return (
     <div className="min-h-screen" data-testid="search-page">
       <header className="bg-card border-b border-border px-6 py-4">
@@ -140,10 +190,23 @@ export default function SearchPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2"><MagnifyingGlass className="w-5 h-5" /> Search & Filter</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setShowAdvanced(!showAdvanced)}>
-                <Funnel className="w-4 h-4 mr-1" />
-                {showAdvanced ? "Hide Filters" : "More Filters"}
-              </Button>
+              <div className="flex items-center gap-2">
+                {(hasActiveFilters || searchQuery) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowSaveInput(v => !v)}
+                    title="Save the current filter combination as a preset"
+                  >
+                    <FloppyDisk className="w-4 h-4 mr-1" />
+                    Save preset
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => setShowAdvanced(!showAdvanced)}>
+                  <Funnel className="w-4 h-4 mr-1" />
+                  {showAdvanced ? "Hide Filters" : "More Filters"}
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -151,6 +214,51 @@ export default function SearchPage() {
               <MagnifyingGlass className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
               <Input type="text" placeholder="Search by keywords, transcript content..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
             </div>
+
+            {/* Saved filter presets — load/delete. The "Save preset" button in the
+                header opens the save input below when active filters exist. */}
+            {savedFilters.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-muted-foreground flex items-center gap-1">
+                  <BookmarkSimple className="w-3.5 h-3.5" /> Saved:
+                </span>
+                {savedFilters.map(f => (
+                  <div key={f.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/60">
+                    <button
+                      onClick={() => applySavedFilter(f)}
+                      className="px-2 py-1 hover:bg-accent rounded-l-md text-foreground"
+                      title={`Load: ${f.name}`}
+                    >
+                      {f.name}
+                    </button>
+                    <button
+                      onClick={() => handleDeletePreset(f.id, f.name)}
+                      className="px-1.5 py-1 hover:bg-destructive/20 rounded-r-md text-muted-foreground hover:text-destructive"
+                      title={`Delete: ${f.name}`}
+                      aria-label={`Delete saved filter ${f.name}`}
+                    >
+                      <Trash className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showSaveInput && (
+              <div className="flex items-center gap-2 p-3 rounded-md border border-dashed border-border bg-muted/30">
+                <Input
+                  type="text"
+                  placeholder="e.g. 'My low-score calls this month'"
+                  value={savingName}
+                  onChange={e => setSavingName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") handleSavePreset(); }}
+                  autoFocus
+                  maxLength={60}
+                />
+                <Button size="sm" onClick={handleSavePreset} disabled={!savingName.trim()}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setShowSaveInput(false); setSavingName(""); }}>Cancel</Button>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
                 <SelectTrigger><Heart className="w-4 h-4 mr-2" /><SelectValue placeholder="All Sentiment" /></SelectTrigger>
