@@ -233,7 +233,7 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
   return score;
 }
 
-// Cleanup anomaly scores every 15 minutes
+// Cleanup anomaly scores every 15 minutes. .unref() per INV-30.
 setInterval(() => {
   const now = Date.now();
   for (const [ip, tracker] of anomalyScores) {
@@ -241,9 +241,10 @@ setInterval(() => {
       anomalyScores.delete(ip);
     }
   }
-}, 15 * 60 * 1000);
+}, 15 * 60 * 1000).unref();
 
-// Cleanup expired temporary blocks and cooldowns every 5 minutes
+// Cleanup expired temporary blocks and cooldowns every 5 minutes. .unref()
+// per INV-30 so the timer doesn't block graceful shutdown.
 setInterval(() => {
   const now = Date.now();
   for (const [ip, expiresAt] of temporaryBlocks) {
@@ -252,7 +253,7 @@ setInterval(() => {
   for (const [ip, expiresAt] of anomalyCooldowns) {
     if (now >= expiresAt) anomalyCooldowns.delete(ip);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 // --- WAF Stats ---
 

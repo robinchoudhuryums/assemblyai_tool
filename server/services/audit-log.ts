@@ -193,18 +193,16 @@ function enqueue(params: (string | undefined)[]): void {
       shedEntryAgeMs: ageMs,
       shedEntryAttempts: shed?.attempt ?? 0,
     });
-    // One-shot Sentry escalation — first drop per process pages on-call.
-    // Non-blocking dynamic import so a Sentry crash can't cascade into the
-    // audit path. We do NOT await; audit logging must stay fire-and-forget.
+    // One-shot escalation — first drop per process pages on-call via
+    // CloudWatch metric filter on "audit-log: queue full" at level=error.
+    // Subsequent drops also log at error but don't re-alert (one-shot).
     if (!alertedQueueFull) {
       alertedQueueFull = true;
-      import("./sentry").then(({ captureMessage }) => {
-        captureMessage(
-          `HIPAA audit queue overflow: oldest entry dropped from DB write path (${MAX_QUEUE_SIZE} entries). ` +
-          `Stdout HMAC chain retains canonical record. Investigate DB write latency or increase MAX_QUEUE_SIZE.`,
-          "error"
-        );
-      }).catch(() => { /* noop — Sentry is optional */ });
+      logger.error("audit-log: queue overflow alert — HIPAA audit DB write path saturated", {
+        maxQueueSize: MAX_QUEUE_SIZE,
+        alert: "audit_queue_overflow",
+        note: "Stdout HMAC chain retains canonical record. Investigate DB write latency or increase MAX_QUEUE_SIZE.",
+      });
     }
   }
   queue.push({ params, attempt: 0, nextRetryAt: 0, enqueuedAt: now });

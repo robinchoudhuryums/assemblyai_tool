@@ -180,6 +180,8 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     )`,
     "CREATE INDEX IF NOT EXISTS idx_scheduled_reports_type_period ON scheduled_reports (type, period_start DESC)",
     "CREATE INDEX IF NOT EXISTS idx_scheduled_reports_generated_at ON scheduled_reports (generated_at DESC)",
+    // MFA recovery codes — scrypt-hashed, single-use recovery tokens for lost-device flow
+    "ALTER TABLE mfa_secrets ADD COLUMN IF NOT EXISTS recovery_codes JSONB DEFAULT '[]'",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

@@ -4,8 +4,8 @@ import { z } from "zod";
 import { sendValidationError } from "./utils";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole, getSessionFingerprint } from "../auth";
-import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers } from "../services/totp";
+import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint } from "../auth";
+import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { logger } from "../services/logger";
 import { insertAccessRequestSchema } from "@shared/schema";
@@ -18,8 +18,13 @@ function bindSessionFingerprint(req: import("express").Request): void {
 
 export function registerAuthRoutes(router: Router) {
 
-  // Temporary store for MFA-pending logins (password verified, awaiting TOTP)
-  const mfaPendingTokens = new Map<string, { user: Express.User; expires: number }>();
+  // Temporary store for MFA-pending logins (password verified, awaiting TOTP).
+  // Each token also carries an attempts counter so we can invalidate after
+  // MFA_MAX_ATTEMPTS bad TOTP submissions — defense against 6-digit brute
+  // force within the token's 5-minute lifetime. The per-IP login limiter
+  // (5/15min) still applies at the outer layer.
+  const MFA_MAX_ATTEMPTS = 5;
+  const mfaPendingTokens = new Map<string, { user: Express.User; expires: number; attempts: number }>();
   // Cleanup expired MFA tokens every 5 minutes
   setInterval(() => {
     const now = Date.now();
@@ -36,19 +41,73 @@ export function registerAuthRoutes(router: Router) {
       const pending = mfaPendingTokens.get(mfaToken);
       if (!pending || Date.now() > pending.expires) {
         mfaPendingTokens.delete(mfaToken);
+        logPhiAccess({
+          timestamp: new Date().toISOString(),
+          event: "mfa_session_expired",
+          ...auditContext(req),
+          username: pending?.user.username,
+          resourceType: "auth",
+        });
         return res.status(401).json({
           code: "mfa_session_expired",
           message: "MFA session expired. Please log in again.",
         });
       }
-      // Verify TOTP
+      // Verify TOTP — recovery codes accepted via the same input field.
+      // 6-digit numeric → TOTP; 10-character alphanumeric → recovery code.
       (async () => {
         try {
           const mfaRecord = await getMFASecret(pending.user.username);
-          if (!mfaRecord || !verifyTOTP(mfaRecord.secret, totpCode)) {
+          const trimmed = String(totpCode).trim();
+          let verified = false;
+          let verifiedVia: "totp" | "recovery_code" = "totp";
+          if (mfaRecord) {
+            if (/^\d{6}$/.test(trimmed) && verifyTOTP(mfaRecord.secret, trimmed)) {
+              verified = true;
+              verifiedVia = "totp";
+            } else if (/^[A-Z0-9]{10}$/i.test(trimmed)) {
+              const { consumeRecoveryCode } = await import("../services/totp");
+              if (await consumeRecoveryCode(pending.user.username, trimmed)) {
+                verified = true;
+                verifiedVia = "recovery_code";
+              }
+            }
+          }
+          if (!verified) {
+            pending.attempts++;
+            if (pending.attempts >= MFA_MAX_ATTEMPTS) {
+              mfaPendingTokens.delete(mfaToken);
+              logPhiAccess({
+                timestamp: new Date().toISOString(),
+                event: "mfa_verification_locked",
+                ...auditContext(req),
+                username: pending.user.username,
+                resourceType: "auth",
+                detail: `MFA token invalidated after ${MFA_MAX_ATTEMPTS} failed attempts`,
+              });
+              return res.status(401).json({
+                code: "mfa_session_expired",
+                message: "Too many failed attempts. Please log in again.",
+              });
+            }
+            logPhiAccess({
+              timestamp: new Date().toISOString(),
+              event: "mfa_verification_failed",
+              ...auditContext(req),
+              username: pending.user.username,
+              resourceType: "auth",
+              detail: `attempt ${pending.attempts}/${MFA_MAX_ATTEMPTS}`,
+            });
             return res.status(401).json({ message: "Invalid verification code" });
           }
           mfaPendingTokens.delete(mfaToken);
+          logPhiAccess({
+            timestamp: new Date().toISOString(),
+            event: verifiedVia === "recovery_code" ? "mfa_recovery_code_used" : "mfa_verification_succeeded",
+            ...auditContext(req),
+            username: pending.user.username,
+            resourceType: "auth",
+          });
           req.login(pending.user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
@@ -74,7 +133,14 @@ export function registerAuthRoutes(router: Router) {
         if (mfaRecord?.enabled) {
           // MFA required — issue temporary token, don't create session yet
           const token = randomUUID();
-          mfaPendingTokens.set(token, { user, expires: Date.now() + 5 * 60 * 1000 }); // 5 min expiry
+          mfaPendingTokens.set(token, { user, expires: Date.now() + 5 * 60 * 1000, attempts: 0 }); // 5 min expiry
+          logPhiAccess({
+            timestamp: new Date().toISOString(),
+            event: "mfa_challenge_issued",
+            ...auditContext(req),
+            username: user.username,
+            resourceType: "auth",
+          });
           return res.json({ mfaRequired: true, mfaToken: token });
         }
 
@@ -103,6 +169,8 @@ export function registerAuthRoutes(router: Router) {
 
   // Logout
   router.post("/api/auth/logout", (req, res) => {
+    const usernameForAudit = req.user?.username;
+    const auditCtx = auditContext(req);
     req.logout((err) => {
       if (err) {
         res.status(500).json({ message: "Failed to logout" });
@@ -114,6 +182,15 @@ export function registerAuthRoutes(router: Router) {
         if (destroyErr) {
           // Session data is already cleared by req.logout(); log and continue
           logger.warn("Failed to destroy session on logout", { error: (destroyErr as Error).message });
+        }
+        if (usernameForAudit) {
+          logPhiAccess({
+            timestamp: new Date().toISOString(),
+            event: "logout",
+            ...auditCtx,
+            username: usernameForAudit,
+            resourceType: "auth",
+          });
         }
         res.json({ message: "Logged out" });
       });
@@ -135,9 +212,15 @@ export function registerAuthRoutes(router: Router) {
   router.get("/api/auth/mfa/status", requireAuth, async (req, res) => {
     try {
       const mfaRecord = await getMFASecret(req.user!.username);
+      const enabled = mfaRecord?.enabled ?? false;
+      let recoveryCodesRemaining = 0;
+      if (enabled) {
+        recoveryCodesRemaining = await countRemainingRecoveryCodes(req.user!.username);
+      }
       res.json({
-        enabled: mfaRecord?.enabled ?? false,
+        enabled,
         required: isMFARequired() || isMFARoleRequired(req.user!.role),
+        recoveryCodesRemaining,
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to check MFA status" });
@@ -178,20 +261,51 @@ export function registerAuthRoutes(router: Router) {
         return res.status(401).json({ message: "Invalid verification code" });
       }
       await enableMFA(req.user!.username);
+      // Generate single-use recovery codes at enable time — shown to the user
+      // exactly once. They MUST save them now; we never display them again.
+      const recoveryCodes = await generateRecoveryCodes(req.user!.username);
       logPhiAccess({
         timestamp: new Date().toISOString(),
         event: "mfa_enabled",
         ...auditContext(req),
         resourceType: "auth",
+        detail: `${recoveryCodes.length} recovery codes generated`,
       });
-      res.json({ message: "MFA enabled successfully" });
+      res.json({ message: "MFA enabled successfully", recoveryCodes });
     } catch (error) {
       res.status(500).json({ message: "Failed to enable MFA" });
     }
   });
 
+  // Regenerate recovery codes (invalidates prior codes). Must be authenticated
+  // and MFA-enabled. Returns the full new plaintext set — display once.
+  router.post("/api/auth/mfa/recovery-codes/regenerate", requireAuth, async (req, res) => {
+    try {
+      const mfaRecord = await getMFASecret(req.user!.username);
+      if (!mfaRecord?.enabled) {
+        return res.status(400).json({ message: "MFA is not enabled for this user" });
+      }
+      const recoveryCodes = await generateRecoveryCodes(req.user!.username);
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "mfa_recovery_codes_regenerated",
+        ...auditContext(req),
+        resourceType: "auth",
+        detail: `${recoveryCodes.length} recovery codes regenerated (prior codes invalidated)`,
+      });
+      res.json({ recoveryCodes });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to regenerate recovery codes" });
+    }
+  });
+
   // Disable MFA (admin or self)
-  router.post("/api/auth/mfa/disable", requireAuth, async (req, res) => {
+  // INV-14: MFA disable is a high-impact state change. Require the caller
+  // to themselves be MFA-enrolled when REQUIRE_MFA is on, otherwise an
+  // admin without MFA could call this on another admin to lock them out
+  // (privilege escalation surface). requireMFASetup is a no-op when
+  // REQUIRE_MFA is unset, so dev/staging are unaffected.
+  router.post("/api/auth/mfa/disable", requireAuth, requireMFASetup, async (req, res) => {
     try {
       const targetUser = req.body.username || req.user!.username;
       // Only admins can disable MFA for other users

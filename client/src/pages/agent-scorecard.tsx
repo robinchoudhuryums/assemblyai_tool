@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, Link } from "wouter";
-import { ArrowLeft, ChatCircle, CheckCircle, Crown, Fire, Heart, Lightning, Printer, Rocket, Shield, Star, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
+import { ArrowDown, ArrowLeft, ArrowUp, ChatCircle, CheckCircle, Crown, Fire, Heart, Lightning, Minus, Printer, Pulse, Rocket, Shield, Star, TrendUp, Trophy, Warning } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoadingIndicator } from "@/components/ui/loading";
@@ -9,6 +9,152 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { toDisplayString } from "@/lib/display-utils";
 import { SCORE_EXCELLENT, SCORE_GOOD, SCORE_NEEDS_WORK } from "@/lib/constants";
 import type { Employee } from "@shared/schema";
+
+interface HealthPulseResponse {
+  employeeId: string;
+  windowDays: number;
+  current: { count: number; avgScore: number | null };
+  prior: { count: number; avgScore: number | null };
+  overallDelta: number | null;
+  trend: "trending_up" | "stable" | "trending_down" | "insufficient_data";
+  severity: "ok" | "warning" | "critical";
+  subScores: Record<string, { current: number | null; prior: number | null; delta: number | null }>;
+  thresholds: { warning: number; critical: number; minCalls: number };
+}
+
+/** Health pulse widget — compares current window against prior equal-length
+ *  window, surfaces trending-down sub-scores as early warnings. */
+function HealthPulseCard({ employeeId }: { employeeId: string }) {
+  const { data, isLoading } = useQuery<HealthPulseResponse>({
+    queryKey: [`/api/analytics/health-pulse/${employeeId}`],
+    enabled: !!employeeId,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="bg-card rounded-lg border border-border p-5">
+        <h3 className="font-semibold text-foreground mb-2 flex items-center gap-1.5">
+          <Pulse className="w-4 h-4" /> Health pulse
+        </h3>
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  if (data.trend === "insufficient_data") {
+    return (
+      <div className="bg-card rounded-lg border border-dashed border-border p-5">
+        <h3 className="font-semibold text-foreground mb-2 flex items-center gap-1.5">
+          <Pulse className="w-4 h-4" /> Health pulse
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Not enough recent calls to compute a trend. Need at least {data.thresholds.minCalls} calls
+          in each of the current and prior {data.windowDays}-day windows.
+        </p>
+      </div>
+    );
+  }
+
+  const trendColor =
+    data.severity === "critical" ? "border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-800" :
+    data.severity === "warning" ? "border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800" :
+    data.trend === "trending_up" ? "border-green-300 bg-green-50 dark:bg-green-900/20 dark:border-green-800" :
+    "border-border bg-card";
+
+  const trendText =
+    data.trend === "trending_down" ? "Trending down" :
+    data.trend === "trending_up" ? "Trending up" :
+    "Stable";
+
+  const TrendIcon =
+    data.trend === "trending_down" ? ArrowDown :
+    data.trend === "trending_up" ? ArrowUp :
+    Minus;
+
+  const trendIconColor =
+    data.trend === "trending_down" ? (data.severity === "critical" ? "text-red-600" : "text-amber-600") :
+    data.trend === "trending_up" ? "text-green-600" :
+    "text-muted-foreground";
+
+  const subScoreLabels: Record<string, string> = {
+    compliance: "Compliance",
+    customerExperience: "Customer Exp.",
+    communication: "Communication",
+    resolution: "Resolution",
+  };
+
+  return (
+    <div className={`rounded-lg border p-5 ${trendColor}`}>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold text-foreground flex items-center gap-1.5">
+          <Pulse className="w-4 h-4" /> Health pulse
+          <span className="text-xs text-muted-foreground font-normal">
+            last {data.windowDays}d vs. prior {data.windowDays}d
+          </span>
+        </h3>
+        <div className="flex items-center gap-1.5">
+          <TrendIcon className={`w-4 h-4 ${trendIconColor}`} />
+          <span className={`text-sm font-semibold ${trendIconColor}`}>{trendText}</span>
+        </div>
+      </div>
+
+      {data.severity === "critical" && (
+        <p className="text-xs text-red-700 dark:text-red-300 mb-3 flex items-start gap-1.5">
+          <Warning className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>Average score dropped by {Math.abs(data.overallDelta ?? 0).toFixed(1)} points — consider scheduling a coaching session.</span>
+        </p>
+      )}
+
+      {/* Overall comparison */}
+      <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Current</div>
+          <div className="text-lg font-bold text-foreground">
+            {data.current.avgScore != null ? data.current.avgScore.toFixed(1) : "—"}
+          </div>
+          <div className="text-xs text-muted-foreground">{data.current.count} call{data.current.count === 1 ? "" : "s"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Prior</div>
+          <div className="text-lg font-bold text-foreground">
+            {data.prior.avgScore != null ? data.prior.avgScore.toFixed(1) : "—"}
+          </div>
+          <div className="text-xs text-muted-foreground">{data.prior.count} call{data.prior.count === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+
+      {/* Per-sub-score deltas */}
+      <div className="space-y-1.5 pt-3 border-t border-border">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">
+          Sub-score movement
+        </div>
+        {Object.entries(data.subScores).map(([key, v]) => {
+          if (v.delta == null) return null;
+          const isDown = v.delta <= -data.thresholds.warning;
+          const isUp = v.delta >= data.thresholds.warning;
+          const cls = isDown ? "text-amber-600 dark:text-amber-400" :
+                      isUp ? "text-green-600 dark:text-green-400" :
+                      "text-muted-foreground";
+          const Icon = isDown ? ArrowDown : isUp ? ArrowUp : Minus;
+          const sign = v.delta > 0 ? "+" : "";
+          return (
+            <div key={key} className="flex items-center justify-between text-xs">
+              <span className="text-foreground">{subScoreLabels[key] ?? key}</span>
+              <span className={`font-mono flex items-center gap-1 ${cls}`}>
+                <Icon className="w-3 h-3" />
+                {sign}{v.delta.toFixed(1)}
+                <span className="text-muted-foreground font-normal">
+                  ({(v.prior ?? 0).toFixed(1)} → {(v.current ?? 0).toFixed(1)})
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 interface AgentProfileData {
   employee: { id: string; name: string; role: string; status: string };
@@ -292,6 +438,13 @@ export default function AgentScorecard() {
                 </Badge>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Health pulse — early warning on sub-score deltas */}
+        {employeeId && (
+          <div className="mb-6 print:mb-4">
+            <HealthPulseCard employeeId={employeeId} />
           </div>
         )}
 

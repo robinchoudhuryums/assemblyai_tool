@@ -10,6 +10,12 @@ export interface SavedFilter {
   status: string;
   sentiment: string;
   employee: string;
+  /** Optional search query to restore with the filter */
+  searchQuery?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  minScore?: string;
+  maxScore?: string;
   createdAt: string;
 }
 

@@ -180,6 +180,7 @@ export async function getLatestCalibrationSnapshot(): Promise<CalibrationSnapsho
 
 // Scheduler
 let calibrationInterval: ReturnType<typeof setInterval> | null = null;
+let calibrationTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export function startCalibrationScheduler(): () => void {
   const intervalHours = parseInt(process.env.CALIBRATION_INTERVAL_HOURS || "24", 10);
@@ -198,12 +199,21 @@ export function startCalibrationScheduler(): () => void {
     );
   };
 
-  // First run after 2 minutes
-  const timeout = setTimeout(runCycle, 2 * 60 * 1000);
+  // First run after 2 minutes. .unref() so timers don't keep the event loop
+  // alive past graceful shutdown.
+  calibrationTimeout = setTimeout(runCycle, 2 * 60 * 1000);
+  calibrationTimeout.unref();
   calibrationInterval = setInterval(runCycle, intervalHours * 3600 * 1000);
+  calibrationInterval.unref();
 
-  return () => {
-    clearTimeout(timeout);
-    if (calibrationInterval) { clearInterval(calibrationInterval); calibrationInterval = null; }
-  };
+  return stopCalibrationScheduler;
+}
+
+/**
+ * Stop the auto-calibration scheduler. Safe to call multiple times.
+ * Exported for use in graceful shutdown.
+ */
+export function stopCalibrationScheduler(): void {
+  if (calibrationTimeout) { clearTimeout(calibrationTimeout); calibrationTimeout = null; }
+  if (calibrationInterval) { clearInterval(calibrationInterval); calibrationInterval = null; }
 }

@@ -26,12 +26,19 @@ export default function ABTestingPage() {
 
   const { data: tests = [], isLoading, error: testsError } = useQuery<ABTest[]>({
     queryKey: ["/api/ab-tests"],
-    // Only poll while tests are actively processing — stop once all are done
+    // F-21: Two-tier polling cadence so a second upload in the same session
+    // resumes monitoring without a manual refresh.
+    //   - If any test is still processing → 5s tight loop
+    //   - Otherwise → 30s heartbeat (catches a new upload's status flip,
+    //     batch-mode completion, or background corruption)
+    // Also refetch when the user returns to the tab so the page never
+    // shows stale data after a long blur.
     refetchInterval: (query) => {
       const data = query.state.data as ABTest[] | undefined;
       const hasProcessing = data?.some(t => t.status === "processing");
-      return hasProcessing ? 5000 : false;
+      return hasProcessing ? 5000 : 30000;
     },
+    refetchOnWindowFocus: true,
   });
 
   const selectedTest = tests.find(t => t.id === selectedTestId);

@@ -30,6 +30,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const totpInputRef = useRef<HTMLInputElement>(null);
 
   // Request access form state
@@ -92,6 +93,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
       if (isMfaExpired) {
         setMfaRequired(false);
         setMfaToken("");
+        setUseRecoveryCode(false);
       } else {
         // Re-focus the input for quick retry
         setTimeout(() => totpInputRef.current?.focus(), 100);
@@ -172,28 +174,57 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                 </div>
                 <div>
                   <label className="text-sm font-medium text-foreground" htmlFor="totp-code">
-                    Verification Code
+                    {useRecoveryCode ? "Recovery Code" : "Verification Code"}
                   </label>
-                  <Input
-                    ref={totpInputRef}
-                    id="totp-code"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={6}
-                    placeholder="000000"
-                    value={totpCode}
-                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
-                    required
-                    autoComplete="one-time-code"
-                    autoFocus
-                    className="text-center text-2xl tracking-[0.5em] font-mono"
-                  />
+                  {useRecoveryCode ? (
+                    <Input
+                      ref={totpInputRef}
+                      id="totp-code"
+                      type="text"
+                      maxLength={11}
+                      placeholder="XXXXX-XXXXX"
+                      value={totpCode}
+                      onChange={(e) => {
+                        const raw = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+                        setTotpCode(raw.length > 5 ? `${raw.slice(0, 5)}-${raw.slice(5)}` : raw);
+                      }}
+                      required
+                      autoFocus
+                      className="text-center text-lg tracking-widest font-mono"
+                    />
+                  ) : (
+                    <Input
+                      ref={totpInputRef}
+                      id="totp-code"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      placeholder="000000"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                      required
+                      autoComplete="one-time-code"
+                      autoFocus
+                      className="text-center text-2xl tracking-[0.5em] font-mono"
+                    />
+                  )}
                   <p className="text-xs text-muted-foreground mt-1.5">
-                    Open your authenticator app and enter the 6-digit code
+                    {useRecoveryCode
+                      ? "Enter one of your saved recovery codes. Each code can only be used once."
+                      : "Open your authenticator app and enter the 6-digit code"}
                   </p>
                 </div>
-                <Button type="submit" className="w-full" disabled={isLoading || totpCode.length !== 6}>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={
+                    isLoading ||
+                    (useRecoveryCode
+                      ? totpCode.replace(/[^A-Z0-9]/gi, "").length !== 10
+                      : totpCode.length !== 6)
+                  }
+                >
                   {isLoading ? (
                     <Waveform className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
@@ -204,8 +235,16 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                 <Button
                   type="button"
                   variant="ghost"
+                  className="w-full text-xs"
+                  onClick={() => { setUseRecoveryCode(v => !v); setTotpCode(""); setTimeout(() => totpInputRef.current?.focus(), 50); }}
+                >
+                  {useRecoveryCode ? "Use authenticator app code instead" : "Can't access your authenticator? Use a recovery code"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
                   className="w-full"
-                  onClick={() => { setMfaRequired(false); setMfaToken(""); setTotpCode(""); }}
+                  onClick={() => { setMfaRequired(false); setMfaToken(""); setTotpCode(""); setUseRecoveryCode(false); }}
                 >
                   Back to Sign In
                 </Button>

@@ -766,4 +766,129 @@ export function registerHeatmapRoutes(router: Router) {
       res.status(500).json({ message: "Failed to generate heatmap data" });
     }
   });
+
+  /**
+   * GET /api/analytics/health-pulse/:employeeId
+   *
+   * Employee "health pulse" — compares the current N-day window against the
+   * prior N-day window and returns per-sub-score deltas so managers can spot
+   * agents trending down before it shows up in monthly reviews. Uses the
+   * existing getCallsSinceWithDetails primitive to keep this cheap.
+   */
+  router.get(
+    "/api/analytics/health-pulse/:employeeId",
+    requireAuth,
+    validateParams({ employeeId: "uuid" }),
+    async (req, res) => {
+      try {
+        const employeeId = req.params.employeeId;
+        const windowDays = Math.min(Math.max(parseInt(req.query.days as string) || 28, 7), 90);
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - windowDays * 86_400_000);
+        const priorStart = new Date(now.getTime() - 2 * windowDays * 86_400_000);
+
+        // Fetch the last 2 windows' worth of calls in one query, then split.
+        const allCalls = await storage.getCallsSinceWithDetails(priorStart, employeeId);
+
+        const avgOf = (arr: number[]): number | null =>
+          arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+
+        const bucket = (from: Date, to: Date) => {
+          const fromMs = from.getTime();
+          const toMs = to.getTime();
+          const calls = allCalls.filter(c => {
+            if (!c.uploadedAt) return false;
+            const t = new Date(c.uploadedAt).getTime();
+            return t >= fromMs && t < toMs;
+          });
+          const scores: number[] = [];
+          const subs: Record<"compliance" | "customerExperience" | "communication" | "resolution", number[]> = {
+            compliance: [],
+            customerExperience: [],
+            communication: [],
+            resolution: [],
+          };
+          for (const c of calls) {
+            const s = c.analysis?.performanceScore;
+            if (s != null) {
+              const n = parseFloat(String(s));
+              if (Number.isFinite(n)) scores.push(n);
+            }
+            const sub = c.analysis?.subScores as Record<string, number | undefined> | undefined;
+            if (sub) {
+              for (const k of Object.keys(subs) as Array<keyof typeof subs>) {
+                const v = sub[k];
+                if (typeof v === "number" && Number.isFinite(v)) subs[k].push(v);
+              }
+            }
+          }
+          return {
+            count: calls.length,
+            avgScore: avgOf(scores),
+            subScores: {
+              compliance: avgOf(subs.compliance),
+              customerExperience: avgOf(subs.customerExperience),
+              communication: avgOf(subs.communication),
+              resolution: avgOf(subs.resolution),
+            },
+          };
+        };
+
+        const current = bucket(windowStart, now);
+        const prior = bucket(priorStart, windowStart);
+
+        // Classify overall trend. Need both windows to have enough data.
+        const MIN_CALLS = 3;
+        const DELTA_WARNING = 0.5;
+        const DELTA_CRITICAL = 1.0;
+        let trend: "trending_up" | "stable" | "trending_down" | "insufficient_data" = "insufficient_data";
+        let overallDelta: number | null = null;
+        if (
+          current.count >= MIN_CALLS &&
+          prior.count >= MIN_CALLS &&
+          current.avgScore != null &&
+          prior.avgScore != null
+        ) {
+          overallDelta = Math.round((current.avgScore - prior.avgScore) * 100) / 100;
+          if (overallDelta <= -DELTA_WARNING) trend = "trending_down";
+          else if (overallDelta >= DELTA_WARNING) trend = "trending_up";
+          else trend = "stable";
+        }
+
+        // Per-sub-score deltas — expose raw so UI can highlight specific dimensions
+        const subScoreDeltas: Record<string, { current: number | null; prior: number | null; delta: number | null }> = {};
+        for (const k of Object.keys(current.subScores) as Array<keyof typeof current.subScores>) {
+          const cv = current.subScores[k];
+          const pv = prior.subScores[k];
+          subScoreDeltas[k] = {
+            current: cv != null ? Math.round(cv * 100) / 100 : null,
+            prior: pv != null ? Math.round(pv * 100) / 100 : null,
+            delta: (cv != null && pv != null) ? Math.round((cv - pv) * 100) / 100 : null,
+          };
+        }
+
+        res.json({
+          employeeId,
+          windowDays,
+          current: {
+            count: current.count,
+            avgScore: current.avgScore != null ? Math.round(current.avgScore * 100) / 100 : null,
+          },
+          prior: {
+            count: prior.count,
+            avgScore: prior.avgScore != null ? Math.round(prior.avgScore * 100) / 100 : null,
+          },
+          overallDelta,
+          trend,
+          severity: overallDelta != null && overallDelta <= -DELTA_CRITICAL ? "critical" :
+                    overallDelta != null && overallDelta <= -DELTA_WARNING ? "warning" : "ok",
+          subScores: subScoreDeltas,
+          thresholds: { warning: DELTA_WARNING, critical: DELTA_CRITICAL, minCalls: MIN_CALLS },
+        });
+      } catch (error) {
+        console.error("Health pulse error:", error instanceof Error ? error.message : error);
+        res.status(500).json({ message: "Failed to compute health pulse" });
+      }
+    }
+  );
 }

@@ -93,8 +93,23 @@ export function useIdleTimeout(onIdle: () => void, enabled: boolean): IdleTimeou
     const handler = () => resetTimers();
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, handler, { passive: true }));
 
+    // F-03: Reset the idle timer when the user returns to the tab. Without
+    // this, a user who blurs the tab for >15 minutes would be silently
+    // logged out — the warning dialog fires while they can't see it, the
+    // countdown reaches 0 in the background, and they return to the login
+    // page with no explanation. visibilitychange fires when the tab becomes
+    // visible/hidden; we only reset on visible (not on hidden, which would
+    // extend the session indefinitely while the user is away).
+    const visibilityHandler = () => {
+      if (document.visibilityState === "visible") {
+        resetTimers();
+      }
+    };
+    document.addEventListener("visibilitychange", visibilityHandler);
+
     return () => {
       ACTIVITY_EVENTS.forEach(e => window.removeEventListener(e, handler, { passive: true } as EventListenerOptions));
+      document.removeEventListener("visibilitychange", visibilityHandler);
       clearAllTimers();
     };
   }, [enabled, resetTimers, clearAllTimers]);

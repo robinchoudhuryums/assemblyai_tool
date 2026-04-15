@@ -472,6 +472,19 @@ Use a professional but supportive tone. Do NOT use markdown formatting, bullet p
 // --- DB Row Conversion ---
 
 function rowToSnapshot(r: any): PerformanceSnapshot {
+  const rawMetrics = typeof r.metrics === "string" ? JSON.parse(r.metrics) : r.metrics;
+  // A11/F25 backfill: `lowConfidenceCallCount`, `promptInjectionCallCount`,
+  // and `outputAnomalyCallCount` were added as required `number` fields
+  // after some historical snapshots were persisted. Default them to 0 here
+  // so consumers never see `undefined`/`NaN` from pre-A11 rows. This is the
+  // "default in the mapper" option from the Operator State Checklist — it
+  // avoids needing the JSONB backfill UPDATE on production.
+  const metrics: PerformanceMetrics = {
+    ...rawMetrics,
+    lowConfidenceCallCount: typeof rawMetrics?.lowConfidenceCallCount === "number" ? rawMetrics.lowConfidenceCallCount : 0,
+    promptInjectionCallCount: typeof rawMetrics?.promptInjectionCallCount === "number" ? rawMetrics.promptInjectionCallCount : 0,
+    outputAnomalyCallCount: typeof rawMetrics?.outputAnomalyCallCount === "number" ? rawMetrics.outputAnomalyCallCount : 0,
+  };
   return {
     id: r.id,
     level: r.level,
@@ -479,7 +492,7 @@ function rowToSnapshot(r: any): PerformanceSnapshot {
     targetName: r.target_name,
     periodStart: r.period_start,
     periodEnd: r.period_end,
-    metrics: typeof r.metrics === "string" ? JSON.parse(r.metrics) : r.metrics,
+    metrics,
     aiSummary: r.ai_summary,
     priorSnapshotIds: typeof r.prior_snapshot_ids === "string" ? JSON.parse(r.prior_snapshot_ids) : (r.prior_snapshot_ids || []),
     generatedBy: r.generated_by,

@@ -259,6 +259,52 @@ export function getCorrectionStats(): {
   return { total: corrections.length, upgrades, downgrades, avgDelta: Math.round(avgDelta * 10) / 10, byCategory };
 }
 
+/**
+ * Return the most recent corrections made by a specific user, newest first.
+ * Used by the "my corrections" dashboard widget so managers can see the
+ * feedback loop they're contributing to.
+ */
+export function getRecentCorrectionsByUser(
+  username: string,
+  limit = 20,
+): ScoringCorrection[] {
+  const all = corrections
+    .filter(c => c.correctedBy === username)
+    .sort((a, b) => b.correctedAt.localeCompare(a.correctedAt));
+  return all.slice(0, Math.max(1, Math.min(100, limit)));
+}
+
+/**
+ * Summary stats for a user's corrections over a rolling window, for the
+ * manager-facing feedback dashboard. Returns counts, average absolute
+ * delta, and direction split.
+ */
+export function getUserCorrectionStats(username: string, sinceDays = 30): {
+  total: number;
+  upgrades: number;
+  downgrades: number;
+  avgDelta: number;
+  windowDays: number;
+} {
+  const cutoff = Date.now() - sinceDays * 86_400_000;
+  const recent = corrections.filter(c =>
+    c.correctedBy === username &&
+    new Date(c.correctedAt).getTime() >= cutoff
+  );
+  const upgrades = recent.filter(c => c.direction === "upgraded").length;
+  const downgrades = recent.filter(c => c.direction === "downgraded").length;
+  const avgDelta = recent.length > 0
+    ? recent.reduce((sum, c) => sum + Math.abs(c.correctedScore - c.originalScore), 0) / recent.length
+    : 0;
+  return {
+    total: recent.length,
+    upgrades,
+    downgrades,
+    avgDelta: Math.round(avgDelta * 10) / 10,
+    windowDays: sinceDays,
+  };
+}
+
 // --- Scoring Quality Alerts ---
 
 export interface ScoringQualityAlert {

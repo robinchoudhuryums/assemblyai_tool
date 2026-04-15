@@ -5,6 +5,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
+import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
 import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 
@@ -409,4 +410,39 @@ router.get("/api/performance", requireAuth, async (req, res) => {
     res.status(500).json({ message: "Failed to delete call" });
   }
 });
+
+  // ==================== SCORING CORRECTION FEEDBACK ====================
+  // Surfaces the user's own corrections + rolling stats so managers can see
+  // the feedback loop they're contributing to. Read-only, authenticated —
+  // any role can fetch their own data; no MFA gate because it reveals no
+  // new PHI (only the user's own recent edits already in the audit trail).
+
+  router.get("/api/scoring-corrections/mine", requireAuth, (req, res) => {
+    try {
+      const username = req.user!.username;
+      const sinceDays = clampInt(typeof req.query.days === "string" ? req.query.days : undefined, 30, 1, 365);
+      const limit = clampInt(typeof req.query.limit === "string" ? req.query.limit : undefined, 20, 1, 100);
+      const stats = getUserCorrectionStats(username, sinceDays);
+      const recent = getRecentCorrectionsByUser(username, limit);
+      // Return a lean shape — the full ScoringCorrection contains call
+      // summary + topics which can be large. Managers only need headline
+      // fields for the dashboard widget.
+      res.json({
+        stats,
+        corrections: recent.map(c => ({
+          id: c.id,
+          callId: c.callId,
+          callCategory: c.callCategory,
+          correctedAt: c.correctedAt,
+          originalScore: c.originalScore,
+          correctedScore: c.correctedScore,
+          direction: c.direction,
+          reason: c.reason,
+          subScoreChanges: c.subScoreChanges,
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to load scoring corrections" });
+    }
+  });
 }

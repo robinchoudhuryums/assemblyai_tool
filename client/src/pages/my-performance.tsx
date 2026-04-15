@@ -4,9 +4,144 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ClipboardText, Fire, Heart, Medal, Phone, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
+import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, Fire, GitDiff, Heart, Medal, Phone, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
 import { ScoreRing } from "@/components/ui/animated-number";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
+
+interface CorrectionStats {
+  total: number;
+  upgrades: number;
+  downgrades: number;
+  avgDelta: number;
+  windowDays: number;
+}
+
+interface CorrectionEntry {
+  id: string;
+  callId: string;
+  callCategory?: string;
+  correctedAt: string;
+  originalScore: number;
+  correctedScore: number;
+  direction: "upgraded" | "downgraded";
+  reason: string;
+  subScoreChanges?: Record<string, { original: number; corrected: number }>;
+}
+
+interface MyCorrectionsResponse {
+  stats: CorrectionStats;
+  corrections: CorrectionEntry[];
+}
+
+function MyCorrectionsCard() {
+  const { data, isLoading } = useQuery<MyCorrectionsResponse>({
+    queryKey: ["/api/scoring-corrections/mine"],
+  });
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader><CardTitle className="text-sm">My scoring corrections</CardTitle></CardHeader>
+        <CardContent><Skeleton className="h-24 w-full" /></CardContent>
+      </Card>
+    );
+  }
+  if (!data || data.stats.total === 0) {
+    return (
+      <Card className="bg-muted/30 border-dashed">
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-1.5">
+            <GitDiff className="w-4 h-4" /> My scoring corrections
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground">
+            You haven't corrected any AI-generated scores yet. When you edit an analysis on the transcript page, your correction is recorded here and injected into future Bedrock prompts so the AI learns from your judgement.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const { stats, corrections } = data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-1.5">
+          <GitDiff className="w-4 h-4" /> My scoring corrections
+          <span className="text-xs text-muted-foreground font-normal ml-auto">
+            last {stats.windowDays} days
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="p-2 rounded-md bg-muted/50">
+            <div className="text-xl font-bold text-foreground">{stats.total}</div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">corrections</div>
+          </div>
+          <div className="p-2 rounded-md bg-green-50 dark:bg-green-900/20">
+            <div className="text-xl font-bold text-green-600 dark:text-green-400 flex items-center justify-center gap-0.5">
+              <ArrowUp className="w-4 h-4" />{stats.upgrades}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">upgraded</div>
+          </div>
+          <div className="p-2 rounded-md bg-red-50 dark:bg-red-900/20">
+            <div className="text-xl font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-0.5">
+              <ArrowDown className="w-4 h-4" />{stats.downgrades}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">downgraded</div>
+          </div>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Avg. absolute delta: <strong className="text-foreground">{stats.avgDelta.toFixed(1)}</strong> points.{" "}
+          {stats.downgrades > stats.upgrades * 2 && (
+            <span className="text-amber-600 dark:text-amber-400">
+              You downgrade the AI more than you upgrade it — the AI may be scoring too high.
+            </span>
+          )}
+          {stats.upgrades > stats.downgrades * 2 && (
+            <span className="text-amber-600 dark:text-amber-400">
+              You upgrade the AI more than you downgrade — the AI may be scoring too low.
+            </span>
+          )}
+        </div>
+
+        {corrections.length > 0 && (
+          <div className="pt-2 border-t border-border">
+            <h5 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Recent corrections</h5>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {corrections.slice(0, 5).map(c => {
+                const delta = c.correctedScore - c.originalScore;
+                const deltaSign = delta > 0 ? "+" : "";
+                return (
+                  <Link
+                    key={c.id}
+                    href={`/transcripts/${c.callId}`}
+                    className="block p-2 rounded hover:bg-accent text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-muted-foreground">
+                        {c.originalScore.toFixed(1)} → {c.correctedScore.toFixed(1)}
+                      </span>
+                      <span className={`font-semibold ${delta > 0 ? "text-green-600" : "text-red-600"}`}>
+                        {deltaSign}{delta.toFixed(1)}
+                      </span>
+                    </div>
+                    {c.reason && (
+                      <p className="text-muted-foreground truncate mt-0.5">"{c.reason}"</p>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface BadgeData {
   id: string;
@@ -142,6 +277,9 @@ export default function MyPerformancePage() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* My scoring corrections — feedback loop visibility */}
+            <MyCorrectionsCard />
 
             {/* Badges */}
             {myData.badges.length > 0 && (

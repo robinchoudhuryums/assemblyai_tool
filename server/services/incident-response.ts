@@ -418,16 +418,38 @@ export async function updateActionItem(
   const incident = incidents.find((i) => i.id === incidentId);
   if (!incident) return null;
 
-  const item = incident.actionItems.find((ai) => ai.id === actionItemId);
-  if (!item) return null;
+  const itemIdx = incident.actionItems.findIndex((ai) => ai.id === actionItemId);
+  if (itemIdx === -1) return null;
 
-  item.status = status;
-  if (status === "completed") {
-    item.completedAt = new Date().toISOString();
-  }
-  incident.updatedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  const existingItem = incident.actionItems[itemIdx];
+  const nextItem: ActionItem = {
+    ...existingItem,
+    status,
+    ...(status === "completed" ? { completedAt: now } : {}),
+  };
 
-  await persistIncident(incident);
+  // INV-13: DB-first clone-then-persist. Build the new state on a shallow
+  // clone (new actionItems array constructed via slice, not push/mutate),
+  // call persistIncident FIRST, and only apply the mutation to the
+  // in-memory object on successful persist. Prevents a failed DB write from
+  // leaving the in-memory cache ahead of the DB.
+  const next: Incident = {
+    ...incident,
+    updatedAt: now,
+    actionItems: [
+      ...incident.actionItems.slice(0, itemIdx),
+      nextItem,
+      ...incident.actionItems.slice(itemIdx + 1),
+    ],
+  };
+
+  await persistIncident(next);
+
+  // Persist succeeded — apply the mutation to the in-memory cache.
+  incident.updatedAt = next.updatedAt;
+  incident.actionItems = next.actionItems;
+
   return incident;
 }
 

@@ -309,11 +309,13 @@ export function warnOnUnknownBedrockModel(model: string | undefined, context: Re
   // Direct logger import avoids a circular require against routes/utils.ts
   // consumers. Kept minimal — this is an operational red flag, not a hot path.
   import("../services/logger").then(({ logger }) => {
-    logger.warn("bedrock-cost: unknown model, cost tracked as $0", { model, known: Object.keys(BEDROCK_PRICING), ...context });
+    logger.warn("bedrock-cost: unknown model, cost tracked as $0", {
+      alert: "bedrock_unknown_model",
+      model,
+      known: Object.keys(BEDROCK_PRICING),
+      ...context,
+    });
   }).catch(() => { /* noop — logger should always import */ });
-  import("../services/sentry").then(({ captureMessage }) => {
-    captureMessage(`Bedrock cost tracking: unknown model "${model}" — usage records will show $0 while AWS still bills`, "warning");
-  }).catch(() => { /* noop — sentry is optional */ });
 }
 
 // AssemblyAI pricing LAST VERIFIED: 2025-11. Base $0.15/hr + sentiment $0.02/hr.

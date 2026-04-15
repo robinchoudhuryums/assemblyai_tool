@@ -246,6 +246,10 @@ CREATE TABLE IF NOT EXISTS mfa_secrets (
   username VARCHAR(255) PRIMARY KEY,
   secret VARCHAR(255) NOT NULL,
   enabled BOOLEAN DEFAULT FALSE,
+  -- Recovery codes for MFA lost-device flow. Stored as JSONB array of objects
+  -- `{ hash: string, used: boolean, usedAt?: string }`. Hashes are scrypt
+  -- derivations of the plaintext code (only shown to the user once at setup).
+  recovery_codes JSONB DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

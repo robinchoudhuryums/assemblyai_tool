@@ -48,11 +48,37 @@ async function processBatchResults(
 
     for (const [callId, analysis] of results) {
       try {
+        // Overwrite guard: if the call already advanced to "completed" (e.g.
+        // a manager edited the analysis, or an on-demand re-run produced a
+        // fresh result, or the batch was submitted twice for the same call),
+        // do NOT overwrite. The batch result would clobber the manager's
+        // corrections. Still clean up the pending item + tracking file.
+        const existingCall = await storage.getCall(callId).catch(() => null);
+        if (existingCall && existingCall.status === "completed") {
+          logger.warn("Batch: skipping result — call already completed (likely manager-edited or re-run)", { callId });
+          try {
+            await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+          } catch { /* best effort */ }
+          continue;
+        }
+
         const pendingData = await s3Client.downloadJson<any>(`batch-inference/pending/${callId}.json`);
         const transcriptResponse = pendingData?.transcriptResponse;
 
         if (!transcriptResponse) {
-          logger.warn("Batch: no transcript data found for call, skipping", { callId });
+          // F-06: Previously this just `continue`d with a warn — the call
+          // stayed in `awaiting_analysis` forever until orphan recovery
+          // (default 2h threshold) caught it. Mark the call failed
+          // explicitly, broadcast the status update so the UI updates
+          // immediately, and clean up the pending S3 item in the finally
+          // block below so we don't loop on it.
+          logger.warn("Batch: pending item missing transcript data, marking call failed", { callId });
+          try {
+            await storage.updateCall(callId, { status: "failed" });
+            broadcastCallUpdate(callId, "failed", { label: "Batch: transcript data missing" });
+          } catch (markErr) {
+            logger.warn("Batch: failed to mark call as failed", { callId, error: (markErr as Error).message });
+          }
           continue;
         }
 
@@ -256,8 +282,9 @@ export async function runBatchCycle(): Promise<void> {
     //  1. Retry the primary write 3x with exponential backoff.
     //  2. On persistent failure, fall back to `orphaned-submissions/` so the
     //     job is still findable in S3 under a known prefix.
-    //  3. In ALL failure cases, emit a Sentry "fatal" with the jobId — that
-    //     is the manual-recovery key an operator can use in the AWS console.
+    //  3. In ALL failure cases, emit a logger.error with the jobId + jobArn —
+    //     those are the manual-recovery keys an operator uses in the AWS
+    //     console (CloudWatch alarm fires on "batch-orphan-escalation").
     await persistBatchJobTracking(s3Client, batchJob, items.length);
 
   } catch (batchErr) {
@@ -333,19 +360,20 @@ async function persistBatchJobTracking(
 }
 
 /**
- * Emit a fatal Sentry alert with the batch jobId. This is the recovery key
- * — with it in Sentry, an operator can find the running job in the AWS
+ * Emit a structured error log with the batch jobId + jobArn. These are the
+ * recovery keys an operator uses to find the running job in the AWS Bedrock
  * console and manually reconstruct the active-jobs tracking file.
+ *
+ * CloudWatch alarm "batch-orphan-escalation" fires on this log line.
  */
 function escalateOrphanedJob(batchJob: BatchJob, reason: string): void {
-  import("./sentry").then(({ captureMessage }) => {
-    captureMessage(
-      `Batch inference tracking-file write failed (${reason}): jobId=${batchJob.jobId} jobArn=${batchJob.jobArn}. ` +
-      `AWS Bedrock is processing this job but CallAnalyzer cannot find it. Manually reconstruct ` +
-      `batch-inference/active-jobs/${batchJob.jobId}.json with the BatchJob shape from the AWS console.`,
-      "error"
-    );
-  }).catch(() => { /* noop — Sentry optional */ });
+  logger.error("batch-orphan-escalation: tracking-file write failed — job invisible to CallAnalyzer", {
+    alert: "batch_orphan_escalation",
+    reason,
+    jobId: batchJob.jobId,
+    jobArn: batchJob.jobArn,
+    recoveryHint: `Manually reconstruct batch-inference/active-jobs/${batchJob.jobId}.json with the BatchJob shape from the AWS console.`,
+  });
 }
 
 /**
@@ -429,13 +457,18 @@ export function startBatchScheduler(): () => void {
   const batchIntervalMinutes = parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10);
   logger.info("Batch inference mode enabled", { intervalMinutes: batchIntervalMinutes });
 
-  // First run after 1 minute, then on interval
+  // First run after 1 minute, then on interval. .unref() so a lingering
+  // timer can't keep the event loop alive past graceful shutdown.
   batchCycleTimeout = setTimeout(runBatchCycle, 60_000);
+  batchCycleTimeout.unref();
   batchCycleInterval = setInterval(runBatchCycle, batchIntervalMinutes * 60 * 1000);
+  batchCycleInterval.unref();
 
   // Orphan recovery: first run after 5 minutes, then every 30 minutes
   orphanCheckTimeout = setTimeout(recoverOrphans, 5 * 60 * 1000);
+  orphanCheckTimeout.unref();
   orphanCheckInterval = setInterval(recoverOrphans, ORPHAN_CHECK_INTERVAL_MS);
+  orphanCheckInterval.unref();
 
   return stopBatchScheduler;
 }

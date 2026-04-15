@@ -10,11 +10,21 @@ import QRCode from "qrcode";
 interface MfaStatus {
   enabled: boolean;
   username: string;
+  recoveryCodesRemaining?: number;
 }
 
 interface MfaSetupResponse {
   secret: string;
-  otpauthUri: string;
+  uri: string;
+}
+
+interface MfaEnableResponse {
+  message: string;
+  recoveryCodes?: string[];
+}
+
+interface RegenerateResponse {
+  recoveryCodes: string[];
 }
 
 /** Renders otpauth:// URI as a scannable QR code on a canvas element. */
@@ -40,10 +50,13 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const [step, setStep] = useState<"status" | "setup" | "verify">("status");
+  const [step, setStep] = useState<"status" | "setup" | "verify" | "recovery-codes">("status");
   const [setupData, setSetupData] = useState<MfaSetupResponse | null>(null);
   const [code, setCode] = useState("");
   const [copied, setCopied] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [codesCopied, setCodesCopied] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const { data: mfaStatus } = useQuery<MfaStatus>({
     queryKey: ["/api/auth/mfa/status"],
@@ -72,16 +85,41 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || "Invalid code");
       }
-      return res.json();
+      return res.json() as Promise<MfaEnableResponse>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
-      toast({ title: "MFA Enabled", description: "Two-factor authentication is now active on your account." });
-      resetAndClose();
+      toast({ title: "MFA Enabled", description: "Save your recovery codes — this is the only time they'll be shown." });
+      setRecoveryCodes(data.recoveryCodes || []);
+      setCodesCopied(false);
+      setAcknowledged(false);
+      setStep("recovery-codes");
     },
     onError: (error) => {
       toast({ title: "Verification Failed", description: error.message, variant: "destructive" });
       setCode("");
+    },
+  });
+
+  const regenerateCodesMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/recovery-codes/regenerate");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to regenerate codes");
+      }
+      return res.json() as Promise<RegenerateResponse>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
+      toast({ title: "Recovery Codes Regenerated", description: "Prior codes are now invalid. Save these new codes." });
+      setRecoveryCodes(data.recoveryCodes);
+      setCodesCopied(false);
+      setAcknowledged(false);
+      setStep("recovery-codes");
+    },
+    onError: (error) => {
+      toast({ title: "Failed to Regenerate", description: error.message, variant: "destructive" });
     },
   });
 
@@ -106,7 +144,21 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
     setSetupData(null);
     setCode("");
     setCopied(false);
+    setRecoveryCodes([]);
+    setCodesCopied(false);
+    setAcknowledged(false);
     onClose();
+  };
+
+  const copyRecoveryCodes = () => {
+    if (recoveryCodes.length === 0) return;
+    const formatted = recoveryCodes
+      .map(c => `${c.slice(0, 5)}-${c.slice(5)}`)
+      .join("\n");
+    navigator.clipboard.writeText(formatted).then(() => {
+      setCodesCopied(true);
+      setTimeout(() => setCodesCopied(false), 3000);
+    });
   };
 
   const copySecret = () => {
@@ -156,23 +208,106 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
+            {mfaStatus?.enabled && typeof mfaStatus.recoveryCodesRemaining === "number" && (
+              <div className={`flex items-start gap-2 p-3 rounded-lg text-xs ${
+                mfaStatus.recoveryCodesRemaining <= 2
+                  ? "bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-400"
+                  : "bg-muted/50 text-muted-foreground"
+              }`}>
+                <Warning className="w-4 h-4 mt-0.5 shrink-0" />
+                <div>
+                  <p>
+                    <strong>{mfaStatus.recoveryCodesRemaining}</strong> recovery code{mfaStatus.recoveryCodesRemaining === 1 ? "" : "s"} remaining.
+                    {mfaStatus.recoveryCodesRemaining <= 2 && " Regenerate to get a fresh set."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 flex-wrap">
               <Button variant="outline" size="sm" onClick={resetAndClose}>Close</Button>
               {mfaStatus?.enabled ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600"
-                  onClick={() => { if (confirm("Disable two-factor authentication?")) disableMutation.mutate(); }}
-                  disabled={disableMutation.isPending}
-                >
-                  Disable MFA
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (confirm("Regenerate recovery codes? Your existing codes will stop working immediately.")) {
+                        regenerateCodesMutation.mutate();
+                      }
+                    }}
+                    disabled={regenerateCodesMutation.isPending}
+                  >
+                    {regenerateCodesMutation.isPending ? "Regenerating..." : "Regenerate Recovery Codes"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-red-600"
+                    onClick={() => { if (confirm("Disable two-factor authentication?")) disableMutation.mutate(); }}
+                    disabled={disableMutation.isPending}
+                  >
+                    Disable MFA
+                  </Button>
+                </>
               ) : (
                 <Button size="sm" onClick={() => setupMutation.mutate()} disabled={setupMutation.isPending}>
                   {setupMutation.isPending ? "Generating..." : "Set Up MFA"}
                 </Button>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Recovery codes view — shown exactly once after enable/regenerate */}
+        {step === "recovery-codes" && recoveryCodes.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-800">
+              <Warning className="w-5 h-5 text-yellow-600 mt-0.5 shrink-0" />
+              <div className="text-xs text-yellow-800 dark:text-yellow-400 space-y-1">
+                <p className="font-semibold">Save these codes somewhere safe right now.</p>
+                <p>
+                  Each code can be used once if you lose access to your authenticator app. They will <strong>never be shown again</strong> — if you lose them and lose your device, an admin will have to disable MFA for you.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 p-4 rounded-md border border-input bg-muted font-mono text-sm">
+              {recoveryCodes.map((code, idx) => (
+                <div key={idx} className="select-all tracking-wider">
+                  {code.slice(0, 5)}-{code.slice(5)}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={copyRecoveryCodes} className="flex-1">
+                {codesCopied ? (
+                  <><CheckCircle className="w-4 h-4 mr-1.5 text-green-500" />Copied</>
+                ) : (
+                  <><Copy className="w-4 h-4 mr-1.5" />Copy All Codes</>
+                )}
+              </Button>
+            </div>
+
+            <label className="flex items-start gap-2 text-sm text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(e) => setAcknowledged(e.target.checked)}
+                className="mt-1"
+              />
+              <span>I have saved my recovery codes in a safe place.</span>
+            </label>
+
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={resetAndClose}
+                disabled={!acknowledged}
+              >
+                Done
+              </Button>
             </div>
           </div>
         )}
@@ -185,7 +320,7 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
             </p>
 
             {/* QR Code */}
-            <QrCodeImage uri={setupData.otpauthUri} />
+            <QrCodeImage uri={setupData.uri} />
 
             {/* Manual entry fallback */}
             <details className="text-sm">

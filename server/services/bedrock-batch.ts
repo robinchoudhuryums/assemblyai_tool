@@ -20,6 +20,7 @@ import type { CallAnalysis } from "./ai-provider";
 import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { logger } from "./logger";
+import { bedrockCircuitBreaker, isCircuitFailure, BedrockClientError } from "./bedrock";
 
 const BATCH_TIMEOUT_MS = 30_000; // 30s for batch management API calls
 
@@ -173,36 +174,48 @@ export class BedrockBatchService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
-    try {
-      const response = await fetch(`https://${host}${path}`, {
-        method: "POST",
-        headers,
-        body,
-        signal: controller.signal,
-      });
+    // F-18: Wrap the Bedrock CreateModelInvocationJob call in the shared
+    // circuit breaker. During a Bedrock outage the breaker rejects new
+    // submissions, preventing this scheduler from racking up failed jobs +
+    // orphaned tracking writes. 4xx (bad role ARN, malformed JSONL, etc)
+    // throws BedrockClientError so it surfaces to the caller without
+    // tripping the breaker.
+    return bedrockCircuitBreaker.execute(async () => {
+      try {
+        const response = await fetch(`https://${host}${path}`, {
+          method: "POST",
+          headers,
+          body,
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bedrock CreateModelInvocationJob failed (${response.status}): ${errorText.substring(0, 300)}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          const msg = `Bedrock CreateModelInvocationJob failed (${response.status}): ${errorText.substring(0, 300)}`;
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new BedrockClientError(response.status, msg);
+          }
+          throw new Error(msg);
+        }
+
+        const result = await response.json() as { jobArn: string };
+        const jobId = result.jobArn.split("/").pop() || batchId;
+
+        logger.info("Batch job created", { jobId, callCount: callIds.length });
+
+        return {
+          jobId,
+          jobArn: result.jobArn,
+          status: "Submitted" as const,
+          inputS3Uri,
+          outputS3Uri,
+          callIds,
+          createdAt: new Date().toISOString(),
+        };
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const result = await response.json() as { jobArn: string };
-      const jobId = result.jobArn.split("/").pop() || batchId;
-
-      logger.info("Batch job created", { jobId, callCount: callIds.length });
-
-      return {
-        jobId,
-        jobArn: result.jobArn,
-        status: "Submitted",
-        inputS3Uri,
-        outputS3Uri,
-        callIds,
-        createdAt: new Date().toISOString(),
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
+    }, isCircuitFailure);
   }
 
   /**
@@ -220,23 +233,32 @@ export class BedrockBatchService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
 
-    try {
-      const response = await fetch(`https://${host}${path}`, {
-        method: "GET",
-        headers,
-        signal: controller.signal,
-      });
+    // F-18: Same circuit breaker as createJob — every 15-min poll cycle
+    // calls this for each active job, so a Bedrock outage would otherwise
+    // pile up retries on every cycle.
+    return bedrockCircuitBreaker.execute(async () => {
+      try {
+        const response = await fetch(`https://${host}${path}`, {
+          method: "GET",
+          headers,
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bedrock GetModelInvocationJob failed (${response.status}): ${errorText.substring(0, 300)}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          const msg = `Bedrock GetModelInvocationJob failed (${response.status}): ${errorText.substring(0, 300)}`;
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new BedrockClientError(response.status, msg);
+          }
+          throw new Error(msg);
+        }
+
+        const result = await response.json() as { status: BatchJob["status"]; message?: string };
+        return { status: result.status, message: result.message };
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const result = await response.json() as { status: BatchJob["status"]; message?: string };
-      return { status: result.status, message: result.message };
-    } finally {
-      clearTimeout(timeout);
-    }
+    }, isCircuitFailure);
   }
 
   /**

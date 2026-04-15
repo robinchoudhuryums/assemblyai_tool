@@ -35,7 +35,9 @@ export function setupWebSocket(server: Server) {
     ws.send(JSON.stringify({ type: "connected" }));
   });
 
-  // Periodic heartbeat: ping all clients, terminate dead connections
+  // Periodic heartbeat: ping all clients, terminate dead connections.
+  // .unref() per INV-30 so the timer doesn't block graceful shutdown
+  // (wss.close also clears it explicitly below).
   const heartbeat = setInterval(() => {
     if (!wss) return;
     wss.clients.forEach((ws) => {
@@ -48,6 +50,7 @@ export function setupWebSocket(server: Server) {
       ws.ping();
     });
   }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
 
   wss.on("close", () => clearInterval(heartbeat));
 

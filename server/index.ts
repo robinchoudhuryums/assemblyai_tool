@@ -60,13 +60,15 @@ function rateLimit(windowMs: number, maxRequests: number) {
     return next();
   };
 }
-// Clean up expired rate limit entries every 5 minutes
+// Clean up expired rate limit entries every 5 minutes. .unref() so this
+// background tick doesn't keep the event loop alive past graceful shutdown
+// (INV-30).
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitMap) {
     if (now > entry.resetTime) rateLimitMap.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 // Trust reverse proxy (Caddy on EC2, or Render/Heroku load balancers).
 // "trust proxy" = 1 means trust only the first hop — prevents attackers
@@ -558,11 +560,35 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
       try {
         // 1. Stop accepting new connections (server.close waits for active requests)
         server.close();
-        // 2. Stop schedulers
+        // 2. Stop schedulers (batch, calibration, telephony, reports). Each
+        //    stop is wrapped independently so one failure doesn't skip the
+        //    others. All four have .unref() on their timers as defense in
+        //    depth — the explicit stop is still preferred so running async
+        //    work completes before the DB pool closes.
         try {
           const mod = await import("./services/batch-scheduler");
           mod.stopBatchScheduler?.();
-        } catch { /* noop */ }
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to stop batch scheduler:", (err as Error).message);
+        }
+        try {
+          const mod = await import("./services/auto-calibration");
+          mod.stopCalibrationScheduler?.();
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to stop calibration scheduler:", (err as Error).message);
+        }
+        try {
+          const mod = await import("./services/telephony-8x8");
+          mod.stopTelephonyScheduler?.();
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to stop telephony scheduler:", (err as Error).message);
+        }
+        try {
+          const mod = await import("./services/scheduled-reports");
+          mod.stopReportScheduler?.();
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to stop report scheduler:", (err as Error).message);
+        }
         // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
         //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s
         //     internal 30s drain deadline; the outer hard-exit timer (30s) also
