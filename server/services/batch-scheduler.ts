@@ -66,7 +66,19 @@ async function processBatchResults(
         const transcriptResponse = pendingData?.transcriptResponse;
 
         if (!transcriptResponse) {
-          logger.warn("Batch: no transcript data found for call, skipping", { callId });
+          // F-06: Previously this just `continue`d with a warn — the call
+          // stayed in `awaiting_analysis` forever until orphan recovery
+          // (default 2h threshold) caught it. Mark the call failed
+          // explicitly, broadcast the status update so the UI updates
+          // immediately, and clean up the pending S3 item in the finally
+          // block below so we don't loop on it.
+          logger.warn("Batch: pending item missing transcript data, marking call failed", { callId });
+          try {
+            await storage.updateCall(callId, { status: "failed" });
+            broadcastCallUpdate(callId, "failed", { label: "Batch: transcript data missing" });
+          } catch (markErr) {
+            logger.warn("Batch: failed to mark call as failed", { callId, error: (markErr as Error).message });
+          }
           continue;
         }
 

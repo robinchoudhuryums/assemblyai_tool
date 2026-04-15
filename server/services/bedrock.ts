@@ -43,7 +43,9 @@ const BEDROCK_EMBEDDING_TIMEOUT_MS = envIntMs("BEDROCK_EMBEDDING_TIMEOUT_MS", 15
 
 // Shared circuit breaker for all Bedrock instances — prevents cascading failures
 // when Bedrock is down. 5 failures → open for 30s → half-open test → close on success.
-const bedrockCircuitBreaker = new CircuitBreaker("bedrock", 5, 30_000);
+// Exported for use by bedrock-batch.ts so an outage detected on either the
+// on-demand or batch path protects both (F-18).
+export const bedrockCircuitBreaker = new CircuitBreaker("bedrock", 5, 30_000);
 
 /**
  * F-17: Marker error for Bedrock 4xx (client errors — schema rejection,
@@ -67,7 +69,7 @@ export class BedrockClientError extends Error {
  * 429) are NOT counted; 5xx and 429 ARE counted (those indicate Bedrock
  * itself is unhealthy or rate-limiting us).
  */
-function isCircuitFailure(err: unknown): boolean {
+export function isCircuitFailure(err: unknown): boolean {
   if (err instanceof BedrockClientError) return false;
   return true;
 }
