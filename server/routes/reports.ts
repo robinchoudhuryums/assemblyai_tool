@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
@@ -119,8 +119,9 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     }
   });
 
-  // Agent profile: aggregated feedback across all calls for an employee
-  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Agent profile: aggregated feedback across all calls for an employee.
+  // #1 Phase 1: restrict to self-or-manager — profile exposes individual PHI.
+  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.query;
@@ -245,8 +246,9 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     }
   });
 
-  // Generate AI narrative summary for an agent's performance
-  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Generate AI narrative summary for an agent's performance.
+  // #1 Phase 1: restrict to self-or-manager.
+  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       if (!aiProvider.isAvailable || !aiProvider.generateText) {
         res.status(503).json({ message: "AI provider not configured. Set up Bedrock or Gemini credentials." });

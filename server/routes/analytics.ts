@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
@@ -210,8 +210,9 @@ export function register(router: Router) {
     }
   });
 
-  // Per-agent trends
-  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Per-agent trends.
+  // #1 Phase 1: restrict to self-or-manager — individual performance trajectory is PHI-adjacent.
+  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const period = (req.query.period as string) || "weekly";
@@ -779,6 +780,8 @@ export function registerHeatmapRoutes(router: Router) {
     "/api/analytics/health-pulse/:employeeId",
     requireAuth,
     validateParams({ employeeId: "uuid" }),
+    // #1 Phase 1: restrict to self-or-manager.
+    requireSelfOrManager(req => req.params.employeeId),
     async (req, res) => {
       try {
         const employeeId = req.params.employeeId;
