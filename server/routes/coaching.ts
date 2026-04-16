@@ -28,8 +28,10 @@ export function register(router: Router) {
     }
   });
 
-  // Get coaching sessions for a specific employee
-  router.get("/api/coaching/employee/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Get coaching sessions for a specific employee.
+  // F-07: restrict to manager+ — coaching sessions contain performance
+  // remediation data that agents should not see for other employees.
+  router.get("/api/coaching/employee/:employeeId", requireAuth, requireRole("manager", "admin"), validateParams({ employeeId: "uuid" }), async (req, res) => {
     try {
       const sessions = await storage.getCoachingSessionsByEmployee(req.params.employeeId);
       res.json(sessions.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));

@@ -195,12 +195,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// HIPAA: Audit logging middleware - logs all API access with user identity but never PHI
+// HIPAA: Audit logging middleware - logs all API access with user identity but never PHI.
+// F-15: also hook `close` to catch aborted/errored requests that never reach `finish`.
 app.use((req, res, next) => {
   const start = Date.now();
   const reqPath = req.path;
+  let audited = false;
 
-  res.on("finish", () => {
+  const emitAudit = (aborted: boolean) => {
+    if (audited) return;
+    audited = true;
     const duration = Date.now() - start;
     if (reqPath.startsWith("/api")) {
       const user = req.user;
@@ -215,6 +219,7 @@ app.use((req, res, next) => {
         duration_ms: duration,
         username,
         role,
+        ...(aborted ? { aborted: true } : {}),
       });
 
       // Metrics: request count by method and status class
@@ -223,9 +228,12 @@ app.use((req, res, next) => {
       metrics.observe("http_request_duration_ms", duration, { method: req.method });
 
       // Also write the human-readable log for pm2 console
-      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms`);
+      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms${aborted ? " (aborted)" : ""}`);
     }
-  });
+  };
+
+  res.on("finish", () => emitAudit(false));
+  res.on("close", () => emitAudit(!res.writableFinished));
 
   next();
 });

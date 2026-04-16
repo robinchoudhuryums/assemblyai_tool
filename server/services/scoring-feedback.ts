@@ -143,7 +143,13 @@ export async function recordScoringCorrection(params: {
   try {
     const s3Client = storage.getObjectStorageClient();
     if (s3Client) {
-      await s3Client.uploadJson(`corrections/${correction.id}.json`, correction);
+      // F-22: prefix filename with ISO timestamp so S3 lexicographic listing
+      // order ≈ chronological order. loadPersistedCorrections() uses keys.slice(-N)
+      // which only works correctly when the "last" keys are the most recent.
+      // Old format: corrections/corr-<uuid>.json (random order)
+      // New format: corrections/<ISO-timestamp>_corr-<uuid>.json (chrono order)
+      const tsPrefix = correction.correctedAt.replace(/[:.]/g, "-");
+      await s3Client.uploadJson(`corrections/${tsPrefix}_${correction.id}.json`, correction);
     }
   } catch {
     // Non-critical — correction is still in memory
