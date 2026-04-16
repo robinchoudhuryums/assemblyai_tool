@@ -358,6 +358,23 @@ export async function setupAuth(app: Express) {
           return done(null, false, { message: "Invalid username or password" });
         }
         clearFailedAttempts(username);
+
+        // F-06: When REQUIRE_MFA=true, ENV-VAR users with admin/manager role
+        // cannot enroll in MFA (no DB row to store TOTP secret). Reject login
+        // with a clear message directing the operator to create a DB user.
+        if (isMFARequired() && isMFARoleRequired(user.role)) {
+          logPhiAccess({
+            timestamp: new Date().toISOString(),
+            event: "login_failed",
+            username: user.username,
+            resourceType: "auth",
+            detail: "ENV-VAR user blocked: MFA required but cannot be enrolled for env-var users",
+          });
+          return done(null, false, {
+            message: "MFA is required for your role but env-var users cannot enroll in MFA. Create a database user instead.",
+          });
+        }
+
         logPhiAccess({
           timestamp: new Date().toISOString(),
           event: "login_success",

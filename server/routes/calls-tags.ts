@@ -78,9 +78,13 @@ export function registerCallTagRoutes(router: Router) {
       );
       if (lookup.rows.length === 0) return res.status(404).json({ message: "Tag not found" });
       const tagCreatedBy = lookup.rows[0].created_by as string;
-      const userIdentifier = req.user?.name || req.user?.username || "";
+      // F-08: creation (line 55) stores created_by as req.user.username.
+      // Compare against username first for an exact match, then fall back
+      // to display name for backward compatibility with pre-fix tags.
+      const username = req.user?.username || "";
+      const displayName = req.user?.name || "";
       const userRole = req.user?.role || "viewer";
-      const isAuthor = tagCreatedBy === userIdentifier;
+      const isAuthor = tagCreatedBy === username || (displayName && tagCreatedBy === displayName);
       const isManagerOrAdmin = userRole === "manager" || userRole === "admin";
       if (!isAuthor && !isManagerOrAdmin) {
         return res.status(403).json({ message: "Only the tag's author or a manager can delete this tag" });

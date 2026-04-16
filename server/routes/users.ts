@@ -9,6 +9,8 @@ import {
   changePasswordSchema,
 } from "@shared/schema";
 import { validateIdParam, sendError, sendValidationError } from "./utils";
+import { getPool } from "../db/pool";
+import { logger } from "../services/logger";
 
 /**
  * Strips password_hash and mfa_secret from a DB user object before returning to API clients.
@@ -147,6 +149,32 @@ export function registerUserRoutes(router: Router) {
       const updated = await storage.updateDbUser(req.params.id, { active: false });
       if (!updated) {
         return res.status(404).json({ message: "User not found" });
+      }
+
+      // F-12: immediately kill all active sessions for the deactivated user
+      // so they cannot continue accessing PHI until idle timeout (up to 15 min).
+      // The session table stores passport user ID in sess::jsonb->'passport'->>'user'.
+      try {
+        const pool = getPool();
+        if (pool) {
+          const { rowCount } = await pool.query(
+            `DELETE FROM session WHERE sess::jsonb->'passport'->>'user' = $1`,
+            [req.params.id],
+          );
+          if (rowCount && rowCount > 0) {
+            logger.info("auth: purged sessions for deactivated user", {
+              targetUsername: targetUser.username,
+              sessionsDeleted: rowCount,
+            });
+          }
+        }
+      } catch (sessionErr) {
+        // Non-blocking — deserializeUser already checks active flag on next request.
+        // Log so operators know the purge failed and there's a residual window.
+        logger.warn("auth: failed to purge sessions for deactivated user", {
+          targetUsername: targetUser.username,
+          error: (sessionErr as Error).message,
+        });
       }
 
       logPhiAccess({

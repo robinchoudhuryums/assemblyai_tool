@@ -12,7 +12,7 @@ import { storage } from "../storage";
 import { bedrockBatchService, type PendingBatchItem, type BatchJob } from "./bedrock-batch";
 import { assemblyAIService } from "./assemblyai";
 import { broadcastCallUpdate } from "./websocket";
-import { estimateBedrockCost, computeConfidenceScore, autoAssignEmployee } from "../routes/utils";
+import { estimateBedrockCost, warnOnUnknownBedrockModel, computeConfidenceScore, autoAssignEmployee } from "../routes/utils";
 import type { UsageRecord } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { logger } from "./logger";
@@ -115,11 +115,19 @@ async function processBatchResults(
         updatedAnalysis.confidenceFactors = confidenceFactors;
 
         if (analysis.sub_scores) {
+          // F-09: validate sub-scores are numbers clamped to [0, 10]. AI may
+          // return strings ("high") or out-of-range values; coerce or default
+          // to 0 to prevent NaN propagation into DB aggregations.
+          const safeSubScore = (v: unknown): number => {
+            const n = typeof v === "string" ? parseFloat(v) : Number(v);
+            if (!Number.isFinite(n)) return 0;
+            return Math.max(0, Math.min(10, Math.round(n * 10) / 10));
+          };
           updatedAnalysis.subScores = {
-            compliance: analysis.sub_scores.compliance ?? 0,
-            customerExperience: analysis.sub_scores.customer_experience ?? 0,
-            communication: analysis.sub_scores.communication ?? 0,
-            resolution: analysis.sub_scores.resolution ?? 0,
+            compliance: safeSubScore(analysis.sub_scores.compliance),
+            customerExperience: safeSubScore(analysis.sub_scores.customer_experience),
+            communication: safeSubScore(analysis.sub_scores.communication),
+            resolution: safeSubScore(analysis.sub_scores.resolution),
           };
         }
 
@@ -149,7 +157,13 @@ async function processBatchResults(
           const bedrockModel = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
           const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
           const estimatedOutputTokens = 800;
-          const bedrockCost = (estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens) ?? 0) * 0.5;
+          const rawBedrockCost = estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens);
+          // F-04: warn on unknown model so operators know cost tracking is broken.
+          // Previously silently recorded $0 via ?? 0 without any warning.
+          if (rawBedrockCost === null) {
+            warnOnUnknownBedrockModel(bedrockModel, { callId, phase: "batch_usage_tracking" });
+          }
+          const bedrockCost = (rawBedrockCost ?? 0) * 0.5;
 
           const usageRecord: UsageRecord = {
             id: randomUUID(),

@@ -100,7 +100,9 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
     const sum = rawScores.reduce((a, b) => a + b, 0);
     const mean = sum / rawScores.length;
     const median = percentile(rawScores, 50);
-    const variance = rawScores.reduce((s, x) => s + (x - mean) ** 2, 0) / rawScores.length;
+    // F-23: use sample variance (N-1) instead of population variance (N).
+    // The scores are a sample from the ongoing call distribution, not the full population.
+    const variance = rawScores.reduce((s, x) => s + (x - mean) ** 2, 0) / (rawScores.length - 1);
     const stdDev = Math.sqrt(variance);
 
     const currentConfig = getCalibrationConfig();

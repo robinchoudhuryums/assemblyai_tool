@@ -1,13 +1,16 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth } from "../auth";
+import { requireAuth, requireRole } from "../auth";
 import { logger } from "../services/logger";
 import { safeFloat, clampInt } from "./utils";
 
 export function register(router: Router) {
   // ==================== COMPANY INSIGHTS API ====================
 
-  router.get("/api/insights", requireAuth, async (req, res) => {
+  // F-02: company-wide insights contain escalation patterns, low-confidence
+  // calls, and per-agent performance data. Restrict to manager+ to prevent
+  // agents from viewing other agents' performance details.
+  router.get("/api/insights", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       // A4/F15: was loading every call ever uploaded. The insights endpoint
       // is a rolling-window view; default 90 days, max 365. Callers can
