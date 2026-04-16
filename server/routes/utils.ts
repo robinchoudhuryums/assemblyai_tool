@@ -1,5 +1,6 @@
 import fs from "fs";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { logger } from "../services/logger";
 
 // ── Path Parameter Validation ────────────────────────────────────────
 // Reusable middleware to reject malformed route params early, before they
@@ -101,7 +102,7 @@ export async function cleanupFile(filePath: string | undefined): Promise<void> {
   } catch (error) {
     // ENOENT = already gone, not an error worth logging
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
-    console.error("Failed to cleanup file:", (error as Error).message);
+    logger.error("failed to cleanup file", { error: (error as Error).message });
   }
 }
 
@@ -246,17 +247,17 @@ export async function autoAssignEmployee(
   const matchedEmployee = await storage.findEmployeeByName(detectedName);
 
   if (!matchedEmployee) {
-    console.log(`${logPrefix}Detected agent name "${detectedName}" but no matching employee found.`);
+    logger.info("detected agent name but no matching employee found", { detectedName });
     return { assigned: false };
   }
 
   const assigned = await storage.atomicAssignEmployee(callId, matchedEmployee.id);
   if (assigned) {
-    console.log(`${logPrefix}Auto-assigned to employee: ${matchedEmployee.name} (${matchedEmployee.id})`);
+    logger.info("auto-assigned to employee", { employeeName: matchedEmployee.name, employeeId: matchedEmployee.id });
     return { assigned: true, employeeName: matchedEmployee.name };
   }
 
-  console.log(`${logPrefix}Call already assigned, skipping auto-assign.`);
+  logger.info("call already assigned, skipping auto-assign", { callId });
   return { assigned: false };
 }
 

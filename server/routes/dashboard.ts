@@ -5,6 +5,7 @@ import { clampInt } from "./utils";
 import { computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
 import type { CallWithDetails } from "@shared/schema";
+import { logger } from "../services/logger";
 
 export function register(router: Router) {
   // Dashboard metrics
@@ -13,7 +14,7 @@ export function register(router: Router) {
       const metrics = await storage.getDashboardMetrics();
       res.json(metrics);
     } catch (error) {
-      console.error("Failed to get dashboard metrics:", (error as Error).message);
+      logger.error("failed to get dashboard metrics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to get dashboard metrics" });
     }
   });
@@ -24,7 +25,7 @@ export function register(router: Router) {
       const distribution = await storage.getSentimentDistribution();
       res.json(distribution);
     } catch (error) {
-      console.error("Failed to get sentiment distribution:", (error as Error).message);
+      logger.error("failed to get sentiment distribution", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to get sentiment distribution" });
     }
   });
@@ -36,7 +37,7 @@ export function register(router: Router) {
       const performers = await storage.getTopPerformers(limit);
       res.json(performers);
     } catch (error) {
-      console.error("Failed to get top performers:", (error as Error).message);
+      logger.error("failed to get top performers", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to get top performers" });
     }
   });
@@ -272,7 +273,7 @@ export function register(router: Router) {
         narrative,
       });
     } catch (error) {
-      console.error("Failed to get weekly changes:", (error as Error).message);
+      logger.error("failed to get weekly changes", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to get weekly changes" });
     }
   });
@@ -366,7 +367,7 @@ export function register(router: Router) {
         weeklyTrend,
       });
     } catch (error) {
-      console.error("My performance error:", (error as Error).message);
+      logger.error("my performance error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to load performance data" });
     }
   });

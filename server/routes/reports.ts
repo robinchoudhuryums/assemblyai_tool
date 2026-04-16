@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { canViewerAccessCall } from "./calls";
@@ -69,7 +70,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     const performers = await storage.getTopPerformers(10); // Get top 10
     res.json(performers);
   } catch (error) {
-    console.error("Failed to get performance data:", error);
+    logger.error("failed to get performance data", { error });
     res.status(500).json({ message: "Failed to get performance data" });
   }
 });
@@ -89,7 +90,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
 
     res.json(reportData);
   } catch (error) {
-    console.error("Failed to generate report data:", error);
+    logger.error("failed to generate report data", { error });
     res.status(500).json({ message: "Failed to generate report data" });
   }
 });
@@ -125,7 +126,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
 
       res.json(result);
     } catch (error) {
-      console.error("Failed to generate filtered report:", error);
+      logger.error("failed to generate filtered report", { error });
       res.status(500).json({ message: "Failed to generate filtered report" });
     }
   });
@@ -252,7 +253,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         flaggedCalls: flaggedCalls.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()),
       });
     } catch (error) {
-      console.error("Failed to generate agent profile:", error);
+      logger.error("failed to generate agent profile", { error });
       res.status(500).json({ message: "Failed to generate agent profile" });
     }
   });
@@ -351,13 +352,13 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         dateRange,
       }) + priorContext;
 
-      console.log(`[${employeeId}] Generating AI summary (${filtered.length} calls, ${priorSnapshots.length} prior snapshots)...`);
+      logger.info("generating AI summary", { employeeId, calls: filtered.length, priorSnapshots: priorSnapshots.length });
       const summary = await aiProvider.generateText(prompt);
-      console.log(`[${employeeId}] AI summary generated.`);
+      logger.info("AI summary generated", { employeeId });
 
       res.json({ summary });
     } catch (error) {
-      console.error("Failed to generate agent summary:", (error as Error).message);
+      logger.error("failed to generate agent summary", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate AI summary" });
     }
   });
@@ -388,7 +389,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
       res.status(204).send();
     } catch (error) {
       // Don't leak details — beacon is fire-and-forget. Log on the server side.
-      console.error("Failed to record export beacon:", (error as Error).message);
+      logger.error("failed to record export beacon", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to record export" });
     }
   });
@@ -409,7 +410,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
 
     await storage.deleteCall(callId);
 
-    console.log(`Successfully deleted call ID: ${callId}`);
+    logger.info("successfully deleted call", { callId });
     // Send a 204 No Content response for a successful deletion
     res.status(204).send();
   } catch (error) {
@@ -421,7 +422,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
       resourceId: req.params.id,
       detail: (error as Error).message,
     });
-    console.error("Failed to delete call:", (error as Error).message);
+    logger.error("failed to delete call", { error: (error as Error).message });
     res.status(500).json({ message: "Failed to delete call" });
   }
 });

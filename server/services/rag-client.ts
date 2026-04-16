@@ -17,6 +17,7 @@
  */
 
 import { withSpan } from "./trace-span";
+import { logger } from "./logger";
 
 const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL?.replace(/\/$/, "");
 const RAG_API_KEY = process.env.RAG_API_KEY || "";
@@ -32,8 +33,7 @@ if (RAG_SERVICE_URL && RAG_SERVICE_URL.startsWith("http://")) {
       `Plaintext http would leak the RAG_API_KEY in transit.`
     );
   } else {
-    // eslint-disable-next-line no-console
-    console.warn(`[RAG] RAG_SERVICE_URL is plaintext http:// — only allowed outside production (${RAG_SERVICE_URL})`);
+    logger.warn("RAG_SERVICE_URL is plaintext http:// — only allowed outside production", { url: RAG_SERVICE_URL });
   }
 }
 
@@ -155,7 +155,7 @@ export async function fetchRagContext(
     });
 
     if (!response.ok) {
-      console.warn(`[RAG] Knowledge base returned ${response.status}: ${response.statusText}`);
+      logger.warn("Knowledge base returned error", { status: response.status, statusText: response.statusText });
       return undefined;
     }
 
@@ -185,9 +185,9 @@ export async function fetchRagContext(
     return result;
   } catch (err) {
     if ((err as Error).name === "AbortError") {
-      console.warn("[RAG] Knowledge base request timed out");
+      logger.warn("Knowledge base request timed out");
     } else {
-      console.warn("[RAG] Knowledge base request failed:", (err as Error).message);
+      logger.warn("Knowledge base request failed", { error: (err as Error).message });
     }
     return undefined;
   } finally {

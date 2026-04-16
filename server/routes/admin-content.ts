@@ -2,6 +2,7 @@ import type { Router } from "express";
 import path from "path";
 import fs from "fs";
 import { randomUUID } from "crypto";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole } from "../auth";
 import { assemblyAIService } from "../services/assemblyai";
@@ -227,7 +228,7 @@ export function registerContentRoutes(
         },
       });
     } catch (error) {
-      console.error("Error back-testing prompt template:", (error as Error).message);
+      logger.error("error back-testing prompt template", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to back-test template" });
     }
   });
@@ -239,7 +240,7 @@ export function registerContentRoutes(
       const records = await storage.getAllUsageRecords();
       res.json(records);
     } catch (error) {
-      console.error("Error fetching usage records:", (error as Error).message);
+      logger.error("error fetching usage records", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch usage data" });
     }
   });
@@ -251,7 +252,7 @@ export function registerContentRoutes(
       const tests = await storage.getAllABTests();
       res.json(tests);
     } catch (error) {
-      console.error("Error fetching A/B tests:", (error as Error).message);
+      logger.error("error fetching A/B tests", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch A/B tests" });
     }
   });
@@ -265,7 +266,7 @@ export function registerContentRoutes(
       }
       res.json(test);
     } catch (error) {
-      console.error("Error fetching A/B test:", (error as Error).message);
+      logger.error("error fetching A/B test", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch A/B test" });
     }
   });
@@ -304,17 +305,17 @@ export function registerContentRoutes(
 
       audioProcessingQueue.add(() => processABTest(abTest.id, filePath, audioBuffer, callCategory))
         .catch(async (error) => {
-          console.error(`[AB-${abTest.id}] Processing failed:`, (error as Error).message);
+          logger.error("A/B test processing failed", { id: abTest.id, error: (error as Error).message });
           try {
             await storage.updateABTest(abTest.id, { status: "failed" });
           } catch (updateErr) {
-            console.error(`[AB-${abTest.id}] Failed to mark as failed:`, (updateErr as Error).message);
+            logger.error("failed to mark A/B test as failed", { id: abTest.id, error: (updateErr as Error).message });
           }
         });
 
       res.status(201).json(abTest);
     } catch (error) {
-      console.error("Error starting A/B test:", (error as Error).message);
+      logger.error("error starting A/B test", { error: (error as Error).message });
       if (req.file?.path) await cleanupFile(req.file.path);
       res.status(500).json({ message: "Failed to start A/B test" });
     }
@@ -330,7 +331,7 @@ export function registerContentRoutes(
       await storage.deleteABTest(req.params.id);
       res.json({ message: "A/B test deleted" });
     } catch (error) {
-      console.error("Error deleting A/B test:", (error as Error).message);
+      logger.error("error deleting A/B test", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to delete A/B test" });
     }
   });
@@ -487,7 +488,7 @@ export function registerContentRoutes(
 
       res.json({ aggregates, currentActiveModel });
     } catch (error) {
-      console.error("Error computing A/B test aggregates:", (error as Error).message);
+      logger.error("error computing A/B test aggregates", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute aggregates" });
     }
   });
@@ -536,7 +537,7 @@ export function registerContentRoutes(
 
       res.json({ message: "Model promoted successfully", model });
     } catch (error) {
-      console.error("Error promoting model:", (error as Error).message);
+      logger.error("error promoting model", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to promote model" });
     }
   });
@@ -644,12 +645,12 @@ export function registerContentRoutes(
 
   // A/B test processing pipeline
   async function processABTest(testId: string, filePath: string, audioBuffer: Buffer, callCategory?: string) {
-    console.log(`[AB-${testId}] Starting A/B model comparison...`);
+    logger.info("starting A/B model comparison", { id: testId });
     try {
       const abTest = await storage.getABTest(testId);
       if (!abTest) throw new Error("A/B test record not found");
 
-      console.log(`[AB-${testId}] Step 1: Uploading to AssemblyAI...`);
+      logger.info("step 1: uploading to AssemblyAI", { id: testId });
       const audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath));
       const transcriptId = await assemblyAIService.transcribeAudio(audioUrl);
       const transcriptResponse = await assemblyAIService.pollTranscript(transcriptId);
@@ -660,7 +661,7 @@ export function registerContentRoutes(
 
       const transcriptText = transcriptResponse.text || "";
       await storage.updateABTest(testId, { transcriptText, status: "analyzing" });
-      console.log(`[AB-${testId}] Transcription complete (${transcriptText.length} chars)`);
+      logger.info("transcription complete", { id: testId, chars: transcriptText.length });
 
       let promptTemplate = undefined;
       if (callCategory) {
@@ -675,11 +676,11 @@ export function registerContentRoutes(
             };
           }
         } catch (e) {
-          console.warn(`[AB-${testId}] Failed to load prompt template:`, (e as Error).message);
+          logger.warn("failed to load prompt template", { id: testId, error: (e as Error).message });
         }
       }
 
-      console.log(`[AB-${testId}] Step 2: Running analysis with both models...`);
+      logger.info("step 2: running analysis with both models", { id: testId });
       const baselineProvider = BedrockProvider.createWithModel(abTest.baselineModel);
       const testProvider = BedrockProvider.createWithModel(abTest.testModel);
 
@@ -701,18 +702,18 @@ export function registerContentRoutes(
       if (baselineResult.status === "fulfilled") {
         updates.baselineAnalysis = baselineResult.value.analysis;
         updates.baselineLatencyMs = baselineResult.value.latencyMs;
-        console.log(`[AB-${testId}] Baseline (${abTest.baselineModel}): score=${baselineResult.value.analysis.performance_score}, ${baselineResult.value.latencyMs}ms`);
+        logger.info("baseline analysis complete", { id: testId, model: abTest.baselineModel, score: baselineResult.value.analysis.performance_score, latencyMs: baselineResult.value.latencyMs });
       } else {
-        console.error(`[AB-${testId}] Baseline model failed:`, baselineResult.reason?.message);
+        logger.error("baseline model failed", { id: testId, error: baselineResult.reason?.message });
         updates.baselineAnalysis = { error: baselineResult.reason?.message || "Analysis failed" };
       }
 
       if (testResult.status === "fulfilled") {
         updates.testAnalysis = testResult.value.analysis;
         updates.testLatencyMs = testResult.value.latencyMs;
-        console.log(`[AB-${testId}] Test (${abTest.testModel}): score=${testResult.value.analysis.performance_score}, ${testResult.value.latencyMs}ms`);
+        logger.info("test analysis complete", { id: testId, model: abTest.testModel, score: testResult.value.analysis.performance_score, latencyMs: testResult.value.latencyMs });
       } else {
-        console.error(`[AB-${testId}] Test model failed:`, testResult.reason?.message);
+        logger.error("test model failed", { id: testId, error: testResult.reason?.message });
         updates.testAnalysis = { error: testResult.reason?.message || "Analysis failed" };
       }
 
@@ -769,15 +770,15 @@ export function registerContentRoutes(
         };
         await storage.createUsageRecord(usageRecord);
       } catch (usageErr) {
-        console.warn(`[AB-${testId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+        logger.warn("failed to record usage (non-blocking)", { id: testId, error: (usageErr as Error).message });
       }
 
       await cleanupFile(filePath);
       broadcastCallUpdate(testId, "ab-test-completed", { label: "A/B test complete" });
-      console.log(`[AB-${testId}] A/B comparison complete.`);
+      logger.info("A/B comparison complete", { id: testId });
 
     } catch (error) {
-      console.error(`[AB-${testId}] Processing error:`, (error as Error).message);
+      logger.error("A/B test processing error", { id: testId, error: (error as Error).message });
       await storage.updateABTest(testId, { status: "failed" });
       await cleanupFile(filePath);
     }

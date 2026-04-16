@@ -15,6 +15,7 @@
  *   }));
  */
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { logger } from "../services/logger";
 
 export class AppError extends Error {
   constructor(
@@ -76,7 +77,7 @@ export function globalErrorHandler(err: Error & { statusCode?: number; status?: 
   }
 
   // Unexpected error → log full server-side, sanitize client message in prod
-  console.error("[ERROR]", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
+  logger.error("Unhandled error", { error: err.message, stack: err.stack?.split("\n").slice(0, 3).join("\n") });
 
   const status = err.statusCode || err.status || 500;
   const sanitizedMessage = isProduction() && status >= 500

@@ -7,6 +7,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server, ServerResponse, IncomingMessage } from "http";
 import { sessionMiddleware } from "../auth";
+import { logger } from "./logger";
 
 let wss: WebSocketServer | null = null;
 
@@ -78,7 +79,7 @@ export function setupWebSocket(server: Server) {
     });
   });
 
-  console.log("WebSocket server initialized on /ws");
+  logger.info("WebSocket server initialized on /ws");
 }
 
 export function broadcastCallUpdate(callId: string, status: string, extra?: Record<string, any>) {

@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { z } from "zod";
 import { createHash } from "crypto";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, getUserEmployeeId } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
@@ -219,7 +220,7 @@ export function registerCallRoutes(
       try {
         await storage.uploadAudio(call.id, originalName, audioBuffer, mimeType);
       } catch (archiveError) {
-        console.warn(`[${call.id}] Warning: Failed to archive audio to S3 (continuing):`, archiveError);
+        logger.warn("failed to archive audio to S3 (continuing)", { callId: call.id, error: archiveError });
       }
 
       const jobQueue = getJobQueue();
@@ -245,18 +246,18 @@ export function registerCallRoutes(
           language,
         }))
           .catch(async (error) => {
-            console.error(`Failed to process call ${call.id}:`, error);
+            logger.error("failed to process call", { callId: call.id, error });
             try {
               await storage.updateCall(call.id, { status: "failed" });
             } catch (updateErr) {
-              console.error(`Failed to mark call ${call.id} as failed:`, updateErr);
+              logger.error("failed to mark call as failed", { callId: call.id, error: updateErr });
             }
           });
       }
 
       res.status(201).json(call);
     } catch (error) {
-      console.error("Error during file upload:", error);
+      logger.error("error during file upload", { error });
       if (req.file?.path) await cleanupFile(req.file.path);
       res.status(500).json({ message: "Failed to upload call" });
     }
@@ -350,7 +351,7 @@ export function registerCallRoutes(
       res.setHeader('Content-Length', audioBuffer.length.toString());
       res.send(audioBuffer);
     } catch (error) {
-      console.error("Failed to stream audio:", error);
+      logger.error("failed to stream audio", { error });
       res.status(500).json({ message: "Failed to stream audio" });
     }
   });
@@ -490,7 +491,7 @@ export function registerCallRoutes(
 
       await storage.createCallAnalysis(updatedAnalysis);
 
-      console.log(`[${callId}] Manual edit by ${editedBy}: ${reason} (fields: ${editRecord.fieldsChanged.join(", ")})`);
+      logger.info("manual edit", { callId, editedBy, reason, fields: editRecord.fieldsChanged.join(", ") });
 
       // Record scoring correction for the feedback loop (improves future AI analysis)
       if (updates.performanceScore || updates.subScores) {
@@ -525,7 +526,7 @@ export function registerCallRoutes(
         resourceId: req.params.id,
         detail: (error as Error).message,
       });
-      console.error("Failed to update call analysis:", (error as Error).message);
+      logger.error("failed to update call analysis", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to update call analysis" });
     }
   });
@@ -575,7 +576,7 @@ export function registerCallRoutes(
 
       await storage.deleteCall(callId);
 
-      console.log(`Successfully deleted call ID: ${callId}`);
+      logger.info("successfully deleted call", { callId });
       res.status(204).send();
     } catch (error) {
       logPhiAccess({
@@ -586,7 +587,7 @@ export function registerCallRoutes(
         resourceId: req.params.id,
         detail: (error as Error).message,
       });
-      console.error("Failed to delete call:", (error as Error).message);
+      logger.error("failed to delete call", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to delete call" });
     }
   });
@@ -648,7 +649,7 @@ export function registerCallRoutes(
               callCategory: call.callCategory ?? undefined,
               uploadedBy: uploadUser,
             })).catch(async (error) => {
-              console.error(`Failed to re-analyze call ${callId}:`, error);
+              logger.error("failed to re-analyze call", { callId, error });
               await storage.updateCall(callId, { status: "failed" });
             });
           }
@@ -671,7 +672,7 @@ export function registerCallRoutes(
         results,
       });
     } catch (error) {
-      console.error("Bulk re-analysis failed:", (error as Error).message);
+      logger.error("bulk re-analysis failed", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to start bulk re-analysis" });
     }
   });

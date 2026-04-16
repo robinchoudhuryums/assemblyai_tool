@@ -8,6 +8,7 @@
  */
 import { createHmac } from "crypto";
 import { isUrlSafe } from "./url-validator";
+import { logger } from "./logger";
 import type { ObjectStorageClient } from "../storage";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
@@ -100,7 +101,7 @@ export async function getAllWebhookConfigs(): Promise<WebhookConfig[]> {
     configCache = { configs, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
     return configs;
   } catch (err) {
-    console.warn("[Webhooks] Failed to list configs:", (err as Error).message);
+    logger.warn("Failed to list webhook configs", { error: (err as Error).message });
     return [];
   }
 }
@@ -150,7 +151,7 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
   try {
     if (!initialized) {
       if (!warnedUninitialized) {
-        console.warn(`[Webhooks] triggerWebhook("${event}") called before initWebhooks() — webhook delivery is disabled until initWebhooks() runs at startup`);
+        logger.warn("triggerWebhook called before initWebhooks() — webhook delivery is disabled until initWebhooks() runs at startup", { event });
         warnedUninitialized = true;
       }
       return;
@@ -166,7 +167,7 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
       matching.map(config => deliverWithRetry(config, event, body))
     );
   } catch (err) {
-    console.warn(`[Webhooks] Error triggering event "${event}":`, (err as Error).message);
+    logger.warn("Error triggering webhook event", { event, error: (err as Error).message });
   }
 }
 
@@ -177,12 +178,12 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
       return;
     } catch (err) {
       if (attempt === WEBHOOK_MAX_RETRIES) {
-        console.error(`[Webhooks] All ${WEBHOOK_MAX_RETRIES + 1} attempts failed for ${config.url} (event: ${event}):`, (err as Error).message);
+        logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: WEBHOOK_MAX_RETRIES + 1, error: (err as Error).message });
         return;
       }
       // Exponential backoff: 2s, 4s, 8s, 16s
       const delay = WEBHOOK_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-      console.warn(`[Webhooks] Attempt ${attempt + 1} failed for ${config.url} (event: ${event}), retrying in ${delay}ms`);
+      logger.warn("Webhook delivery attempt failed, retrying", { url: config.url, event, attempt: attempt + 1, retryDelayMs: delay });
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -192,7 +193,7 @@ async function deliverWebhook(config: WebhookConfig, event: string, body: string
   // Runtime SSRF check — prevents delivery to private/reserved IPs even if the URL
   // was changed directly in storage (bypassing API validation)
   if (!isUrlSafe(config.url)) {
-    console.error(`[Webhooks] SSRF blocked: refusing to deliver to ${config.url}`);
+    logger.error("SSRF blocked: refusing to deliver webhook", { url: config.url });
     return;
   }
 
@@ -230,7 +231,7 @@ async function deliverWebhook(config: WebhookConfig, event: string, body: string
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
-    console.log(`[Webhooks] Delivered "${event}" to ${config.url} (${response.status})`);
+    logger.info("Webhook delivered", { event, url: config.url, status: response.status });
   } finally {
     clearTimeout(timeout);
   }

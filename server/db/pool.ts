@@ -5,6 +5,7 @@
  * allowing the app to fall back to S3 or in-memory storage.
  */
 import pg from "pg";
+import { logger } from "../services/logger";
 
 let pool: pg.Pool | null = null;
 
@@ -32,7 +33,7 @@ export function getPool(): pg.Pool | null {
   });
 
   pool.on("error", (err) => {
-    console.error("[DB] Unexpected pool error:", err.message);
+    logger.error("Unexpected pool error", { error: err.message });
   });
 
   return pool;
@@ -54,7 +55,7 @@ export async function initializeDatabase(): Promise<void> {
     `);
 
     if (result.rows[0].exists) {
-      console.log("[DB] Schema already initialized");
+      logger.info("Schema already initialized");
       // Run lightweight migrations for new columns on existing databases
       await runMigrations(db);
       return;
@@ -66,9 +67,9 @@ export async function initializeDatabase(): Promise<void> {
     const schemaPath = path.join(import.meta.dirname, "schema.sql");
     const schemaSql = fs.readFileSync(schemaPath, "utf-8");
     await db.query(schemaSql);
-    console.log("[DB] Schema initialized successfully");
+    logger.info("Schema initialized successfully");
   } catch (error) {
-    console.error("[DB] Failed to initialize schema:", (error as Error).message);
+    logger.error("Failed to initialize schema", { error: (error as Error).message });
     throw error;
   }
 }
@@ -192,7 +193,7 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // Add native vector column alongside the existing JSONB embedding column
     await db.query("ALTER TABLE call_analyses ADD COLUMN IF NOT EXISTS embedding_vec vector(256)");
     await db.query("CREATE INDEX IF NOT EXISTS idx_call_analyses_embedding ON call_analyses USING ivfflat (embedding_vec vector_cosine_ops) WITH (lists = 50)");
-    console.log("[DB] pgvector extension enabled — native vector similarity search available");
+    logger.info("pgvector extension enabled — native vector similarity search available");
   } catch {
     // pgvector not available — JSONB embedding column is the fallback (already exists)
   }
@@ -202,7 +203,7 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     } catch (err) {
       // Ignore "column already exists" errors
       if (!(err as Error)?.message?.includes("already exists")) {
-        console.warn("[DB] Migration warning:", (err as Error).message);
+        logger.warn("Migration warning", { error: (err as Error).message });
       }
     }
   }

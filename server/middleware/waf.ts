@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { logPhiAccess } from "../services/audit-log";
+import { logger } from "../services/logger";
 
 /**
  * Application-level Web Application Firewall (WAF)
@@ -45,7 +46,7 @@ export function blockIP(ip: string, reason: string): void {
   blockedIPs.delete(ip);
   while (blockedIPs.size >= BLOCKED_IPS_MAX) evictOldestFromSet(blockedIPs);
   blockedIPs.add(ip);
-  console.error(`[WAF] IP blocked permanently: ${ip} — ${reason}`);
+  logger.error("IP blocked permanently", { ip, reason });
   logPhiAccess({
     timestamp: new Date().toISOString(),
     event: "waf_ip_blocked",
@@ -59,7 +60,7 @@ export function temporaryBlockIP(ip: string, durationMs: number, reason: string)
   while (temporaryBlocks.size >= TEMP_BLOCKS_MAX) evictOldestFromMap(temporaryBlocks);
   temporaryBlocks.delete(ip); // ensure LRU recency on re-block
   temporaryBlocks.set(ip, Date.now() + durationMs);
-  console.error(`[WAF] IP blocked temporarily (${Math.round(durationMs / 1000)}s): ${ip} — ${reason}`);
+  logger.error("IP blocked temporarily", { ip, reason, durationSeconds: Math.round(durationMs / 1000) });
   logPhiAccess({
     timestamp: new Date().toISOString(),
     event: "waf_ip_temp_blocked",
@@ -433,7 +434,7 @@ export function wafPreBody() {
         stats.totalBlocked++;
         stats.suspiciousUABlocked++;
         recordAnomaly(ip, "suspicious_user_agent", 3);
-        console.warn(`[WAF] Suspicious User-Agent blocked: "${ua}" from ${ip}`);
+        logger.warn("Suspicious User-Agent blocked", { userAgent: ua, ip });
         return res.status(403).json({ message: "Access denied" });
       }
     }
@@ -541,7 +542,7 @@ export function wafMiddleware() {
         stats.totalBlocked++;
         stats.suspiciousUABlocked++;
         recordAnomaly(ip, "suspicious_user_agent", 3);
-        console.warn(`[WAF] Suspicious User-Agent blocked: "${ua}" from ${ip}`);
+        logger.warn("Suspicious User-Agent blocked", { userAgent: ua, ip });
         return res.status(403).json({ message: "Access denied" });
       }
     }

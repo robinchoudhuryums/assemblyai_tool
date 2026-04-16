@@ -409,20 +409,20 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // Startup validation: warn about missing critical configuration
   const isProduction = process.env.NODE_ENV === "production";
   if (!process.env.SESSION_SECRET) {
-    console.error("[STARTUP] SESSION_SECRET is not set — sessions will use an insecure default.");
+    logger.error("SESSION_SECRET is not set — sessions will use an insecure default");
     if (isProduction) throw new Error("SESSION_SECRET is required in production");
   }
   if (!process.env.ASSEMBLYAI_API_KEY) {
-    console.warn("[STARTUP] ASSEMBLYAI_API_KEY is not set — transcription will be unavailable.");
+    logger.warn("ASSEMBLYAI_API_KEY is not set — transcription will be unavailable");
   }
   if (isProduction && !process.env.DATABASE_URL) {
-    console.warn("[STARTUP] DATABASE_URL is not set in production — using in-memory storage (data will be lost on restart).");
+    logger.warn("DATABASE_URL is not set in production — using in-memory storage (data will be lost on restart)");
   }
   if (isProduction && process.env.APP_BASE_URL && !process.env.ASSEMBLYAI_WEBHOOK_SECRET) {
-    console.error("[STARTUP] APP_BASE_URL is set but ASSEMBLYAI_WEBHOOK_SECRET is missing — webhooks will be rejected.");
+    logger.error("APP_BASE_URL is set but ASSEMBLYAI_WEBHOOK_SECRET is missing — webhooks will be rejected");
   }
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    console.warn("[STARTUP] AWS credentials not set — Bedrock AI analysis and S3 storage will be unavailable.");
+    logger.warn("AWS credentials not set — Bedrock AI analysis and S3 storage will be unavailable");
   }
   // Validate BEDROCK_MODEL against the pricing whitelist so a typo doesn't
   // silently record $0 cost for every analyzed call while AWS still bills.
@@ -430,12 +430,10 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
     try {
       const { isKnownBedrockModel, getKnownBedrockModels } = await import("./routes/utils");
       if (!isKnownBedrockModel(process.env.BEDROCK_MODEL)) {
-        console.warn(
-          `[STARTUP] BEDROCK_MODEL="${process.env.BEDROCK_MODEL}" is not in the pricing table. ` +
-          `Usage records will show $0 for calls analyzed with this model while AWS still bills. ` +
-          `Known models: ${getKnownBedrockModels().join(", ")}. ` +
-          `Update BEDROCK_PRICING in server/routes/utils.ts to fix.`
-        );
+        logger.warn("BEDROCK_MODEL is not in the pricing table — usage records will show $0", {
+          model: process.env.BEDROCK_MODEL,
+          knownModels: getKnownBedrockModels().join(", "),
+        });
       }
     } catch { /* non-critical — runtime warnOnUnknownBedrockModel is the backstop */ }
   }
@@ -502,11 +500,11 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // RAG Knowledge Base integration
   if (process.env.RAG_ENABLED === "true") {
     if (!process.env.RAG_SERVICE_URL) {
-      console.warn("[STARTUP] RAG_ENABLED is true but RAG_SERVICE_URL is not set — RAG context injection disabled.");
+      logger.warn("RAG_ENABLED is true but RAG_SERVICE_URL is not set — RAG context injection disabled");
     } else if (!process.env.RAG_API_KEY) {
-      console.warn("[STARTUP] RAG_ENABLED is true but RAG_API_KEY is not set — RAG context injection disabled.");
+      logger.warn("RAG_ENABLED is true but RAG_API_KEY is not set — RAG context injection disabled");
     } else {
-      console.log(`[STARTUP] RAG enabled — knowledge base at ${process.env.RAG_SERVICE_URL}`);
+      logger.info("RAG enabled", { serviceUrl: process.env.RAG_SERVICE_URL });
     }
   }
 
@@ -538,7 +536,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           log(`[RETENTION] Purged ${purged} call(s) older than ${retentionDays} days`);
         }
       } catch (error) {
-        console.error("[RETENTION] Error during purge:", error);
+        logger.error("Retention purge error", { error: (error as Error).message });
       }
     };
 
@@ -561,7 +559,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
       log(`${signal} received — beginning graceful shutdown`);
       // Hard deadline so a hanging drain doesn't strand pm2
       const hardExit = setTimeout(() => {
-        console.error("[SHUTDOWN] Hard exit after 30s timeout");
+        logger.error("Hard exit after 30s timeout");
         process.exit(1);
       }, 30_000);
       hardExit.unref();
@@ -577,25 +575,25 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           const mod = await import("./services/batch-scheduler");
           mod.stopBatchScheduler?.();
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to stop batch scheduler:", (err as Error).message);
+          logger.error("Failed to stop batch scheduler", { error: (err as Error).message });
         }
         try {
           const mod = await import("./services/auto-calibration");
           mod.stopCalibrationScheduler?.();
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to stop calibration scheduler:", (err as Error).message);
+          logger.error("Failed to stop calibration scheduler", { error: (err as Error).message });
         }
         try {
           const mod = await import("./services/telephony-8x8");
           mod.stopTelephonyScheduler?.();
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to stop telephony scheduler:", (err as Error).message);
+          logger.error("Failed to stop telephony scheduler", { error: (err as Error).message });
         }
         try {
           const mod = await import("./services/scheduled-reports");
           mod.stopReportScheduler?.();
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to stop report scheduler:", (err as Error).message);
+          logger.error("Failed to stop report scheduler", { error: (err as Error).message });
         }
         // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
         //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s
@@ -616,7 +614,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
             log("Job queue stopped.");
           }
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to stop job queue:", (err as Error).message);
+          logger.error("Failed to stop job queue", { error: (err as Error).message });
         }
         // 3a. #6: Persist the HMAC integrity chain head so the next boot picks up
         //     the correct chain position. Must run before flushAuditQueue because
@@ -625,7 +623,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           await persistIntegrityChainHead();
           log("Audit integrity chain head persisted.");
         } catch (err) {
-          console.error("[SHUTDOWN] Failed to persist integrity chain head:", (err as Error).message);
+          logger.error("Failed to persist integrity chain head", { error: (err as Error).message });
         }
         // 3b. Flush audit log queue (bounded to 10s — if DB is hung, don't waste
         //     the full 30s hard-exit budget; remaining entries are in stdout via HMAC chain)
@@ -638,14 +636,14 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           ]);
           log("Audit log queue flushed.");
         } catch (err) {
-          console.error("[HIPAA_AUDIT] Failed to flush audit queue:", (err as Error).message);
+          logger.error("Failed to flush audit queue", { error: (err as Error).message });
         }
         // 4. Close DB pool
         try {
           const { closePool } = await import("./db/pool");
           await closePool();
         } catch (err) {
-          console.error("[DB] Failed to close pool:", (err as Error).message);
+          logger.error("Failed to close DB pool", { error: (err as Error).message });
         }
       } finally {
         clearTimeout(hardExit);

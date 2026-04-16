@@ -8,6 +8,7 @@ import { sendError, sendValidationError, validateIdParam, cleanupFile } from "./
 import csv from "csv-parser";
 import fs from "fs";
 import path from "path";
+import { logger } from "../services/logger";
 
 // A29/F32-F34: accept CSV as multipart upload (2MB cap) instead of reading
 // a hard-coded server-side file path.
@@ -204,7 +205,7 @@ export function register(router: Router) {
             }
           } catch (err) {
             // Sanitized: don't leak internal error messages to response.
-            console.warn(`[CSV import] Row failed for ${name}:`, (err as Error).message);
+            logger.warn("CSV import row failed", { name, error: (err as Error).message });
             results.push({ name, action: "error (row failed)" });
           }
         }
@@ -213,7 +214,7 @@ export function register(router: Router) {
         const skipped = results.filter(r => r.action.startsWith("skipped")).length;
         res.json({ message: `Import complete: ${created} created, ${skipped} skipped`, details: results });
       } catch (error) {
-        console.error("CSV import failed:", (error as Error).message);
+        logger.error("CSV import failed", { error: (error as Error).message });
         res.status(500).json({ message: "Failed to import CSV" });
       } finally {
         if (uploaded?.path) await cleanupFile(uploaded.path);

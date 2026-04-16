@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { canViewerAccessCall } from "./calls";
@@ -96,7 +97,7 @@ export function register(router: Router) {
         employees: r.employee_names || [],
       })));
     } catch (error) {
-      console.error("Failed to fetch team analytics:", (error as Error).message);
+      logger.error("failed to fetch team analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch team analytics" });
     }
   });
@@ -206,7 +207,7 @@ export function register(router: Router) {
       const formatted = formatTrendResponse(periods, pool !== null);
       res.json(formatted);
     } catch (error) {
-      console.error("Failed to fetch trend analytics:", (error as Error).message);
+      logger.error("failed to fetch trend analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch trend analytics" });
     }
   });
@@ -270,7 +271,7 @@ export function register(router: Router) {
       const formatted = formatTrendResponse(periods, pool !== null);
       res.json(formatted);
     } catch (error) {
-      console.error("Failed to fetch agent trend analytics:", (error as Error).message);
+      logger.error("failed to fetch agent trend analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch agent trend analytics" });
     }
   });
@@ -335,7 +336,7 @@ export function register(router: Router) {
       res.setHeader("Content-Disposition", `attachment; filename="calls-export-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csvRows.join("\n"));
     } catch (error) {
-      console.error("Failed to export calls:", (error as Error).message);
+      logger.error("failed to export calls", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to export calls" });
     }
   });
@@ -451,7 +452,7 @@ export function register(router: Router) {
         avgSubScores: r.avg_sub_scores,
       })));
     } catch (error) {
-      console.error("Agent comparison failed:", (error as Error).message);
+      logger.error("agent comparison failed", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compare agents" });
     }
   });
@@ -467,7 +468,7 @@ export function register(router: Router) {
       const clusters = await getCallClusters({ days, employeeId, minClusterSize: minSize });
       res.json({ clusters, days });
     } catch (error) {
-      console.error("Clustering error:", (error as Error).message);
+      logger.error("clustering error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate call clusters" });
     }
   });
@@ -507,7 +508,7 @@ export function register(router: Router) {
         },
       });
     } catch (error) {
-      console.error("Speech analytics error:", (error as Error).message);
+      logger.error("speech analytics error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute speech analytics" });
     }
   });
@@ -572,7 +573,7 @@ export function register(router: Router) {
 
       res.json({ summary, days, totalCalls: recentCalls.length });
     } catch (error) {
-      console.error("Speech summary error:", (error as Error).message);
+      logger.error("speech summary error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute speech summary" });
     }
   });
@@ -769,7 +770,7 @@ export function registerHeatmapRoutes(router: Router) {
 
       res.json({ cells, days });
     } catch (error) {
-      console.error("Heatmap error:", error instanceof Error ? error.message : error);
+      logger.error("heatmap error", { error: error instanceof Error ? error.message : error });
       res.status(500).json({ message: "Failed to generate heatmap data" });
     }
   });
@@ -895,7 +896,7 @@ export function registerHeatmapRoutes(router: Router) {
           thresholds: { warning: DELTA_WARNING, critical: DELTA_CRITICAL, minCalls: MIN_CALLS },
         });
       } catch (error) {
-        console.error("Health pulse error:", error instanceof Error ? error.message : error);
+        logger.error("health pulse error", { error: error instanceof Error ? error.message : error });
         res.status(500).json({ message: "Failed to compute health pulse" });
       }
     }

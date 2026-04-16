@@ -9,6 +9,7 @@ import { getLeaderboard, computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
 import { STREAK_SCORE_THRESHOLD } from "../constants";
 import { validateParams } from "./utils";
+import { logger } from "../services/logger";
 
 export function registerGamificationRoutes(router: Router): void {
   // GET /api/gamification/leaderboard — ranked list of employees with points, badges, streaks
@@ -20,7 +21,7 @@ export function registerGamificationRoutes(router: Router): void {
       const leaderboard = await getLeaderboard(selectedPeriod);
       res.json({ leaderboard, period: selectedPeriod });
     } catch (error) {
-      console.error("Leaderboard error:", (error as Error).message);
+      logger.error("leaderboard error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute leaderboard" });
     }
   });
@@ -42,7 +43,7 @@ export function registerGamificationRoutes(router: Router): void {
       });
       res.json(enriched);
     } catch (error) {
-      console.error("Badges error:", (error as Error).message);
+      logger.error("badges error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch badges" });
     }
   });
@@ -96,7 +97,7 @@ export function registerGamificationRoutes(router: Router): void {
         badges: enrichedBadges,
       });
     } catch (error) {
-      console.error("Gamification stats error:", (error as Error).message);
+      logger.error("gamification stats error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch gamification stats" });
     }
   });

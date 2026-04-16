@@ -7,6 +7,7 @@
 import type pg from "pg";
 import { randomUUID } from "crypto";
 import { runWithCorrelationId } from "./correlation-id";
+import { logger } from "./logger";
 
 export interface Job {
   id: string;
@@ -134,11 +135,11 @@ export class JobQueue {
          WHERE id = $1`,
         [jobId, reason],
       );
-      console.error(`[JOB_QUEUE] Job ${jobId} moved to dead letter after ${attempts} attempts: ${reason}`);
+      logger.error("Job moved to dead letter", { jobId, attempts, reason });
       try {
         this.onDeadLetter?.(jobId, reason, attempts);
       } catch (callbackErr) {
-        console.error(`[JOB_QUEUE] Dead-letter callback threw for job ${jobId}:`, (callbackErr as Error).message);
+        logger.error("Dead-letter callback threw", { jobId, error: (callbackErr as Error).message });
       }
     } else {
       // Exponential backoff: 10s, 30s, 60s (capped)
@@ -151,7 +152,7 @@ export class JobQueue {
          WHERE id = $1`,
         [jobId, reason, String(backoffSeconds)],
       );
-      console.log(`[JOB_QUEUE] Job ${jobId} failed (attempt ${attempts}/${max_attempts}), retrying in ${backoffSeconds}s`);
+      logger.info("Job failed, retrying", { jobId, attempt: attempts, maxAttempts: max_attempts, backoffSeconds });
     }
   }
 
@@ -252,7 +253,7 @@ export class JobQueue {
       [JobQueue.STALE_HEARTBEAT_MS],
     );
     for (const row of rows) {
-      console.warn(`[JOB_QUEUE] Reaping stale job ${row.id} (no heartbeat for ${Math.round(JobQueue.STALE_HEARTBEAT_MS / 1000)}s)`);
+      logger.warn("Reaping stale job", { jobId: row.id, staleThresholdSeconds: Math.round(JobQueue.STALE_HEARTBEAT_MS / 1000) });
       await this.failJob(row.id, "Worker crashed: no heartbeat");
     }
   }
@@ -271,7 +272,7 @@ export class JobQueue {
   start(handler: (job: Job) => Promise<void>): void {
     if (this.running) return;
     this.running = true;
-    console.log(`[JOB_QUEUE] Worker started (concurrency=${this.concurrency}, poll=${this.pollIntervalMs}ms)`);
+    logger.info("Job queue worker started", { concurrency: this.concurrency, pollIntervalMs: this.pollIntervalMs });
 
     const poll = async () => {
       if (!this.running) return;
@@ -291,7 +292,7 @@ export class JobQueue {
           });
         }
       } catch (err) {
-        console.error("[JOB_QUEUE] Poll iteration error (continuing):", (err as Error).message);
+        logger.error("Poll iteration error (continuing)", { error: (err as Error).message });
       }
 
       if (this.running) {
@@ -300,7 +301,7 @@ export class JobQueue {
     };
 
     poll().catch((err) => {
-      console.error("[JOB_QUEUE] Fatal poll startup error:", err.message);
+      logger.error("Fatal poll startup error", { error: err.message });
     });
   }
 
@@ -310,7 +311,7 @@ export class JobQueue {
     // F-14: .unref() per INV-30 so in-flight heartbeat timers don't block graceful shutdown.
     const heartbeatTimer = setInterval(() => {
       this.heartbeat(job.id).catch((err) => {
-        console.warn(`[JOB_QUEUE] Heartbeat failed for ${job.id}:`, (err as Error).message);
+        logger.warn("Heartbeat failed", { jobId: job.id, error: (err as Error).message });
       });
     }, JobQueue.HEARTBEAT_INTERVAL_MS);
     heartbeatTimer.unref();
@@ -321,11 +322,11 @@ export class JobQueue {
       await this.completeJob(job.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[JOB_QUEUE] Job ${job.id} failed (attempt ${job.attempts + 1}/${job.maxAttempts}): ${message}`);
+      logger.error("Job failed", { jobId: job.id, attempt: job.attempts + 1, maxAttempts: job.maxAttempts, error: message });
       try {
         await this.failJob(job.id, message);
       } catch (failErr) {
-        console.error(`[JOB_QUEUE] failJob threw for ${job.id}:`, (failErr as Error).message);
+        logger.error("failJob threw", { jobId: job.id, error: (failErr as Error).message });
       }
     } finally {
       clearInterval(heartbeatTimer);
@@ -349,9 +350,9 @@ export class JobQueue {
     }
 
     if (this.activeJobs > 0) {
-      console.warn(`[JOB_QUEUE] Shutting down with ${this.activeJobs} active jobs`);
+      logger.warn("Shutting down with active jobs", { activeJobs: this.activeJobs });
     }
 
-    console.log("[JOB_QUEUE] Worker stopped");
+    logger.info("Job queue worker stopped");
   }
 }

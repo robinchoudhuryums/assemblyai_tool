@@ -7,6 +7,7 @@
  */
 import { storage } from "../storage";
 import type { CallWithDetails } from "@shared/schema";
+import { logger } from "./logger";
 
 export interface TopicCluster {
   id: string;
@@ -312,12 +313,12 @@ export async function getCallClusters(options: {
   let docTermsForLabels: TermFrequency[] | null = null;
 
   if (useEmbeddings) {
-    console.log(`[Clustering] Using embedding-based clustering (${callsWithEmbeddings.length}/${calls.length} calls have embeddings)`);
+    logger.info("Using embedding-based clustering", { embeddingCount: callsWithEmbeddings.length, totalCalls: calls.length });
     clusters = clusterByEmbeddings(callsWithEmbeddings);
     // Still build TF-IDF for labels (but only for calls in clusters)
     docTermsForLabels = buildTfIdf(calls);
   } else {
-    console.log(`[Clustering] Using TF-IDF clustering (${callsWithEmbeddings.length}/${calls.length} embeddings available)`);
+    logger.info("Using TF-IDF clustering", { embeddingCount: callsWithEmbeddings.length, totalCalls: calls.length });
     const docTerms = buildTfIdf(calls);
     const tfIdfClusters = clusterCalls(docTerms);
     docTermsForLabels = docTerms;

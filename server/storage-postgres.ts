@@ -6,6 +6,7 @@
  */
 import type pg from "pg";
 import { randomUUID } from "crypto";
+import { logger } from "./services/logger";
 import type {
   User, InsertUser, DbUser, Employee, InsertEmployee,
   Call, InsertCall, Transcript, InsertTranscript,
@@ -1310,7 +1311,7 @@ export class PostgresStorage implements IStorage {
         await Promise.allSettled(
           callIds.flatMap((id: string) => [
             this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
-              console.error(`[RETENTION] Failed to delete S3 audio for call ${id}:`, err.message),
+              logger.error("Failed to delete S3 audio for call during retention", { callId: id, error: err.message }),
             ),
             this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch(() => {}),
           ]),
@@ -1358,9 +1359,9 @@ export class PostgresStorage implements IStorage {
         );
       }
       await this.db.query("DELETE FROM calls WHERE id = ANY($1::uuid[])", [failedIds]);
-      console.log(`[RETENTION] Purged ${failedIds.length} failed call(s) older than 7 days.`);
+      logger.info("Purged failed calls older than 7 days", { count: failedIds.length });
     } catch (err) {
-      console.warn("[RETENTION] Failed call cleanup error:", (err as Error).message);
+      logger.warn("Failed call cleanup error", { error: (err as Error).message });
     }
   }
 

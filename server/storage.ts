@@ -1,3 +1,4 @@
+import { logger } from "./services/logger";
 import {
   type User,
   type InsertUser,
@@ -1009,7 +1010,7 @@ export class CloudStorage implements IStorage {
     try {
       return await this.client.listAndDownloadJson<Employee>("employees/");
     } catch (error) {
-      console.error("Error fetching employees:", error);
+      logger.error("Error fetching employees", { error: (error as Error).message });
       return [];
     }
   }
@@ -1638,7 +1639,7 @@ export class CloudStorage implements IStorage {
     for (const call of calls) {
       const uploadDate = new Date(call.uploadedAt || 0);
       if (uploadDate < cutoff) {
-        console.log(`[RETENTION] Purging call ${call.id} (uploaded ${uploadDate.toISOString()}, older than ${retentionDays} days)`);
+        logger.info("Purging call by retention policy", { callId: call.id, uploadedAt: uploadDate.toISOString(), retentionDays });
         await this.deleteCall(call.id);
         purged++;
       }
@@ -1684,7 +1685,7 @@ function createStorage(): IStorage {
     // Always construct the audio client when a DB pool exists — audio storage
     // is required for the pipeline. Falls back to default bucket name in dev.
     const audioClient = new S3Client(bucket);
-    console.log(`[STORAGE] Using PostgreSQL (metadata) + S3 (audio, bucket: ${bucket})`);
+    logger.info("Using PostgreSQL (metadata) + S3 (audio)", { bucket });
     return new PostgresStorage(dbPool, audioClient);
   }
 
@@ -1705,14 +1706,11 @@ function createStorage(): IStorage {
 
   if (storageBackend === "s3-legacy") {
     const bucket = process.env.S3_BUCKET || "ums-call-archive";
-    console.warn(
-      `[STORAGE] WARN: CloudStorage backend is deprecated and will be removed. ` +
-      `Migrate to PostgresStorage by setting DATABASE_URL. (bucket: ${bucket})`,
-    );
+    logger.warn("CloudStorage backend is deprecated and will be removed — migrate to PostgresStorage by setting DATABASE_URL", { bucket });
     return new CloudStorage(new S3Client(bucket));
   }
 
-  console.log("[STORAGE] No cloud credentials — using in-memory storage (data will not persist across restarts)");
+  logger.info("No cloud credentials — using in-memory storage (data will not persist across restarts)");
   return new MemStorage();
 }
 
