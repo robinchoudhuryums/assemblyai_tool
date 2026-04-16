@@ -105,6 +105,91 @@ export function register(router: Router) {
     }
   });
 
+  // Coaching outcomes: compare sub-score averages in N calls before vs N calls
+  // after a coaching session to measure effectiveness. Restricted to manager+
+  // because coaching session data is manager-only.
+  router.get("/api/coaching/:id/outcome", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+    try {
+      const session = await storage.getCoachingSession(req.params.id);
+      if (!session) return res.status(404).json({ message: "Coaching session not found" });
+
+      // Default window of 10 calls before/after. Clamped to [1, 50].
+      const nRaw = parseInt((req.query.n as string) || "10", 10);
+      const N = Math.max(1, Math.min(Number.isFinite(nRaw) ? nRaw : 10, 50));
+
+      const sessionCreatedAt = new Date(session.createdAt || 0).getTime();
+      if (!sessionCreatedAt || !Number.isFinite(sessionCreatedAt)) {
+        return res.status(400).json({ message: "Coaching session has no valid createdAt timestamp" });
+      }
+
+      // Load all completed calls for the employee, ordered by uploadedAt.
+      const allCalls = await storage.getCallsWithDetails({
+        status: "completed",
+        employee: session.employeeId,
+      });
+      // Split into before/after buckets by session creation time.
+      const withTs = allCalls
+        .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
+        .filter(x => Number.isFinite(x.ts) && x.ts > 0)
+        .sort((a, b) => a.ts - b.ts);
+      const beforeAll = withTs.filter(x => x.ts < sessionCreatedAt);
+      const afterAll = withTs.filter(x => x.ts >= sessionCreatedAt);
+      // Take the N closest to the session boundary (most recent before, earliest after).
+      const beforeWindow = beforeAll.slice(-N).map(x => x.call);
+      const afterWindow = afterAll.slice(0, N).map(x => x.call);
+
+      const avgField = (calls: typeof allCalls, getField: (c: typeof allCalls[number]) => number | undefined): number | null => {
+        const vals = calls.map(getField).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+        if (vals.length === 0) return null;
+        return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+      };
+
+      const buildWindow = (calls: typeof allCalls) => ({
+        callCount: calls.length,
+        avgScore: avgField(calls, c => parseFloat(c.analysis?.performanceScore || "")),
+        subScores: {
+          compliance: avgField(calls, c => (c.analysis?.subScores as { compliance?: number } | undefined)?.compliance),
+          customerExperience: avgField(calls, c => (c.analysis?.subScores as { customerExperience?: number } | undefined)?.customerExperience),
+          communication: avgField(calls, c => (c.analysis?.subScores as { communication?: number } | undefined)?.communication),
+          resolution: avgField(calls, c => (c.analysis?.subScores as { resolution?: number } | undefined)?.resolution),
+        },
+      });
+
+      const before = buildWindow(beforeWindow);
+      const after = buildWindow(afterWindow);
+
+      const delta = (a: number | null, b: number | null): number | null => {
+        if (a === null || b === null) return null;
+        return Math.round((b - a) * 100) / 100;
+      };
+
+      // Flag insufficient data: require at least 3 calls in each window for a
+      // meaningful comparison. Fewer calls → "insufficient_data" signal to UI.
+      const MIN_WINDOW = 3;
+      const insufficient = before.callCount < MIN_WINDOW || after.callCount < MIN_WINDOW;
+
+      res.json({
+        coachingSessionId: session.id,
+        employeeId: session.employeeId,
+        coachingCreatedAt: session.createdAt,
+        windowSize: N,
+        minWindow: MIN_WINDOW,
+        insufficientData: insufficient,
+        before,
+        after,
+        deltas: {
+          overall: delta(before.avgScore, after.avgScore),
+          compliance: delta(before.subScores.compliance, after.subScores.compliance),
+          customerExperience: delta(before.subScores.customerExperience, after.subScores.customerExperience),
+          communication: delta(before.subScores.communication, after.subScores.communication),
+          resolution: delta(before.subScores.resolution, after.subScores.resolution),
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to compute coaching outcome" });
+    }
+  });
+
   // Agent self-service: toggle a coaching action item's completed status.
   // Agents can only modify their OWN coaching sessions.
   router.patch("/api/coaching/:id/action-item/:index", requireAuth, validateIdParam, async (req, res) => {

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
+import { canViewerAccessCall } from "./calls";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
@@ -477,6 +478,11 @@ export function register(router: Router) {
   router.get("/api/analytics/speech/:callId", requireAuth, validateParams({ callId: "uuid" }), async (req, res) => {
     try {
       const callId = req.params.callId;
+      // Phase 3: viewer-scoped — only own or unassigned calls.
+      const callForScope = await storage.getCall(callId);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        return res.status(403).json({ message: "You can only access your own calls" });
+      }
       const transcript = await storage.getTranscript(callId);
       if (!transcript) return res.status(404).json({ message: "Transcript not found" });
 

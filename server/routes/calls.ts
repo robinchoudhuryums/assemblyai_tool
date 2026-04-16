@@ -31,8 +31,11 @@ export type ProcessAudioFn = (
  * Returns true for manager/admin. For viewers, the call's employeeId must
  * match the viewer's linked employee, OR the call has no employee yet
  * (unassigned — viewers can see calls they may have uploaded).
+ *
+ * Exported so other route modules (reports/search, calls-tags, analytics)
+ * can apply the same check uniformly.
  */
-async function canViewerAccessCall(
+export async function canViewerAccessCall(
   req: import("express").Request,
   call: { employeeId?: string | null },
 ): Promise<boolean> {

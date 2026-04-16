@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
+import { canViewerAccessCall } from "./calls";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
@@ -28,8 +29,18 @@ export function registerReportRoutes(router: Router) {
       const expandedQuery = expandMedicalSynonyms(query);
       const results = await storage.searchCalls(expandedQuery, limit);
 
-      // Apply optional client-side filters for sentiment, score range, date range
+      // Phase 3: viewer-scoped search. Filter results to calls the viewer may access
+      // (their own calls or unassigned calls). Manager/admin get all results.
       let filtered = results;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const accessChecks = await Promise.all(
+          results.map(c => canViewerAccessCall(req, c))
+        );
+        filtered = results.filter((_, i) => accessChecks[i]);
+      }
+
+      // Apply optional client-side filters for sentiment, score range, date range
       const sentimentParam = req.query.sentiment as string;
       if (sentimentParam && sentimentParam !== "all") {
         filtered = filtered.filter(c => c.sentiment?.overallSentiment === sentimentParam);
