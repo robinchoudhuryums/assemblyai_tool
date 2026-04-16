@@ -201,12 +201,12 @@ tests/                   # Unit tests (Node test runner)
 | PATCH | `/api/calls/:id/analysis` | manager+ | Edit AI analysis |
 | PATCH | `/api/calls/:id/assign` | manager+ | Assign call to employee |
 | DELETE | `/api/calls/:id` | manager+ | Delete call |
-| GET | `/api/calls/:id/tags` | authenticated | Get tags for a call |
+| GET | `/api/calls/:id/tags` | authenticated (viewer: own calls only) | Get tags for a call |
 | POST | `/api/calls/:id/tags` | authenticated | Add a tag to a call |
 | DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
 | GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
-| GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
-| GET | `/api/calls/:id/annotations` | authenticated | Get annotations for a call |
+| GET | `/api/calls/by-tag/:tag` | authenticated (viewer: own calls only) | Search calls by tag |
+| GET | `/api/calls/:id/annotations` | authenticated (viewer: own calls only) | Get annotations for a call |
 | POST | `/api/calls/:id/annotations` | authenticated | Add annotation to a call |
 | DELETE | `/api/calls/:id/annotations/:annotationId` | authenticated | Remove an annotation |
 
@@ -226,7 +226,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/dashboard/sentiment` | authenticated | Sentiment summaries |
 | GET | `/api/dashboard/performers` | authenticated | Top performers |
 | GET | `/api/dashboard/weekly-changes` | manager+ | Week-over-week narrative: top score movers, flag deltas, noteworthy calls. Backs the "This Week in Review" dashboard widget. |
-| GET | `/api/search` | authenticated | Full-text search |
+| GET | `/api/search` | authenticated (viewer: own calls only) | Full-text search |
 | GET | `/api/performance` | manager+ | Performance metrics |
 | GET | `/api/reports/summary` | manager+ | Summary report |
 | GET | `/api/reports/filtered` | authenticated | Filtered reports (query: `from`, `to`, `employeeId`, `role` (preferred) or `department` (deprecated alias), `callPartyType`) |
@@ -243,6 +243,7 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/coaching` | manager+ | Create coaching session |
 | PATCH | `/api/coaching/:id` | manager+ | Update coaching session |
 | PATCH | `/api/coaching/:id/action-item/:index` | authenticated | Toggle action item (agents can toggle their own) |
+| GET | `/api/coaching/:id/outcome` | manager+ | Coaching effectiveness: compares N calls before vs after the session. Query: `n` (default 10, range 1-50). Returns avg scores, sub-score deltas, `insufficientData` flag when either window has <3 calls. |
 | GET | `/api/prompt-templates` | admin | List prompt templates |
 | POST | `/api/prompt-templates` | admin | Create prompt template |
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
@@ -303,7 +304,7 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
 | GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
 | GET | `/api/analytics/trends/agent/:employeeId` | authenticated (viewer: self only) | Agent-specific performance trends |
-| GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
+| GET | `/api/analytics/speech/:callId` | authenticated (viewer: own calls only) | Speech metrics for a single call (interruptions, latency, talk time) |
 | GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
 | GET | `/api/analytics/heatmap` | authenticated | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`) |
 | GET | `/api/analytics/compare` | manager+ | Compare 2-5 agents side-by-side (query: `ids` comma-separated employee IDs) |
@@ -888,8 +889,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **Embedding cache key includes model ID** (F-19) — `getEmbeddingCacheKey` in `server/services/bedrock.ts` now hashes `${model}:${text}` instead of just `text`. A runtime change to `BEDROCK_EMBEDDING_MODEL` invalidates the cache (brief spike of Bedrock API calls until re-warmed). Previously stale cached vectors with different dimensionality could be returned.
 - **`filterCallsByDateRange` uses UTC end-of-day** (F-17) — `setUTCHours(23, 59, 59, 999)` instead of `setHours()`. Date-filtered reports now use UTC-consistent boundaries. Previously the end-of-day boundary was local timezone, causing ±12h errors on non-UTC servers.
 - **Auto-calibration uses sample variance (N-1)** (F-23) — `server/services/auto-calibration.ts` divides by `(rawScores.length - 1)` for Bessel's correction. Reported stdDev is ~2.5% higher than before (for N=20), which may cause marginal drift to newly trigger calibration recommendations.
-- **Viewer-scoped data access** (#1 Phase 1+2) — Viewer-role users are restricted to their own data on agent-specific and call endpoints via two helpers in `server/auth.ts`: `getUserEmployeeId(username, displayName)` (matches user→employee via email→username then name→displayName) and `requireSelfOrManager(req => req.params.employeeId)` (middleware factory). Viewers hitting another employee's `/api/reports/agent-profile/:id`, `/api/gamification/{badges,stats}/:id`, `/api/analytics/{trends/agent,health-pulse}/:id`, `/api/snapshots/employee/:id`, or `/api/reports/agent-summary/:id` get 403. `/api/calls` forces the employee filter to the viewer's ID; `GET /api/calls/:id[/audio|transcript|sentiment|analysis]` checks via `canViewerAccessCall()` in `routes/calls.ts` (unassigned calls remain visible to cover the upload→auto-assign window). Manager/admin paths unchanged. **Operator note**: a viewer user with no matching employee row (email/name mismatch) sees empty lists and 403s with no warning — ensure employee records use the same email as the user's login.
-- **`/api/search` is NOT viewer-scoped** — search returns calls across all employees regardless of role. Known gap; follow-on to Phase 2.
+- **Viewer-scoped data access** (#1 Phase 1+2+3) — Viewer-role users are restricted to their own data on agent-specific and call endpoints via three helpers: `getUserEmployeeId(username, displayName)` in `server/auth.ts` (matches user→employee via email→username then name→displayName), `requireSelfOrManager(req => req.params.employeeId)` in `server/auth.ts` (middleware factory), and `canViewerAccessCall(req, call)` exported from `server/routes/calls.ts` (per-call employee match, unassigned calls allowed). Scoped endpoints: (agent-scoped, return 403) `/api/reports/agent-profile/:id`, `/api/reports/agent-summary/:id`, `/api/gamification/{badges,stats}/:id`, `/api/analytics/{trends/agent,health-pulse}/:id`, `/api/snapshots/employee/:id`; (call-scoped, filter list or return 403) `/api/calls` (list), `/api/calls/:id[/audio|transcript|sentiment|analysis]`, `/api/calls/:id/{tags,annotations}`, `/api/calls/by-tag/:tag`, `/api/search`, `/api/analytics/speech/:callId`. Manager/admin paths unchanged. Unassigned calls (no `employeeId`) remain visible to viewers to cover the upload→auto-assign window. **Operator note**: a viewer user with no matching employee row (email/name mismatch) sees empty lists and 403s with no warning — ensure employee records use the same email as the user's login.
 - **`persistIntegrityChainHead()` runs in graceful shutdown** (#6) — exported from `server/services/audit-log.ts` and called in `server/index.ts` at step 3a (before `flushAuditQueue`). Persists the in-memory HMAC chain head to `audit_log_integrity` so the next boot picks up the correct position even if fire-and-forget `persistPreviousHash` writes from `computeIntegrityHash` were in-flight when shutdown started. Failure is non-blocking (try-catch wrapped) — stdout HMAC chain remains canonical. HIPAA §164.312(b).
 - **CI has backend coverage gate at 65%** (#5) — `.github/workflows/ci.yml` `test & build` job runs `npm run test:coverage` and fails if statement coverage drops below 65% (current ~67%, 2% headroom). Coverage threshold is hardcoded in the workflow, not in `package.json`.
 - **CI E2E job runs Playwright chromium** (#5) — separate `e2e` parallel job installs chromium with `--with-deps` and runs `npm run test:e2e` against the dev server (started by Playwright's `webServer` config). Uses CI-specific `SESSION_SECRET` and `AUTH_USERS` env vars defined in the workflow. Artifact `playwright-report/` uploaded on failure with 7-day retention.
