@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth } from "../auth";
+import { requireAuth, requireRole } from "../auth";
 import { clampInt } from "./utils";
 import { computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
@@ -46,7 +46,10 @@ export function register(router: Router) {
   // surfaces top movers, new flags, and coaching-worthy regressions.
   // Designed to power a "what changed this week" dashboard widget that turns
   // raw metrics into actionable story ("Compliance dropped 0.5 in Team X").
-  router.get("/api/dashboard/weekly-changes", requireAuth, async (_req, res) => {
+  // F-02: weekly-changes returns per-agent score deltas, flagged calls with
+  // employee names, and noteworthy calls (individual performance data).
+  // Restrict to manager+ so agents can't see each other's score movements.
+  router.get("/api/dashboard/weekly-changes", requireAuth, requireRole("manager", "admin"), async (_req, res) => {
     try {
       const now = Date.now();
       const weekMs = 7 * 86400000;

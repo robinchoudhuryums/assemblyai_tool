@@ -50,8 +50,9 @@ export function registerReportRoutes(router: Router) {
     }
   });
 
-  // This new route will handle requests for the Performance page
-router.get("/api/performance", requireAuth, async (req, res) => {
+  // F-02: performance rankings expose individual employee scores. Restrict to
+  // manager+ so agents can't see each other's performance metrics.
+router.get("/api/performance", requireAuth, requireRole("manager", "admin"), async (req, res) => {
   try {
     // We can reuse the existing function to get top performers
     const performers = await storage.getTopPerformers(10); // Get top 10
@@ -62,7 +63,8 @@ router.get("/api/performance", requireAuth, async (req, res) => {
   }
 });
 
-  router.get("/api/reports/summary", requireAuth, async (req, res) => {
+  // F-02: summary includes performer rankings with individual scores.
+  router.get("/api/reports/summary", requireAuth, requireRole("manager", "admin"), async (req, res) => {
   try {
     const metrics = await storage.getDashboardMetrics();
     const sentiment = await storage.getSentimentDistribution();

@@ -36,14 +36,17 @@ export async function generateEmployeeSnapshot(
   employeeId: string, name: string, role: string | undefined,
   from: string, to: string, generatedBy: string
 ): Promise<PerformanceSnapshot> {
-  const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
+  // F-03: use getCallsSinceWithDetails(fromDate, employeeId) to push
+  // date + employee filtering to SQL instead of loading all calls into memory.
   const fromDate = new Date(from);
   const toDate = new Date(to);
   toDate.setHours(23, 59, 59, 999);
 
-  const filtered = allCalls.filter(c => {
+  const callsSince = await storage.getCallsSinceWithDetails(fromDate, employeeId);
+  const filtered = callsSince.filter(c => {
+    if (c.status !== "completed") return false;
     const d = new Date(c.uploadedAt || 0);
-    return d >= fromDate && d <= toDate;
+    return d <= toDate;
   });
 
   const metrics = aggregateMetrics(filtered);
@@ -90,16 +93,19 @@ export async function generateTeamSnapshot(
   const employees = await storage.getAllEmployees();
   const teamMembers = employees.filter(e => e.subTeam === teamName && e.status === "Active");
 
-  const allCalls = await storage.getCallsWithDetails({ status: "completed" });
+  // F-03: use getCallsSinceWithDetails(fromDate) to push date filtering to SQL
+  // instead of loading ALL completed calls into memory (OOM at production scale).
   const fromDate = new Date(from);
   const toDate = new Date(to);
   toDate.setHours(23, 59, 59, 999);
   const teamMemberIds = new Set(teamMembers.map(e => e.id));
 
-  const filtered = allCalls.filter(c => {
+  const callsSince = await storage.getCallsSinceWithDetails(fromDate);
+  const filtered = callsSince.filter(c => {
+    if (c.status !== "completed") return false;
     if (!c.employeeId || !teamMemberIds.has(c.employeeId)) return false;
     const d = new Date(c.uploadedAt || 0);
-    return d >= fromDate && d <= toDate;
+    return d <= toDate;
   });
 
   const metrics = aggregateMetrics(filtered);
@@ -146,16 +152,18 @@ export async function generateDepartmentSnapshot(
   const employees = await storage.getAllEmployees();
   const deptMembers = employees.filter(e => e.role === department && e.status === "Active");
 
-  const allCalls = await storage.getCallsWithDetails({ status: "completed" });
+  // F-03: use getCallsSinceWithDetails(fromDate) to push date filtering to SQL.
   const fromDate = new Date(from);
   const toDate = new Date(to);
   toDate.setHours(23, 59, 59, 999);
   const deptMemberIds = new Set(deptMembers.map(e => e.id));
 
-  const filtered = allCalls.filter(c => {
+  const callsSince = await storage.getCallsSinceWithDetails(fromDate);
+  const filtered = callsSince.filter(c => {
+    if (c.status !== "completed") return false;
     if (!c.employeeId || !deptMemberIds.has(c.employeeId)) return false;
     const d = new Date(c.uploadedAt || 0);
-    return d >= fromDate && d <= toDate;
+    return d <= toDate;
   });
 
   const metrics = aggregateMetrics(filtered);
@@ -199,14 +207,16 @@ export async function generateDepartmentSnapshot(
 export async function generateCompanySnapshot(
   from: string, to: string, generatedBy: string
 ): Promise<PerformanceSnapshot> {
-  const allCalls = await storage.getCallsWithDetails({ status: "completed" });
+  // F-03: use getCallsSinceWithDetails(fromDate) to push date filtering to SQL.
   const fromDate = new Date(from);
   const toDate = new Date(to);
   toDate.setHours(23, 59, 59, 999);
 
-  const filtered = allCalls.filter(c => {
+  const callsSince = await storage.getCallsSinceWithDetails(fromDate);
+  const filtered = callsSince.filter(c => {
+    if (c.status !== "completed") return false;
     const d = new Date(c.uploadedAt || 0);
-    return d >= fromDate && d <= toDate;
+    return d <= toDate;
   });
 
   const employees = await storage.getAllEmployees();
