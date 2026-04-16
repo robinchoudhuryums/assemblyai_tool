@@ -136,8 +136,10 @@ export function filterCallsByDateRange<T extends { uploadedAt?: string | null }>
     result = result.filter(c => new Date(c.uploadedAt || 0) >= fromDate);
   }
   if (toDate) {
+    // F-17: use setUTCHours so end-of-day is UTC-consistent with uploadedAt (stored as UTC).
+    // Previously used setHours (local timezone), causing ±12h date boundary errors.
     const endOfDay = new Date(toDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    endOfDay.setUTCHours(23, 59, 59, 999);
     result = result.filter(c => new Date(c.uploadedAt || 0) <= endOfDay);
   }
   return result;

@@ -25,8 +25,11 @@ import { logger } from "./logger";
 const EMBEDDING_CACHE_MAX = 200;
 const embeddingCache = new Map<string, number[]>();
 
+// F-19: include embedding model in cache key so a model change at runtime
+// doesn't return stale cached vectors with different dimensionality.
 function getEmbeddingCacheKey(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const model = process.env.BEDROCK_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+  return createHash("sha256").update(`${model}:${text}`).digest("hex").slice(0, 16);
 }
 
 const DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6";

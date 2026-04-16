@@ -71,6 +71,23 @@ fi
 echo "[3/3] Restarting pm2..."
 pm2 restart all
 
+# F-26: Post-rollback health check (matches deploy.sh pattern)
+echo "[4/4] Health check..."
+PORT="${PORT:-5000}"
+HEALTH_OK=false
+for i in $(seq 1 30); do
+  STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:$PORT/api/health" 2>/dev/null || echo "000")
+  if [ "$STATUS" = "200" ]; then
+    HEALTH_OK=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HEALTH_OK" = false ]; then
+  echo "!!! WARNING: Health check failed after rollback. Check pm2 logs. !!!"
+fi
+
 # Log this rollback
 echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') | ROLLBACK | ${CURRENT_COMMIT:0:12} -> ${TARGET_COMMIT:0:12}" >> "$DEPLOY_LOG"
 
@@ -78,4 +95,4 @@ echo ""
 echo "=== Rollback complete ==="
 echo "Rolled back: ${CURRENT_COMMIT:0:12} → ${TARGET_COMMIT:0:12}"
 sleep 2
-pm2 logs callanalyzer --lines 10 --nostream
+pm2 logs callanalyzer --lines 10 --nostream 2>/dev/null || true

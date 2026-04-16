@@ -118,14 +118,15 @@ export function register(router: Router) {
       const session = await storage.getCoachingSession(sessionId);
       if (!session) return res.status(404).json({ message: "Coaching session not found" });
 
-      // Verify the agent owns this coaching session
+      // F-18: verify the agent owns this coaching session. Prioritize email→username
+      // match (more unique) over display-name match (can collide across employees).
       const username = req.user?.username;
       const displayName = req.user?.name;
       const allEmployees = await storage.getAllEmployees();
-      const myEmployee = allEmployees.find(e =>
-        e.name.toLowerCase() === displayName?.toLowerCase() ||
-        e.email?.toLowerCase() === username?.toLowerCase()
-      );
+      const myEmployee =
+        allEmployees.find(e => e.email?.toLowerCase() === username?.toLowerCase()) ||
+        allEmployees.find(e => e.name.toLowerCase() === displayName?.toLowerCase()) ||
+        null;
 
       const isOwner = myEmployee && session.employeeId === myEmployee.id;
       const isManagerOrAdmin = req.user?.role === "manager" || req.user?.role === "admin";

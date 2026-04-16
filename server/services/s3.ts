@@ -193,6 +193,7 @@ export class S3Client {
   async listAndDownloadJson<T>(prefix: string): Promise<T[]> {
     const names = await this.listObjects(prefix);
     const results: T[] = [];
+    let failCount = 0;
 
     // Download in parallel batches of 10
     for (let i = 0; i < names.length; i += 10) {
@@ -202,6 +203,7 @@ export class S3Client {
           try {
             return await this.downloadJson<T>(name);
           } catch {
+            failCount++;
             return undefined;
           }
         })
@@ -209,6 +211,13 @@ export class S3Client {
       for (const result of batchResults) {
         if (result) results.push(result);
       }
+    }
+
+    // F-11: warn when a significant fraction of downloads fail so operators
+    // know data is being silently dropped. Previously fully silent.
+    if (failCount > 0 && names.length > 0) {
+      const failPct = Math.round((failCount / names.length) * 100);
+      console.warn(`[S3] listAndDownloadJson: ${failCount}/${names.length} downloads failed (${failPct}%) for prefix "${prefix}"`);
     }
 
     return results;

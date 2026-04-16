@@ -24,6 +24,14 @@ import { bedrockCircuitBreaker, isCircuitFailure, BedrockClientError } from "./b
 
 const BATCH_TIMEOUT_MS = 30_000; // 30s for batch management API calls
 
+// F-21: S3 ListObjectsV2 XML-encodes the 5 predefined entities in object keys.
+// Matches the decodeXmlEntities in s3.ts (A12) but inlined here since bedrock-batch
+// has its own self-contained S3 implementation.
+const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot|apos);/g, (_, e) => XML_ENTITIES[e] || _);
+}
+
 export interface PendingBatchItem {
   callId: string;
   prompt: string;
@@ -381,7 +389,7 @@ export class BedrockBatchService {
 
       const xml = await response.text();
       const matches = xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g);
-      for (const m of matches) keys.push(m[1]);
+      for (const m of matches) keys.push(decodeXmlEntities(m[1]));
 
       const truncatedMatch = xml.match(/<IsTruncated>(true|false)<\/IsTruncated>/);
       const isTruncated = truncatedMatch?.[1] === "true";

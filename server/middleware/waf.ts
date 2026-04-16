@@ -40,6 +40,9 @@ function evictOldestFromSet<T>(set: Set<T>): void {
 
 /** Permanently block an IP address. */
 export function blockIP(ip: string, reason: string): void {
+  // F-05: LRU recency touch — delete-then-add moves the entry to the end
+  // of Set iteration order so re-blocked IPs aren't the first evicted.
+  blockedIPs.delete(ip);
   while (blockedIPs.size >= BLOCKED_IPS_MAX) evictOldestFromSet(blockedIPs);
   blockedIPs.add(ip);
   console.error(`[WAF] IP blocked permanently: ${ip} — ${reason}`);
@@ -224,7 +227,9 @@ function recordAnomaly(ip: string, violation: string, points: number): number {
   if (score >= ANOMALY_THRESHOLD) {
     const violations = tracker.events.map(e => e.violation);
     temporaryBlockIP(ip, ANOMALY_BLOCK_DURATION, `Anomaly score ${score}: ${violations.join(", ")}`);
-    // Set cooldown so score doesn't reset immediately if they retry
+    // Set cooldown so score doesn't reset immediately if they retry.
+    // F-05: LRU recency touch — delete-then-set so re-blocked IPs aren't evicted first.
+    anomalyCooldowns.delete(ip);
     while (anomalyCooldowns.size >= ANOMALY_COOLDOWNS_MAX) evictOldestFromMap(anomalyCooldowns);
     anomalyCooldowns.set(ip, now + ANOMALY_COOLDOWN_MS);
     anomalyScores.delete(ip);

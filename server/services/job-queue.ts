@@ -307,11 +307,13 @@ export class JobQueue {
   private async processJob(job: Job, handler: (job: Job) => Promise<void>): Promise<void> {
     // Heartbeat ticker — refreshed every HEARTBEAT_INTERVAL_MS during job
     // execution. Cleared in finally to prevent leaked intervals.
+    // F-14: .unref() per INV-30 so in-flight heartbeat timers don't block graceful shutdown.
     const heartbeatTimer = setInterval(() => {
       this.heartbeat(job.id).catch((err) => {
         console.warn(`[JOB_QUEUE] Heartbeat failed for ${job.id}:`, (err as Error).message);
       });
     }, JobQueue.HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref();
     // A31/F66: wrap handler invocation in a correlation-id scope so all
     // structured logs emitted during processing carry the job id.
     try {

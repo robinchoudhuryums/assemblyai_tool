@@ -464,20 +464,33 @@ export async function updateIncidentDetails(
   const incident = incidents.find((i) => i.id === incidentId);
   if (!incident) return null;
 
+  // F-13/INV-13: DB-first clone-then-persist. Build the new state on a
+  // shallow clone, persist FIRST, then apply to in-memory cache on success.
+  // Previously used Object.assign (mutate-then-persist anti-pattern).
   const now = new Date().toISOString();
+  const changedFields = Object.keys(updates).join(", ");
+  const next: Incident = {
+    ...incident,
+    ...updates,
+    updatedAt: now,
+    timeline: [
+      ...incident.timeline,
+      {
+        timestamp: now,
+        phase: incident.currentPhase,
+        action: `Updated: ${changedFields}`,
+        actor,
+        automated: false,
+      },
+    ],
+  };
+
+  await persistIncident(next);
+
+  // Persist succeeded — apply to in-memory cache.
   Object.assign(incident, updates);
   incident.updatedAt = now;
-
-  const changedFields = Object.keys(updates).join(", ");
-  incident.timeline.push({
-    timestamp: now,
-    phase: incident.currentPhase,
-    action: `Updated: ${changedFields}`,
-    actor,
-    automated: false,
-  });
-
-  await persistIncident(incident);
+  incident.timeline = next.timeline;
   return incident;
 }
 
