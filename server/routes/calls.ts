@@ -4,7 +4,7 @@ import fs from "fs";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, getUserEmployeeId } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
@@ -27,6 +27,23 @@ export type ProcessAudioFn = (
 // assignCallSchema imported from @shared/schema
 
 /**
+ * #1 Phase 2: check whether a viewer may access a specific call.
+ * Returns true for manager/admin. For viewers, the call's employeeId must
+ * match the viewer's linked employee, OR the call has no employee yet
+ * (unassigned — viewers can see calls they may have uploaded).
+ */
+async function canViewerAccessCall(
+  req: import("express").Request,
+  call: { employeeId?: string | null },
+): Promise<boolean> {
+  const userRole = req.user?.role || "viewer";
+  if (userRole === "manager" || userRole === "admin") return true;
+  if (!call.employeeId) return true;
+  const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+  return myEmployeeId === call.employeeId;
+}
+
+/**
  * Register all call-related API routes.
  * Core routes (list, get, upload, audio, analysis, assign, delete) are here.
  * Tags, annotations, and bulk ops are in calls-tags.ts.
@@ -46,10 +63,25 @@ export function registerCallRoutes(
     try {
       const { status, sentiment, employee, cursor } = req.query;
       const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 25, 200));
+
+      // #1 Phase 2: viewers can only see their own calls. Force the employee
+      // filter to their linked employee ID. If no employee link exists, return
+      // empty results (same behavior as /api/my-performance).
+      let employeeFilter = employee as string;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          res.json({ calls: [], pagination: { page: 1, limit, total: 0, totalPages: 0 }, nextCursor: null, hasMore: false });
+          return;
+        }
+        employeeFilter = myEmployeeId;
+      }
+
       const filters = {
         status: status as string,
         sentiment: sentiment as string,
-        employee: employee as string,
+        employee: employeeFilter,
       };
 
       // A20/F20: SQL-level pagination is now the only path. Legacy offset
@@ -77,6 +109,12 @@ export function registerCallRoutes(
       const call = await storage.getCall(req.params.id);
       if (!call) {
         res.status(404).json({ message: "Call not found" });
+        return;
+      }
+
+      // #1 Phase 2: viewers can only access their own calls.
+      if (!(await canViewerAccessCall(req, call))) {
+        res.status(403).json({ message: "You can only access your own calls" });
         return;
       }
 
@@ -229,6 +267,11 @@ export function registerCallRoutes(
         return;
       }
 
+      if (!(await canViewerAccessCall(req, call))) {
+        res.status(403).json({ message: "You can only access your own calls" });
+        return;
+      }
+
       logPhiAccess({
         ...auditContext(req),
         timestamp: new Date().toISOString(),
@@ -313,6 +356,13 @@ export function registerCallRoutes(
 
   router.get("/api/calls/:id/transcript", requireAuth, validateIdParam, async (req, res) => {
     try {
+      // #1 Phase 2: viewer scope check
+      const callForScope = await storage.getCall(req.params.id);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        res.status(403).json({ message: "You can only access your own calls" });
+        return;
+      }
+
       logPhiAccess({
         ...auditContext(req),
         timestamp: new Date().toISOString(),
@@ -335,6 +385,12 @@ export function registerCallRoutes(
 
   router.get("/api/calls/:id/sentiment", requireAuth, validateIdParam, async (req, res) => {
     try {
+      const callForScope = await storage.getCall(req.params.id);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        res.status(403).json({ message: "You can only access your own calls" });
+        return;
+      }
+
       logPhiAccess({
         ...auditContext(req),
         timestamp: new Date().toISOString(),
@@ -356,6 +412,12 @@ export function registerCallRoutes(
 
   router.get("/api/calls/:id/analysis", requireAuth, validateIdParam, async (req, res) => {
     try {
+      const callForScope = await storage.getCall(req.params.id);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        res.status(403).json({ message: "You can only access your own calls" });
+        return;
+      }
+
       logPhiAccess({
         ...auditContext(req),
         timestamp: new Date().toISOString(),

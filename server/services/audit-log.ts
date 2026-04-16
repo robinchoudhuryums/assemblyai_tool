@@ -72,6 +72,17 @@ function computeIntegrityHash(content: string): string {
   return hash;
 }
 
+/**
+ * #6: Persist the in-memory HMAC chain head to PostgreSQL.
+ * Called during graceful shutdown so the chain head is durable even if
+ * fire-and-forget persists from computeIntegrityHash were still in-flight.
+ * Safe to call multiple times (idempotent upsert).
+ */
+export async function persistIntegrityChainHead(): Promise<void> {
+  if (previousHash === "genesis") return;
+  await persistPreviousHash(previousHash);
+}
+
 let integrityLoaded = false;
 async function persistPreviousHash(hash: string): Promise<void> {
   const pool = getPool();

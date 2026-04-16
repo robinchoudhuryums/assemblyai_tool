@@ -18,7 +18,7 @@ import { captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
 import { runWithCorrelationId } from "./services/correlation-id";
-import { flushAuditQueue } from "./services/audit-log";
+import { flushAuditQueue, persistIntegrityChainHead } from "./services/audit-log";
 import { initWebhooks } from "./services/webhooks";
 
 const app = express();
@@ -618,8 +618,17 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
         } catch (err) {
           console.error("[SHUTDOWN] Failed to stop job queue:", (err as Error).message);
         }
-        // 3. Flush audit log queue (bounded to 10s — if DB is hung, don't waste
-        //    the full 30s hard-exit budget; remaining entries are in stdout via HMAC chain)
+        // 3a. #6: Persist the HMAC integrity chain head so the next boot picks up
+        //     the correct chain position. Must run before flushAuditQueue because
+        //     the flush may generate additional audit entries that advance the chain.
+        try {
+          await persistIntegrityChainHead();
+          log("Audit integrity chain head persisted.");
+        } catch (err) {
+          console.error("[SHUTDOWN] Failed to persist integrity chain head:", (err as Error).message);
+        }
+        // 3b. Flush audit log queue (bounded to 10s — if DB is hung, don't waste
+        //     the full 30s hard-exit budget; remaining entries are in stdout via HMAC chain)
         try {
           await Promise.race([
             flushAuditQueue(),
