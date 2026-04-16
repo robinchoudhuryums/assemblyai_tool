@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager, getUserEmployeeId } from "../auth";
 import { canViewerAccessCall } from "./calls";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
@@ -116,10 +116,32 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         }
       }
 
+      // Viewer-scoped filtered reports: force employeeId to the viewer's own ID
+      // regardless of what they pass. Unlinked viewers get empty results.
+      let scopedEmployeeId = employeeId as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          // No linked employee — return empty-shaped result without hitting the DB
+          // (employee_id is UUID-typed, so any sentinel would cause a cast error).
+          res.json({
+            metrics: { totalCalls: 0, avgSentiment: 0, avgPerformanceScore: 0 },
+            sentiment: { positive: 0, neutral: 0, negative: 0 },
+            performers: [],
+            trends: [],
+            avgSubScores: null,
+            autoAssignedCount: 0,
+          });
+          return;
+        }
+        scopedEmployeeId = myEmployeeId;
+      }
+
       const result = await storage.getFilteredReportMetrics({
         from: from as string | undefined,
         to: to as string | undefined,
-        employeeId: employeeId as string | undefined,
+        employeeId: scopedEmployeeId,
         role,
         callPartyType: callPartyType as string | undefined,
       });

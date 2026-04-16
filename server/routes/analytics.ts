@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager, getUserEmployeeId } from "../auth";
 import { canViewerAccessCall } from "./calls";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
@@ -103,7 +103,9 @@ export function register(router: Router) {
   });
 
   // Individual employee comparison within a team
-  router.get("/api/analytics/team/:teamName", requireAuth, validateParams({ teamName: "safeName" }), async (req, res) => {
+  // Individual employee comparison within a team — manager+ only.
+  // Per-employee score breakdowns shouldn't be visible to peer agents.
+  router.get("/api/analytics/team/:teamName", requireAuth, requireRole("manager", "admin"), validateParams({ teamName: "safeName" }), async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.json([]);
@@ -462,8 +464,20 @@ export function register(router: Router) {
   router.get("/api/analytics/clusters", requireAuth, async (req, res) => {
     try {
       const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 30, 365));
-      const employeeId = req.query.employee as string | undefined;
       const minSize = Math.max(2, parseInt(req.query.minSize as string) || 2);
+
+      // Viewer-scoped: force employee filter to the viewer's own ID.
+      // Unlinked viewers get empty cluster results.
+      let employeeId = req.query.employee as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          res.json({ clusters: [], days });
+          return;
+        }
+        employeeId = myEmployeeId;
+      }
 
       const clusters = await getCallClusters({ days, employeeId, minClusterSize: minSize });
       res.json({ clusters, days });
@@ -513,8 +527,10 @@ export function register(router: Router) {
     }
   });
 
-  // GET /api/analytics/speech-summary — aggregate speech metrics across employees
-  router.get("/api/analytics/speech-summary", requireAuth, async (req, res) => {
+  // GET /api/analytics/speech-summary — aggregate speech metrics across employees.
+  // Manager+ only: exposes per-employee speech patterns (interruption counts, etc.)
+  // which are management tools, not peer-visibility data.
+  router.get("/api/analytics/speech-summary", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       const days = Math.min(parseInt(req.query.days as string) || 30, 90);
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();
@@ -700,7 +716,21 @@ export function registerHeatmapRoutes(router: Router) {
   router.get("/api/analytics/heatmap", requireAuth, async (req, res) => {
     try {
       const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 90, 365));
-      const employeeId = req.query.employee as string | undefined;
+      // Viewer-scoped: force employee filter to the viewer's own ID.
+      // Unlinked viewers get an empty grid rather than cross-employee data.
+      let employeeId = req.query.employee as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          // Return empty grid (same shape as normal response)
+          const emptyCells: { dow: number; hour: number; count: number; avgScore: number | null }[] = [];
+          for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++) emptyCells.push({ dow: d, hour: h, count: 0, avgScore: null });
+          res.json({ cells: emptyCells, days });
+          return;
+        }
+        employeeId = myEmployeeId;
+      }
       const pool = getPool();
 
       // Initialize 7×24 grid (dow 0=Sun..6=Sat, hour 0..23)
