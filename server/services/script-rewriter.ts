@@ -30,7 +30,9 @@
  */
 import { z } from "zod";
 import { aiProvider } from "./ai-factory";
+import { BedrockClientError } from "./bedrock";
 import { logger } from "./logger";
+import { getModelForTier } from "./model-tiers";
 import {
   simulatedCallScriptSchema,
   CIRCUMSTANCE_META,
@@ -52,6 +54,16 @@ export interface RewriteResult {
   /** Approximate input + output char count so the UI can estimate cost if it wants. */
   promptChars: number;
   responseChars: number;
+  /**
+   * Which model actually produced the script. For the generator this can
+   * differ from what the admin requested if Haiku wasn't accessible in
+   * their AWS account and we fell back to the BEDROCK_MODEL default.
+   * The UI uses this to surface a note like "Generated with Sonnet
+   * (Haiku 4.5 access not enabled)".
+   */
+  modelUsed?: "haiku" | "sonnet" | "default" | "fallback";
+  /** True iff we tried Haiku first and had to fall back to the default model. */
+  fellBackFromHaiku?: boolean;
 }
 
 // ── Prompt construction ────────────────────────────────────────────
@@ -269,12 +281,11 @@ export interface GenerateFromScenarioInput {
   useSonnet?: boolean;
 }
 
-// Model IDs used by the generator. Haiku is the default because cold-start
-// generation is mostly structural — Sonnet is overkill for most cases
-// and ~10× more expensive. Admins who want richer dialogue can flip the
-// useSonnet flag at call time.
-const GENERATOR_HAIKU_MODEL = "us.anthropic.claude-haiku-4-5-20251001";
-const GENERATOR_SONNET_MODEL = "us.anthropic.claude-sonnet-4-6";
+// Model IDs used by the generator now route through the tier abstraction
+// (model-tiers.ts). "fast" = Haiku-class (the cost-optimized default);
+// "strong" = Sonnet-class (the useSonnet=true opt-in). Admins can override
+// either tier at runtime via PATCH /api/admin/model-tiers without a code
+// change.
 
 function buildGeneratorPrompt(input: GenerateFromScenarioInput): string {
   const targetTurns = Math.max(4, Math.min(input.targetTurnCount ?? 10, 30));
@@ -346,20 +357,57 @@ export async function generateScriptFromScenario(
   }
 
   const prompt = buildGeneratorPrompt(input);
-  const modelId = input.useSonnet ? GENERATOR_SONNET_MODEL : GENERATOR_HAIKU_MODEL;
+  const primaryModel = input.useSonnet ? getModelForTier("strong") : getModelForTier("fast");
+
+  // 8192 tokens gives enough headroom for up to ~30 turns of dialogue
+  // (the generator's max). The default 2048 caps out around 8-10 turns
+  // before JSON gets truncated mid-object, causing parse_error.
+  const MAX_TOKENS = 8192;
 
   let raw: string;
+  let fellBackFromHaiku = false;
+  let modelUsed: RewriteResult["modelUsed"] = input.useSonnet ? "sonnet" : "haiku";
   try {
-    // 8192 tokens gives enough headroom for up to ~30 turns of dialogue
-    // (the generator's max). The default 2048 caps out around 8-10 turns
-    // before JSON gets truncated mid-object, causing parse_error.
-    raw = await aiProvider.generateText(prompt, modelId, 8192);
+    raw = await aiProvider.generateText(prompt, primaryModel, MAX_TOKENS);
   } catch (err) {
-    throw new ScriptRewriterError(
-      `Bedrock generateText failed: ${(err as Error).message}`,
-      "model_error",
-      err,
-    );
+    // Fallback: if the admin asked for Haiku (default) but the AWS
+    // account doesn't have Haiku 4.5 access enabled, retry with the
+    // configured BEDROCK_MODEL (typically Sonnet 4.6, which has
+    // already been proven to work for regular call analysis). A 4xx
+    // from Bedrock is almost always "access denied" (403) or
+    // "model not found" (400), both of which mean "try a different model".
+    // 429 (rate limit) and 5xx (Bedrock outage) still surface as hard
+    // failures — falling back wouldn't help either of those.
+    const isBedrockClientErr = err instanceof BedrockClientError;
+    const shouldFallback =
+      !input.useSonnet &&                         // only when admin picked Haiku
+      isBedrockClientErr &&                        // 4xx from Bedrock
+      (err as BedrockClientError).status !== 429;  // not a rate limit
+    if (shouldFallback) {
+      logger.warn("script-generator: Haiku rejected by Bedrock, falling back to default model", {
+        haikuModel: primaryModel,
+        haikuStatus: (err as BedrockClientError).status,
+        haikuError: (err as Error).message,
+      });
+      try {
+        // `undefined` modelOverride → uses BEDROCK_MODEL env var (Sonnet for this tenant).
+        raw = await aiProvider.generateText(prompt, undefined, MAX_TOKENS);
+        fellBackFromHaiku = true;
+        modelUsed = "fallback";
+      } catch (fallbackErr) {
+        throw new ScriptRewriterError(
+          `Bedrock generateText failed (after Haiku fallback): ${(fallbackErr as Error).message}`,
+          "model_error",
+          fallbackErr,
+        );
+      }
+    } else {
+      throw new ScriptRewriterError(
+        `Bedrock generateText failed: ${(err as Error).message}`,
+        "model_error",
+        err,
+      );
+    }
   }
 
   const jsonBlob = extractJsonObject(raw);
@@ -415,6 +463,8 @@ export async function generateScriptFromScenario(
     rawResponse: raw,
     promptChars: prompt.length,
     responseChars: raw.length,
+    modelUsed,
+    fellBackFromHaiku,
   };
 }
 

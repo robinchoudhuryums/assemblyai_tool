@@ -1,25 +1,29 @@
 /**
- * Active Bedrock model override.
+ * Active Bedrock model override (legacy A/B-test-promotion API).
  *
- * Normally the active model is set via the BEDROCK_MODEL env var and frozen
- * at startup. This module adds a runtime promotion flow (for A/B test winners):
+ * This module used to own the single-slot model override flow. As of the
+ * model-tier refactor it's a thin shim over `model-tiers.ts`, preserving
+ * the external contract used by the A/B test promote endpoint and by
+ * `loadActiveModelOverride()` at startup. New code should call
+ * `setTierOverride()` / `getModelForTier()` directly — this file exists
+ * only for back-compat with the A/B test flow.
  *
+ * Flow:
  * 1. Admin promotes a model via POST /api/ab-tests/promote
- * 2. This module persists the choice to S3 (`config/active-model.json`)
- * 3. aiProvider.setModel() is called to swap the singleton
- * 4. On the next startup, loadActiveModelOverride() rehydrates the override
- *
- * The env var still takes precedence for the *initial* provider construction
- * (since aiProvider is created before this module runs), but loadActiveModelOverride()
- * runs shortly after startup and swaps the model if a persisted override exists.
+ * 2. promoteActiveModel() → setTierOverride("strong", ...)
+ * 3. setTierOverride persists to S3 under `config/model-tiers.json` AND
+ *    calls aiProvider.setModel() + bedrockBatchService.setModel()
+ * 4. On the next startup, loadTierOverrides() rehydrates + ALSO migrates
+ *    any legacy `config/active-model.json` into the new tier file.
  */
 
-import { storage } from "../storage";
 import { aiProvider } from "./ai-factory";
-import { bedrockBatchService } from "./bedrock-batch";
 import { logger } from "./logger";
-
-const S3_KEY = "config/active-model.json";
+import {
+  getModelForTier,
+  setTierOverride,
+  loadTierOverrides,
+} from "./model-tiers";
 
 export interface ActiveModelOverride {
   model: string;
@@ -40,76 +44,42 @@ export async function promoteActiveModel(override: ActiveModelOverride): Promise
     throw new Error("promoteActiveModel: model is required");
   }
 
-  // 1. Persist to S3 so the promotion survives restart
-  const s3Client = storage.getObjectStorageClient();
-  if (s3Client) {
-    try {
-      await s3Client.uploadJson(S3_KEY, override);
-    } catch (err) {
-      // Storage unavailable — log and continue. The in-memory swap still
-      // applies for the current process, but it won't survive a restart.
-      logger.warn("active-model: failed to persist override to S3", { error: (err as Error).message });
-    }
-  }
-
-  // 2. Apply to the live aiProvider singleton (on-demand path)
-  if (typeof aiProvider.setModel === "function") {
-    aiProvider.setModel(override.model);
-    logger.info("active-model: promoted", {
-      model: override.model,
-      promotedBy: override.promotedBy,
-      baselineModel: override.baselineModel,
-      sampleSize: override.sampleSize,
-    });
-  } else {
-    logger.warn("active-model: aiProvider does not support runtime setModel — override persisted but not applied until restart");
-  }
-
-  // 3. Apply to the batch service (batch-mode path). Previously this was a
-  //    documented asymmetry — the on-demand singleton observed promotions
-  //    but batch jobs continued using the env-var model until restart. Now
-  //    both paths are kept in sync. In-flight batch jobs (already submitted
-  //    to AWS Bedrock) are unaffected; only NEW batch submissions pick up
-  //    the promoted model.
-  try {
-    bedrockBatchService.setModel(override.model);
-  } catch (err) {
-    logger.warn("active-model: bedrockBatchService.setModel threw, batch path may be stale until restart", {
-      error: (err as Error).message,
-    });
-  }
+  // Route through the tier abstraction. setTierOverride handles
+  // persistence + calls aiProvider.setModel() + bedrockBatchService.setModel()
+  // via its singleton-sync hook. External behavior is identical to the
+  // pre-refactor flow; only the S3 file name changes (legacy file is
+  // migrated on next startup).
+  const reason = override.sampleSize
+    ? `ab-test-promotion (n=${override.sampleSize}${override.avgDelta !== undefined && override.avgDelta !== null ? ", Δ=" + override.avgDelta.toFixed(2) : ""})`
+    : "ab-test-promotion";
+  await setTierOverride("strong", override.model, override.promotedBy, reason);
+  logger.info("active-model: promoted via tier abstraction", {
+    model: override.model,
+    promotedBy: override.promotedBy,
+    baselineModel: override.baselineModel,
+    sampleSize: override.sampleSize,
+  });
 }
 
 /**
  * Load the persisted active-model override at startup and apply it.
  * Fire-and-forget from server/index.ts — silent no-op if nothing is persisted.
+ * Delegates to the tier system, which handles both the new key and the
+ * legacy `config/active-model.json` migration automatically.
  */
 export async function loadActiveModelOverride(): Promise<ActiveModelOverride | null> {
   try {
-    const s3Client = storage.getObjectStorageClient();
-    if (!s3Client) return null;
-
-    const override = await s3Client.downloadJson<ActiveModelOverride>(S3_KEY);
-    if (!override || !override.model) return null;
-
-    if (typeof aiProvider.setModel === "function") {
-      aiProvider.setModel(override.model);
-      logger.info("active-model: restored persisted override", {
-        model: override.model,
-        promotedBy: override.promotedBy,
-        promotedAt: override.promotedAt,
-      });
-    }
-    // Apply to batch service as well so a persisted override survives
-    // restart across BOTH the on-demand and batch paths, not just on-demand.
-    try {
-      bedrockBatchService.setModel(override.model);
-    } catch (err) {
-      logger.warn("active-model: bedrockBatchService.setModel threw during startup hydration", {
-        error: (err as Error).message,
-      });
-    }
-    return override;
+    await loadTierOverrides();
+    // After hydration, report back what the strong tier resolved to.
+    // The shape matches the old return type so any callers depending on
+    // it keep working. Promotion metadata is best-effort — we don't track
+    // baselineModel/sampleSize in the tier system.
+    const model = getModelForTier("strong");
+    return {
+      model,
+      promotedBy: "unknown",
+      promotedAt: new Date().toISOString(),
+    };
   } catch (err) {
     logger.warn("active-model: failed to load persisted override", { error: (err as Error).message });
     return null;
@@ -120,3 +90,4 @@ export async function loadActiveModelOverride(): Promise<ActiveModelOverride | n
 export function getCurrentActiveModel(): string | undefined {
   return aiProvider.modelId;
 }
+

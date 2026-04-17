@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
+import { Brain, CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { USER_ROLES } from "@shared/schema";
 import type { AccessRequest } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
-type TabView = "users" | "requests" | "roles" | "pipeline";
+type TabView = "users" | "requests" | "roles" | "pipeline" | "models";
 
 interface DbUser {
   id: string;
@@ -213,6 +213,10 @@ export default function AdminPage() {
           <Button variant={tab === "pipeline" ? "default" : "outline"} size="sm" onClick={() => setTab("pipeline")}>
             <Sliders className="w-4 h-4 mr-2" />
             Pipeline Settings
+          </Button>
+          <Button variant={tab === "models" ? "default" : "outline"} size="sm" onClick={() => setTab("models")}>
+            <Brain className="w-4 h-4 mr-2" />
+            AI Models
           </Button>
         </div>
 
@@ -645,6 +649,9 @@ export default function AdminPage() {
 
         {/* ════════════════ PIPELINE SETTINGS TAB ════════════════ */}
         {tab === "pipeline" && <PipelineSettingsCard />}
+
+        {/* ════════════════ AI MODELS TAB ════════════════ */}
+        {tab === "models" && <ModelTiersCard />}
       </div>
     </div>
   );
@@ -841,5 +848,220 @@ function PipelineSettingsCard() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// AI Model Tiers — runtime overrides for the Anthropic model IDs
+// used across the app. Three tiers: strong (primary analysis),
+// fast (short-call + scenario generator), reasoning (reserved).
+// Backed by GET/PATCH /api/admin/model-tiers, persisted to S3.
+// ─────────────────────────────────────────────────────────────
+type TierName = "strong" | "fast" | "reasoning";
+
+interface TierSnapshot {
+  tier: TierName;
+  effectiveModel: string;
+  source: "override" | "env" | "legacy-env" | "default";
+  override?: {
+    model: string;
+    updatedBy: string;
+    updatedAt: string;
+    reason?: string;
+  };
+  envValue?: string;
+  defaultValue: string;
+}
+
+interface ModelTiersResponse {
+  tiers: TierSnapshot[];
+}
+
+const TIER_META: Record<TierName, { label: string; purpose: string; usedBy: string }> = {
+  strong: {
+    label: "Strong (primary analysis)",
+    purpose: "Sonnet-class. Used for call-transcript analysis, agent summaries, and the scenario rewriter.",
+    usedBy: "Call pipeline (analyzeCallTranscript), agent profile summaries, script rewriter + generator when 'Use Sonnet' is toggled.",
+  },
+  fast: {
+    label: "Fast (cost-optimized)",
+    purpose: "Haiku-class. Used for short routine calls and script generation by default.",
+    usedBy: "Short-call optimization in the pipeline, scenario generator default path.",
+  },
+  reasoning: {
+    label: "Reasoning (reserved)",
+    purpose: "Opus-class. Nothing reads it yet — reserved for future features that need extended reasoning.",
+    usedBy: "Not currently invoked by any feature.",
+  },
+};
+
+function ModelTiersCard() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<ModelTiersResponse>({
+    queryKey: ["/api/admin/model-tiers"],
+  });
+
+  const [drafts, setDrafts] = useState<Record<TierName, string>>({
+    strong: "", fast: "", reasoning: "",
+  });
+
+  // Hydrate drafts from the response — only for tiers that don't already
+  // have an in-flight edit (so a Save click doesn't snap to the old value
+  // while the PATCH round-trip is pending).
+  useEffect(() => {
+    if (!data) return;
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const snap of data.tiers) {
+        if (!next[snap.tier]) next[snap.tier] = snap.effectiveModel;
+      }
+      return next;
+    });
+  }, [data]);
+
+  const saveMut = useMutation({
+    mutationFn: async (payload: { tier: TierName; model: string | null; reason?: string }) => {
+      const res = await apiRequest("PATCH", "/api/admin/model-tiers", payload);
+      return res.json() as Promise<ModelTiersResponse>;
+    },
+    onSuccess: () => {
+      sharedQueryClient.invalidateQueries({ queryKey: ["/api/admin/model-tiers"] });
+      toast({ title: "Model tier updated", description: "New model applies to the next Bedrock call." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading || !data) {
+    return <Skeleton className="h-96" />;
+  }
+
+  const sourceBadge = (src: TierSnapshot["source"]) => {
+    const map: Record<TierSnapshot["source"], { color: string; label: string }> = {
+      override:    { color: "bg-purple-200 text-purple-900", label: "Admin override" },
+      env:         { color: "bg-blue-200 text-blue-900",     label: "Env var" },
+      "legacy-env":{ color: "bg-cyan-200 text-cyan-900",     label: "Legacy env var" },
+      default:     { color: "bg-gray-200 text-gray-900",     label: "Baked-in default" },
+    };
+    const { color, label } = map[src];
+    return <Badge className={`${color} text-[10px]`}>{label}</Badge>;
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="w-5 h-5" />
+            AI Model Tiers
+          </CardTitle>
+          <CardDescription>
+            All Anthropic model IDs used across the app resolve through these three tiers. Set an override when
+            Anthropic ships a new model, AWS renames an inference profile, or you want to switch a specific tier
+            for cost/quality reasons. Changes apply to the next Bedrock call and survive restarts (persisted to S3).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {data.tiers.map((snap) => {
+            const meta = TIER_META[snap.tier];
+            const isOverride = snap.source === "override";
+            return (
+              <div key={snap.tier} className="space-y-2 pb-6 border-b last:border-b-0 last:pb-0">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-base font-semibold">{meta.label}</Label>
+                      {sourceBadge(snap.source)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{meta.purpose}</p>
+                    <p className="text-[11px] text-muted-foreground mt-1"><strong>Used by:</strong> {meta.usedBy}</p>
+                  </div>
+                  {isOverride && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+                      onClick={() => saveMut.mutate({ tier: snap.tier, model: null })}
+                      disabled={saveMut.isPending}
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-2">
+                  <Label className="text-xs text-muted-foreground">
+                    Effective model ID
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={drafts[snap.tier]}
+                      onChange={(e) => setDrafts({ ...drafts, [snap.tier]: e.target.value })}
+                      placeholder={snap.defaultValue}
+                      className="font-mono text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      disabled={saveMut.isPending || drafts[snap.tier] === snap.effectiveModel || !drafts[snap.tier].trim()}
+                      onClick={() => saveMut.mutate({
+                        tier: snap.tier,
+                        model: drafts[snap.tier].trim(),
+                        reason: "admin-ui",
+                      })}
+                    >
+                      Save
+                    </Button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+                    <div>
+                      <div className="font-medium text-foreground mb-0.5">Default</div>
+                      <div className="font-mono break-all">{snap.defaultValue}</div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-foreground mb-0.5">Env var</div>
+                      <div className="font-mono break-all">{snap.envValue ?? "— (unset)"}</div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-foreground mb-0.5">Override</div>
+                      <div className="font-mono break-all">{snap.override?.model ?? "— (none)"}</div>
+                    </div>
+                  </div>
+
+                  {snap.override && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Set by {snap.override.updatedBy} on {new Date(snap.override.updatedAt).toLocaleString()}
+                      {snap.override.reason ? ` — ${snap.override.reason}` : ""}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card className="border-blue-500/30 bg-blue-500/5">
+        <CardContent className="pt-4 text-xs space-y-2">
+          <p className="font-medium">Tips</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>
+              Use model IDs exactly as AWS Bedrock expects them (e.g. <code className="font-mono">us.anthropic.claude-sonnet-4-6</code> or
+              {" "}<code className="font-mono">anthropic.claude-3-5-haiku-20241022-v1:0</code>). AWS rejects unknown strings with 400.
+            </li>
+            <li>
+              Find valid IDs for your account + region via <code className="font-mono">aws bedrock list-foundation-models</code> or
+              {" "}<code className="font-mono">aws bedrock list-inference-profiles</code> (requires the matching IAM action).
+            </li>
+            <li>
+              Overriding "strong" also updates the batch-inference path — both on-demand and batch calls use the new model after save.
+            </li>
+            <li>
+              If a tier's model ID is invalid, fallback logic in the script generator and short-call pipeline silently retries on the "strong" tier. You'll see a toast or pm2 warn when this happens.
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

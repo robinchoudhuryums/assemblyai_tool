@@ -757,9 +757,19 @@ export class PostgresStorage implements IStorage {
 
   async createTranscript(transcript: InsertTranscript): Promise<Transcript> {
     const id = randomUUID();
+    // UPSERT: re-analyze of a call that already has a transcript used to
+    // throw pg 23505 on the UNIQUE(call_id) constraint. Same contract as
+    // createCallAnalysis (F-04) — a second insert for the same call_id
+    // replaces the transcript fields, keeping the original row's id so
+    // external FKs stay stable.
     const { rows } = await this.db.query(
       `INSERT INTO transcripts (id, call_id, text, confidence, words)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (call_id) DO UPDATE SET
+         text = EXCLUDED.text,
+         confidence = EXCLUDED.confidence,
+         words = EXCLUDED.words
+       RETURNING *`,
       [id, transcript.callId, transcript.text, transcript.confidence, JSON.stringify(transcript.words ?? null)],
     );
     return mapTranscript(rows[0]);
@@ -773,9 +783,17 @@ export class PostgresStorage implements IStorage {
 
   async createSentimentAnalysis(sentiment: InsertSentimentAnalysis): Promise<SentimentAnalysis> {
     const id = randomUUID();
+    // UPSERT — same rationale as createTranscript. Re-analyze of a call
+    // with an existing sentiment row previously failed on the
+    // UNIQUE(call_id) constraint; now it replaces.
     const { rows } = await this.db.query(
       `INSERT INTO sentiment_analyses (id, call_id, overall_sentiment, overall_score, segments)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (call_id) DO UPDATE SET
+         overall_sentiment = EXCLUDED.overall_sentiment,
+         overall_score = EXCLUDED.overall_score,
+         segments = EXCLUDED.segments
+       RETURNING *`,
       [id, sentiment.callId, sentiment.overallSentiment, sentiment.overallScore, JSON.stringify(sentiment.segments ?? null)],
     );
     return mapSentiment(rows[0]);

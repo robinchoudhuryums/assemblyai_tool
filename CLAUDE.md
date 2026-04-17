@@ -296,6 +296,8 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/admin/telephony/status` | admin | 8x8 telephony integration status |
 | GET | `/api/admin/pipeline-settings` | admin | Current effective quality-gate thresholds + per-field source (default / env / override) |
 | PATCH | `/api/admin/pipeline-settings` | admin | Override quality-gate thresholds (minCallDurationSec, minTranscriptLength, minTranscriptConfidence). Pass `null` on a field to clear the override. Persists to S3 (`config/pipeline-settings.json`). |
+| GET | `/api/admin/model-tiers` | admin | Current Anthropic model IDs per tier (strong/fast/reasoning) with source metadata (override / env / legacy-env / default). |
+| PATCH | `/api/admin/model-tiers` | admin | Set or clear a per-tier Bedrock model override. Body: `{ tier: "strong"\|"fast"\|"reasoning", model: string\|null, reason?: string }`. Setting "strong" also calls `aiProvider.setModel()` + `bedrockBatchService.setModel()`. Persists to S3 (`config/model-tiers.json`). |
 
 ### User Management (admin only)
 | Method | Path | Role | Description |
@@ -438,8 +440,12 @@ DATABASE_URL                    # postgresql://user:password@host:5432/dbname
 # Storage
 S3_BUCKET                       # Default: ums-call-archive (audio blobs when DB is set, everything when DB is not)
 
-# AI Model
-BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)
+# AI Model — tiered (see server/services/model-tiers.ts)
+BEDROCK_MODEL_STRONG            # Primary analysis model (Sonnet-class). Default: us.anthropic.claude-sonnet-4-6
+BEDROCK_MODEL_FAST              # Cost-optimized model (Haiku-class). Default: us.anthropic.claude-haiku-4-5-20251001
+BEDROCK_MODEL_REASONING         # Reasoning model (Opus-class). Default: us.anthropic.claude-opus-4-7 — reserved, nothing reads it today
+BEDROCK_MODEL                   # LEGACY: alias for BEDROCK_MODEL_STRONG (still respected, new deploys should use the tier-specific var)
+BEDROCK_HAIKU_MODEL             # LEGACY: alias for BEDROCK_MODEL_FAST
 BEDROCK_TIMEOUT_MS              # Bedrock Converse API timeout in ms (default: 120000 / 2 min)
 BEDROCK_EMBEDDING_TIMEOUT_MS    # Bedrock embedding API timeout in ms (default: 15000 / 15 sec)
 ASSEMBLYAI_POLL_MAX_MINUTES     # Max minutes to poll AssemblyAI before timeout (default: 5)
