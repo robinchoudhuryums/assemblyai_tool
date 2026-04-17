@@ -160,13 +160,14 @@ export class BedrockProvider implements AIAnalysisProvider {
       || !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
   }
 
-  async generateText(prompt: string): Promise<string> {
-    return withSpan("bedrock.generateText", { model: this.model, promptChars: prompt.length }, async () => {
+  async generateText(prompt: string, modelIdOverride?: string): Promise<string> {
+    const modelId = modelIdOverride || this.model;
+    return withSpan("bedrock.generateText", { model: modelId, promptChars: prompt.length }, async () => {
     const creds = await this.ensureCredentials();
 
     const region = creds.region;
     const host = `bedrock-runtime.${region}.amazonaws.com`;
-    const rawPath = `/model/${this.model}/converse`;
+    const rawPath = `/model/${modelId}/converse`;
     const url = `https://${host}${rawPath}`;
 
     const body = JSON.stringify({

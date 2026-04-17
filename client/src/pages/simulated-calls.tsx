@@ -66,6 +66,11 @@ const DEFAULT_CONFIG: SimulatedCallConfig = {
   circumstances: [],
 };
 
+const DEFAULT_TURNS_TEXT = [
+  "Thank you for calling, how can I help?",
+  "Hi, I had a question about my order.",
+] as const;
+
 const EMPTY_SCRIPT: SimulatedCallScript = {
   title: "",
   scenario: "",
@@ -73,10 +78,24 @@ const EMPTY_SCRIPT: SimulatedCallScript = {
   equipment: "",
   voices: { agent: "pNInz6obpgDQGcFmaJgB", customer: "21m00Tcm4TlvDq8ikWAM" },
   turns: [
-    { speaker: "agent", text: "Thank you for calling UMS, how can I help?" },
-    { speaker: "customer", text: "Hi, I had a question about my order." },
+    { speaker: "agent", text: DEFAULT_TURNS_TEXT[0] },
+    { speaker: "customer", text: DEFAULT_TURNS_TEXT[1] },
   ],
 };
+
+/**
+ * Returns true if the user has customized the turn list — more than the
+ * two default turns, or different text in the defaults. Used to decide
+ * whether to confirm before the Scenario Generator overwrites the turns.
+ */
+function hasCustomizedTurns(turns: SimulatedCallScript["turns"]): boolean {
+  if (turns.length !== 2) return true;
+  const [a, b] = turns;
+  if (a.speaker !== "agent" || b.speaker !== "customer") return true;
+  const aText = (a as { text?: string }).text ?? "";
+  const bText = (b as { text?: string }).text ?? "";
+  return aText !== DEFAULT_TURNS_TEXT[0] || bText !== DEFAULT_TURNS_TEXT[1];
+}
 
 function statusBadge(status: SimulatedCallStatus) {
   const variants: Record<SimulatedCallStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -590,6 +609,29 @@ function GenerateForm({
       toast({ title: "Missing fields", description: "Title and at least one turn are required.", variant: "destructive" });
       return;
     }
+    // Surface empty turn text up-front so the user doesn't round-trip to
+    // the server for a Zod min(1) rejection on `script.turns.N.text` /
+    // `script.turns.N.interruptText`. These are the most common sources
+    // of a 400 from the generate endpoint when a user adds a turn via
+    // the "+ Agent" / "+ Customer" / "+ Hold" buttons and forgets to
+    // fill in the text box.
+    const emptyTurnIndexes: number[] = [];
+    finalScript.turns.forEach((turn, idx) => {
+      if (turn.speaker === "hold") return;
+      const text = (turn as { text?: string }).text ?? "";
+      const interruptText =
+        turn.speaker === "interrupt" ? (turn.interruptText ?? "") : "";
+      if (!text.trim()) emptyTurnIndexes.push(idx);
+      else if (turn.speaker === "interrupt" && !interruptText.trim()) emptyTurnIndexes.push(idx);
+    });
+    if (emptyTurnIndexes.length > 0) {
+      toast({
+        title: "Empty turns found",
+        description: `Turn${emptyTurnIndexes.length > 1 ? "s" : ""} ${emptyTurnIndexes.map(i => i + 1).join(", ")} ha${emptyTurnIndexes.length > 1 ? "ve" : "s"} no text. Fill in each turn or remove the blank ones before generating.`,
+        variant: "destructive",
+      });
+      return;
+    }
     generateMut.mutate({ script: finalScript, config });
   };
 
@@ -874,7 +916,8 @@ function FormScriptBuilder({
       </div>
 
       <div className="border-t pt-4">
-        <div className="flex items-center justify-between mb-2">
+        <ScenarioGeneratorButton script={script} setScript={setScript} />
+        <div className="flex items-center justify-between mb-2 mt-4">
           <Label>Turns ({script.turns.length})</Label>
           <div className="flex gap-2">
             <Button type="button" size="sm" variant="outline" onClick={() => addTurn("agent")}>
@@ -1011,6 +1054,175 @@ function voiceMetaLine(voice: Voice): string {
  * voices. Each row has a ▶ button that plays the voice's preview clip
  * via a single shared <audio> element (only one preview plays at a time).
  */
+// ─────────────────────────────────────────────────────────────
+// Scenario Generator — "Generate turns from title + scenario" button
+// above the Turns section. Calls Bedrock via the
+// /api/admin/simulated-calls/generate-from-scenario endpoint to cold-start
+// the dialogue. Haiku is the default model (fast + cheap); toggle uses
+// Sonnet for higher quality. Always visible but gated on title being
+// non-empty. Confirms before overwriting customized turns.
+// ─────────────────────────────────────────────────────────────
+function ScenarioGeneratorButton({
+  script,
+  setScript,
+}: {
+  script: SimulatedCallScript;
+  setScript: (s: SimulatedCallScript) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [targetTurns, setTargetTurns] = useState(10);
+  const [useSonnet, setUseSonnet] = useState(false);
+  const { toast } = useToast();
+
+  const generateMut = useMutation({
+    mutationFn: async () => {
+      const body = {
+        title: script.title,
+        scenario: script.scenario || undefined,
+        equipment: script.equipment || undefined,
+        qualityTier: script.qualityTier,
+        voices: script.voices,
+        targetTurnCount: targetTurns,
+        useSonnet,
+      };
+      const res = await apiRequest(
+        "POST",
+        "/api/admin/simulated-calls/generate-from-scenario",
+        body,
+      );
+      return (await res.json()) as { script: SimulatedCallScript; modelTier: string };
+    },
+    onSuccess: (data) => {
+      setScript({
+        ...script,
+        // Replace only the turns — keep the admin's other fields
+        // (title, scenario, qualityTier, equipment, voices) authoritative.
+        turns: data.script.turns,
+      });
+      toast({
+        title: "Turns generated",
+        description: `${data.script.turns.length} turns (${data.modelTier}). Review + edit as needed.`,
+      });
+      setOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Generation failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleOpen = () => {
+    if (!script.title.trim()) {
+      toast({
+        title: "Title required",
+        description: "Fill in the Title field first — the generator uses it + scenario to write the dialogue.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (hasCustomizedTurns(script.turns)) {
+      const ok = confirm(
+        "You have turns that differ from the defaults. Generating will REPLACE them with AI-generated dialogue. Continue?",
+      );
+      if (!ok) return;
+    }
+    setOpen(true);
+  };
+
+  return (
+    <div className="rounded-md border border-purple-400/40 bg-purple-500/5 p-3 flex items-center justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 font-medium text-sm">
+          <Sparkle className="w-4 h-4 text-purple-600" weight="fill" />
+          Generate turns from title + scenario
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Let AI write the dialogue from your title + scenario description. Haiku by default (~$0.003); Sonnet option for richer dialogue (~$0.034).
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="border-purple-500/50 text-purple-700 hover:bg-purple-500/10 shrink-0"
+        onClick={handleOpen}
+      >
+        <Sparkle className="w-4 h-4 mr-1" />
+        Generate
+      </Button>
+
+      <Dialog open={open} onOpenChange={(v) => !v && setOpen(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkle className="w-5 h-5" />
+              Generate turns from scenario
+            </DialogTitle>
+            <DialogDescription>
+              Target a turn count and model quality. The AI will write all turns from scratch using your title + scenario description.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-md bg-muted p-3 text-xs space-y-1">
+              <div><span className="text-muted-foreground">Title:</span> {script.title || <em>(empty)</em>}</div>
+              {script.scenario && <div><span className="text-muted-foreground">Scenario:</span> {script.scenario}</div>}
+              <div><span className="text-muted-foreground">Quality tier:</span> {script.qualityTier}</div>
+            </div>
+
+            <div>
+              <Label>
+                Target turns: {targetTurns} {targetTurns > 20 && <span className="text-xs text-amber-600">(long call)</span>}
+              </Label>
+              <Slider
+                value={[targetTurns]}
+                onValueChange={([v]) => setTargetTurns(v)}
+                min={4}
+                max={30}
+                step={1}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Model may produce ±20%. Typical 2–3 minute call is 8–12 turns.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="cursor-pointer">Use Sonnet (higher quality)</Label>
+                <p className="text-xs text-muted-foreground">~10× cost. Richer dialogue but Haiku is usually enough.</p>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={useSonnet}
+                onChange={(e) => setUseSonnet(e.target.checked)}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => generateMut.mutate()}
+              disabled={generateMut.isPending}
+            >
+              {generateMut.isPending ? (
+                <SpinnerGap className="w-4 h-4 animate-spin mr-2" />
+              ) : (
+                <Sparkle className="w-4 h-4 mr-2" />
+              )}
+              Generate turns
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // Single turn row with an expandable per-turn voice-settings panel.
 // The settings toggle is only shown for spoken + interrupt turns

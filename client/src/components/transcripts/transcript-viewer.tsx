@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, DownloadSimple, FileText, Flag, FloppyDisk, Gauge, MagnifyingGlass, Pause, PencilSimple, Play, Shield, ShieldStar, SkipForward, Trophy, Warning, X } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, DownloadSimple, FileText, Flag, FloppyDisk, Gauge, MagnifyingGlass, Pause, PencilSimple, Play, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
@@ -34,6 +36,15 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioReady, setAudioReady] = useState(false);
+  // Volume + mute state. Persisted per-session in localStorage so a user's
+  // preferred level sticks across navigations. Falls back to full volume.
+  const [volume, setVolume] = useState<number>(() => {
+    if (typeof window === "undefined") return 1;
+    const raw = localStorage.getItem("transcript-audio-volume");
+    const parsed = raw ? parseFloat(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 1;
+  });
+  const [muted, setMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const queryClient = useQueryClient();
 
@@ -51,6 +62,21 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       return next;
     });
   }, []);
+
+  // Apply volume / mute to the audio element whenever they change. Also
+  // persist the volume so the user's preferred level sticks across
+  // navigations. Mute is session-only (not persisted) — restoring muted
+  // on page load would be surprising.
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = volume;
+    audioRef.current.muted = muted;
+  }, [volume, muted]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("transcript-audio-volume", String(volume)); } catch { /* quota */ }
+    }
+  }, [volume]);
 
   // Manual edit state
   const [isEditing, setIsEditing] = useState(false);
@@ -568,6 +594,51 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             <Gauge className="w-3 h-3 mr-1" />
             {playbackRate}x
           </Button>
+          {/* Volume control — popover with a slider + mute toggle. Volume
+              persists to localStorage; mute is session-only. */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+                title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              >
+                {muted || volume === 0
+                  ? <SpeakerX className="w-4 h-4" />
+                  : volume < 0.5
+                    ? <SpeakerLow className="w-4 h-4" />
+                    : <SpeakerHigh className="w-4 h-4" />}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-48 p-3" align="end">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Volume</span>
+                  <button
+                    type="button"
+                    onClick={() => setMuted((v) => !v)}
+                    className="text-foreground hover:underline"
+                  >
+                    {muted ? "Unmute" : "Mute"}
+                  </button>
+                </div>
+                <Slider
+                  value={[muted ? 0 : volume]}
+                  onValueChange={([v]) => {
+                    setVolume(v);
+                    if (v > 0 && muted) setMuted(false);
+                  }}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                />
+                <div className="text-[10px] text-muted-foreground text-right">
+                  {Math.round((muted ? 0 : volume) * 100)}%
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
@@ -926,6 +997,34 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 )}
               </div>
             </div>
+            );
+          })()}
+
+          {/* AI Analysis Skipped banner — surfaced prominently when the
+              pipeline quality gate fired (empty transcript or low transcript
+              confidence). Without this, the UI fell back to showing the
+              default score (~5.0) and a verbatim transcript excerpt as the
+              summary, which made it look like the call had been analyzed. */}
+          {call.analysis?.flags && Array.isArray(call.analysis.flags) && (() => {
+            const flagStrs = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
+            const emptyTranscript = flagStrs.includes("empty_transcript");
+            const lowQuality = flagStrs.includes("low_transcript_quality");
+            if (!emptyTranscript && !lowQuality) return null;
+            const reason = emptyTranscript
+              ? "the transcript was empty or under 10 characters"
+              : "the transcript confidence was below 60%";
+            return (
+              <div role="alert" className="rounded-lg p-4 border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900">
+                <h4 className="font-semibold mb-1 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                  <Warning className="w-4 h-4" /> AI analysis skipped
+                </h4>
+                <p className="text-sm text-amber-900 dark:text-amber-200">
+                  The AI scoring step was not run on this call because {reason}. Any score, summary, or feedback shown below is a placeholder — treat them as unavailable rather than as AI-generated insights.
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-300 mt-2">
+                  Re-analysis won't help: it re-transcribes the same audio and will hit the same gate. Re-upload higher-quality audio instead.
+                </p>
+              </div>
             );
           })()}
 

@@ -73,7 +73,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { theme, setTheme } = useAppearance();
-  const { companyName } = useConfig();
+  const { appName } = useConfig();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -86,24 +86,32 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Listen for WebSocket call completion events
+  // Listen for WebSocket call completion events. Only terminal statuses
+  // (completed / failed) create notifications — the pipeline broadcasts a
+  // `ws:call_update` event for every step (uploading / transcribing /
+  // analyzing / storing / etc.), and without this filter the notifications
+  // drawer fills with one entry per pipeline step per file. Intermediate
+  // steps are still used for progress indication by other components
+  // (file-upload, calls-table); only the bell menu is deduped here.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.callId) {
-        const type = detail.status === "failed" ? "failed" as const : "completed" as const;
-        const message = detail.status === "failed"
-          ? `Call analysis failed`
-          : detail.label || `Call analysis completed`;
-        setNotifications(prev => [{
-          id: `${detail.callId}-${Date.now()}`,
-          callId: detail.callId,
-          type,
-          message,
-          timestamp: new Date(),
-          read: false,
-        }, ...prev].slice(0, MAX_NOTIFICATIONS));
-      }
+      if (!detail?.callId) return;
+      const isCompleted = detail.status === "completed";
+      const isFailed = detail.status === "failed";
+      if (!isCompleted && !isFailed) return; // skip intermediate pipeline steps
+      const type = isFailed ? "failed" as const : "completed" as const;
+      const message = isFailed
+        ? "Call analysis failed"
+        : (detail.label || "Call analysis completed");
+      setNotifications(prev => [{
+        id: `${detail.callId}-${Date.now()}`,
+        callId: detail.callId,
+        type,
+        message,
+        timestamp: new Date(),
+        read: false,
+      }, ...prev].slice(0, MAX_NOTIFICATIONS));
     };
     window.addEventListener("ws:call_update", handler);
     return () => window.removeEventListener("ws:call_update", handler);
@@ -188,7 +196,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             <Waveform className="text-primary-foreground w-4 h-4" />
           </div>
           <div>
-            <h1 className="font-bold text-lg text-foreground">{companyName}</h1>
+            <h1 className="font-bold text-lg text-foreground">{appName}</h1>
             <p className="text-xs text-muted-foreground">Pro Dashboard</p>
           </div>
         </div>

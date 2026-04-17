@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowCounterClockwise, ArrowDown, ArrowUp, ArrowsDownUp, BookmarkSimple, CaretLeft, CaretRight, CheckSquare, DownloadSimple, Eye, FileArrowDown, FileAudio, Play, ShieldStar, Square, Star, Trash, Trophy, UserCheck, Warning, Waveform, X } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, ArrowDown, ArrowUp, ArrowsDownUp, BookmarkSimple, CaretLeft, CaretRight, CheckSquare, DownloadSimple, Eye, FileArrowDown, FileAudio, Pause, Play, ShieldStar, Square, Star, Trash, Trophy, UserCheck, Warning, Waveform, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +68,55 @@ export default function CallsTable() {
 
   // Confirm dialog state
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; callId?: string; bulk?: boolean }>({ open: false });
+
+  // Inline audio preview state for the row-level Play button. A single
+  // shared HTMLAudioElement is created on first use so multiple rows never
+  // play simultaneously. Paused on unmount.
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause();
+    };
+  }, []);
+  const togglePlay = (callId: string) => {
+    if (playingId === callId) {
+      audioRef.current?.pause();
+      setPlayingId(null);
+      return;
+    }
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.addEventListener("ended", () => setPlayingId(null));
+      audioRef.current.addEventListener("pause", () => {
+        // Only clear when the pause wasn't triggered by us swapping src.
+        if (audioRef.current?.ended) setPlayingId(null);
+      });
+    }
+    audioRef.current.src = `/api/calls/${callId}/audio`;
+    audioRef.current.play()
+      .then(() => setPlayingId(callId))
+      .catch((err) => {
+        setPlayingId(null);
+        toast({
+          title: "Couldn't play audio",
+          description: err?.message || "The audio file may be missing or unavailable.",
+          variant: "destructive",
+        });
+      });
+  };
+
+  const handleDownloadAudio = (call: CallWithDetails) => {
+    // Temp anchor with `download` attr triggers save-as without navigating
+    // away from the page. `?download=true` makes the server set
+    // Content-Disposition: attachment so the filename sticks.
+    const a = document.createElement("a");
+    a.href = `/api/calls/${call.id}/audio?download=true`;
+    a.download = call.fileName || `call-${call.id}.mp3`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -247,6 +296,21 @@ export default function CallsTable() {
 
   const handleBulkReanalyze = () => {
     if (selectedIds.size === 0) return;
+    // Warn if any selected call was quality-gated during the original run —
+    // re-analysis re-transcribes the same audio, which will hit the same
+    // quality gate (low confidence / empty transcript). The admin should
+    // re-upload cleaner audio instead. Allow the run if the user confirms.
+    const gatedCalls = calls.filter((c) => {
+      if (!selectedIds.has(c.id)) return false;
+      const flags = (c.analysis?.flags as unknown[] | undefined) ?? [];
+      return flags.some((f) => f === "low_transcript_quality" || f === "empty_transcript");
+    });
+    if (gatedCalls.length > 0) {
+      const proceed = confirm(
+        `${gatedCalls.length} of the selected call${gatedCalls.length > 1 ? "s were" : " was"} flagged as low transcript quality. Re-analyzing won't improve the result — the same audio will hit the same quality gate. Re-upload higher-quality audio instead.\n\nContinue anyway?`,
+      );
+      if (!proceed) return;
+    }
     reanalyzeMutation.mutate(Array.from(selectedIds));
   };
 
@@ -660,8 +724,26 @@ export default function CallsTable() {
                         <Eye className="w-4 h-4" />
                       </Button>
                     </Link>
-                    <Button size="sm" variant="ghost" aria-label="Play audio"><Play className="w-4 h-4" /></Button>
-                    <Button size="sm" variant="ghost" aria-label="Download audio" disabled={call.status !== 'completed'}><DownloadSimple className="w-4 h-4" /></Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={playingId === call.id ? "Pause audio" : "Play audio"}
+                      onClick={() => togglePlay(call.id)}
+                      disabled={call.status === "processing" || call.status === "failed"}
+                    >
+                      {playingId === call.id
+                        ? <Pause className="w-4 h-4" weight="fill" />
+                        : <Play className="w-4 h-4" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label="Download audio"
+                      onClick={() => handleDownloadAudio(call)}
+                      disabled={call.status !== "completed"}
+                    >
+                      <DownloadSimple className="w-4 h-4" />
+                    </Button>
                     <Button
                       size="sm" variant="ghost" className="text-red-500 hover:text-red-600"
                       aria-label="Delete call" onClick={() => handleDelete(call.id)} disabled={deleteMutation.isPending}

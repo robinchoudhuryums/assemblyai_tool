@@ -294,6 +294,8 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/admin/calibration/analyze` | admin | Trigger manual calibration analysis (query: `days`) |
 | POST | `/api/admin/calibration/apply` | admin | Apply recommended calibration values (guard rail: ±0.5 max shift) |
 | GET | `/api/admin/telephony/status` | admin | 8x8 telephony integration status |
+| GET | `/api/admin/pipeline-settings` | admin | Current effective quality-gate thresholds + per-field source (default / env / override) |
+| PATCH | `/api/admin/pipeline-settings` | admin | Override quality-gate thresholds (minCallDurationSec, minTranscriptLength, minTranscriptConfidence). Pass `null` on a field to clear the override. Persists to S3 (`config/pipeline-settings.json`). |
 
 ### User Management (admin only)
 | Method | Path | Role | Description |

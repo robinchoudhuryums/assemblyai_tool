@@ -64,7 +64,22 @@ export function sendError(res: Response, status: number, message: string): void 
 
 /** Send a 400 with Zod validation errors (always uses .flatten() for consistency). */
 export function sendValidationError(res: Response, message: string, zodError: ZodError): void {
-  res.status(400).json({ message, errors: zodError.flatten() });
+  // Include BOTH .flatten() (backward compat — existing clients parse
+  // `errors.fieldErrors`) and an `issues` array that preserves the full
+  // dot-path to each failing field. `.flatten()` collapses
+  // `["script","voices","agent"]` to `fieldErrors.script`, which makes
+  // nested-field debugging impossible from the response body alone.
+  // `issues` keeps the original Zod path so operators can pinpoint the
+  // exact failing subfield ("script.voices.agent" vs "script.title" etc.).
+  res.status(400).json({
+    message,
+    errors: zodError.flatten(),
+    issues: zodError.issues.map((i) => ({
+      path: i.path.join("."),
+      code: i.code,
+      message: i.message,
+    })),
+  });
 }
 
 /** Parse an integer query param with bounds, returning defaultVal on NaN/missing. */

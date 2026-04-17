@@ -12,6 +12,8 @@ import { getDroppedAuditEntryCount, getPendingAuditEntryCount } from "../service
 import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
 import { getBedrockCircuitBreakerState } from "../services/bedrock";
 import { is8x8Enabled } from "../services/telephony-8x8";
+import { getPipelineSettingsWithMeta, setPipelineSettings } from "../services/pipeline-settings";
+import { z } from "zod";
 
 export function registerOperationsRoutes(
   router: Router,
@@ -349,5 +351,59 @@ export function registerOperationsRoutes(
       configured: !!(process.env.TELEPHONY_8X8_API_KEY && process.env.TELEPHONY_8X8_SUBACCOUNT_ID),
       pollIntervalMinutes: parseInt(process.env.TELEPHONY_8X8_POLL_MINUTES || "15", 10),
     });
+  });
+
+  // ==================== PIPELINE QUALITY-GATE SETTINGS ====================
+  // Runtime-tunable thresholds that control when the audio-processing
+  // pipeline skips Bedrock analysis. Admins can relax these (e.g. to run
+  // AI on low-confidence synthetic calls) or tighten them (to save spend
+  // on borderline recordings). Persisted to S3; survives restarts.
+
+  router.get("/api/admin/pipeline-settings", requireRole("admin"), (_req, res) => {
+    res.json(getPipelineSettingsWithMeta());
+  });
+
+  // Use z.null() to allow the caller to clear an override and fall back
+  // to the env/default baseline. `undefined` on a key means "unchanged".
+  const pipelineSettingsPatchSchema = z.object({
+    minCallDurationSec: z.number().min(0).max(600).nullable().optional(),
+    minTranscriptLength: z.number().min(0).max(10_000).nullable().optional(),
+    minTranscriptConfidence: z.number().min(0).max(1).nullable().optional(),
+  }).strict();
+
+  router.patch("/api/admin/pipeline-settings", requireRole("admin"), async (req, res) => {
+    const parsed = pipelineSettingsPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid pipeline settings patch",
+        errors: parsed.error.flatten(),
+        issues: parsed.error.issues.map((i) => ({
+          path: i.path.join("."),
+          code: i.code,
+          message: i.message,
+        })),
+      });
+    }
+    // Normalize: z.null() means "clear override" → pass undefined to the service.
+    const patch: Partial<Record<"minCallDurationSec" | "minTranscriptLength" | "minTranscriptConfidence", number | undefined>> = {};
+    (Object.keys(parsed.data) as Array<keyof typeof parsed.data>).forEach((key) => {
+      const v = parsed.data[key];
+      if (v === null) patch[key] = undefined;
+      else if (typeof v === "number") patch[key] = v;
+    });
+    try {
+      const updated = await setPipelineSettings(patch, req.user?.username || "admin");
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "update_pipeline_settings",
+        resourceType: "pipeline_settings",
+        detail: JSON.stringify(patch),
+      });
+      res.json(updated);
+    } catch (err) {
+      logger.error("pipeline-settings: PATCH failed", { error: (err as Error).message });
+      res.status(500).json({ message: "Failed to update pipeline settings" });
+    }
   });
 }

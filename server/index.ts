@@ -459,6 +459,12 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // BEDROCK_MODEL is the fallback.
   void import("./services/active-model").then(m => m.loadActiveModelOverride()).catch(() => {});
 
+  // Hydrate pipeline quality-gate settings from S3 so an admin's tuning
+  // (via PATCH /api/admin/pipeline-settings) survives restart. Fire-and-
+  // forget — the in-memory defaults from env vars remain effective if
+  // S3 is unreachable.
+  void import("./services/pipeline-settings").then(m => m.loadPipelineSettings()).catch(() => {});
+
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
 

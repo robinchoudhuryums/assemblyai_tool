@@ -17,7 +17,17 @@ import {
  * and the company name without re-fetching.
  */
 export interface AppConfig {
+  /**
+   * Tenant's company name — used by backend AI prompts (coaching,
+   * snapshots, transcription word boost). NOT the brand shown in UI
+   * chrome; use `appName` for that.
+   */
   companyName: string;
+  /**
+   * Product brand for UI chrome (login page title, sidebar header).
+   * Hardcoded server-side; not tenant-tunable.
+   */
+  appName: string;
   scoring: {
     lowScoreThreshold: number;
     highScoreThreshold: number;
@@ -30,6 +40,7 @@ export interface AppConfig {
 
 const FALLBACK_CONFIG: AppConfig = {
   companyName: DEFAULT_COMPANY_NAME,
+  appName: "CallAnalyzer",
   scoring: {
     lowScoreThreshold: LOW_SCORE_THRESHOLD,
     highScoreThreshold: HIGH_SCORE_THRESHOLD,
