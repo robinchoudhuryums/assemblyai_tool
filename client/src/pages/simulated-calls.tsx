@@ -20,7 +20,8 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Microphone, Pause, Play, Plus, SpinnerGap, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Microphone, Pause, Play, Plus, SpinnerGap, Sparkle, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
 import type {
   SimulatedCall,
   SimulatedCallStatus,
@@ -184,6 +185,7 @@ function LibraryTable({
   onPlay: (id: string | null) => void;
 }) {
   const { toast } = useToast();
+  const [variantSource, setVariantSource] = useState<SimulatedCall | null>(null);
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/admin/simulated-calls/${id}`),
@@ -280,6 +282,15 @@ function LibraryTable({
                           Analyze
                         </Button>
                       )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-purple-500/40 text-purple-600 hover:bg-purple-500/10"
+                        onClick={() => setVariantSource(c)}
+                      >
+                        <Sparkle className="w-4 h-4 mr-1" />
+                        Variation
+                      </Button>
                     </>
                   )}
                   <Button
@@ -307,7 +318,196 @@ function LibraryTable({
           </Card>
         );
       })}
+      <VariationDialog source={variantSource} onClose={() => setVariantSource(null)} />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Variation dialog — calls the Bedrock rewriter preview endpoint,
+// then lets the admin confirm + queue generation. Two-step flow:
+// preview → confirm. The admin sees the rewritten script before
+// spending TTS credits.
+// ─────────────────────────────────────────────────────────────
+function VariationDialog({
+  source,
+  onClose,
+}: {
+  source: SimulatedCall | null;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [circumstances, setCircumstances] = useState<Circumstance[]>([]);
+  const [targetTier, setTargetTier] = useState<"poor" | "acceptable" | "excellent" | "inherit">("inherit");
+  const [preview, setPreview] = useState<SimulatedCallScript | null>(null);
+
+  // Reset state each time a new source is opened.
+  useEffect(() => {
+    if (source) {
+      setCircumstances([]);
+      setTargetTier("inherit");
+      setPreview(null);
+    }
+  }, [source?.id]);
+
+  const rewriteMut = useMutation({
+    mutationFn: async () => {
+      if (!source) throw new Error("no source");
+      const body: Record<string, unknown> = { circumstances };
+      if (targetTier !== "inherit") body.targetQualityTier = targetTier;
+      const res = await apiRequest("POST", `/api/admin/simulated-calls/${source.id}/rewrite`, body);
+      return res.json() as Promise<{ sourceId: string; script: SimulatedCallScript }>;
+    },
+    onSuccess: (data) => {
+      setPreview(data.script);
+    },
+    onError: (e: Error) => toast({ title: "Rewrite failed", description: e.message, variant: "destructive" }),
+  });
+
+  const generateMut = useMutation({
+    mutationFn: async () => {
+      if (!preview || !source) throw new Error("no preview");
+      const script = preview;
+      // Build a config that carries the circumstances so the Library shows
+      // them as badges, and the rule-based modifiers compose on top at
+      // generation time (unless the admin clears them here).
+      const config = { ...(source.config ?? {}), circumstances };
+      const res = await apiRequest("POST", "/api/admin/simulated-calls/generate", { script, config });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/simulated-calls"] });
+      toast({ title: "Variation queued", description: "Generation will complete shortly." });
+      onClose();
+    },
+    onError: (e: Error) => toast({ title: "Generation failed", description: e.message, variant: "destructive" }),
+  });
+
+  const toggleCirc = (c: Circumstance) => {
+    setCircumstances((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+    setPreview(null); // invalidate any prior preview when selection changes
+  };
+
+  return (
+    <Dialog open={!!source} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkle className="w-5 h-5" />
+            Create Variation
+          </DialogTitle>
+          <DialogDescription>
+            Pick circumstances and the AI will rewrite the script. Preview before spending TTS credits. Rewrite cost: ~$0.003 on Haiku / ~$0.034 on Sonnet.
+          </DialogDescription>
+        </DialogHeader>
+
+        {!preview ? (
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs uppercase text-muted-foreground">Source</Label>
+              <p className="text-sm font-medium">{source?.title}</p>
+            </div>
+
+            <div>
+              <Label className="mb-2 block">Circumstances (1–4)</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {CIRCUMSTANCE_VALUES.map((c) => {
+                  const active = circumstances.includes(c);
+                  const meta = CIRCUMSTANCE_META[c];
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => toggleCirc(c)}
+                      className={
+                        "text-left px-3 py-2 rounded-md border text-sm transition-colors " +
+                        (active ? "bg-primary/10 border-primary/50" : "border-border hover:bg-muted")
+                      }
+                    >
+                      <div className="flex items-center justify-between">
+                        <span>{meta.label}</span>
+                        {active && <CheckCircle className="w-4 h-4 text-green-600" weight="fill" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <Label>Target quality tier</Label>
+              <Select value={targetTier} onValueChange={(v) => setTargetTier(v as any)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">Inherit from source ({source?.qualityTier})</SelectItem>
+                  <SelectItem value="poor">Poor</SelectItem>
+                  <SelectItem value="acceptable">Acceptable</SelectItem>
+                  <SelectItem value="excellent">Excellent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+              <Button
+                onClick={() => rewriteMut.mutate()}
+                disabled={rewriteMut.isPending || circumstances.length === 0 || circumstances.length > 4}
+              >
+                {rewriteMut.isPending ? <SpinnerGap className="w-4 h-4 animate-spin mr-2" /> : <Sparkle className="w-4 h-4 mr-2" />}
+                Preview rewrite
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs uppercase text-muted-foreground">Rewritten script</Label>
+              <p className="text-sm font-medium">{preview.title}</p>
+              {preview.scenario && (
+                <p className="text-xs text-muted-foreground mt-1">{preview.scenario}</p>
+              )}
+            </div>
+
+            <ScrollArea className="h-72 border rounded-md p-3 bg-muted/30">
+              <div className="space-y-2 text-sm">
+                {preview.turns.map((t, i) => {
+                  if (t.speaker === "hold") {
+                    return (
+                      <div key={i} className="italic text-muted-foreground">
+                        — hold, {t.duration}s —
+                      </div>
+                    );
+                  }
+                  const label = t.speaker === "interrupt" ? `${t.primarySpeaker} (interrupt)` : t.speaker;
+                  const text = t.speaker === "interrupt" ? `${t.text} / [${t.interruptText}]` : t.text;
+                  return (
+                    <div key={i}>
+                      <span className="font-medium capitalize text-xs">{label}:</span>{" "}
+                      <span>{text}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+
+            <div className="text-xs text-muted-foreground">
+              {preview.turns.length} turns · Clicking Generate will queue a new simulated call using this rewritten script and the selected circumstances as config metadata.
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreview(null)}>Back</Button>
+              <Button
+                onClick={() => generateMut.mutate()}
+                disabled={generateMut.isPending}
+              >
+                {generateMut.isPending ? <SpinnerGap className="w-4 h-4 animate-spin mr-2" /> : null}
+                Generate variation
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

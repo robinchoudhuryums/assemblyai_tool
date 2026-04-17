@@ -28,15 +28,23 @@ import {
   isSimulatedCallsAvailable,
   warnSimulatedCallsUnavailableOnce,
 } from "../services/simulated-call-storage";
-import { generateSimulatedCallRequestSchema } from "@shared/simulated-call-schema";
+import {
+  generateSimulatedCallRequestSchema,
+  circumstanceSchema,
+} from "@shared/simulated-call-schema";
 import { elevenLabsClient, type ElevenLabsVoice } from "../services/elevenlabs-client";
 import { isFfmpegAvailable } from "../services/audio-stitcher";
 import { broadcastSimulatedCallUpdate } from "../services/websocket";
+import { rewriteScript, ScriptRewriterError } from "../services/script-rewriter";
+import { z } from "zod";
 
 const DAILY_GENERATION_CAP = Math.max(
   1,
   Math.min(parseInt(process.env.SIMULATED_CALL_DAILY_CAP || "20", 10), 500),
 );
+
+/** Upper bound on circumstances per /rewrite call. Keeps prompt size + cost bounded. */
+const CIRCUMSTANCE_LIMIT_PER_REWRITE = 4;
 
 // Simple in-memory cache for the ElevenLabs voices list. 24h TTL; the list
 // rarely changes. Shared across all admins.
@@ -284,6 +292,73 @@ export function registerSimulatedCallRoutes(
         }
         logger.error("failed to send simulated call to analysis", { error: message });
         sendError(res, 500, "Failed to send to analysis");
+      }
+    },
+  );
+
+  // ── Create variant via Bedrock rewriter (Phase B) ──────────
+  // Returns a rewritten script as a PREVIEW. The admin can then submit
+  // that script to `POST /generate` to create + queue a new simulated_call.
+  // Intentionally does NOT persist anything — this keeps the UI two-step
+  // (preview → confirm + generate) so admins see what they're paying for
+  // before spending TTS credits.
+  const rewriteBodySchema = z.object({
+    circumstances: z.array(circumstanceSchema).min(1).max(CIRCUMSTANCE_LIMIT_PER_REWRITE),
+    targetQualityTier: z.enum(["poor", "acceptable", "excellent"]).optional(),
+  });
+
+  router.post(
+    "/api/admin/simulated-calls/:id/rewrite",
+    requireAuth,
+    requireRole("admin"),
+    requireMFASetup,
+    validateIdParam,
+    async (req, res) => {
+      if (!isSimulatedCallsAvailable()) {
+        return sendError(res, 503, "Simulated calls require DATABASE_URL");
+      }
+      const parsed = rewriteBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendValidationError(res, "Invalid rewrite request", parsed.error);
+      }
+      const row = await getSimulatedCall(req.params.id);
+      if (!row) return sendError(res, 404, "Simulated call not found");
+
+      try {
+        const result = await rewriteScript({
+          baseScript: row.script,
+          circumstances: parsed.data.circumstances,
+          targetQualityTier: parsed.data.targetQualityTier,
+        });
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "rewrite_simulated_call",
+          resourceType: "simulated_call",
+          resourceId: row.id,
+          detail: `circumstances=${parsed.data.circumstances.join(",")}; tier=${parsed.data.targetQualityTier ?? "inherit"}`,
+        });
+        res.json({
+          sourceId: row.id,
+          script: result.script,
+          promptChars: result.promptChars,
+          responseChars: result.responseChars,
+        });
+      } catch (err) {
+        if (err instanceof ScriptRewriterError) {
+          const statusByStage: Record<typeof err.stage, number> = {
+            unavailable: 503,
+            model_error: 502,
+            parse_error: 502,
+            validation_error: 502,
+          };
+          return sendError(res, statusByStage[err.stage], err.message);
+        }
+        logger.error("failed to rewrite simulated call", {
+          id: row.id,
+          error: (err as Error).message,
+        });
+        sendError(res, 500, "Failed to rewrite script");
       }
     },
   );
