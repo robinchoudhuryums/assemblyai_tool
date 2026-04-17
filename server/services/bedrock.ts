@@ -160,9 +160,16 @@ export class BedrockProvider implements AIAnalysisProvider {
       || !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
   }
 
-  async generateText(prompt: string, modelIdOverride?: string): Promise<string> {
+  async generateText(prompt: string, modelIdOverride?: string, maxTokensOverride?: number): Promise<string> {
     const modelId = modelIdOverride || this.model;
-    return withSpan("bedrock.generateText", { model: modelId, promptChars: prompt.length }, async () => {
+    // Default 2048 is enough for single-document analyses but too tight
+    // for multi-turn script generation where the model has to emit a full
+    // JSON object with 10+ dialogue turns. Callers that expect larger
+    // output (script rewriter, script generator) pass a higher ceiling.
+    const maxTokens = maxTokensOverride && maxTokensOverride > 0
+      ? Math.min(maxTokensOverride, 16_384)
+      : 2048;
+    return withSpan("bedrock.generateText", { model: modelId, promptChars: prompt.length, maxTokens }, async () => {
     const creds = await this.ensureCredentials();
 
     const region = creds.region;
@@ -172,7 +179,7 @@ export class BedrockProvider implements AIAnalysisProvider {
 
     const body = JSON.stringify({
       messages: [{ role: "user", content: [{ text: prompt }] }],
-      inferenceConfig: { temperature: 0.4, maxTokens: 2048 },
+      inferenceConfig: { temperature: 0.4, maxTokens },
     });
 
     const headers = this.signBedrockRequest("POST", host, rawPath, body, region, creds);
@@ -203,7 +210,21 @@ export class BedrockProvider implements AIAnalysisProvider {
         }
 
         const result = await response.json();
-        return result.output?.message?.content?.[0]?.text || "";
+        const text = result.output?.message?.content?.[0]?.text || "";
+        // Surface truncation explicitly instead of letting the caller hit
+        // a downstream parse_error on a truncated JSON string. "max_tokens"
+        // means the model ran out of output budget mid-response.
+        if (result.stopReason === "max_tokens") {
+          logger.warn("Bedrock response truncated by maxTokens", {
+            model: modelId,
+            maxTokens,
+            outputChars: text.length,
+          });
+          throw new Error(
+            `Bedrock response truncated at maxTokens=${maxTokens} (${text.length} chars emitted). Raise the limit or shorten the prompt.`,
+          );
+        }
+        return text;
       } finally {
         clearTimeout(timeout);
       }
