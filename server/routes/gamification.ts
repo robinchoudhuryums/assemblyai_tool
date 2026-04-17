@@ -4,11 +4,12 @@
  */
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth } from "../auth";
+import { requireAuth, requireSelfOrManager } from "../auth";
 import { getLeaderboard, computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
 import { STREAK_SCORE_THRESHOLD } from "../constants";
 import { validateParams } from "./utils";
+import { logger } from "../services/logger";
 
 export function registerGamificationRoutes(router: Router): void {
   // GET /api/gamification/leaderboard — ranked list of employees with points, badges, streaks
@@ -20,13 +21,14 @@ export function registerGamificationRoutes(router: Router): void {
       const leaderboard = await getLeaderboard(selectedPeriod);
       res.json({ leaderboard, period: selectedPeriod });
     } catch (error) {
-      console.error("Leaderboard error:", (error as Error).message);
+      logger.error("leaderboard error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute leaderboard" });
     }
   });
 
-  // GET /api/gamification/badges/:employeeId — badges for a specific employee
-  router.get("/api/gamification/badges/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // GET /api/gamification/badges/:employeeId — badges for a specific employee.
+  // #1 Phase 1: restrict to self-or-manager so viewers can't see other agents' badges.
+  router.get("/api/gamification/badges/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const badges = await storage.getBadgesByEmployee(req.params.employeeId);
       // Enrich with badge metadata (label, description, icon)
@@ -41,7 +43,7 @@ export function registerGamificationRoutes(router: Router): void {
       });
       res.json(enriched);
     } catch (error) {
-      console.error("Badges error:", (error as Error).message);
+      logger.error("badges error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch badges" });
     }
   });
@@ -51,8 +53,9 @@ export function registerGamificationRoutes(router: Router): void {
     res.json(BADGE_TYPES);
   });
 
-  // GET /api/gamification/stats/:employeeId — gamification stats for a single employee
-  router.get("/api/gamification/stats/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // GET /api/gamification/stats/:employeeId — gamification stats for a single employee.
+  // #1 Phase 1: restrict to self-or-manager.
+  router.get("/api/gamification/stats/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const [badges, employee] = await Promise.all([
@@ -94,7 +97,7 @@ export function registerGamificationRoutes(router: Router): void {
         badges: enrichedBadges,
       });
     } catch (error) {
-      console.error("Gamification stats error:", (error as Error).message);
+      logger.error("gamification stats error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch gamification stats" });
     }
   });

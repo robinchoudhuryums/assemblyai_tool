@@ -45,8 +45,25 @@ jobs:
       - name: Type check
         run: npm run check
 
-      - name: Run backend unit tests
-        run: npm run test
+      - name: Run backend unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Check backend coverage threshold
+        run: |
+          # Extract statement coverage from c8 text-summary output.
+          # Fail if below 65% — currently at ~67%, gate set 2% below to
+          # catch regressions without blocking on minor fluctuation.
+          STMT=$(npm run test:coverage 2>&1 | grep "Statements" | head -1 | grep -oP '[\d.]+%' | head -1 | tr -d '%')
+          echo "Backend statement coverage: ${STMT}%"
+          if [ -z "$STMT" ]; then
+            echo "::warning::Could not parse coverage — skipping gate"
+          else
+            THRESHOLD=65
+            if [ "$(echo "$STMT < $THRESHOLD" | bc -l)" = "1" ]; then
+              echo "::error::Backend coverage ${STMT}% is below ${THRESHOLD}% threshold"
+              exit 1
+            fi
+          fi
 
       - name: Run frontend unit tests
         run: npm run test:client
@@ -55,6 +72,42 @@ jobs:
         run: npm run build
         env:
           NODE_OPTIONS: '--max-old-space-size=1536'
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          CI: true
+          SESSION_SECRET: 'ci-test-secret-e2e-only'
+          AUTH_USERS: 'testadmin:TestPass123!:admin:Test Admin,testviewer:ViewPass123!:viewer:Test Viewer'
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   audit:
     name: Dependency Audit

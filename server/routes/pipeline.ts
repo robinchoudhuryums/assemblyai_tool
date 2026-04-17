@@ -21,6 +21,7 @@ import { checkAndCreateCoachingAlert } from "../services/coaching-alerts";
 import { triggerWebhook } from "../services/webhooks";
 import { captureException } from "../services/sentry";
 import { evaluateBadges } from "../services/gamification";
+import { logger } from "../services/logger";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -37,13 +38,13 @@ function parseScheduleTime(raw: string | undefined, label: string): number | nul
   if (!raw) return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
   if (!m) {
-    console.warn(`[STARTUP] ${label}=${raw} is not HH:MM format — batch schedule window disabled.`);
+    logger.warn("batch schedule env var not HH:MM format — window disabled", { label, value: raw });
     return null;
   }
   const h = Number(m[1]);
   const mm = Number(m[2]);
   if (h < 0 || h > 23 || mm < 0 || mm > 59) {
-    console.warn(`[STARTUP] ${label}=${raw} is out of range — batch schedule window disabled.`);
+    logger.warn("batch schedule env var out of range — window disabled", { label, value: raw });
     return null;
   }
   return h * 60 + mm;
@@ -91,7 +92,7 @@ export async function processAudioFile(
   options: ProcessAudioOptions,
 ) {
   const { originalName, mimeType, callCategory, uploadedBy, processingMode, language, filePath } = options;
-  console.log(`[${callId}] Starting audio processing...`);
+  logger.info("pipeline: starting audio processing", { callId });
   broadcastCallUpdate(callId, "uploading", { step: 1, totalSteps: 6, label: "Uploading audio..." });
   try {
     // Step 1a: Get audio URL for AssemblyAI
@@ -102,36 +103,36 @@ export async function processAudioFile(
       const presigned = await storage.getAudioPresignedUrl(existingAudioFiles[0]);
       if (presigned) {
         audioUrl = presigned;
-        console.log(`[${callId}] Step 1/7: Using pre-signed S3 URL for AssemblyAI (skipping upload).`);
+        logger.info("pipeline: step 1/7 using pre-signed S3 URL for AssemblyAI", { callId });
       } else {
-        console.log(`[${callId}] Step 1/7: Pre-signed URL unavailable, uploading to AssemblyAI...`);
+        logger.info("pipeline: step 1/7 pre-signed URL unavailable, uploading to AssemblyAI", { callId });
         audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
       }
     } else {
-      console.log(`[${callId}] Step 1/7: Uploading audio file to AssemblyAI...`);
+      logger.info("pipeline: step 1/7 uploading audio file to AssemblyAI", { callId });
       audioUrl = await assemblyAIService.uploadAudioFile(audioBuffer, path.basename(filePath || originalName));
     }
-    console.log(`[${callId}] Step 1/7: Audio URL ready.`);
+    logger.info("pipeline: step 1/7 audio URL ready", { callId });
 
     // Step 1b: Archive audio to cloud storage (skip if already archived by job queue)
     // A23/F82: reuse existingAudioFiles from step 1a — no mutation between steps.
     if (existingAudioFiles.length === 0) {
-      console.log(`[${callId}] Step 1b/7: Archiving audio file to cloud storage...`);
+      logger.info("pipeline: step 1b/7 archiving audio file to cloud storage", { callId });
       try {
         await storage.uploadAudio(callId, originalName, audioBuffer, mimeType);
-        console.log(`[${callId}] Step 1b/7: Audio archived.`);
+        logger.info("pipeline: step 1b/7 audio archived", { callId });
       } catch (archiveError) {
         // A23/F83: log the error properly instead of dropping it into stringification
-        console.warn(`[${callId}] Warning: Failed to archive audio (continuing):`, (archiveError as Error).message);
+        logger.warn("pipeline: failed to archive audio (continuing)", { callId, error: (archiveError as Error).message });
         captureException(archiveError as Error, { callId, errorType: "audio_archive_failed" });
       }
     } else {
-      console.log(`[${callId}] Step 1b/7: Audio already archived, skipping.`);
+      logger.info("pipeline: step 1b/7 audio already archived, skipping", { callId });
     }
 
     // Step 2: Start transcription (with agent name word boost for correct spelling)
     broadcastCallUpdate(callId, "transcribing", { step: 2, totalSteps: 6, label: "Transcribing audio..." });
-    console.log(`[${callId}] Step 2/7: Submitting for transcription...`);
+    logger.info("pipeline: step 2/7 submitting for transcription", { callId });
 
     // Build word boost list from employee names
     let wordBoost: string[] | undefined;
@@ -158,23 +159,23 @@ export async function processAudioFile(
         wordBoost = Array.from(nameWords).slice(0, 100);
       }
     } catch (boostErr) {
-      console.warn(`[${callId}] Failed to build word boost list (non-blocking):`, (boostErr as Error).message);
+      logger.warn("pipeline: failed to build word boost list (non-blocking)", { callId, error: (boostErr as Error).message });
     }
 
     const transcriptId = await assemblyAIService.transcribeAudio(audioUrl, wordBoost, language);
-    console.log(`[${callId}] Step 2/7: Transcription submitted. Transcript ID: ${transcriptId}`);
+    logger.info("pipeline: step 2/7 transcription submitted", { callId, transcriptId });
 
     await storage.updateCall(callId, { assemblyAiId: transcriptId });
 
     // Step 3: Wait for transcription completion (webhook if available, polling fallback)
     broadcastCallUpdate(callId, "transcribing", { step: 3, totalSteps: 6, label: "Waiting for transcript..." });
-    console.log(`[${callId}] Step 3/7: Waiting for transcript results...`);
+    logger.info("pipeline: step 3/7 waiting for transcript results", { callId });
     const transcriptResponse = await assemblyAIService.waitForTranscript(transcriptId);
 
     if (!transcriptResponse || transcriptResponse.status !== 'completed') {
       throw new Error(`Transcription polling failed or did not complete. Final status: ${transcriptResponse?.status}`);
     }
-    console.log(`[${callId}] Step 3/7: Polling complete. Status: ${transcriptResponse.status}`);
+    logger.info("pipeline: step 3/7 polling complete", { callId, status: transcriptResponse.status });
 
     // Compute call duration from word-level data
     const callDurationSeconds = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
@@ -182,7 +183,7 @@ export async function processAudioFile(
     // Quality gate: skip AI analysis for empty/near-empty transcripts (prevents wasted Bedrock spend)
     const transcriptText = (transcriptResponse.text || "").trim();
     if (transcriptText.length < 10) {
-      console.warn(`[${callId}] Empty transcript (${transcriptText.length} chars) — skipping AI analysis.`);
+      logger.warn("pipeline: empty transcript — skipping AI analysis", { callId, transcriptLength: transcriptText.length });
 
       const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
       analysis.confidenceScore = "0.000";
@@ -204,14 +205,14 @@ export async function processAudioFile(
       await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
       await cleanupFile(filePath);
       broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (empty transcript)" });
-      console.log(`[${callId}] Completed with empty_transcript flag. AI analysis skipped.`);
+      logger.info("pipeline: completed with empty_transcript flag, AI analysis skipped", { callId });
       return;
     }
 
     // Quality gate: skip AI analysis for very low-confidence transcripts (#3)
     const transcriptConfidenceValue = transcriptResponse.confidence || 0;
     if (transcriptConfidenceValue < 0.6 && transcriptConfidenceValue > 0) {
-      console.warn(`[${callId}] Low transcript confidence (${(transcriptConfidenceValue * 100).toFixed(0)}%) — skipping AI analysis to avoid unreliable scoring.`);
+      logger.warn("pipeline: low transcript confidence — skipping AI analysis", { callId, confidencePct: Math.round(transcriptConfidenceValue * 100) });
 
       const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
       analysis.confidenceScore = transcriptConfidenceValue.toFixed(3);
@@ -233,7 +234,7 @@ export async function processAudioFile(
       await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
       await cleanupFile(filePath);
       broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (low quality transcript)" });
-      console.log(`[${callId}] Completed with low_transcript_quality flag. AI analysis skipped.`);
+      logger.info("pipeline: completed with low_transcript_quality flag, AI analysis skipped", { callId });
       return;
     }
 
@@ -243,7 +244,7 @@ export async function processAudioFile(
       const labeled = buildSpeakerLabeledTranscript(transcriptResponse.words);
       if (labeled) {
         speakerLabeledText = labeled;
-        console.log(`[${callId}] Built speaker-labeled transcript (${speakerLabeledText.length} chars)`);
+        logger.info("pipeline: built speaker-labeled transcript", { callId, chars: speakerLabeledText.length });
       }
     }
 
@@ -266,10 +267,10 @@ export async function processAudioFile(
             scoringWeights: tmpl.scoringWeights,
             additionalInstructions: tmpl.additionalInstructions,
           };
-          console.log(`[${callId}] Using custom prompt template: ${tmpl.name}`);
+          logger.info("pipeline: using custom prompt template", { callId, templateName: tmpl.name });
         }
       } catch (tmplError) {
-        console.warn(`[${callId}] Failed to load prompt template (using defaults):`, (tmplError as Error).message);
+        logger.warn("pipeline: failed to load prompt template (using defaults)", { callId, error: (tmplError as Error).message });
       }
     }
 
@@ -289,10 +290,10 @@ export async function processAudioFile(
         if (ragResult) {
           ragContext = ragResult.context;
           ragSources = ragResult.sources;
-          console.log(`[${callId}] RAG context retrieved (${ragContext.length} chars, ${ragSources.length} sources, confidence: ${ragResult.confidence})`);
+          logger.info("pipeline: RAG context retrieved", { callId, chars: ragContext.length, sources: ragSources.length, confidence: ragResult.confidence });
         }
       } catch (ragErr) {
-        console.warn(`[${callId}] RAG context fetch failed (non-blocking):`, (ragErr as Error).message);
+        logger.warn("pipeline: RAG context fetch failed (non-blocking)", { callId, error: (ragErr as Error).message });
       }
     })();
 
@@ -301,7 +302,7 @@ export async function processAudioFile(
       const injectionCheck = detectTranscriptInjection(speakerLabeledText);
       if (injectionCheck.detected) {
         injectionDetected = true;
-        console.warn(`[${callId}] ⚠ Prompt injection detected in transcript: ${injectionCheck.reasons.join("; ")}`);
+        logger.warn("pipeline: prompt injection detected in transcript", { callId, reasons: injectionCheck.reasons });
       }
     }
 
@@ -333,7 +334,7 @@ export async function processAudioFile(
             },
           });
         }
-        console.log(`[${callId}] Step 4/6: Deferred to batch analysis (50% cost savings).`);
+        logger.info("pipeline: step 4/6 deferred to batch analysis (50% cost savings)", { callId });
         broadcastCallUpdate(callId, "awaiting_analysis", { step: 4, totalSteps: 6, label: "Queued for batch analysis..." });
 
         const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
@@ -379,14 +380,14 @@ export async function processAudioFile(
           };
           await storage.createUsageRecord(usageRecord);
         } catch (usageErr) {
-          console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+          logger.warn("pipeline: failed to record usage (non-blocking)", { callId, error: (usageErr as Error).message });
         }
 
         await cleanupFile(filePath);
-        console.log(`[${callId}] Transcription complete, awaiting batch analysis.`);
+        logger.info("pipeline: transcription complete, awaiting batch analysis", { callId });
         return;
       } catch (batchErr) {
-        console.warn(`[${callId}] Failed to defer to batch (falling back to on-demand):`, (batchErr as Error).message);
+        logger.warn("pipeline: failed to defer to batch (falling back to on-demand)", { callId, error: (batchErr as Error).message });
       }
     }
 
@@ -394,15 +395,15 @@ export async function processAudioFile(
     const tooShortForAI = callDurationSeconds < MIN_CALL_DURATION_FOR_AI_SEC;
 
     if (tooShortForAI) {
-      console.log(`[${callId}] Step 4/6: Skipping AI analysis (call too short: ${callDurationSeconds}s). Saves ~$0.05.`);
+      logger.info("pipeline: step 4/6 skipping AI analysis (call too short)", { callId, callDurationSeconds });
     } else if (aiProvider.isAvailable && speakerLabeledText) {
       try {
         const transcriptCharCount = speakerLabeledText.length;
         const estimatedTokens = Math.ceil(transcriptCharCount / 4);
-        console.log(`[${callId}] Step 4/6: Running AI analysis (${aiProvider.name}). Transcript: ${transcriptCharCount} chars (~${estimatedTokens} tokens)`);
+        logger.info("pipeline: step 4/6 running AI analysis", { callId, provider: aiProvider.name, transcriptChars: transcriptCharCount, estimatedTokens });
 
         if (estimatedTokens > 100000) {
-          console.warn(`[${callId}] Very long transcript (${estimatedTokens} estimated tokens).`);
+          logger.warn("pipeline: very long transcript", { callId, estimatedTokens });
         }
 
         // Cost optimization: use Haiku for short routine calls (≤ 2min, no flags, no custom template)
@@ -417,9 +418,9 @@ export async function processAudioFile(
             // Rough rate differential: Sonnet $3/$15 per 1M vs Haiku $0.80/$4 per 1M.
             // Savings per call depend on in/out mix; ~70% is a typical ballpark
             // but left qualitative here rather than hard-coded.
-            console.log(`[${callId}] Using Haiku for short routine call (${callDurationSeconds}s ≤ ${HAIKU_SHORT_CALL_MAX_SEC}s, ~${estimatedTokens} tokens)`);
+            logger.info("pipeline: using Haiku for short routine call", { callId, callDurationSeconds, maxSec: HAIKU_SHORT_CALL_MAX_SEC, estimatedTokens });
           } catch (haikuErr) {
-            console.warn(`[${callId}] Haiku provider creation failed, using default model:`, (haikuErr as Error).message);
+            logger.warn("pipeline: Haiku provider creation failed, using default model", { callId, error: (haikuErr as Error).message });
           }
         }
 
@@ -431,32 +432,32 @@ export async function processAudioFile(
           const firstMsg = (firstErr as Error).message || "";
           const isParseFailure = /JSON|parse|schema/i.test(firstMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(firstMsg);
           if (isParseFailure) {
-            console.warn(`[${callId}] AI parse failure on first attempt, retrying once:`, firstMsg);
+            logger.warn("pipeline: AI parse failure on first attempt, retrying once", { callId, error: firstMsg });
             aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
           } else {
             throw firstErr;
           }
         }
-        console.log(`[${callId}] Step 4/6: AI analysis complete.`);
+        logger.info("pipeline: step 4/6 AI analysis complete", { callId });
       } catch (aiError) {
         const errMsg = (aiError as Error).message || "";
         const isParseFailure =
           /JSON|parse|schema/i.test(errMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(errMsg);
         if (isParseFailure) {
-          console.error(`[${callId}] AI returned unparseable response after retry (continuing with defaults):`, errMsg);
+          logger.error("pipeline: AI returned unparseable response after retry (continuing with defaults)", { callId, error: errMsg });
           captureException(aiError as Error, { callId, errorType: "ai_parse_failure" });
         } else {
-          console.warn(`[${callId}] AI analysis failed (continuing with defaults):`, errMsg);
+          logger.warn("pipeline: AI analysis failed (continuing with defaults)", { callId, error: errMsg });
           captureException(aiError as Error, { callId, errorType: "ai_unavailable" });
         }
       }
     } else if (!aiProvider.isAvailable) {
-      console.log(`[${callId}] Step 4/6: AI provider not configured, skipping AI analysis.`);
+      logger.info("pipeline: step 4/6 AI provider not configured, skipping AI analysis", { callId });
     }
 
     // Step 5: Process combined results
     broadcastCallUpdate(callId, "processing", { step: 5, totalSteps: 6, label: "Processing results..." });
-    console.log(`[${callId}] Step 5/6: Processing combined transcript and analysis data...`);
+    logger.info("pipeline: step 5/6 processing combined transcript and analysis data", { callId });
 
     // A4/F06: Identify agent speaker label *before* processTranscriptData so
     // talkTimeRatio is computed against the correct speaker (or null if unknown).
@@ -501,7 +502,7 @@ export async function processAudioFile(
     if (aiAnalysis?.detected_agent_name) {
       analysis.detectedAgentName = aiAnalysis.detected_agent_name;
       if (agentSpeakerLabel) {
-        console.log(`[${callId}] Agent "${aiAnalysis.detected_agent_name}" identified as Speaker ${agentSpeakerLabel}`);
+        logger.info("pipeline: agent identified as speaker", { callId, agentName: aiAnalysis.detected_agent_name, speakerLabel: agentSpeakerLabel });
         if (!analysis.confidenceFactors) analysis.confidenceFactors = {};
         (analysis.confidenceFactors as Record<string, unknown>).agentSpeakerLabel = agentSpeakerLabel;
       }
@@ -554,7 +555,7 @@ export async function processAudioFile(
       const existingFlags = (analysis.flags as string[]) || [];
       existingFlags.push("prompt_injection_detected");
       analysis.flags = existingFlags;
-      console.warn(`[${callId}] Flagged: prompt injection detected in transcript`);
+      logger.warn("pipeline: flagged — prompt injection detected in transcript", { callId });
     }
 
     // Output anomaly: check if AI response shows signs of injection bypass
@@ -565,15 +566,15 @@ export async function processAudioFile(
         const existingFlags = (analysis.flags as string[]) || [];
         existingFlags.push(`output_anomaly:${outputCheck.reason}`);
         analysis.flags = existingFlags;
-        console.warn(`[${callId}] Flagged: output anomaly — ${outputCheck.reason}`);
+        logger.warn("pipeline: flagged — output anomaly", { callId, reason: outputCheck.reason });
       }
     }
 
-    console.log(`[${callId}] Step 5/6: Data processing complete. Confidence: ${(confidenceScore * 100).toFixed(0)}%`);
+    logger.info("pipeline: step 5/6 data processing complete", { callId, confidencePct: Math.round(confidenceScore * 100) });
 
     // Step 6: Store results
     broadcastCallUpdate(callId, "saving", { step: 6, totalSteps: 6, label: "Saving results..." });
-    console.log(`[${callId}] Step 6/6: Saving analysis results...`);
+    logger.info("pipeline: step 6/6 saving analysis results", { callId });
     await storage.createTranscript(transcript);
     await storage.createSentimentAnalysis(sentiment);
     await storage.createCallAnalysis(analysis);
@@ -588,7 +589,7 @@ export async function processAudioFile(
 
       if (embeddingText.length > 20) {
         generateCallEmbedding(callId, embeddingText).catch(err => {
-          console.warn(`[${callId}] Embedding generation failed (non-blocking):`, err.message);
+          logger.warn("pipeline: embedding generation failed (non-blocking)", { callId, error: err.message });
           captureException(err as Error, { callId, errorType: "embedding_generation" });
         });
       }
@@ -607,9 +608,9 @@ export async function processAudioFile(
       ...(autoCategoryToApply ? { callCategory: autoCategoryToApply } : {}),
     });
     if (autoCategoryToApply) {
-      console.log(`[${callId}] Auto-categorized as: ${autoCategoryToApply}`);
+      logger.info("pipeline: auto-categorized call", { callId, category: autoCategoryToApply });
     }
-    console.log(`[${callId}] Step 6/6: Done. Status is now 'completed'.${autoAssigned ? " (auto-assigned)" : ""}`);
+    logger.info("pipeline: step 6/6 done, status=completed", { callId, autoAssigned });
 
     // A23/F57: fetch completed call once and reuse across coaching and webhook blocks.
     const completedCall = await storage.getCall(callId);
@@ -627,7 +628,7 @@ export async function processAudioFile(
         subScores: analysis.subScores,
         flags: analysis.flags,
       }).catch(err => {
-        console.warn(`[${callId}] Coaching alert failed (non-blocking):`, (err as Error).message);
+        logger.warn("pipeline: coaching alert failed (non-blocking)", { callId, error: (err as Error).message });
         captureException(err as Error, { callId, errorType: "coaching_alert" });
       });
 
@@ -635,7 +636,7 @@ export async function processAudioFile(
       if (finalEmployeeId) {
         const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
         evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
-          console.warn(`[${callId}] Badge evaluation failed (non-blocking):`, (err as Error).message);
+          logger.warn("pipeline: badge evaluation failed (non-blocking)", { callId, error: (err as Error).message });
           captureException(err as Error, { callId, errorType: "badge_evaluation" });
         });
       }
@@ -654,15 +655,15 @@ export async function processAudioFile(
             transcript: speakerLabeledText?.slice(0, 5000) || "",
             strengths,
           }).catch((err) => {
-            console.warn(`[${callId}] Best-practice ingestion failed (non-blocking):`, (err as Error).message);
+            logger.warn("pipeline: best-practice ingestion failed (non-blocking)", { callId, error: (err as Error).message });
             captureException(err as Error, { callId, errorType: "best_practice_ingest" });
           });
         }).catch((err) => {
-          console.warn(`[${callId}] Best-practice ingest module import failed:`, (err as Error).message);
+          logger.warn("pipeline: best-practice ingest module import failed", { callId, error: (err as Error).message });
         });
       }
     } catch (alertErr) {
-      console.warn(`[${callId}] Coaching alert check failed (non-blocking):`, (alertErr as Error).message);
+      logger.warn("pipeline: coaching alert check failed (non-blocking)", { callId, error: (alertErr as Error).message });
       captureException(alertErr as Error, { callId, errorType: "coaching_alert_setup" });
     }
 
@@ -675,7 +676,7 @@ export async function processAudioFile(
           const emp = await storage.getEmployee(employeeId);
           employeeName = emp?.name;
         } catch (empErr) {
-          console.warn(`[${callId}] Failed to look up employee name for webhook:`, (empErr as Error).message);
+          logger.warn("pipeline: failed to look up employee name for webhook", { callId, error: (empErr as Error).message });
         }
       }
 
@@ -688,7 +689,7 @@ export async function processAudioFile(
         employee: employeeName || undefined,
         fileName: originalName,
       }).catch(err => {
-        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        logger.warn("pipeline: webhook delivery failed", { callId, event: "call.completed", error: (err as Error).message });
         captureException(err as Error, { callId, errorType: "webhook_delivery" });
       });
 
@@ -700,7 +701,7 @@ export async function processAudioFile(
           employee: employeeName || undefined,
           fileName: originalName,
         }).catch(err => {
-          console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+          logger.warn("pipeline: webhook delivery failed", { callId, event: "score.low", error: (err as Error).message });
           captureException(err as Error, { callId, errorType: "webhook_delivery" });
         });
       }
@@ -713,12 +714,12 @@ export async function processAudioFile(
           employee: employeeName || undefined,
           fileName: originalName,
         }).catch(err => {
-          console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+          logger.warn("pipeline: webhook delivery failed", { callId, event: "score.exceptional", error: (err as Error).message });
           captureException(err as Error, { callId, errorType: "webhook_delivery" });
         });
       }
     } catch (webhookErr) {
-      console.warn(`[${callId}] Webhook trigger failed (non-blocking):`, (webhookErr as Error).message);
+      logger.warn("pipeline: webhook trigger failed (non-blocking)", { callId, error: (webhookErr as Error).message });
     }
 
     // Track usage/cost
@@ -758,20 +759,20 @@ export async function processAudioFile(
       };
       await storage.createUsageRecord(usageRecord);
     } catch (usageErr) {
-      console.warn(`[${callId}] Failed to record usage (non-blocking):`, (usageErr as Error).message);
+      logger.warn("pipeline: failed to record usage (non-blocking)", { callId, error: (usageErr as Error).message });
     }
 
     broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
-    console.log(`[${callId}] Processing finished successfully.`);
+    logger.info("pipeline: processing finished successfully", { callId });
 
   } catch (error) {
-    console.error(`[${callId}] A critical error occurred during audio processing:`, (error as Error).message);
+    logger.error("pipeline: critical error during audio processing", { callId, error: (error as Error).message });
     captureException(error instanceof Error ? error : new Error(String(error)), { callId, step: "processAudioFile" });
 
     try {
       await storage.updateCall(callId, { status: "failed" });
     } catch (updateErr) {
-      console.error(`[${callId}] Failed to update call status to failed:`, (updateErr as Error).message);
+      logger.error("pipeline: failed to update call status to failed", { callId, error: (updateErr as Error).message });
     }
 
     broadcastCallUpdate(callId, "failed", { label: "Processing failed" });
@@ -782,7 +783,7 @@ export async function processAudioFile(
       error: (error as Error).message,
       fileName: originalName,
     }).catch(err => {
-        console.warn(`[WEBHOOK] Delivery failed:`, (err as Error).message);
+        logger.warn("pipeline: webhook delivery failed", { callId, event: "call.failed", error: (err as Error).message });
         captureException(err as Error, { callId, errorType: "webhook_delivery" });
       });
   } finally {
@@ -803,7 +804,7 @@ async function generateCallEmbedding(callId: string, text: string): Promise<void
     const existing = await storage.getCallAnalysis(callId);
     if (existing) {
       await storage.updateCallAnalysis(callId, { embedding });
-      console.log(`[${callId}] Embedding stored (${embedding.length}-dim)`);
+      logger.info("pipeline: embedding stored", { callId, dim: embedding.length });
     }
   }
 }

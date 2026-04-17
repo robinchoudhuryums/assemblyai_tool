@@ -24,6 +24,7 @@
 import { storage } from "../storage";
 import { createHash } from "crypto";
 import { isUrlSafe } from "./url-validator";
+import { logger } from "./logger";
 
 export interface TelephonyConfig {
   enabled: boolean;
@@ -243,7 +244,7 @@ export async function ingestRecording(
         await s3Client.uploadFile(`audio/${callId}/${externalFileName}`, audioBuffer, "audio/wav");
       }
     } catch (archiveErr) {
-      console.warn(`[8x8] Failed to archive audio for ${recording.recordingId}:`, (archiveErr as Error).message);
+      logger.warn("Failed to archive audio", { recordingId: recording.recordingId, error: (archiveErr as Error).message });
     }
 
     // Submit to pipeline (non-blocking)
@@ -253,13 +254,13 @@ export async function ingestRecording(
       callCategory,
       uploadedBy: "8x8-auto-ingestion",
     }).catch(err => {
-      console.error(`[8x8] Pipeline failed for ${recording.recordingId}:`, (err as Error).message);
+      logger.error("Pipeline failed", { recordingId: recording.recordingId, error: (err as Error).message });
     });
 
-    console.log(`[8x8] Ingested recording ${recording.recordingId} → call ${callId} (ext: ${recording.extension}, ${recording.durationSeconds}s)`);
+    logger.info("Ingested recording", { recordingId: recording.recordingId, callId, extension: recording.extension, durationSeconds: recording.durationSeconds });
     return { recordingId: recording.recordingId, callId, status: "ingested" };
   } catch (error) {
-    console.error(`[8x8] Ingestion error for ${recording.recordingId}:`, (error as Error).message);
+    logger.error("Ingestion error", { recordingId: recording.recordingId, error: (error as Error).message });
     return { recordingId: recording.recordingId, callId: null, status: "error", reason: (error as Error).message };
   }
 }
@@ -273,16 +274,16 @@ export async function pollAndIngest(
   if (!is8x8Enabled()) return [];
 
   const config = getConfig();
-  console.log(`[8x8] Polling for new recordings (last ${config.pollIntervalMinutes} minutes)...`);
+  logger.info("Polling for new recordings", { pollIntervalMinutes: config.pollIntervalMinutes });
 
   try {
     const recordings = await fetchRecentRecordings();
     if (recordings.length === 0) {
-      console.log("[8x8] No new recordings found.");
+      logger.info("No new recordings found");
       return [];
     }
 
-    console.log(`[8x8] Found ${recordings.length} recording(s). Ingesting...`);
+    logger.info("Found recordings, ingesting", { count: recordings.length });
     const results: IngestionResult[] = [];
     for (const recording of recordings) {
       const result = await ingestRecording(recording, processAudioFn);
@@ -292,11 +293,11 @@ export async function pollAndIngest(
     const ingested = results.filter(r => r.status === "ingested").length;
     const dupes = results.filter(r => r.status === "duplicate").length;
     const errors = results.filter(r => r.status === "error").length;
-    console.log(`[8x8] Poll complete: ${ingested} ingested, ${dupes} duplicates, ${errors} errors.`);
+    logger.info("Poll complete", { ingested, duplicates: dupes, errors });
 
     return results;
   } catch (error) {
-    console.error("[8x8] Poll failed:", (error as Error).message);
+    logger.error("Poll failed", { error: (error as Error).message });
     return [];
   }
 }
@@ -312,15 +313,15 @@ export function startTelephonyScheduler(
     const acked = process.env.TELEPHONY_8X8_STUB_ACKNOWLEDGED === "true";
     const enabled = process.env.TELEPHONY_8X8_ENABLED === "true";
     if (enabled && !acked) {
-      console.warn("[8x8] Integration is a STUB pending API access. Refusing to start scheduler. Set TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to override.");
+      logger.warn("8x8 integration is a STUB pending API access. Refusing to start scheduler. Set TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to override.");
     } else {
-      console.log("[8x8] Telephony integration disabled (set TELEPHONY_8X8_ENABLED=true and TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to enable).");
+      logger.info("Telephony integration disabled (set TELEPHONY_8X8_ENABLED=true and TELEPHONY_8X8_STUB_ACKNOWLEDGED=true to enable)");
     }
     return () => {};
   }
 
   const config = getConfig();
-  console.log(`[8x8] Telephony auto-ingestion enabled. Polling every ${config.pollIntervalMinutes} minutes.`);
+  logger.info("Telephony auto-ingestion enabled", { pollIntervalMinutes: config.pollIntervalMinutes });
 
   // First poll after 30 seconds. .unref() so timers don't keep the event
   // loop alive past graceful shutdown.
@@ -339,5 +340,5 @@ export function startTelephonyScheduler(
 export function stopTelephonyScheduler(): void {
   if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-  console.log("[8x8] Telephony scheduler stopped.");
+  logger.info("Telephony scheduler stopped");
 }

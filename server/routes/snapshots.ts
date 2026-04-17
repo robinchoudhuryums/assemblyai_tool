@@ -9,7 +9,7 @@ import type { Router } from "express";
 import { randomUUID } from "crypto";
 import type { JobQueue } from "../services/job-queue";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { aiProvider } from "../services/ai-factory";
 import { logger } from "../services/logger";
 import { validateParams } from "./utils";
@@ -456,8 +456,10 @@ export function registerSnapshotRoutes(router: Router, deps?: { getJobQueue?: ()
 
   // ==================== VIEW SNAPSHOTS ====================
 
-  /** Get snapshots for a specific employee. */
-  router.get("/api/snapshots/employee/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  /** Get snapshots for a specific employee.
+   *  #1 Phase 1: restrict to self-or-manager. Snapshots contain AI-generated
+   *  performance narratives that are individually identifying. */
+  router.get("/api/snapshots/employee/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     const snapshots = await getSnapshots("employee", req.params.employeeId);
     res.json(snapshots);
   });

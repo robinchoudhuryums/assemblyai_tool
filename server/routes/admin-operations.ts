@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from "../auth";
 import { escapeCsvValue } from "./utils";
 import { generateReport, getReports, getReport } from "../services/scheduled-reports";
 import { bedrockBatchService, type BatchJob } from "../services/bedrock-batch";
-import { metrics } from "../services/logger";
+import { metrics, logger } from "../services/logger";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../services/auto-calibration";
 import { getCorrectionStats, getScoringQualityAlerts } from "../services/scoring-feedback";
@@ -246,7 +246,7 @@ export function registerOperationsRoutes(
       const report = await generateReport(type, req.user!.username);
       res.json(report);
     } catch (error) {
-      console.error("Report generation error:", (error as Error).message);
+      logger.error("report generation error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate report" });
     }
   });
@@ -280,7 +280,7 @@ export function registerOperationsRoutes(
       }
       res.json({ snapshot });
     } catch (error) {
-      console.error("Calibration analysis error:", (error as Error).message);
+      logger.error("calibration analysis error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to run calibration analysis" });
     }
   });
@@ -334,7 +334,7 @@ export function registerOperationsRoutes(
 
       res.json({ message: "Calibration applied", config: getCalibrationConfig() });
     } catch (error) {
-      console.error("Calibration apply error:", (error as Error).message);
+      logger.error("calibration apply error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to apply calibration" });
     }
   });

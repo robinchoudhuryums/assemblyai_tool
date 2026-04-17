@@ -28,7 +28,7 @@ export function registerUserRoutes(router: Router) {
       const users = await storage.getAllDbUsers();
       res.json(users.map(sanitizeUser));
     } catch (error) {
-      console.error("Error fetching users:", (error as Error).message);
+      logger.error("error fetching users", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
@@ -79,7 +79,7 @@ export function registerUserRoutes(router: Router) {
 
       res.status(201).json(sanitizeUser(newUser));
     } catch (error) {
-      console.error("Error creating user:", (error as Error).message);
+      logger.error("error creating user", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to create user" });
     }
   });
@@ -128,7 +128,7 @@ export function registerUserRoutes(router: Router) {
 
       res.json(sanitizeUser(updated));
     } catch (error) {
-      console.error("Error updating user:", (error as Error).message);
+      logger.error("error updating user", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to update user" });
     }
   });
@@ -190,7 +190,7 @@ export function registerUserRoutes(router: Router) {
 
       res.json({ message: "User deactivated", user: sanitizeUser(updated) });
     } catch (error) {
-      console.error("Error deactivating user:", (error as Error).message);
+      logger.error("error deactivating user", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to deactivate user" });
     }
   });
@@ -246,7 +246,7 @@ export function registerUserRoutes(router: Router) {
 
       res.json({ message: "Password reset successfully" });
     } catch (error) {
-      console.error("Error resetting password:", (error as Error).message);
+      logger.error("error resetting password", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to reset password" });
     }
   });
@@ -314,7 +314,7 @@ export function registerUserRoutes(router: Router) {
 
       res.json({ message: "Password changed successfully" });
     } catch (error) {
-      console.error("Error changing password:", (error as Error).message);
+      logger.error("error changing password", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to change password" });
     }
   });

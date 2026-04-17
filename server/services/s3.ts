@@ -217,7 +217,7 @@ export class S3Client {
     // know data is being silently dropped. Previously fully silent.
     if (failCount > 0 && names.length > 0) {
       const failPct = Math.round((failCount / names.length) * 100);
-      console.warn(`[S3] listAndDownloadJson: ${failCount}/${names.length} downloads failed (${failPct}%) for prefix "${prefix}"`);
+      logger.warn("listAndDownloadJson: partial download failure", { failCount, totalCount: names.length, failPct, prefix });
     }
 
     return results;

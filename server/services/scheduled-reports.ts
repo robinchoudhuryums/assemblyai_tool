@@ -413,6 +413,17 @@ export function startReportScheduler(): void {
 
   const checkAndGenerate = async () => {
     const now = new Date();
+
+    // #7: run catch-up on every hourly tick so a failed report mid-hour
+    // (transient DB error, AI timeout) is retried on the next tick instead
+    // of waiting for the next process restart. reportExistsForPeriod
+    // short-circuits, so this is cheap when nothing is missing.
+    try {
+      await runCatchUp();
+    } catch (error) {
+      logger.error("hourly catch-up failed (non-blocking)", { error: (error as Error).message });
+    }
+
     // Generate weekly on Monday (day 1) at the 00:00 hour. Catch-up handles
     // any missed slots; this is just the regular periodic trigger.
     if (now.getDay() === 1 && now.getHours() === 0) {

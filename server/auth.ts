@@ -547,6 +547,60 @@ export function requireRole(...allowedRoles: string[]): RequestHandler {
 }
 
 /**
+ * #1 Phase 1: Resolve the employee row linked to the logged-in user.
+ * Uses the same email→username / name→displayName pattern as /api/my-performance.
+ * Returns undefined if no employee row matches.
+ *
+ * Note: email match is preferred (more unique) over name match (can collide
+ * when multiple employees share a name). F-18 uses the same priority order.
+ */
+export async function getUserEmployeeId(username: string | undefined, displayName: string | undefined): Promise<string | undefined> {
+  if (!username && !displayName) return undefined;
+  try {
+    const employees = await storage.getAllEmployees();
+    const byEmail = username
+      ? employees.find(e => e.email?.toLowerCase() === username.toLowerCase())
+      : undefined;
+    if (byEmail) return byEmail.id;
+    const byName = displayName
+      ? employees.find(e => e.name.toLowerCase() === displayName.toLowerCase())
+      : undefined;
+    return byName?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * #1 Phase 1: Middleware factory that allows manager/admin OR the employee themselves.
+ * Rejects viewers attempting to access another employee's scoped data.
+ *
+ * `getTargetEmployeeId` extracts the target employee ID from the request
+ * (e.g. `req => req.params.employeeId`).
+ */
+export function requireSelfOrManager(getTargetEmployeeId: (req: import("express").Request) => string): RequestHandler {
+  return async (req, res, next) => {
+    if (!req.isAuthenticated() || !req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+    const userRole = req.user.role || "viewer";
+    // Manager/admin bypass — they can access any employee's data.
+    if (userRole === "manager" || userRole === "admin") {
+      return next();
+    }
+    const targetId = getTargetEmployeeId(req);
+    if (!targetId) {
+      return res.status(400).json({ message: "Employee ID required" });
+    }
+    const myEmployeeId = await getUserEmployeeId(req.user.username, req.user.name);
+    if (myEmployeeId && myEmployeeId === targetId) {
+      return next();
+    }
+    return res.status(403).json({ message: "You can only access your own data" });
+  };
+}
+
+/**
  * Middleware to enforce MFA setup for roles that require it (admin, manager).
  * Returns 403 if the user's role requires MFA but they haven't set it up yet.
  * Use on sensitive admin/manager routes to block access until MFA is configured.

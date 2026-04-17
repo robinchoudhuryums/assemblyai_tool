@@ -4,6 +4,7 @@ import { requireAuth } from "../auth";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getPool } from "../db/pool";
 import { validateIdParam, validateParams } from "./utils";
+import { canViewerAccessCall } from "./calls";
 
 const validateIdAndTagId = validateParams({ id: "uuid", tagId: "uuid" });
 const validateIdAndAnnotationId = validateParams({ id: "uuid", annotationId: "uuid" });
@@ -18,6 +19,10 @@ export function registerCallTagRoutes(router: Router) {
       // Verify call exists and user has access
       const call = await storage.getCall(callId);
       if (!call) return res.status(404).json({ message: "Call not found" });
+      // Phase 3: viewer-scoped — only own or unassigned calls.
+      if (!(await canViewerAccessCall(req, call))) {
+        return res.status(403).json({ message: "You can only access your own calls" });
+      }
       const pool = getPool();
       if (pool) {
         const result = await pool.query(
@@ -125,7 +130,17 @@ export function registerCallTagRoutes(router: Router) {
          LIMIT 100`,
         [tag]
       );
-      res.json(result.rows.map((r: any) => ({
+      // Phase 3: viewer-scoped tag search. Post-filter in JS since the SQL query
+      // already returns only tagged calls (bounded to 100 by LIMIT).
+      let rows = result.rows;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const checks = await Promise.all(
+          rows.map((r: any) => canViewerAccessCall(req, { employeeId: r.employee_id }))
+        );
+        rows = rows.filter((_: any, i: number) => checks[i]);
+      }
+      res.json(rows.map((r: any) => ({
         id: r.id, fileName: r.file_name, status: r.status, duration: r.duration,
         callCategory: r.call_category, uploadedAt: r.uploaded_at,
         employeeId: r.employee_id, employeeName: r.employee_name,
@@ -139,6 +154,13 @@ export function registerCallTagRoutes(router: Router) {
 
   router.get("/api/calls/:id/annotations", requireAuth, validateIdParam, async (req, res) => {
     try {
+      // Phase 3: viewer-scoped — only own or unassigned calls.
+      const callForScope = await storage.getCall(req.params.id);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        res.status(403).json({ message: "You can only access your own calls" });
+        return;
+      }
+
       logPhiAccess({ ...auditContext(req), timestamp: new Date().toISOString(), event: "view_annotations", resourceType: "annotation", resourceId: req.params.id });
       const pool = getPool();
       if (!pool) {

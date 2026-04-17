@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager, getUserEmployeeId } from "../auth";
+import { canViewerAccessCall } from "./calls";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
@@ -28,8 +30,18 @@ export function registerReportRoutes(router: Router) {
       const expandedQuery = expandMedicalSynonyms(query);
       const results = await storage.searchCalls(expandedQuery, limit);
 
-      // Apply optional client-side filters for sentiment, score range, date range
+      // Phase 3: viewer-scoped search. Filter results to calls the viewer may access
+      // (their own calls or unassigned calls). Manager/admin get all results.
       let filtered = results;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const accessChecks = await Promise.all(
+          results.map(c => canViewerAccessCall(req, c))
+        );
+        filtered = results.filter((_, i) => accessChecks[i]);
+      }
+
+      // Apply optional client-side filters for sentiment, score range, date range
       const sentimentParam = req.query.sentiment as string;
       if (sentimentParam && sentimentParam !== "all") {
         filtered = filtered.filter(c => c.sentiment?.overallSentiment === sentimentParam);
@@ -58,7 +70,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     const performers = await storage.getTopPerformers(10); // Get top 10
     res.json(performers);
   } catch (error) {
-    console.error("Failed to get performance data:", error);
+    logger.error("failed to get performance data", { error });
     res.status(500).json({ message: "Failed to get performance data" });
   }
 });
@@ -78,7 +90,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
 
     res.json(reportData);
   } catch (error) {
-    console.error("Failed to generate report data:", error);
+    logger.error("failed to generate report data", { error });
     res.status(500).json({ message: "Failed to generate report data" });
   }
 });
@@ -104,23 +116,46 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         }
       }
 
+      // Viewer-scoped filtered reports: force employeeId to the viewer's own ID
+      // regardless of what they pass. Unlinked viewers get empty results.
+      let scopedEmployeeId = employeeId as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          // No linked employee — return empty-shaped result without hitting the DB
+          // (employee_id is UUID-typed, so any sentinel would cause a cast error).
+          res.json({
+            metrics: { totalCalls: 0, avgSentiment: 0, avgPerformanceScore: 0 },
+            sentiment: { positive: 0, neutral: 0, negative: 0 },
+            performers: [],
+            trends: [],
+            avgSubScores: null,
+            autoAssignedCount: 0,
+          });
+          return;
+        }
+        scopedEmployeeId = myEmployeeId;
+      }
+
       const result = await storage.getFilteredReportMetrics({
         from: from as string | undefined,
         to: to as string | undefined,
-        employeeId: employeeId as string | undefined,
+        employeeId: scopedEmployeeId,
         role,
         callPartyType: callPartyType as string | undefined,
       });
 
       res.json(result);
     } catch (error) {
-      console.error("Failed to generate filtered report:", error);
+      logger.error("failed to generate filtered report", { error });
       res.status(500).json({ message: "Failed to generate filtered report" });
     }
   });
 
-  // Agent profile: aggregated feedback across all calls for an employee
-  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Agent profile: aggregated feedback across all calls for an employee.
+  // #1 Phase 1: restrict to self-or-manager — profile exposes individual PHI.
+  router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { from, to } = req.query;
@@ -240,13 +275,14 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         flaggedCalls: flaggedCalls.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()),
       });
     } catch (error) {
-      console.error("Failed to generate agent profile:", error);
+      logger.error("failed to generate agent profile", { error });
       res.status(500).json({ message: "Failed to generate agent profile" });
     }
   });
 
-  // Generate AI narrative summary for an agent's performance
-  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Generate AI narrative summary for an agent's performance.
+  // #1 Phase 1: restrict to self-or-manager.
+  router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       if (!aiProvider.isAvailable || !aiProvider.generateText) {
         res.status(503).json({ message: "AI provider not configured. Set up Bedrock or Gemini credentials." });
@@ -338,13 +374,13 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         dateRange,
       }) + priorContext;
 
-      console.log(`[${employeeId}] Generating AI summary (${filtered.length} calls, ${priorSnapshots.length} prior snapshots)...`);
+      logger.info("generating AI summary", { employeeId, calls: filtered.length, priorSnapshots: priorSnapshots.length });
       const summary = await aiProvider.generateText(prompt);
-      console.log(`[${employeeId}] AI summary generated.`);
+      logger.info("AI summary generated", { employeeId });
 
       res.json({ summary });
     } catch (error) {
-      console.error("Failed to generate agent summary:", (error as Error).message);
+      logger.error("failed to generate agent summary", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate AI summary" });
     }
   });
@@ -375,7 +411,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
       res.status(204).send();
     } catch (error) {
       // Don't leak details — beacon is fire-and-forget. Log on the server side.
-      console.error("Failed to record export beacon:", (error as Error).message);
+      logger.error("failed to record export beacon", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to record export" });
     }
   });
@@ -396,7 +432,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
 
     await storage.deleteCall(callId);
 
-    console.log(`Successfully deleted call ID: ${callId}`);
+    logger.info("successfully deleted call", { callId });
     // Send a 204 No Content response for a successful deletion
     res.status(204).send();
   } catch (error) {
@@ -408,7 +444,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
       resourceId: req.params.id,
       detail: (error as Error).message,
     });
-    console.error("Failed to delete call:", (error as Error).message);
+    logger.error("failed to delete call", { error: (error as Error).message });
     res.status(500).json({ message: "Failed to delete call" });
   }
 });

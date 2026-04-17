@@ -29,6 +29,95 @@ interface CoachingSession {
   completedAt?: string;
 }
 
+interface CoachingOutcome {
+  coachingSessionId: string;
+  employeeId: string;
+  coachingCreatedAt: string;
+  windowSize: number;
+  minWindow: number;
+  insufficientData: boolean;
+  before: {
+    callCount: number;
+    avgScore: number | null;
+    subScores: {
+      compliance: number | null;
+      customerExperience: number | null;
+      communication: number | null;
+      resolution: number | null;
+    };
+  };
+  after: {
+    callCount: number;
+    avgScore: number | null;
+    subScores: {
+      compliance: number | null;
+      customerExperience: number | null;
+      communication: number | null;
+      resolution: number | null;
+    };
+  };
+  deltas: {
+    overall: number | null;
+    compliance: number | null;
+    customerExperience: number | null;
+    communication: number | null;
+    resolution: number | null;
+  };
+}
+
+function OutcomeWidget({ sessionId, enabled }: { sessionId: string; enabled: boolean }) {
+  const { data, isLoading, error } = useQuery<CoachingOutcome>({
+    queryKey: ["/api/coaching", sessionId, "outcome"],
+    enabled,
+  });
+
+  if (!enabled) return null;
+  if (isLoading) return <p className="text-xs text-muted-foreground">Loading outcome...</p>;
+  if (error || !data) return null;
+
+  const formatDelta = (d: number | null): { text: string; cls: string } => {
+    if (d === null) return { text: "—", cls: "text-muted-foreground" };
+    const sign = d > 0 ? "+" : "";
+    const cls = d > 0.1 ? "text-green-600 dark:text-green-400" : d < -0.1 ? "text-red-600 dark:text-red-400" : "text-muted-foreground";
+    return { text: `${sign}${d.toFixed(2)}`, cls };
+  };
+
+  const fmtScore = (s: number | null) => s === null ? "—" : s.toFixed(2);
+  const overallD = formatDelta(data.deltas.overall);
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground mb-2">
+        Coaching Outcome <span className="text-muted-foreground/70">(last {data.before.callCount} vs next {data.after.callCount} calls, window size {data.windowSize})</span>
+      </p>
+      {data.insufficientData ? (
+        <p className="text-xs text-muted-foreground">
+          Insufficient data to measure outcome — need at least {data.minWindow} calls in each window.
+        </p>
+      ) : (
+        <div className="grid grid-cols-5 gap-3 text-xs">
+          <div>
+            <div className="text-muted-foreground mb-0.5">Overall</div>
+            <div className="font-medium">{fmtScore(data.before.avgScore)} → {fmtScore(data.after.avgScore)}</div>
+            <div className={`text-xs font-semibold ${overallD.cls}`}>{overallD.text}</div>
+          </div>
+          {(["compliance", "customerExperience", "communication", "resolution"] as const).map(key => {
+            const d = formatDelta(data.deltas[key]);
+            const label = key === "customerExperience" ? "CX" : key.charAt(0).toUpperCase() + key.slice(1);
+            return (
+              <div key={key}>
+                <div className="text-muted-foreground mb-0.5">{label}</div>
+                <div className="font-medium">{fmtScore(data.before.subScores[key])} → {fmtScore(data.after.subScores[key])}</div>
+                <div className={`text-xs font-semibold ${d.cls}`}>{d.text}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CoachingPage() {
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("active");
@@ -229,6 +318,8 @@ export default function CoachingPage() {
                       <Eye className="w-3 h-3" /> View Referenced Call
                     </Link>
                   )}
+
+                  <OutcomeWidget sessionId={session.id} enabled={isExpanded} />
 
                   {totalTasks > 0 && (
                     <div>

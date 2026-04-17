@@ -11,6 +11,8 @@
  * Ported from ums-knowledge-reference/backend/src/utils/resilience.ts.
  */
 
+import { logger } from "./logger";
+
 // ---------------------------------------------------------------------------
 // CircuitBreaker
 // ---------------------------------------------------------------------------
@@ -66,7 +68,7 @@ export class CircuitBreaker {
 
   private onSuccess(): void {
     if (this.state === "half-open") {
-      console.log(`[CircuitBreaker] [${this.label}] test call succeeded, closing circuit`);
+      logger.info("Circuit breaker test call succeeded, closing circuit", { label: this.label });
     }
     this.failureCount = 0;
     this.transitionTo("closed");
@@ -85,7 +87,7 @@ export class CircuitBreaker {
 
   private transitionTo(newState: CircuitState): void {
     if (this.state !== newState) {
-      console.warn(`[CircuitBreaker] [${this.label}] ${this.state} → ${newState} (failures: ${this.failureCount})`);
+      logger.warn("Circuit breaker state transition", { label: this.label, from: this.state, to: newState, failures: this.failureCount });
       this.state = newState;
     }
   }

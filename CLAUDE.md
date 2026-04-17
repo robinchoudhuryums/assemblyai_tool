@@ -191,22 +191,22 @@ tests/                   # Unit tests (Node test runner)
 ### Calls
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
-| GET | `/api/calls` | authenticated | List calls (filtering/pagination) |
-| GET | `/api/calls/:id` | authenticated | Get call details |
+| GET | `/api/calls` | authenticated (viewer: own calls only) | List calls. Viewers have employee filter forced to their linked employee ID; unlinked viewers get empty results. |
+| GET | `/api/calls/:id` | authenticated (viewer: own calls only) | Get call details. Viewers get 403 on other employees' calls. |
 | POST | `/api/calls/upload` | authenticated | Upload audio (starts pipeline) |
-| GET | `/api/calls/:id/audio` | authenticated | Stream audio for playback |
-| GET | `/api/calls/:id/transcript` | authenticated | Get transcript |
-| GET | `/api/calls/:id/sentiment` | authenticated | Get sentiment analysis |
-| GET | `/api/calls/:id/analysis` | authenticated | Get AI analysis |
+| GET | `/api/calls/:id/audio` | authenticated (viewer: own calls only) | Stream audio for playback |
+| GET | `/api/calls/:id/transcript` | authenticated (viewer: own calls only) | Get transcript |
+| GET | `/api/calls/:id/sentiment` | authenticated (viewer: own calls only) | Get sentiment analysis |
+| GET | `/api/calls/:id/analysis` | authenticated (viewer: own calls only) | Get AI analysis |
 | PATCH | `/api/calls/:id/analysis` | manager+ | Edit AI analysis |
 | PATCH | `/api/calls/:id/assign` | manager+ | Assign call to employee |
 | DELETE | `/api/calls/:id` | manager+ | Delete call |
-| GET | `/api/calls/:id/tags` | authenticated | Get tags for a call |
+| GET | `/api/calls/:id/tags` | authenticated (viewer: own calls only) | Get tags for a call |
 | POST | `/api/calls/:id/tags` | authenticated | Add a tag to a call |
 | DELETE | `/api/calls/:id/tags/:tagId` | authenticated | Remove a tag from a call |
 | GET | `/api/tags` | authenticated | Get all unique tags (for autocomplete) |
-| GET | `/api/calls/by-tag/:tag` | authenticated | Search calls by tag |
-| GET | `/api/calls/:id/annotations` | authenticated | Get annotations for a call |
+| GET | `/api/calls/by-tag/:tag` | authenticated (viewer: own calls only) | Search calls by tag |
+| GET | `/api/calls/:id/annotations` | authenticated (viewer: own calls only) | Get annotations for a call |
 | POST | `/api/calls/:id/annotations` | authenticated | Add annotation to a call |
 | DELETE | `/api/calls/:id/annotations/:annotationId` | authenticated | Remove an annotation |
 
@@ -226,12 +226,12 @@ tests/                   # Unit tests (Node test runner)
 | GET | `/api/dashboard/sentiment` | authenticated | Sentiment summaries |
 | GET | `/api/dashboard/performers` | authenticated | Top performers |
 | GET | `/api/dashboard/weekly-changes` | manager+ | Week-over-week narrative: top score movers, flag deltas, noteworthy calls. Backs the "This Week in Review" dashboard widget. |
-| GET | `/api/search` | authenticated | Full-text search |
+| GET | `/api/search` | authenticated (viewer: own calls only) | Full-text search |
 | GET | `/api/performance` | manager+ | Performance metrics |
 | GET | `/api/reports/summary` | manager+ | Summary report |
-| GET | `/api/reports/filtered` | authenticated | Filtered reports (query: `from`, `to`, `employeeId`, `role` (preferred) or `department` (deprecated alias), `callPartyType`) |
-| GET | `/api/reports/agent-profile/:id` | authenticated | Detailed agent profile |
-| POST | `/api/reports/agent-summary/:id` | authenticated | Generate agent summary |
+| GET | `/api/reports/filtered` | authenticated | Filtered reports (query: `from`, `to`, `employeeId`, `role` (preferred) or `department` (deprecated alias), `callPartyType`). Viewers have `employeeId` forced to their linked employee; unlinked viewers get an empty-shaped response. |
+| GET | `/api/reports/agent-profile/:id` | authenticated (viewer: self only) | Detailed agent profile |
+| POST | `/api/reports/agent-summary/:id` | authenticated (viewer: self only) | Generate agent summary |
 | POST | `/api/reports/export-beacon` | authenticated | HIPAA audit beacon — fired by the client before a TXT/CSV download so client-built exports still land in the audit log |
 | GET | `/api/scoring-corrections/mine` | authenticated | Returns the current user's recent scoring corrections + rolling stats (upgrade/downgrade split, avg delta). Query: `days` (default 30, max 365), `limit` (default 20, max 100). Read-only; no MFA gate (reveals no new PHI). Powers the MyCorrectionsCard widget on my-performance. |
 
@@ -243,6 +243,7 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/coaching` | manager+ | Create coaching session |
 | PATCH | `/api/coaching/:id` | manager+ | Update coaching session |
 | PATCH | `/api/coaching/:id/action-item/:index` | authenticated | Toggle action item (agents can toggle their own) |
+| GET | `/api/coaching/:id/outcome` | manager+ | Coaching effectiveness: compares N calls before vs after the session. Query: `n` (default 10, range 1-50). Returns avg scores, sub-score deltas, `insufficientData` flag when either window has <3 calls. |
 | GET | `/api/prompt-templates` | admin | List prompt templates |
 | POST | `/api/prompt-templates` | admin | Create prompt template |
 | PATCH | `/api/prompt-templates/:id` | admin | Update prompt template |
@@ -300,14 +301,15 @@ tests/                   # Unit tests (Node test runner)
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
 | GET | `/api/analytics/teams` | authenticated | Comparative team performance (sub-team aggregates) |
-| GET | `/api/analytics/team/:teamName` | authenticated | Individual employee metrics within a team |
+| GET | `/api/analytics/team/:teamName` | manager+ | Individual employee metrics within a team |
 | GET | `/api/analytics/trends` | authenticated | Week-over-week/month-over-month company-wide trends |
-| GET | `/api/analytics/trends/agent/:employeeId` | authenticated | Agent-specific performance trends |
-| GET | `/api/analytics/speech/:callId` | authenticated | Speech metrics for a single call (interruptions, latency, talk time) |
-| GET | `/api/analytics/speech-summary` | authenticated | Aggregate speech metrics across agents (query: `days`) |
-| GET | `/api/analytics/heatmap` | authenticated | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`) |
+| GET | `/api/analytics/trends/agent/:employeeId` | authenticated (viewer: self only) | Agent-specific performance trends |
+| GET | `/api/analytics/speech/:callId` | authenticated (viewer: own calls only) | Speech metrics for a single call (interruptions, latency, talk time) |
+| GET | `/api/analytics/speech-summary` | manager+ | Aggregate speech metrics across agents (query: `days`) |
+| GET | `/api/analytics/heatmap` | authenticated (viewer: self only) | Day-of-week × hour-of-day call volume + avg score grid (query: `days`, `employee`). Viewers have `employee` filter forced to self; unlinked viewers get an empty 7×24 grid. |
+| GET | `/api/analytics/clusters` | authenticated (viewer: self only) | Topic clusters via TF-IDF cosine similarity (query: `days`, `employee`, `minSize`). Viewers have `employee` filter forced to self; unlinked viewers get an empty clusters array. |
 | GET | `/api/analytics/compare` | manager+ | Compare 2-5 agents side-by-side (query: `ids` comma-separated employee IDs) |
-| GET | `/api/analytics/health-pulse/:employeeId` | authenticated | Compares current N-day window vs prior equal-length window. Returns `{ current, prior, overallDelta, trend, severity, subScores }`. Query: `days` (default 28, range 7–90). Powers the Health Pulse widget on agent-scorecard. |
+| GET | `/api/analytics/health-pulse/:employeeId` | authenticated (viewer: self only) | Compares current N-day window vs prior equal-length window. Returns `{ current, prior, overallDelta, trend, severity, subScores }`. Query: `days` (default 28, range 7–90). Powers the Health Pulse widget on agent-scorecard. |
 | GET | `/api/export/calls` | manager+ | Export calls as CSV (with date/employee filters) |
 | GET | `/api/export/team-analytics` | manager+ | Export team analytics as CSV |
 
@@ -319,7 +321,7 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/snapshots/department` | manager+ | Generate department performance snapshot |
 | POST | `/api/snapshots/company` | manager+ | Generate company-wide performance snapshot |
 | POST | `/api/snapshots/batch` | admin | Batch generate all employee + team + company snapshots |
-| GET | `/api/snapshots/employee/:id` | authenticated | Get employee snapshot history |
+| GET | `/api/snapshots/employee/:id` | authenticated (viewer: self only) | Get employee snapshot history |
 | GET | `/api/snapshots/team/:teamName` | authenticated | Get team snapshot history |
 | GET | `/api/snapshots/department/:dept` | authenticated | Get department snapshot history |
 | GET | `/api/snapshots/company` | authenticated | Get company-wide snapshot history |
@@ -363,9 +365,9 @@ Usage records are automatically created after each call analysis and A/B test. E
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
 | GET | `/api/gamification/leaderboard` | authenticated | Agent leaderboard (query: `period=week\|month\|all`) |
-| GET | `/api/gamification/badges/:employeeId` | authenticated | Badges earned by an employee |
+| GET | `/api/gamification/badges/:employeeId` | authenticated (viewer: self only) | Badges earned by an employee |
 | GET | `/api/gamification/badge-types` | authenticated | All possible badge definitions |
-| GET | `/api/gamification/stats/:employeeId` | authenticated | Points, streak, and badges for one agent |
+| GET | `/api/gamification/stats/:employeeId` | authenticated (viewer: self only) | Points, streak, and badges for one agent |
 
 **Gamification System** (`server/services/gamification.ts`):
 - **Badges**: 12 types — milestone (first call, 25/50/100 calls), score (perfect 10), streak (3/5/10 consecutive 8+), sub-score (compliance star, empathy champion, resolution ace), improvement (most improved over 30 days)
@@ -382,7 +384,7 @@ Role hierarchy: **admin (3) > manager (2) > viewer (1)**. Enforced via `requireR
 
 | Role | Capabilities |
 |------|-------------|
-| **viewer** | Read-only: dashboards, reports, transcripts, call playback, team data |
+| **viewer** | Read-only, scoped to own data: own calls (list + details + transcript/sentiment/analysis/audio), own agent profile/badges/stats/trends/health-pulse/snapshots. Company dashboards (non-agent-specific) visible to all viewers. |
 | **manager** | Everything viewer can do, plus: assign calls, edit AI analysis, manage employees, create coaching sessions, export reports, delete calls |
 | **admin** | Full control: manage users, approve/deny access requests, bulk CSV import, prompt template CRUD, A/B model testing, spend tracking, system configuration |
 
@@ -542,7 +544,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 | **TOTP replay protection** | `server/services/totp.ts` | Used-token cache prevents same TOTP code from being reused within the same time window |
 | **Route param validation** | `server/routes/utils.ts` | `validateParams()` middleware rejects malformed UUIDs, IDs, and names before they reach DB queries (30+ routes) |
 | **Audit log durability** | `server/services/audit-log.ts` | Write-ahead queue (`MAX_QUEUE_SIZE=20000`, ~20MB runway) with batched INSERT (up to 100 rows/flush, 2s interval), strict-FIFO drain from queue head, per-row fallback on batch failure, retry with exponential backoff, graceful shutdown flush, health endpoint monitoring. Overflow policy: drop-OLDEST (canonical record remains in stdout HMAC chain). First drop per process escalates via `logger.error`; subsequent drops in the same process are also logged via `logger.error` but do not re-alert. |
-| **Graceful shutdown** | `server/index.ts` | SIGINT/SIGTERM sequence: (1) `server.close()` stops accepting new connections, (2) batch scheduler stop, (3) `jobQueue.stop()` drains in-flight pipeline jobs (15s cap), (4) audit log queue flush (10s cap), (5) DB pool close. 30s outer hard-exit timeout via `setTimeout().unref()`. |
+| **Graceful shutdown** | `server/index.ts` | SIGINT/SIGTERM sequence: (1) `server.close()` stops accepting new connections, (2) batch scheduler stop, (3) `jobQueue.stop()` drains in-flight pipeline jobs (15s cap), (3a) `persistIntegrityChainHead()` persists HMAC chain head to DB, (4) audit log queue flush (10s cap), (5) DB pool close. 30s outer hard-exit timeout via `setTimeout().unref()`. |
 | **Vulnerability scanning** | `server/services/vulnerability-scanner.ts` | Automated daily scans of env config, dependencies, database, auth; admin can trigger manual scans |
 | **Incident response** | `server/services/incident-response.ts` | Formal IRP with severity classification, phase tracking, escalation contacts, response procedures, action items |
 | **Disaster recovery** | `docs/disaster-recovery.md` | DR plan: S3 CRR, RDS cross-region replica, AMI snapshots, Route 53 DNS failover |
@@ -587,7 +589,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 - **`bedrockProvider.isAvailable` is no longer optimistic** (A8/F07) — previously returned `true` before IMDS was tried. Now returns `false` until env vars are present or `ensureCredentials()` has been called once. On EC2 instance-profile-only deployments, `aiProvider.isAvailable` reports `false` at boot and AI analysis is skipped until something fires `ensureCredentials()`. Eager-resolution at startup is a planned follow-up.
 - **`CallAnalysisSchema` no longer silently defaults `summary`/`performance_score`/`sub_scores`** (A12/F17) — malformed AI responses previously produced "completed" calls with placeholder 5.0 scores and `"No summary available"`. Now invalid output throws inside `parseJsonResponse` and the pipeline retries Bedrock once before falling through to the no-AI path. Doubles Bedrock cost on parse failures and consumes 2 circuit-breaker slots per failed call (breaker threshold is 5 — comfortable). Batched calls that previously silently completed with 5.0 placeholders are now marked failed.
 - **`CalibrationSnapshot.recommended.spread` is intentionally absent** (A14/F15) — the prior derivation (`targetSpread / observedSpread`) was dimensionally wrong. The field was removed but `POST /api/admin/calibration/apply` still requires `spread` in the body. Operators must supply it manually; no admin UI exists today, so zero current callers.
-- **AI subsystem logs are structured JSON via `logger.*`** (A10/F18) — `assemblyai.ts`, `bedrock.ts`, `bedrock-batch.ts`, `batch-scheduler.ts`, `auto-calibration.ts`, `scoring-calibration.ts`, `scoring-feedback.ts`, `ai-provider.ts`, `ai-factory.ts` no longer use `console.*`. External log scrapers parsing `[BATCH]` / `[CALIBRATION]` bracket prefixes from stdout now see structured JSON with `callId` as a field, not interpolation.
+- **All server logs are structured JSON via `logger.*`** (A10/F18, #3, #4) — the entire server codebase has been migrated from `console.*` to the structured `logger`. Only TWO intentional exceptions remain: (1) `server/vite.ts` uses `console` for CSS-styled dev terminal output that pre-dates logger; (2) `server/services/audit-log.ts:313` writes the canonical `[HIPAA_AUDIT]` stdout line for the HMAC integrity chain — this MUST NOT be migrated because PHI redaction in the logger would corrupt the chain hash. External log scrapers that grep for any bracket prefix (`[BATCH]`, `[JOB_QUEUE]`, `[WEBHOOK]`, `[Webhooks]`, `[OTEL]`, `[SECURITY]`, `[AUTH]`, `[AWS]`, etc.) now match nothing — update CloudWatch metric filters and pm2 grep scripts to match structured JSON fields instead.
 - **Fire-and-forget error capture**: Background tasks (embeddings, coaching alerts, badges, webhooks) call `captureException()` (now a no-op stub; errors are logged via `logger.error`)
 - **`updateCall` is employeeId-free** (A6/F14): all three storage backends throw if `employeeId` appears in the updates payload. The manager-facing PATCH /api/calls/:id/assign route uses the new `setCallEmployee` method; pipeline auto-assignment uses `atomicAssignEmployee`. Closes a silent-clobber race where status updates would re-write a stale `employee_id` from a prior read.
 - **PostgresStorage password history is JS-side** (A3/F02): `updateDbUserPassword` reads the existing history, prepends + slices to 5, and writes it back in a single UPDATE. Replaces an opaque jsonb_array_elements_text aggregation. Trade-off: small lost-update window on concurrent password changes (admin reset racing self-change). Acceptable because concurrent rotations are vanishingly rare.
@@ -600,7 +602,7 @@ BEDROCK_EMBEDDING_MODEL         # Embedding model for call clustering (default: 
 - **Score-tier constants: client-side migration complete** (A11, Batch 2): all surveyed sites now import `SCORE_EXCELLENT/GOOD/NEEDS_WORK` from `client/src/lib/constants.ts` — `report-components`, `agent-scorecard` ×2, `calls-table`, `performance`, `team-analytics`, `call-clusters`, `my-performance`, `leaderboard`. The static client constants mirror `server/constants.ts` and are the bundled fallback for `useConfig()`.
 - **A/B test promotion updates both on-demand and batch paths** — `promoteActiveModel()` in `server/services/active-model.ts` now calls both `aiProvider.setModel()` AND `bedrockBatchService.setModel()`, wrapped in try/catch so a batch-service throw doesn't block the on-demand promotion. `loadActiveModelOverride()` applies the same dual-update at startup so a persisted override restores both paths. In-flight batch jobs (already submitted to AWS Bedrock) are unaffected — they run to completion on whatever model they were submitted with. Only NEW batch submissions pick up the promoted model.
 - **Prompt template back-test endpoint bypasses `audioProcessingQueue`** — `POST /api/prompt-templates/:id/test` runs up to 10 Bedrock analyses inline via `Promise.all` rather than enqueueing through the shared task queue. Trade-off: does not contend with live upload processing, but admin clicks are unmetered beyond the 10-sample cap. Acceptable because the endpoint is admin-only and the cap is enforced server-side.
-- **`BEDROCK_MODEL` is validated at startup and at runtime** — `server/index.ts` emits a `console.warn` on boot if the env var is set but missing from `BEDROCK_PRICING`. The pipeline's usage-tracking path also calls `warnOnUnknownBedrockModel()` on the first call per unknown model id (deduped via a module-level Set) and logs via `logger.warn`. Trade-off: the warning is non-blocking — cost records still store `$0` for unknown models. Operators who want a hard-fail must add the check themselves.
+- **`BEDROCK_MODEL` is validated at startup and at runtime** — `server/index.ts` emits a `logger.warn` on boot if the env var is set but missing from `BEDROCK_PRICING`. The pipeline's usage-tracking path also calls `warnOnUnknownBedrockModel()` on the first call per unknown model id (deduped via a module-level Set) and logs via `logger.warn`. Trade-off: the warning is non-blocking — cost records still store `$0` for unknown models. Operators who want a hard-fail must add the check themselves.
 
 ## Deployment
 
@@ -662,9 +664,10 @@ S3 and Bedrock traffic can be routed through AWS's private network instead of th
 ### GitHub Actions CI/CD
 
 **CI Pipeline** (`.github/workflows/ci.yml`):
-Runs on every push to `main` and every PR. Two parallel jobs:
-1. **Test & Build** — type check (`tsc`), backend unit tests (`npm test`), frontend unit tests (`npm run test:client`), production build
-2. **Dependency Audit** — `npm audit` for vulnerabilities; blocks on critical severity
+Runs on every push to `main` and every PR. Three parallel jobs:
+1. **Test & Build** — type check (`tsc`), backend unit tests with c8 coverage (`npm run test:coverage`, gate at 65% statements), frontend unit tests (`npm run test:client`), production build
+2. **E2E Tests** — Playwright chromium against the dev server (installed via `npx playwright install chromium --with-deps`); uploads `playwright-report/` artifact on failure
+3. **Dependency Audit** — `npm audit` for vulnerabilities; blocks on critical severity
 
 **Deploy Pipeline** (`.github/workflows/deploy.yml`):
 Triggers automatically **after CI passes** on `main` (via `workflow_run`). SSHs into EC2 and runs `deploy.sh`. Manual `workflow_dispatch` is available for hotfixes (bypasses CI gate). Required GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`, `EC2_APP_DIR`.
@@ -765,7 +768,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **`aws-credentials.ts` log scrapers** (A7-batch2) — `[AWS]` literal stdout prefix is gone. IMDS first-failure logs at `info`, refresh failures escalate to `warn`. Output is structured JSON via `logger.*`.
 - **Incident routes 500 on missing `incidents` table** (A7) — `persistIncident` and `createBreachReport` now throw on DB write failure (DB-first persist; in-memory cache only updated after successful persist). On a fresh deploy without `initializeDatabase()` having run, `/api/admin/incidents/*` will 500 instead of silently caching in memory. Run schema migration before exercising admin incident routes.
 - **Incident/breach/alert IDs are opaque UUIDs** (A7) — `INC-<uuid>`, `breach-<uuid>`, `alert-<uuid>`. Old `Date.now()`-based IDs were parseable but collision-prone within the same millisecond. Anything that tried to extract a timestamp from an ID needs to read `declaredAt`/`reportedAt` instead.
-- **Auth / security / incident logs are structured JSON via `logger.*`** (A11) — `[AUTH]`, `[SECURITY]`, `[INCIDENT]` bracket prefixes are gone. External scrapers grepping for those literal strings will silently match nothing. The `[HIPAA_AUDIT]` stdout line is intentionally preserved (canonical chain record).
+- **All bracket-prefix log scrapers are now broken except `[HIPAA_AUDIT]`** (A11, #4) — `[AUTH]`, `[SECURITY]`, `[INCIDENT]`, `[BATCH]`, `[CALIBRATION]`, `[JOB_QUEUE]`, `[WEBHOOK]`, `[Webhooks]`, `[OTEL]`, `[AWS]` prefixes and all others are gone. External scrapers grepping for any of these literal strings will silently match nothing — they need to migrate to structured JSON field matching. The `[HIPAA_AUDIT]` stdout line is intentionally preserved as the canonical HMAC chain record.
 - **`/api/admin/waf/block-ip` enforces a 30-day max `durationMs`** (A9) — Zod schema rejects values >30 days with a 400. Permanent blocks should omit `durationMs` entirely. Operator scripts that hardcoded multi-month "temporary" blocks must switch to permanent or chunk the duration.
 - **Vuln-scanner history retains hollow entries past `MAX_SCAN_HISTORY`** (A12) — older scan reports stay in `scanHistory` with `findings: []` while their summary remains. Frontend code iterating history must expect `findings.length === 0` on archived scans (summary counts are still valid). Previously the entries were `shift()`-ed out entirely; the comment claimed "summary is retained" but it wasn't.
 - **`requireMFASetup` is gated on `REQUIRE_MFA=true`** — the middleware is a no-op when the env var is unset. When `REQUIRE_MFA=true`, it enforces MFA enrollment for admin/manager roles on `/api/admin/*` (via `router.use`) and on all manager/admin-gated mutations (per-route). `isMFARoleRequired()` returns true for admin/manager unconditionally, but `requireMFASetup` only consults it after confirming `isMFARequired()` (the env var check). Enrollment endpoints `/api/auth/mfa/setup` and `/api/auth/mfa/enable` are unaffected. **Operational footgun:** flipping `REQUIRE_MFA=true` without enrolling admins first will lock them out of all write operations on their next request — including their own self-service password change at `/api/users/me/password`. Recovery path: enroll via `/api/auth/mfa/setup` and `/api/auth/mfa/enable` first, then change password.
@@ -840,7 +843,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **`/api/insights` defaults to a 90-day window** (A4/F15) — was previously unbounded (full-table scan over every call ever uploaded). Pass `?days=N` (max 365) to widen. Existing dashboards that depended on all-time data will visibly change.
 - **Leaderboard cached for 60s, not invalidated on badge insert** (A4/F13) — `getLeaderboard(period)` uses an in-memory cache keyed by period (`week`/`month`/`all`). Newly earned badges or completed calls take up to 60s to appear on the leaderboard. `clearLeaderboardCache()` is exported as a test seam but is NOT called from `evaluateBadges`. If real-time updates are needed, add the call there.
 - **`saveSnapshot`/`resetSnapshotContext` rethrow DB errors now** (A6/F09) — was silently swallowed before. Snapshot generation routes wrap `saveSnapshot` in try/catch; the `DELETE /api/snapshots/:level/:targetId/reset` route does NOT, so failures now propagate as 500 via the global error handler (was silent 200 with `removed: 0`). The HIPAA `logPhiAccess` audit entry for `snapshot_context_reset` is written AFTER the DB delete, so a DB failure also skips the audit log.
-- **`scheduled_reports` has `UNIQUE(type, period_start)`** (A3/F02) — concurrent scheduler triggers and catch-up runs are idempotent (`INSERT … ON CONFLICT DO NOTHING`); duplicate periods return the existing row. `runCatchUp()` walks back up to `CATCH_UP_WEEKLY_LOOKBACK=12` Mondays and `CATCH_UP_MONTHLY_LOOKBACK=12` 1st-of-months on startup and generates any missing reports in chronological order. Previously only the most-recent missed boundary was recovered, so a month-long outage silently lost all but the latest weekly and latest monthly report. `generateReport` is pure SQL aggregation so filling up to 24 slots on first boot is cheap (~seconds).
+- **`scheduled_reports` has `UNIQUE(type, period_start)`** (A3/F02) — concurrent scheduler triggers and catch-up runs are idempotent (`INSERT … ON CONFLICT DO NOTHING`); duplicate periods return the existing row. `runCatchUp()` walks back up to `CATCH_UP_WEEKLY_LOOKBACK=12` Mondays and `CATCH_UP_MONTHLY_LOOKBACK=12` 1st-of-months on startup AND on every hourly `checkAndGenerate` tick (#7) — idempotent via `reportExistsForPeriod` short-circuit, so the hourly call is cheap when nothing is missing. Recovers failed mid-hour reports within an hour instead of waiting for process restart. Previously only the most-recent missed boundary was recovered, so a month-long outage silently lost all but the latest weekly and latest monthly report. `generateReport` is pure SQL aggregation so filling up to 24 slots on first boot is cheap (~seconds).
 - **Snapshot generation helpers are module-level exports** (A8/F18) — `generateEmployeeSnapshot`, `generateTeamSnapshot`, `generateDepartmentSnapshot`, `generateCompanySnapshot`, `generateBatchSnapshots` exported from `server/routes/snapshots.ts`. The job worker dynamically imports them; other services may also call them directly. Lifted out of the `registerSnapshotRoutes` closure.
 - **`most_improved` removed from `BADGE_TYPES`** (A13/F10) — never had a code path that awarded it. Pre-existing rows in `badges` with `badge_type='most_improved'` (if any) render with the raw string instead of a label/icon/description because `BADGE_TYPES.find()` returns undefined. Run `SELECT count(*) FROM badges WHERE badge_type='most_improved'` before deploy.
 - **`/api/reports/filtered` `?role` query param** (A15/F14) — was `?department`; renamed because the filter compares against `employees.role`, not a separate department column. Old name accepted as a deprecated alias during the transition. `decodeURIComponent` applied so percent-encoded values like `Customer%20Service` match.
@@ -887,6 +890,10 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 - **Embedding cache key includes model ID** (F-19) — `getEmbeddingCacheKey` in `server/services/bedrock.ts` now hashes `${model}:${text}` instead of just `text`. A runtime change to `BEDROCK_EMBEDDING_MODEL` invalidates the cache (brief spike of Bedrock API calls until re-warmed). Previously stale cached vectors with different dimensionality could be returned.
 - **`filterCallsByDateRange` uses UTC end-of-day** (F-17) — `setUTCHours(23, 59, 59, 999)` instead of `setHours()`. Date-filtered reports now use UTC-consistent boundaries. Previously the end-of-day boundary was local timezone, causing ±12h errors on non-UTC servers.
 - **Auto-calibration uses sample variance (N-1)** (F-23) — `server/services/auto-calibration.ts` divides by `(rawScores.length - 1)` for Bessel's correction. Reported stdDev is ~2.5% higher than before (for N=20), which may cause marginal drift to newly trigger calibration recommendations.
+- **Viewer-scoped data access** (#1 Phase 1+2+3+4) — Viewer-role users are restricted to their own data on agent-specific and call endpoints via three helpers: `getUserEmployeeId(username, displayName)` in `server/auth.ts` (matches user→employee via email→username then name→displayName), `requireSelfOrManager(req => req.params.employeeId)` in `server/auth.ts` (middleware factory), and `canViewerAccessCall(req, call)` exported from `server/routes/calls.ts` (per-call employee match, unassigned calls allowed). Scoped endpoints fall into three groups: (1) **agent-scoped, return 403**: `/api/reports/agent-profile/:id`, `/api/reports/agent-summary/:id`, `/api/gamification/{badges,stats}/:id`, `/api/analytics/{trends/agent,health-pulse}/:id`, `/api/snapshots/employee/:id`. (2) **call-scoped, filter list or return 403**: `/api/calls` (list), `/api/calls/:id[/audio|transcript|sentiment|analysis]`, `/api/calls/:id/{tags,annotations}`, `/api/calls/by-tag/:tag`, `/api/search`, `/api/analytics/speech/:callId`. (3) **Phase 4 — filter forced to self**: `/api/reports/filtered` (viewer's `employeeId` always applied), `/api/analytics/heatmap`, `/api/analytics/clusters`. Phase 4 also **restricts to manager+**: `/api/analytics/team/:teamName`, `/api/analytics/speech-summary`. **Kept open to viewers intentionally**: `/api/analytics/trends` (aggregate), `/api/analytics/teams` (team-level aggregates only), `/api/dashboard/performers` (top-3 motivation widget), `/api/gamification/leaderboard` (public ranking by design). Manager/admin paths unchanged throughout. Unassigned calls (no `employeeId`) remain visible to viewers to cover the upload→auto-assign window. Client-side: `requireRole` on the team-analytics sidebar nav hides the entry from viewers (the page itself would return empty-aggregates-only data, but the nav gate avoids confusion). **Operator note**: a viewer user with no matching employee row (email/name mismatch) sees empty lists and 403s with no warning — ensure employee records use the same email as the user's login.
+- **`persistIntegrityChainHead()` runs in graceful shutdown** (#6) — exported from `server/services/audit-log.ts` and called in `server/index.ts` at step 3a (before `flushAuditQueue`). Persists the in-memory HMAC chain head to `audit_log_integrity` so the next boot picks up the correct position even if fire-and-forget `persistPreviousHash` writes from `computeIntegrityHash` were in-flight when shutdown started. Failure is non-blocking (try-catch wrapped) — stdout HMAC chain remains canonical. HIPAA §164.312(b).
+- **CI has backend coverage gate at 65%** (#5) — `.github/workflows/ci.yml` `test & build` job runs `npm run test:coverage` and fails if statement coverage drops below 65% (current ~67%, 2% headroom). Coverage threshold is hardcoded in the workflow, not in `package.json`.
+- **CI E2E job runs Playwright chromium** (#5) — separate `e2e` parallel job installs chromium with `--with-deps` and runs `npm run test:e2e` against the dev server (started by Playwright's `webServer` config). Uses CI-specific `SESSION_SECRET` and `AUTH_USERS` env vars defined in the workflow. Artifact `playwright-report/` uploaded on failure with 7-day retention.
 
 ## Systems Map
 
@@ -1169,6 +1176,7 @@ These log a warning but allow the server to start. The app appears healthy but h
 - [ ] `REQUIRE_MFA=true` with AUTH_USERS admin/manager — `server/auth.ts:365` (F-06). ENV-VAR admin/manager users are now **blocked at login** because they cannot enroll in MFA (no DB row for TOTP secret). Must create equivalent DB users first. **HIGH risk** — admin access completely blocked if only AUTH_USERS admin exists and REQUIRE_MFA is enabled.
 - [ ] `DISABLE_SECURE_COOKIE` set in production — `server/auth.ts:234`, `server/index.ts:74`. Silently disables HTTPS-only session cookies, enabling session hijacking over HTTP. No startup warning. **MEDIUM risk** — security degradation without visibility.
 - [ ] `BEDROCK_MODEL` must be in `BEDROCK_PRICING` if set — `server/index.ts` startup and `server/routes/utils.ts:warnOnUnknownBedrockModel`. Without this, cost tracking silently records $0 for affected calls while AWS still bills. **LOW risk** (warning now fires loudly at boot + once per unknown model at runtime via `logger.warn`); was **HIGH** risk before this fix.
+- [ ] **Viewer user accounts must be linkable to an employee row** — `server/auth.ts:getUserEmployeeId()` matches `username→email` then `displayName→name`. If no match, viewers see empty call lists and 403 on agent endpoints. Silent degradation — no startup warning. **MEDIUM risk** — viewer appears authenticated but sees no data. Ensure DB employee records use the same email as the corresponding user's login.
 
 ### Manual seed required (no startup check, no migration)
 Operator must populate this state outside of any automated path. CI does not catch missing data.
@@ -1205,7 +1213,7 @@ Architecture & Code Quality, Security & HIPAA Compliance, Audio Processing Pipel
 
 ### Subsystems
 Core Architecture & Pipeline:
-  server/index.ts, server/routes.ts, server/routes/pipeline.ts, server/routes/utils.ts, server/routes/config.ts, server/routes/admin.ts, server/middleware/waf.ts, server/middleware/rate-limit.ts, server/middleware/error-handler.ts, server/types.d.ts, server/vite.ts, server/constants.ts, server/services/job-queue.ts, server/services/logger.ts, server/services/correlation-id.ts, server/services/tracing.ts, server/services/trace-span.ts, server/services/websocket.ts
+  server/index.ts, server/routes.ts, server/routes/pipeline.ts, server/routes/utils.ts, server/routes/config.ts, server/routes/admin.ts, server/middleware/waf.ts, server/middleware/rate-limit.ts, server/middleware/error-handler.ts, server/types.d.ts, server/vite.ts, server/constants.ts, server/services/job-queue.ts, server/services/logger.ts, server/services/correlation-id.ts, server/services/tracing.ts, server/services/trace-span.ts, server/services/sentry.ts, server/services/websocket.ts
 Storage Layer / Database:
   server/storage.ts, server/storage-postgres.ts, server/db/pool.ts, server/db/schema.sql, shared/schema.ts
 AI Processing & Analysis:
@@ -1241,7 +1249,7 @@ INV-16 | validateTimestamps must log + flag (output_anomaly:*) on strip, not sil
 INV-17 | persistBatchJobTracking must retry 3x + fall back to orphaned-submissions/ prefix | Subsystem: AI Processing
 INV-18 | runCatchUp must walk back 12 weekly + 12 monthly boundaries, not just one | Subsystem: Engagement
 INV-19 | Audit queue overflow must fire one-shot logger.error on first drop | Subsystem: Security
-INV-20 | BEDROCK_MODEL validated against BEDROCK_PRICING at startup with console.warn | Subsystem: Core Architecture
+INV-20 | BEDROCK_MODEL validated against BEDROCK_PRICING at startup with logger.warn | Subsystem: Core Architecture
 INV-21 | getSessionFingerprint is the single source of truth for fingerprinting | Subsystem: Security
 INV-22 | Production hard-fails if S3_BUCKET missing when DATABASE_URL is set | Subsystem: Storage
 INV-23 | Sub-scores are camelCase in storage, snake_case at AI boundary — never read storage with snake_case | Subsystem: AI Processing

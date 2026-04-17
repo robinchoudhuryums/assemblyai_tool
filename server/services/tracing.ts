@@ -16,6 +16,7 @@
  * Ported from ums-knowledge-reference/backend/src/tracing.ts.
  */
 
+import { logger } from "./logger";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -55,7 +56,7 @@ if (OTEL_ENABLED) {
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 
-  console.log(`[OTEL] Tracing enabled — service=${serviceName} env=${environment}`);
+  logger.info("Tracing enabled", { service: serviceName, environment });
 } else {
-  console.log("[OTEL] Tracing disabled (set OTEL_ENABLED=true to enable)");
+  logger.info("Tracing disabled (set OTEL_ENABLED=true to enable)");
 }

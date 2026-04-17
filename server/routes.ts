@@ -9,6 +9,7 @@ import { getPool } from "./db/pool";
 import { JobQueue, type Job } from "./services/job-queue";
 import { broadcastCallUpdate } from "./services/websocket";
 import { timingSafeEqual, createHash } from "crypto";
+import { logger } from "./services/logger";
 
 // Route modules
 import { registerAuthRoutes } from "./routes/auth";
@@ -92,10 +93,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Default-deny: reject in all environments unless explicit dev opt-in.
       // Set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true in local dev only.
       if (process.env.ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED !== "true") {
-        console.error("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook (set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true for dev override)");
+        logger.error("ASSEMBLYAI_WEBHOOK_SECRET not set — rejecting webhook (set ASSEMBLYAI_WEBHOOK_ALLOW_UNVERIFIED=true for dev override)");
         return res.status(500).json({ message: "Webhook secret not configured" });
       }
-      console.warn("[WEBHOOK] ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev override)");
+      logger.warn("ASSEMBLYAI_WEBHOOK_SECRET not set — accepting unverified webhook (dev override)");
     } else {
       const provided = String(req.headers["x-webhook-secret"] || "");
       // Hash both sides to constant-length buffers so length mismatch doesn't
@@ -103,7 +104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const secretHash = createHash("sha256").update(secret, "utf8").digest();
       const providedHash = createHash("sha256").update(provided, "utf8").digest();
       if (!timingSafeEqual(secretHash, providedHash)) {
-        console.warn("[WEBHOOK] AssemblyAI webhook received with invalid secret");
+        logger.warn("AssemblyAI webhook received with invalid secret");
         return res.status(401).json({ message: "Invalid webhook secret" });
       }
     }
@@ -113,7 +114,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ message: "Missing transcript_id" });
     }
 
-    console.log(`[WEBHOOK] AssemblyAI callback: transcript ${transcript_id}, status: ${status}`);
+    logger.info("AssemblyAI webhook callback", { transcript_id, status });
     const handled = handleAssemblyAIWebhook(transcript_id, {
       id: transcript_id,
       status,
@@ -127,16 +128,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!handled) {
       // Not in our pending map — may be a late delivery or from a previous server instance.
       // Fetch the full transcript via API so we don't lose it.
-      console.log(`[WEBHOOK] Transcript ${transcript_id} not in pending map (may be stale). Acknowledged.`);
+      logger.info("Transcript not in pending map (may be stale), acknowledged", { transcript_id });
     }
 
     res.status(200).json({ received: true });
   });
 
   if (isWebhookModeEnabled()) {
-    console.log(`[ASSEMBLYAI] Webhook mode enabled. Callbacks will be sent to ${process.env.APP_BASE_URL}/api/webhooks/assemblyai`);
+    logger.info("AssemblyAI webhook mode enabled", { callbackUrl: `${process.env.APP_BASE_URL}/api/webhooks/assemblyai` });
   } else {
-    console.log("[ASSEMBLYAI] Polling mode (set APP_BASE_URL to enable faster webhook mode).");
+    logger.info("AssemblyAI polling mode (set APP_BASE_URL to enable faster webhook mode)");
   }
 
   // ==================== JOB QUEUE INITIALIZATION ====================
@@ -149,7 +150,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     jobQueue = new JobQueue(dbPool, concurrency, pollInterval);
 
     jobQueue.onDeadLetter = (jobId, reason, attempts) => {
-      console.error(`[DEAD_LETTER_ALERT] Job ${jobId} failed permanently after ${attempts} attempts: ${reason}`);
+      logger.error("Job failed permanently (dead letter)", { jobId, attempts, reason });
       broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
     };
 
@@ -201,10 +202,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             [job.id, JSON.stringify(results)],
           );
         } catch (err) {
-          console.warn(`[JOB_QUEUE] Failed to stash batch_snapshots results for ${job.id}:`, (err as Error).message);
+          logger.warn("Failed to stash batch_snapshots results", { jobId: job.id, error: (err as Error).message });
         }
       } else {
-        console.warn(`[JOB_QUEUE] Unknown job type: ${job.type}`);
+        logger.warn("Unknown job type", { jobType: job.type });
       }
     });
   }
@@ -235,7 +236,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start scheduled report generation
   import("./services/scheduled-reports").then(m => m.startReportScheduler()).catch(err => {
-    console.warn("[REPORTS] Failed to start report scheduler:", (err as Error).message);
+    logger.warn("Failed to start report scheduler", { error: (err as Error).message });
   });
 
   // Mount all routes on the app
@@ -248,7 +249,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   import("./services/scoring-calibration").then(({ loadPersistedCalibration }) =>
     loadPersistedCalibration(storage.getObjectStorageClient())
   ).catch((err) => {
-    console.warn("[CALIBRATION] Failed to load persisted calibration:", (err as Error).message);
+    logger.warn("Failed to load persisted calibration", { error: (err as Error).message });
   });
   startCalibrationScheduler();
 

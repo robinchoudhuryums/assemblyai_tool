@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { logger } from "../services/logger";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager, getUserEmployeeId } from "../auth";
+import { canViewerAccessCall } from "./calls";
 import { getPool } from "../db/pool";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { getCallClusters } from "../services/call-clustering";
@@ -95,13 +97,15 @@ export function register(router: Router) {
         employees: r.employee_names || [],
       })));
     } catch (error) {
-      console.error("Failed to fetch team analytics:", (error as Error).message);
+      logger.error("failed to fetch team analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch team analytics" });
     }
   });
 
   // Individual employee comparison within a team
-  router.get("/api/analytics/team/:teamName", requireAuth, validateParams({ teamName: "safeName" }), async (req, res) => {
+  // Individual employee comparison within a team — manager+ only.
+  // Per-employee score breakdowns shouldn't be visible to peer agents.
+  router.get("/api/analytics/team/:teamName", requireAuth, requireRole("manager", "admin"), validateParams({ teamName: "safeName" }), async (req, res) => {
     try {
       const pool = getPool();
       if (!pool) return res.json([]);
@@ -205,13 +209,14 @@ export function register(router: Router) {
       const formatted = formatTrendResponse(periods, pool !== null);
       res.json(formatted);
     } catch (error) {
-      console.error("Failed to fetch trend analytics:", (error as Error).message);
+      logger.error("failed to fetch trend analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch trend analytics" });
     }
   });
 
-  // Per-agent trends
-  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), async (req, res) => {
+  // Per-agent trends.
+  // #1 Phase 1: restrict to self-or-manager — individual performance trajectory is PHI-adjacent.
+  router.get("/api/analytics/trends/agent/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
     try {
       const employeeId = req.params.employeeId;
       const period = (req.query.period as string) || "weekly";
@@ -268,7 +273,7 @@ export function register(router: Router) {
       const formatted = formatTrendResponse(periods, pool !== null);
       res.json(formatted);
     } catch (error) {
-      console.error("Failed to fetch agent trend analytics:", (error as Error).message);
+      logger.error("failed to fetch agent trend analytics", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch agent trend analytics" });
     }
   });
@@ -333,7 +338,7 @@ export function register(router: Router) {
       res.setHeader("Content-Disposition", `attachment; filename="calls-export-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csvRows.join("\n"));
     } catch (error) {
-      console.error("Failed to export calls:", (error as Error).message);
+      logger.error("failed to export calls", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to export calls" });
     }
   });
@@ -449,7 +454,7 @@ export function register(router: Router) {
         avgSubScores: r.avg_sub_scores,
       })));
     } catch (error) {
-      console.error("Agent comparison failed:", (error as Error).message);
+      logger.error("agent comparison failed", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compare agents" });
     }
   });
@@ -459,13 +464,25 @@ export function register(router: Router) {
   router.get("/api/analytics/clusters", requireAuth, async (req, res) => {
     try {
       const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 30, 365));
-      const employeeId = req.query.employee as string | undefined;
       const minSize = Math.max(2, parseInt(req.query.minSize as string) || 2);
+
+      // Viewer-scoped: force employee filter to the viewer's own ID.
+      // Unlinked viewers get empty cluster results.
+      let employeeId = req.query.employee as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          res.json({ clusters: [], days });
+          return;
+        }
+        employeeId = myEmployeeId;
+      }
 
       const clusters = await getCallClusters({ days, employeeId, minClusterSize: minSize });
       res.json({ clusters, days });
     } catch (error) {
-      console.error("Clustering error:", (error as Error).message);
+      logger.error("clustering error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate call clusters" });
     }
   });
@@ -476,6 +493,11 @@ export function register(router: Router) {
   router.get("/api/analytics/speech/:callId", requireAuth, validateParams({ callId: "uuid" }), async (req, res) => {
     try {
       const callId = req.params.callId;
+      // Phase 3: viewer-scoped — only own or unassigned calls.
+      const callForScope = await storage.getCall(callId);
+      if (callForScope && !(await canViewerAccessCall(req, callForScope))) {
+        return res.status(403).json({ message: "You can only access your own calls" });
+      }
       const transcript = await storage.getTranscript(callId);
       if (!transcript) return res.status(404).json({ message: "Transcript not found" });
 
@@ -500,13 +522,15 @@ export function register(router: Router) {
         },
       });
     } catch (error) {
-      console.error("Speech analytics error:", (error as Error).message);
+      logger.error("speech analytics error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute speech analytics" });
     }
   });
 
-  // GET /api/analytics/speech-summary — aggregate speech metrics across employees
-  router.get("/api/analytics/speech-summary", requireAuth, async (req, res) => {
+  // GET /api/analytics/speech-summary — aggregate speech metrics across employees.
+  // Manager+ only: exposes per-employee speech patterns (interruption counts, etc.)
+  // which are management tools, not peer-visibility data.
+  router.get("/api/analytics/speech-summary", requireAuth, requireRole("manager", "admin"), async (req, res) => {
     try {
       const days = Math.min(parseInt(req.query.days as string) || 30, 90);
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();
@@ -565,7 +589,7 @@ export function register(router: Router) {
 
       res.json({ summary, days, totalCalls: recentCalls.length });
     } catch (error) {
-      console.error("Speech summary error:", (error as Error).message);
+      logger.error("speech summary error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute speech summary" });
     }
   });
@@ -692,7 +716,21 @@ export function registerHeatmapRoutes(router: Router) {
   router.get("/api/analytics/heatmap", requireAuth, async (req, res) => {
     try {
       const days = Math.max(7, Math.min(parseInt(req.query.days as string) || 90, 365));
-      const employeeId = req.query.employee as string | undefined;
+      // Viewer-scoped: force employee filter to the viewer's own ID.
+      // Unlinked viewers get an empty grid rather than cross-employee data.
+      let employeeId = req.query.employee as string | undefined;
+      const userRole = req.user?.role || "viewer";
+      if (userRole === "viewer") {
+        const myEmployeeId = await getUserEmployeeId(req.user?.username, req.user?.name);
+        if (!myEmployeeId) {
+          // Return empty grid (same shape as normal response)
+          const emptyCells: { dow: number; hour: number; count: number; avgScore: number | null }[] = [];
+          for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++) emptyCells.push({ dow: d, hour: h, count: 0, avgScore: null });
+          res.json({ cells: emptyCells, days });
+          return;
+        }
+        employeeId = myEmployeeId;
+      }
       const pool = getPool();
 
       // Initialize 7×24 grid (dow 0=Sun..6=Sat, hour 0..23)
@@ -762,7 +800,7 @@ export function registerHeatmapRoutes(router: Router) {
 
       res.json({ cells, days });
     } catch (error) {
-      console.error("Heatmap error:", error instanceof Error ? error.message : error);
+      logger.error("heatmap error", { error: error instanceof Error ? error.message : error });
       res.status(500).json({ message: "Failed to generate heatmap data" });
     }
   });
@@ -779,6 +817,8 @@ export function registerHeatmapRoutes(router: Router) {
     "/api/analytics/health-pulse/:employeeId",
     requireAuth,
     validateParams({ employeeId: "uuid" }),
+    // #1 Phase 1: restrict to self-or-manager.
+    requireSelfOrManager(req => req.params.employeeId),
     async (req, res) => {
       try {
         const employeeId = req.params.employeeId;
@@ -886,7 +926,7 @@ export function registerHeatmapRoutes(router: Router) {
           thresholds: { warning: DELTA_WARNING, critical: DELTA_CRITICAL, minCalls: MIN_CALLS },
         });
       } catch (error) {
-        console.error("Health pulse error:", error instanceof Error ? error.message : error);
+        logger.error("health pulse error", { error: error instanceof Error ? error.message : error });
         res.status(500).json({ message: "Failed to compute health pulse" });
       }
     }
