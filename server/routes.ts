@@ -190,14 +190,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // to S3. Failures set status='failed' + error on the simulated_calls
         // row; the job queue still counts this as a success if we caught the
         // error, or a retryable failure if we let it throw.
-        const { simulatedCallId } = job.payload as { simulatedCallId: string };
+        const { simulatedCallId } = job.payload as { simulatedCallId: string; uploadedBy?: string };
+        const uploadedBy = (job.payload as { uploadedBy?: string }).uploadedBy ?? "system";
         const { runSimulator } = await import("./services/call-simulator");
-        const { updateSimulatedCall } = await import("./services/simulated-call-storage");
+        const {
+          updateSimulatedCall,
+          getSimulatedCall,
+          sendSimulatedCallToAnalysis,
+          SendToAnalysisError,
+        } = await import("./services/simulated-call-storage");
         const { broadcastSimulatedCallUpdate } = await import("./services/websocket");
         try {
           broadcastSimulatedCallUpdate(simulatedCallId, "generating");
           await runSimulator(simulatedCallId);
           broadcastSimulatedCallUpdate(simulatedCallId, "ready");
+
+          // Post-generation hook: auto-send to the real analysis pipeline if
+          // the config requested it. Non-blocking relative to the generation
+          // job's success — even if the analyze-enqueue fails, the generated
+          // call still stays in 'ready' status and can be analyzed manually.
+          const finalRow = await getSimulatedCall(simulatedCallId);
+          if (finalRow?.config?.analyzeAfterGeneration === true) {
+            try {
+              const result = await sendSimulatedCallToAnalysis({
+                simulatedCallId,
+                uploadedBy,
+                jobQueue,
+                storage,
+              });
+              logger.info("auto-analyze enqueued after generation", {
+                simulatedCallId,
+                callId: result.callId,
+              });
+            } catch (analyzeErr) {
+              if (analyzeErr instanceof SendToAnalysisError) {
+                logger.warn("auto-analyze skipped", {
+                  simulatedCallId,
+                  code: analyzeErr.code,
+                  message: analyzeErr.message,
+                });
+              } else {
+                logger.error("auto-analyze failed", {
+                  simulatedCallId,
+                  error: (analyzeErr as Error).message,
+                });
+              }
+            }
+          }
         } catch (err) {
           const message = (err as Error).message;
           logger.error("simulator job failed", { simulatedCallId, error: message });

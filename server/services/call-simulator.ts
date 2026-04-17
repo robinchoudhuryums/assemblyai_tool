@@ -18,6 +18,7 @@ import type {
   SimulatedCallScript,
   SimulatedCallConfig,
   SimulatedTurn,
+  VoiceSettings,
 } from "@shared/simulated-call-schema";
 import {
   updateSimulatedCall,
@@ -33,6 +34,7 @@ import {
   stitchAndPostProcess,
   generateSilence,
   probeDurationSeconds,
+  overlayClipOnClip,
   isFfmpegAvailable,
   type BackchannelOverlay,
 } from "./audio-stitcher";
@@ -269,35 +271,84 @@ async function renderTurn(
   }
 
   if (turn.speaker === "interrupt") {
-    // Render the primary speaker's line + the interrupter's line as two
-    // separate clips, stitched back-to-back. A true overlap would require
-    // amix; for MVP we treat it as a fast cut (primary → interrupt → primary
-    // resumes is the caller's responsibility — they'd model it as three
-    // turns). Treating interrupt as a single clip keeps the MVP honest.
-    const voice = turn.primarySpeaker === "agent" ? script.voices.agent : script.voices.customer;
-    const combinedText = maybeAddDisfluencies(
-      `${turn.text} ... ${turn.interruptText}`,
-      script.qualityTier,
-      config.disfluencies,
-    );
-    const { audio, characterCount } = await elevenLabsClient.textToSpeech({
-      voiceId: voice,
-      text: combinedText,
+    // Real overlap: render the primary line + the interrupter's line as
+    // TWO clips with DIFFERENT voices, then mix them via ffmpeg so the
+    // interrupter's audio starts 65–80% of the way through the primary.
+    // This replaces the earlier MVP that concatenated both lines into a
+    // single TTS call (which produced same-voice sequential speech, not
+    // a real interruption).
+    const primaryVoice = turn.primarySpeaker === "agent" ? script.voices.agent : script.voices.customer;
+    const interrupterVoice = turn.primarySpeaker === "agent" ? script.voices.customer : script.voices.agent;
+    const primaryText = maybeAddDisfluencies(turn.text, script.qualityTier, config.disfluencies);
+    const interruptText = maybeAddDisfluencies(turn.interruptText, script.qualityTier, config.disfluencies);
+    const settings = resolveVoiceSettings(turn.voiceSettings, script);
+
+    const primaryClip = await elevenLabsClient.textToSpeech({
+      voiceId: primaryVoice,
+      text: primaryText,
+      ...settings,
     });
-    charTally(characterCount);
-    return writeClip(dir, `turn-${index}.mp3`, audio);
+    charTally(primaryClip.characterCount);
+    const primaryPath = await writeClip(dir, `turn-${index}-primary.mp3`, primaryClip.audio);
+
+    const interruptClip = await elevenLabsClient.textToSpeech({
+      voiceId: interrupterVoice,
+      text: interruptText,
+      ...settings,
+    });
+    charTally(interruptClip.characterCount);
+    const interruptPath = await writeClip(dir, `turn-${index}-interrupt.mp3`, interruptClip.audio);
+
+    // Probe primary duration so we can compute the overlap offset.
+    const primaryDurSec = await probeDurationSeconds(primaryPath);
+    // Overlap window: interrupter cuts in between 65–80% of the primary
+    // line. Real interrupts come late; cutting in at 50% sounds
+    // artificial. Minimum 1s so very short primary lines still have
+    // a discernible first phrase before the cut.
+    const minOffsetSec = Math.max(1, primaryDurSec * 0.65);
+    const maxOffsetSec = Math.max(minOffsetSec + 0.1, primaryDurSec * 0.8);
+    const offsetSec = minOffsetSec + Math.random() * (maxOffsetSec - minOffsetSec);
+    const outPath = path.join(dir, `turn-${index}.mp3`);
+    await overlayClipOnClip({
+      primaryPath,
+      secondaryPath: interruptPath,
+      offsetMs: Math.round(offsetSec * 1000),
+      outPath,
+    });
+    return outPath;
   }
 
   // Standard spoken turn. Disfluencies are applied to the TTS request only;
   // the stored script is untouched so admins see what they wrote.
+  // Voice settings resolve turn → script default → client defaults.
   const voice = turn.speaker === "agent" ? script.voices.agent : script.voices.customer;
   const ttsText = maybeAddDisfluencies(turn.text, script.qualityTier, config.disfluencies);
+  const settings = resolveVoiceSettings(turn.voiceSettings, script);
   const { audio, characterCount } = await elevenLabsClient.textToSpeech({
     voiceId: voice,
     text: ttsText,
+    ...settings,
   });
   charTally(characterCount);
   return writeClip(dir, `turn-${index}.mp3`, audio);
+}
+
+/**
+ * Resolve the effective voice_settings for one turn. Precedence:
+ *   turn.voiceSettings → script.defaultVoiceSettings → ElevenLabs defaults.
+ * Returns only the keys the caller set, so `textToSpeech` can fall back
+ * to its own defaults for any missing key.
+ */
+function resolveVoiceSettings(
+  turnSettings: VoiceSettings | undefined,
+  script: SimulatedCallScript,
+): { stability?: number; similarityBoost?: number } {
+  const defaults = script.defaultVoiceSettings ?? {};
+  const effective = { ...defaults, ...(turnSettings ?? {}) };
+  const out: { stability?: number; similarityBoost?: number } = {};
+  if (effective.stability !== undefined) out.stability = effective.stability;
+  if (effective.similarityBoost !== undefined) out.similarityBoost = effective.similarityBoost;
+  return out;
 }
 
 /**

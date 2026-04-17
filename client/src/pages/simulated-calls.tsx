@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Microphone, Pause, Play, Plus, SpinnerGap, Sparkle, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
+import { Microphone, Pause, Play, Plus, SpinnerGap, Sparkle, SlidersHorizontal, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
 import type {
   SimulatedCall,
   SimulatedCallStatus,
@@ -731,6 +731,21 @@ function GenerateForm({
                 onChange={(e) => setConfig({ ...config, backchannels: e.target.checked })}
               />
             </div>
+
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div>
+                <Label className="cursor-pointer">Auto-analyze when ready</Label>
+                <p className="text-xs text-muted-foreground">
+                  Send the generated call through the real analysis pipeline automatically. Adds Bedrock + AssemblyAI cost per generation.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={config.analyzeAfterGeneration === true}
+                onChange={(e) => setConfig({ ...config, analyzeAfterGeneration: e.target.checked })}
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -875,44 +890,12 @@ function FormScriptBuilder({
         </div>
         <div className="space-y-2">
           {script.turns.map((turn, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <Badge variant="outline" className="shrink-0 mt-2 capitalize">
-                {turn.speaker}
-              </Badge>
-              {turn.speaker === "hold" ? (
-                <Input
-                  type="number"
-                  value={turn.duration}
-                  onChange={(e) =>
-                    setTurn(i, { speaker: "hold", duration: parseInt(e.target.value) || 1 })
-                  }
-                  className="w-24"
-                />
-              ) : turn.speaker === "interrupt" ? (
-                <div className="flex-1 space-y-1">
-                  <Input
-                    value={turn.text}
-                    onChange={(e) => setTurn(i, { ...turn, text: e.target.value })}
-                    placeholder="Primary speaker line"
-                  />
-                  <Input
-                    value={turn.interruptText}
-                    onChange={(e) => setTurn(i, { ...turn, interruptText: e.target.value })}
-                    placeholder="Interruption"
-                  />
-                </div>
-              ) : (
-                <Textarea
-                  rows={2}
-                  value={turn.text}
-                  onChange={(e) => setTurn(i, { speaker: turn.speaker, text: e.target.value })}
-                  className="flex-1"
-                />
-              )}
-              <Button type="button" size="sm" variant="ghost" onClick={() => removeTurn(i)}>
-                <Trash className="w-4 h-4" />
-              </Button>
-            </div>
+            <TurnRow
+              key={i}
+              turn={turn}
+              onChange={(next) => setTurn(i, next)}
+              onRemove={() => removeTurn(i)}
+            />
           ))}
         </div>
       </div>
@@ -1028,6 +1011,144 @@ function voiceMetaLine(voice: Voice): string {
  * voices. Each row has a ▶ button that plays the voice's preview clip
  * via a single shared <audio> element (only one preview plays at a time).
  */
+// ─────────────────────────────────────────────────────────────
+// Single turn row with an expandable per-turn voice-settings panel.
+// The settings toggle is only shown for spoken + interrupt turns
+// (hold turns have no TTS to tune).
+// ─────────────────────────────────────────────────────────────
+function TurnRow({
+  turn,
+  onChange,
+  onRemove,
+}: {
+  turn: SimulatedCallScript["turns"][number];
+  onChange: (next: SimulatedCallScript["turns"][number]) => void;
+  onRemove: () => void;
+}) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hasCustomSettings = turn.speaker !== "hold" && !!turn.voiceSettings && (
+    turn.voiceSettings.stability !== undefined ||
+    turn.voiceSettings.similarityBoost !== undefined
+  );
+
+  const updateVoiceSettings = (patch: { stability?: number; similarityBoost?: number } | null) => {
+    if (turn.speaker === "hold") return;
+    const next = patch === null ? undefined : { ...(turn.voiceSettings ?? {}), ...patch };
+    onChange({ ...turn, voiceSettings: next } as typeof turn);
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex gap-2 items-start">
+        <Badge variant="outline" className="shrink-0 mt-2 capitalize">
+          {turn.speaker}
+        </Badge>
+        {turn.speaker === "hold" ? (
+          <Input
+            type="number"
+            value={turn.duration}
+            onChange={(e) =>
+              onChange({ speaker: "hold", duration: parseInt(e.target.value) || 1 })
+            }
+            className="w-24"
+          />
+        ) : turn.speaker === "interrupt" ? (
+          <div className="flex-1 space-y-1">
+            <Input
+              value={turn.text}
+              onChange={(e) => onChange({ ...turn, text: e.target.value })}
+              placeholder="Primary speaker line"
+            />
+            <Input
+              value={turn.interruptText}
+              onChange={(e) => onChange({ ...turn, interruptText: e.target.value })}
+              placeholder="Interruption (other speaker)"
+            />
+          </div>
+        ) : (
+          <Textarea
+            rows={2}
+            value={turn.text}
+            onChange={(e) => onChange({ speaker: turn.speaker, text: e.target.value, voiceSettings: turn.voiceSettings })}
+            className="flex-1"
+          />
+        )}
+        {turn.speaker !== "hold" && (
+          <Button
+            type="button"
+            size="sm"
+            variant={hasCustomSettings ? "default" : "ghost"}
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-label="Per-turn voice settings"
+            title={hasCustomSettings ? "Custom voice settings set" : "Voice settings (stability, similarity)"}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+          </Button>
+        )}
+        <Button type="button" size="sm" variant="ghost" onClick={onRemove}>
+          <Trash className="w-4 h-4" />
+        </Button>
+      </div>
+      {settingsOpen && turn.speaker !== "hold" && (
+        <div className="ml-[70px] p-2 bg-muted/50 rounded-md space-y-2">
+          <div>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">
+                Stability: {turn.voiceSettings?.stability !== undefined ? turn.voiceSettings.stability.toFixed(2) : "(inherit)"}
+              </Label>
+              {turn.voiceSettings?.stability !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => updateVoiceSettings({ stability: undefined })}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  clear
+                </button>
+              )}
+            </div>
+            <Slider
+              value={[turn.voiceSettings?.stability ?? 0.5]}
+              onValueChange={([v]) => updateVoiceSettings({ stability: v })}
+              min={0}
+              max={1}
+              step={0.05}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Lower = more expressive / variable. Higher = more consistent.
+            </p>
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">
+                Similarity boost: {turn.voiceSettings?.similarityBoost !== undefined ? turn.voiceSettings.similarityBoost.toFixed(2) : "(inherit)"}
+              </Label>
+              {turn.voiceSettings?.similarityBoost !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => updateVoiceSettings({ similarityBoost: undefined })}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  clear
+                </button>
+              )}
+            </div>
+            <Slider
+              value={[turn.voiceSettings?.similarityBoost ?? 0.75]}
+              onValueChange={([v]) => updateVoiceSettings({ similarityBoost: v })}
+              min={0}
+              max={1}
+              step={0.05}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              How closely this turn adheres to the reference voice.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VoicePicker({
   voices,
   value,

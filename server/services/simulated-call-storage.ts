@@ -203,3 +203,96 @@ export function warnSimulatedCallsUnavailableOnce() {
     "Simulated Call Generator unavailable: DATABASE_URL is not set. Feature disabled.",
   );
 }
+
+/**
+ * Shared "send to real analysis pipeline" logic, used by both the explicit
+ * POST /:id/analyze route and the post-generation hook triggered by
+ * `config.analyzeAfterGeneration`.
+ *
+ * Side effects: creates a `calls` row with synthetic=TRUE, links it back
+ * via simulated_calls.sent_to_analysis_call_id, and enqueues a
+ * `process_audio` job. `external_id="sim:<id>"` dedupes double-invocations.
+ *
+ * Status codes returned via the throw — callers translate to HTTP:
+ *   - "not_ready" when status !== "ready" or audio_s3_key missing
+ *   - "already_sent" when sent_to_analysis_call_id is already set
+ *   - "db_not_available" when getPool() returns null
+ *   - "no_job_queue" when the job queue is not running
+ *
+ * The jobQueue argument is `unknown` to avoid a cyclic import with
+ * server/services/job-queue.ts's JobQueue class — callers pass the live
+ * instance and we duck-call `.enqueue()`.
+ */
+export class SendToAnalysisError extends Error {
+  constructor(message: string, public readonly code: string) {
+    super(message);
+    this.name = "SendToAnalysisError";
+  }
+}
+
+export interface SendToAnalysisResult {
+  simulatedCallId: string;
+  callId: string;
+  externalId: string;
+}
+
+export async function sendSimulatedCallToAnalysis(params: {
+  simulatedCallId: string;
+  uploadedBy: string;
+  jobQueue: { enqueue: (type: string, payload: Record<string, unknown>, priority?: number) => Promise<string> } | null;
+  /**
+   * Inject the storage instance so this module doesn't import ../storage
+   * (cycle risk). Typed as `any` for param flexibility — we only use
+   * `createCall`, whose real signature is enforced at the call site.
+   */
+  storage: {
+    createCall: (call: any) => Promise<{ id: string }>;
+  };
+}): Promise<SendToAnalysisResult> {
+  const row = await getSimulatedCall(params.simulatedCallId);
+  if (!row) {
+    throw new SendToAnalysisError("Simulated call not found", "not_found");
+  }
+  if (row.status !== "ready" || !row.audioS3Key) {
+    throw new SendToAnalysisError("Simulated call is not ready yet", "not_ready");
+  }
+  if (row.sentToAnalysisCallId) {
+    throw new SendToAnalysisError("Already sent to analysis", "already_sent");
+  }
+  if (!params.jobQueue) {
+    throw new SendToAnalysisError("Job queue is not running", "no_job_queue");
+  }
+
+  const externalId = `sim:${row.id}`;
+  let call: { id: string };
+  try {
+    call = await params.storage.createCall({
+      fileName: `${row.title}.mp3`,
+      filePath: row.audioS3Key,
+      status: "processing",
+      synthetic: true,
+      externalId,
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") {
+      // external_id unique violation — another concurrent caller beat us.
+      throw new SendToAnalysisError("Already sent to analysis", "already_sent");
+    }
+    throw err;
+  }
+
+  await updateSimulatedCall(row.id, { sentToAnalysisCallId: call.id });
+
+  await params.jobQueue.enqueue("process_audio", {
+    callId: call.id,
+    filePath: "",
+    originalName: `${row.title}.mp3`,
+    mimeType: "audio/mpeg",
+    callCategory: null,
+    uploadedBy: params.uploadedBy,
+    processingMode: "immediate",
+    language: "en",
+  });
+
+  return { simulatedCallId: row.id, callId: call.id, externalId };
+}

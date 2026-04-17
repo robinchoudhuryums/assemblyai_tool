@@ -23,10 +23,11 @@ import {
   getSimulatedCall,
   listSimulatedCalls,
   deleteSimulatedCall,
-  updateSimulatedCall,
   countSimulatedCallsToday,
   isSimulatedCallsAvailable,
   warnSimulatedCallsUnavailableOnce,
+  sendSimulatedCallToAnalysis,
+  SendToAnalysisError,
 } from "../services/simulated-call-storage";
 import {
   generateSimulatedCallRequestSchema,
@@ -182,7 +183,7 @@ export function registerSimulatedCallRoutes(
         // setting -10 here makes generations yield to them.
         await jobQueue.enqueue(
           "generate_simulated_call",
-          { simulatedCallId: row.id },
+          { simulatedCallId: row.id, uploadedBy: username },
           -10,
         );
 
@@ -226,71 +227,42 @@ export function registerSimulatedCallRoutes(
       if (!isSimulatedCallsAvailable()) {
         return sendError(res, 503, "Simulated calls require DATABASE_URL");
       }
-      const row = await getSimulatedCall(req.params.id);
-      if (!row) return sendError(res, 404, "Simulated call not found");
-      if (row.status !== "ready" || !row.audioS3Key) {
-        return sendError(res, 400, "Simulated call is not ready yet");
-      }
-      if (row.sentToAnalysisCallId) {
-        res.status(409).json({
-          message: "Already sent to analysis",
-          callId: row.sentToAnalysisCallId,
-        });
-        return;
-      }
 
       try {
-        // Create the `calls` row with synthetic=TRUE and external_id linking
-        // back to the simulated_calls id so we can dedupe second clicks.
-        const externalId = `sim:${row.id}`;
-        const call = await storage.createCall({
-          fileName: `${row.title}.mp3`,
-          filePath: row.audioS3Key,
-          status: "processing",
-          synthetic: true,
-          externalId,
+        const result = await sendSimulatedCallToAnalysis({
+          simulatedCallId: req.params.id,
+          uploadedBy: req.user!.username,
+          jobQueue: getJobQueue(),
+          storage,
         });
-
-        // Link back
-        await updateSimulatedCall(row.id, { sentToAnalysisCallId: call.id });
-
-        // Enqueue the existing process_audio job — the pipeline will load
-        // the audio from S3 via storage.getAudioFiles / downloadAudio.
-        const jobQueue = getJobQueue();
-        if (jobQueue) {
-          await jobQueue.enqueue("process_audio", {
-            callId: call.id,
-            filePath: "",
-            originalName: `${row.title}.mp3`,
-            mimeType: "audio/mpeg",
-            callCategory: null,
-            uploadedBy: req.user!.username,
-            processingMode: "immediate",
-            language: "en",
-          });
-        }
 
         logPhiAccess({
           ...auditContext(req),
           timestamp: new Date().toISOString(),
           event: "simulated_call_sent_to_analysis",
           resourceType: "simulated_call",
-          resourceId: row.id,
-          detail: `callId=${call.id}`,
+          resourceId: result.simulatedCallId,
+          detail: `callId=${result.callId}`,
         });
 
         res.status(202).json({
-          simulatedCallId: row.id,
-          callId: call.id,
+          simulatedCallId: result.simulatedCallId,
+          callId: result.callId,
           status: "processing",
         });
       } catch (err) {
-        const message = (err as Error).message;
-        if ((err as { code?: string }).code === "23505") {
-          // external_id already exists — another click won the race.
-          return sendError(res, 409, "Already sent to analysis");
+        if (err instanceof SendToAnalysisError) {
+          const statusByCode: Record<string, number> = {
+            not_found: 404,
+            not_ready: 400,
+            already_sent: 409,
+            no_job_queue: 503,
+          };
+          return sendError(res, statusByCode[err.code] ?? 500, err.message);
         }
-        logger.error("failed to send simulated call to analysis", { error: message });
+        logger.error("failed to send simulated call to analysis", {
+          error: (err as Error).message,
+        });
         sendError(res, 500, "Failed to send to analysis");
       }
     },

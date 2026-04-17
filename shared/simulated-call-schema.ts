@@ -78,12 +78,27 @@ export const CIRCUMSTANCE_META: Record<Circumstance, { label: string; descriptio
   },
 };
 
+// ── Per-turn voice settings ────────────────────────────────────
+// Optional overrides passed to ElevenLabs `voice_settings` for a single
+// turn. When omitted, the client defaults (stability=0.5, similarityBoost
+// =0.75) apply. Lower stability = more expressive/variable; higher
+// stability = more consistent. Lower similarityBoost = looser adherence
+// to the reference voice. Useful for making a specific turn sound rushed,
+// agitated, calm, etc., without regenerating the whole call.
+export const voiceSettingsSchema = z.object({
+  stability: z.number().min(0).max(1).optional(),
+  similarityBoost: z.number().min(0).max(1).optional(),
+  style: z.number().min(0).max(1).optional(),
+}).partial();
+export type VoiceSettings = z.infer<typeof voiceSettingsSchema>;
+
 // ── Per-turn script primitives ─────────────────────────────────
 export const agentOrCustomer = z.enum(["agent", "customer"]);
 
 export const spokenTurnSchema = z.object({
   speaker: agentOrCustomer,
   text: z.string().min(1).max(2000),
+  voiceSettings: voiceSettingsSchema.optional(),
 });
 
 export const holdTurnSchema = z.object({
@@ -97,6 +112,7 @@ export const interruptTurnSchema = z.object({
   primarySpeaker: agentOrCustomer,
   text: z.string().min(1).max(2000),
   interruptText: z.string().min(1).max(500),
+  voiceSettings: voiceSettingsSchema.optional(),
 });
 
 export const simulatedTurnSchema = z.union([
@@ -115,6 +131,12 @@ export const simulatedCallScriptSchema = z.object({
     agent: z.string().min(1),       // ElevenLabs voice ID
     customer: z.string().min(1),
   }),
+  /**
+   * Script-wide voice settings applied to every turn that doesn't have
+   * its own `voiceSettings`. Precedence at render time:
+   *   turn.voiceSettings → script.defaultVoiceSettings → client defaults.
+   */
+  defaultVoiceSettings: voiceSettingsSchema.optional(),
   turns: z.array(simulatedTurnSchema).min(1).max(200),
 });
 

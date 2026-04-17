@@ -330,6 +330,51 @@ export async function stitchAndPostProcess(
 }
 
 /**
+ * Overlay `secondaryPath` onto `primaryPath` at a given offset (ms from
+ * the start of the primary) and write the mixed result to `outPath`.
+ * Used to produce a real interruption effect: the primary speaker is
+ * talking, and the interrupter's clip starts partway through (after
+ * most of the primary line has played). Both clips share the same
+ * sample rate; ffmpeg's amix handles resampling if not.
+ *
+ * `secondaryVolumeDb` lets callers attenuate the overlaid clip (default 0
+ * = unchanged, same loudness as the primary). For interruptions we keep
+ * it at 0 — the interrupter isn't quieter, just starting later.
+ *
+ * `duration=first` on amix clamps output to the primary's length plus
+ * whatever of the secondary extends beyond — but since we set duration
+ * to `longest`, the output is primary OR primary+tail, whichever is
+ * longer. That's what we want for real interruptions: the interrupter's
+ * final words can extend past where the primary speaker stopped.
+ */
+export async function overlayClipOnClip(params: {
+  primaryPath: string;
+  secondaryPath: string;
+  offsetMs: number;
+  outPath: string;
+  secondaryVolumeDb?: number;
+}): Promise<void> {
+  const delayMs = Math.max(0, Math.floor(params.offsetMs));
+  const db = params.secondaryVolumeDb ?? 0;
+  const filter = [
+    `[1:a]adelay=${delayMs}|${delayMs},volume=${db}dB[overlay]`,
+    `[0:a][overlay]amix=inputs=2:duration=longest:normalize=0[out]`,
+  ].join(";");
+  await runFfmpeg({
+    args: [
+      "-i", params.primaryPath,
+      "-i", params.secondaryPath,
+      "-filter_complex", filter,
+      "-map", "[out]",
+      "-c:a", "libmp3lame",
+      "-q:a", "4",
+      params.outPath,
+    ],
+    timeoutMs: 120_000,
+  });
+}
+
+/**
  * Probe duration by running `ffmpeg -i` and parsing the "Duration:" line
  * from stderr. Avoids a separate ffprobe binary.
  */
