@@ -65,11 +65,6 @@ export function resetSessionExpired() {
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    // Server-side errors (502/503/504) — app is down or restarting, not a session issue
-    if (res.status >= 502 && res.status <= 504) {
-      throw new Error("Server is temporarily unavailable. Please try again in a moment.");
-    }
-
     // Try to parse the response body once so all error paths can read code/message.
     // Body is consumed exactly once — falls through to text() if it isn't JSON.
     let bodyMessage: string | undefined;
@@ -79,7 +74,21 @@ async function throwIfResNotOk(res: Response) {
       bodyMessage = body?.message ?? body?.error?.message;
       bodyCode = body?.code ?? body?.error?.code;
     } catch {
-      // Not JSON — leave undefined; we'll fall back to text below.
+      // Not JSON — try text
+      try {
+        const text = await res.clone().text();
+        if (text && text.length < 500) bodyMessage = text;
+      } catch { /* ignore */ }
+    }
+
+    // Server-side errors (502/503/504) — app is down, restarting, OR an
+    // upstream integration (Bedrock, AssemblyAI, etc.) threw. The app
+    // itself responds with a JSON body when it proxies an upstream error;
+    // a bare 502 without JSON is a real infra outage. Preserve the app's
+    // message when present so admins see "Model JSON was malformed" or
+    // "Bedrock rate limit exceeded" instead of a generic placeholder.
+    if (res.status >= 502 && res.status <= 504) {
+      throw new Error(bodyMessage || "Server is temporarily unavailable. Please try again in a moment.");
     }
 
     // On 401, clear auth cache so AuthenticatedApp renders login page.

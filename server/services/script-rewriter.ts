@@ -185,7 +185,10 @@ export async function rewriteScript(input: RewriteInput): Promise<RewriteResult>
   const prompt = buildRewritePrompt(input);
   let raw: string;
   try {
-    raw = await aiProvider.generateText(prompt);
+    // 6144 tokens gives enough headroom for a 15-turn rewritten script
+    // plus JSON overhead. The default 2048 cuts off mid-JSON on longer
+    // scripts, producing parse_error stage failures.
+    raw = await aiProvider.generateText(prompt, undefined, 6144);
   } catch (err) {
     throw new ScriptRewriterError(
       `Bedrock generateText failed: ${(err as Error).message}`,
@@ -347,7 +350,10 @@ export async function generateScriptFromScenario(
 
   let raw: string;
   try {
-    raw = await aiProvider.generateText(prompt, modelId);
+    // 8192 tokens gives enough headroom for up to ~30 turns of dialogue
+    // (the generator's max). The default 2048 caps out around 8-10 turns
+    // before JSON gets truncated mid-object, causing parse_error.
+    raw = await aiProvider.generateText(prompt, modelId, 8192);
   } catch (err) {
     throw new ScriptRewriterError(
       `Bedrock generateText failed: ${(err as Error).message}`,
@@ -358,7 +364,10 @@ export async function generateScriptFromScenario(
 
   const jsonBlob = extractJsonObject(raw);
   if (!jsonBlob) {
-    logger.warn("script-generator: model response had no JSON block", { sample: raw.slice(0, 200) });
+    logger.warn("script-generator: model response had no JSON block", {
+      sample: raw.slice(0, 400),
+      totalChars: raw.length,
+    });
     throw new ScriptRewriterError(
       "Model response did not contain a JSON object",
       "parse_error",
