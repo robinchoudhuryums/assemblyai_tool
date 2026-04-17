@@ -590,6 +590,29 @@ function GenerateForm({
       toast({ title: "Missing fields", description: "Title and at least one turn are required.", variant: "destructive" });
       return;
     }
+    // Surface empty turn text up-front so the user doesn't round-trip to
+    // the server for a Zod min(1) rejection on `script.turns.N.text` /
+    // `script.turns.N.interruptText`. These are the most common sources
+    // of a 400 from the generate endpoint when a user adds a turn via
+    // the "+ Agent" / "+ Customer" / "+ Hold" buttons and forgets to
+    // fill in the text box.
+    const emptyTurnIndexes: number[] = [];
+    finalScript.turns.forEach((turn, idx) => {
+      if (turn.speaker === "hold") return;
+      const text = (turn as { text?: string }).text ?? "";
+      const interruptText =
+        turn.speaker === "interrupt" ? (turn.interruptText ?? "") : "";
+      if (!text.trim()) emptyTurnIndexes.push(idx);
+      else if (turn.speaker === "interrupt" && !interruptText.trim()) emptyTurnIndexes.push(idx);
+    });
+    if (emptyTurnIndexes.length > 0) {
+      toast({
+        title: "Empty turns found",
+        description: `Turn${emptyTurnIndexes.length > 1 ? "s" : ""} ${emptyTurnIndexes.map(i => i + 1).join(", ")} ha${emptyTurnIndexes.length > 1 ? "ve" : "s"} no text. Fill in each turn or remove the blank ones before generating.`,
+        variant: "destructive",
+      });
+      return;
+    }
     generateMut.mutate({ script: finalScript, config });
   };
 
