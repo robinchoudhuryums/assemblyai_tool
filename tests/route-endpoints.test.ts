@@ -555,11 +555,13 @@ describe("Public config endpoint (/api/config)", () => {
     assert.equal(status, 200);
   });
 
-  it("GET /api/config returns companyName + scoring shape", async () => {
+  it("GET /api/config returns companyName + appName + scoring shape", async () => {
     const { status, body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
     assert.equal(status, 200);
     assert.equal(typeof body.companyName, "string");
     assert.ok(body.companyName.length > 0);
+    assert.equal(typeof body.appName, "string");
+    assert.ok(body.appName.length > 0);
     assert.ok(body.scoring);
     assert.equal(typeof body.scoring.lowScoreThreshold, "number");
     assert.equal(typeof body.scoring.highScoreThreshold, "number");
@@ -577,12 +579,20 @@ describe("Public config endpoint (/api/config)", () => {
   });
 
   it("companyName falls back to default when COMPANY_NAME env var is not overridden", async () => {
-    // Default per server/routes/config.ts is "UMS (United Medical Supply)".
+    // Default per server/routes/config.ts is "UniversalMed Supply".
     // The test process may have COMPANY_NAME set or unset; just assert it's
     // a non-empty string and matches the env var when present.
     const { body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
-    const expected = process.env.COMPANY_NAME || "UMS (United Medical Supply)";
+    const expected = process.env.COMPANY_NAME || "UniversalMed Supply";
     assert.equal(body.companyName, expected);
+  });
+
+  it("appName is always CallAnalyzer regardless of COMPANY_NAME env var", async () => {
+    // appName is the product brand for UI chrome — hardcoded server-side
+    // so a tenant's COMPANY_NAME override never changes the app name shown
+    // in the login page title or sidebar header.
+    const { body } = await req(baseUrl, "GET", "/api/config", undefined, "none");
+    assert.equal(body.appName, "CallAnalyzer");
   });
 
   after((_, done) => {

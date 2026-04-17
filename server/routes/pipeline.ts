@@ -151,7 +151,7 @@ export async function processAudioFile(
         }
       }
       // Boost company name/acronym for transcription accuracy
-      const companyName = process.env.COMPANY_NAME || "UMS";
+      const companyName = process.env.COMPANY_NAME || "UniversalMed Supply";
       for (const word of companyName.split(/[\s()]+/).filter(Boolean)) {
         nameWords.add(word);
       }

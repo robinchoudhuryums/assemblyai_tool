@@ -73,7 +73,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
   const notifRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { theme, setTheme } = useAppearance();
-  const { companyName } = useConfig();
+  const { appName } = useConfig();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -188,7 +188,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             <Waveform className="text-primary-foreground w-4 h-4" />
           </div>
           <div>
-            <h1 className="font-bold text-lg text-foreground">{companyName}</h1>
+            <h1 className="font-bold text-lg text-foreground">{appName}</h1>
             <p className="text-xs text-muted-foreground">Pro Dashboard</p>
           </div>
         </div>

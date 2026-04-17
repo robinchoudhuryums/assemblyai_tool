@@ -24,7 +24,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
-  const { companyName } = useConfig();
+  const { appName } = useConfig();
 
   // MFA state
   const [mfaRequired, setMfaRequired] = useState(false);
@@ -152,7 +152,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                 <Waveform className="w-6 h-6 text-primary" />
               </div>
             </div>
-            <CardTitle className="text-2xl">{companyName}</CardTitle>
+            <CardTitle className="text-2xl">{appName}</CardTitle>
             <CardDescription>
               {mfaRequired
                 ? "Enter the verification code from your authenticator app"

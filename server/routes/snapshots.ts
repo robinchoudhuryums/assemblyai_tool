@@ -25,7 +25,7 @@ import {
   type SnapshotLevel,
 } from "../services/performance-snapshots";
 
-const COMPANY_NAME = process.env.COMPANY_NAME || "UMS (United Medical Supply)";
+const COMPANY_NAME = process.env.COMPANY_NAME || "UniversalMed Supply";
 
 // ==================== SNAPSHOT GENERATION (module-level) ====================
 // A8/F18: lifted out of registerSnapshotRoutes so the job worker in routes.ts

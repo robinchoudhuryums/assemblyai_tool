@@ -16,7 +16,14 @@ import {
 export function registerConfigRoutes(router: Router) {
   router.get("/api/config", (_req, res) => {
     res.json({
-      companyName: process.env.COMPANY_NAME || "UMS (United Medical Supply)",
+      // `companyName` is consumed by backend AI prompts (coaching alerts,
+      // snapshots, transcription word boost) when the server renders text
+      // ABOUT the tenant. Clients should NOT display this directly as the
+      // app chrome — use the hardcoded "CallAnalyzer" brand in the UI.
+      companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+      // `appName` is the product brand shown in UI chrome (login page,
+      // sidebar header). Hardcoded — not tenant-tunable.
+      appName: "CallAnalyzer",
       scoring: {
         lowScoreThreshold: LOW_SCORE_THRESHOLD,
         highScoreThreshold: HIGH_SCORE_THRESHOLD,
