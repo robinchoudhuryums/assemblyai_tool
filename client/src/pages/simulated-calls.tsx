@@ -26,7 +26,9 @@ import type {
   SimulatedCallStatus,
   SimulatedCallConfig,
   SimulatedCallScript,
+  Circumstance,
 } from "@shared/simulated-call-schema";
+import { CIRCUMSTANCE_VALUES, CIRCUMSTANCE_META } from "@shared/simulated-call-schema";
 
 interface Voice {
   voice_id: string;
@@ -60,6 +62,7 @@ const DEFAULT_CONFIG: SimulatedCallConfig = {
   analyzeAfterGeneration: false,
   disfluencies: true,
   backchannels: true,
+  circumstances: [],
 };
 
 const EMPTY_SCRIPT: SimulatedCallScript = {
@@ -232,6 +235,11 @@ function LibraryTable({
                     <h3 className="font-medium truncate">{c.title}</h3>
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                     {c.qualityTier && <Badge variant="outline">{c.qualityTier}</Badge>}
+                    {(c.config?.circumstances ?? []).map((circ: Circumstance) => (
+                      <Badge key={circ} variant="outline" className="border-orange-500/40 text-orange-600 text-[10px]">
+                        {CIRCUMSTANCE_META[circ]?.label ?? circ}
+                      </Badge>
+                    ))}
                     {c.sentToAnalysisCallId && (
                       <Badge variant="outline" className="border-green-500/50 text-green-600">
                         <CheckCircle className="w-3 h-3 mr-1" /> Analyzed
@@ -526,6 +534,11 @@ function GenerateForm({
           </CardContent>
         </Card>
 
+        <CircumstancePicker
+          value={config.circumstances ?? []}
+          onChange={(next) => setConfig({ ...config, circumstances: next })}
+        />
+
         <Card>
           <CardHeader>
             <CardTitle>Summary</CardTitle>
@@ -543,6 +556,12 @@ function GenerateForm({
               <span className="text-muted-foreground">Est. cost:</span>
               <span>${estimatedCost}</span>
             </div>
+            {(config.circumstances?.length ?? 0) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Circumstances:</span>
+                <span>{config.circumstances!.length}</span>
+              </div>
+            )}
             <Button
               className="w-full mt-3"
               onClick={handleSubmit}
@@ -698,6 +717,76 @@ function FormScriptBuilder({
         </div>
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Circumstance multi-select — toggle chips that reflect the
+// real-call situations the script should simulate. Rule-based
+// circumstances (angry, hard_of_hearing, escalation) take effect
+// at generation time via server/services/circumstance-modifiers.ts.
+// Non-rule circumstances are inputs to the Bedrock script rewriter
+// (Phase B) and are accepted here but are no-ops until the admin
+// uses the "Create Variation" flow.
+// ─────────────────────────────────────────────────────────────
+function CircumstancePicker({
+  value,
+  onChange,
+}: {
+  value: Circumstance[];
+  onChange: (next: Circumstance[]) => void;
+}) {
+  const toggle = (c: Circumstance) => {
+    if (value.includes(c)) {
+      onChange(value.filter((x) => x !== c));
+    } else {
+      onChange([...value, c]);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Circumstances</CardTitle>
+        <CardDescription className="text-xs">
+          Apply to the script at generation time. Rule-based items take effect immediately; the rest only apply when you use "Create Variation" on a generated call (uses AI).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {CIRCUMSTANCE_VALUES.map((c) => {
+          const meta = CIRCUMSTANCE_META[c];
+          const active = value.includes(c);
+          return (
+            <button
+              key={c}
+              type="button"
+              onClick={() => toggle(c)}
+              className={
+                "w-full text-left px-3 py-2 rounded-md border transition-colors " +
+                (active
+                  ? "bg-primary/10 border-primary/50 text-foreground"
+                  : "border-border hover:bg-muted")
+              }
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-sm">{meta.label}</span>
+                <div className="flex gap-1 shrink-0">
+                  {meta.ruleBased ? (
+                    <Badge variant="outline" className="text-[10px] h-5">Rule</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] h-5 border-purple-400/50 text-purple-600">AI</Badge>
+                  )}
+                  {active && <CheckCircle className="w-4 h-4 text-green-600" weight="fill" />}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 leading-snug">
+                {meta.description}
+              </p>
+            </button>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
 

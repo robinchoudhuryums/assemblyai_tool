@@ -37,6 +37,7 @@ import {
   type BackchannelOverlay,
 } from "./audio-stitcher";
 import { addDisfluencies, pickBackchannel } from "./disfluency";
+import { applyCircumstanceModifiers } from "./circumstance-modifiers";
 
 /** Minimum duration (seconds) for a primary turn to get a backchannel overlay. */
 const BACKCHANNEL_MIN_TURN_SEC = 4;
@@ -88,8 +89,20 @@ export async function runSimulator(
 
   await updateSimulatedCall(simulatedCallId, { status: "generating" });
 
-  const script = row.script as SimulatedCallScript;
+  const storedScript = row.script as SimulatedCallScript;
   const config = row.config as SimulatedCallConfig;
+
+  // Step 0: apply rule-based circumstance modifiers. `applyCircumstanceModifiers`
+  // returns the input turn list unchanged when no rule-based circumstances
+  // are selected, so the no-circumstance path is byte-identical to before.
+  // Non-rule circumstances (confused, grateful, etc.) are handled by the
+  // Bedrock rewriter in the variant-creation flow — by the time the
+  // simulator runs, the stored script already reflects those changes.
+  const effectiveTurns = applyCircumstanceModifiers(
+    storedScript,
+    config.circumstances ?? [],
+  );
+  const script: SimulatedCallScript = { ...storedScript, turns: effectiveTurns };
 
   const result = await withTempDir(async (dir) => {
     // Step 1: synthesize each turn (or silence for hold) into a buffer/file.
