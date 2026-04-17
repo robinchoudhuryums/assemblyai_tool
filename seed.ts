@@ -1,8 +1,19 @@
 import 'dotenv/config';
 import fs from 'fs';
+import path from 'path';
 import csv from 'csv-parser';
 import { storage } from './server/storage';
+import {
+  isSimulatedCallsAvailable,
+  listSimulatedCalls,
+  createSimulatedCall,
+} from './server/services/simulated-call-storage';
+import {
+  simulatedCallScriptSchema,
+  simulatedCallConfigSchema,
+} from './shared/simulated-call-schema';
 const csvFilePath = './employees.csv';
+const PRESETS_DIR = './seed/simulated-call-presets';
 
 async function syncFromCSV() {
   const employeesFromCSV: any[] = [];
@@ -56,4 +67,68 @@ async function syncFromCSV() {
     });
 }
 
-syncFromCSV();
+async function seedSimulatedCallPresets() {
+  if (!isSimulatedCallsAvailable()) {
+    console.log("[presets] DATABASE_URL not set — skipping simulated-call preset seeding.");
+    return;
+  }
+  if (!fs.existsSync(PRESETS_DIR)) {
+    console.log(`[presets] directory ${PRESETS_DIR} not found — skipping.`);
+    return;
+  }
+  const files = fs
+    .readdirSync(PRESETS_DIR)
+    .filter((f) => f.endsWith(".json"));
+  if (files.length === 0) {
+    console.log(`[presets] no preset JSON files in ${PRESETS_DIR}.`);
+    return;
+  }
+
+  // Idempotency: seed only presets that don't already exist by title under
+  // the "system" creator. If an admin deletes a preset they probably don't
+  // want it respawned on the next seed — but that's the tradeoff for a
+  // simple title-based check. Manually-created rows are untouched.
+  const existing = await listSimulatedCalls({ createdBy: "system", limit: 500 });
+  const existingTitles = new Set(existing.map((c) => c.title));
+
+  let created = 0;
+  for (const file of files) {
+    const fullPath = path.join(PRESETS_DIR, file);
+    try {
+      const raw = fs.readFileSync(fullPath, "utf-8");
+      const json = JSON.parse(raw);
+      const scriptParsed = simulatedCallScriptSchema.safeParse(json);
+      if (!scriptParsed.success) {
+        console.warn(`[presets] ${file} — invalid script shape, skipping`);
+        continue;
+      }
+      if (existingTitles.has(scriptParsed.data.title)) {
+        continue;
+      }
+      // Sensible default config: natural gap timing, phone codec, no noise.
+      const config = simulatedCallConfigSchema.parse({});
+      await createSimulatedCall({
+        title: scriptParsed.data.title,
+        scenario: scriptParsed.data.scenario,
+        qualityTier: scriptParsed.data.qualityTier,
+        equipment: scriptParsed.data.equipment,
+        script: scriptParsed.data,
+        config,
+        createdBy: "system",
+      });
+      console.log(`[presets] seeded: ${scriptParsed.data.title}`);
+      created++;
+    } catch (err) {
+      console.warn(`[presets] failed to process ${file}:`, (err as Error).message);
+    }
+  }
+  console.log(`[presets] seeded ${created} new preset(s) (${existingTitles.size} already existed).`);
+}
+
+(async () => {
+  syncFromCSV();
+  // Run presets independently of the CSV sync (CSV sync is event-driven).
+  await seedSimulatedCallPresets().catch((err) => {
+    console.error("Preset seeding failed:", err);
+  });
+})();

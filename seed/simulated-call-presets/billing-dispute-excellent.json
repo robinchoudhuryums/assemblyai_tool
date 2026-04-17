@@ -1,0 +1,19 @@
+{
+  "title": "Power Wheelchair Billing Dispute — Excellent Handling",
+  "scenario": "Customer disputes an invoice charge. Agent listens, investigates, owns the error, and issues a correction.",
+  "qualityTier": "excellent",
+  "equipment": "Power Wheelchair",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "Good afternoon, thank you for calling UMS, this is Maria. How can I help you?" },
+    { "speaker": "customer", "text": "I just got a bill for six hundred dollars for my wheelchair. I thought Medicare covered everything." },
+    { "speaker": "agent", "text": "I completely understand that's concerning. Let me take a close look at your statement. Can you read me the invoice number?" },
+    { "speaker": "customer", "text": "It's invoice 44871." },
+    { "speaker": "agent", "text": "Thank you. I'm pulling it up now. I can see what happened — your supplemental insurance wasn't billed for the coinsurance portion. That's our mistake on our end. I'm going to file the claim with them right now and issue a hold on the balance. You won't owe anything in the meantime." },
+    { "speaker": "customer", "text": "Oh thank goodness. I was so worried." },
+    { "speaker": "agent", "text": "I'm really sorry for the stress this caused. I'm going to personally follow up on this in five business days to make sure it's resolved. Is the number on your account the best way to reach you?" },
+    { "speaker": "customer", "text": "Yes, that works." },
+    { "speaker": "agent", "text": "Perfect. I'll reach out Wednesday with an update. Is there anything else I can do for you today?" },
+    { "speaker": "customer", "text": "No, you've been wonderful, thank you." }
+  ]
+}

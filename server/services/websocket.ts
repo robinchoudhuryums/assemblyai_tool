@@ -93,3 +93,29 @@ export function broadcastCallUpdate(callId: string, status: string, extra?: Reco
     }
   });
 }
+
+/**
+ * Broadcast a Simulated Call Generator status update. Separate from
+ * call_update so the regular calls-list TanStack Query cache doesn't
+ * invalidate on every simulator status tick (different URL prefix).
+ * Payload shape: { type: "simulated_call_update", simulatedCallId, status, ... }
+ */
+export function broadcastSimulatedCallUpdate(
+  simulatedCallId: string,
+  status: string,
+  extra?: Record<string, any>,
+) {
+  if (!wss) return;
+  const message = JSON.stringify({
+    type: "simulated_call_update",
+    simulatedCallId,
+    status,
+    ...extra,
+  });
+  wss.clients.forEach((client) => {
+    const aws = client as AuthenticatedWebSocket;
+    if (client.readyState === WebSocket.OPEN && aws.userId) {
+      client.send(message);
+    }
+  });
+}

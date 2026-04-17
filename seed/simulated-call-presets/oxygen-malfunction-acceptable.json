@@ -1,0 +1,19 @@
+{
+  "title": "Oxygen Concentrator Malfunction — Acceptable Handling",
+  "scenario": "Customer reports a malfunctioning concentrator. Agent resolves it eventually but without warmth or urgency.",
+  "qualityTier": "acceptable",
+  "equipment": "Oxygen Concentrator",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS, this is Sam." },
+    { "speaker": "customer", "text": "My oxygen machine is making a beeping noise and I don't know what's wrong." },
+    { "speaker": "agent", "text": "What's the error code on the display?" },
+    { "speaker": "customer", "text": "It says E02." },
+    { "speaker": "agent", "text": "That's a filter issue. The unit will need to be replaced." },
+    { "speaker": "customer", "text": "How long will that take?" },
+    { "speaker": "agent", "text": "We can get one out tomorrow. Do you have a backup tank to use tonight?" },
+    { "speaker": "customer", "text": "Yes, I have one from the hospital." },
+    { "speaker": "agent", "text": "Okay, use that until tomorrow. The driver will bring a new concentrator and take the old one." },
+    { "speaker": "customer", "text": "Alright, thank you." }
+  ]
+}

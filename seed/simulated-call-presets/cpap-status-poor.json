@@ -1,0 +1,19 @@
+{
+  "title": "CPAP Order Status — Poor Handling",
+  "scenario": "Customer is upset about a delayed CPAP. Agent is curt, dismissive, and fails to own the issue.",
+  "qualityTier": "poor",
+  "equipment": "CPAP",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS." },
+    { "speaker": "customer", "text": "Yeah hi, I ordered a CPAP machine over a month ago and nobody's told me anything. What's going on?" },
+    { "speaker": "agent", "text": "I'd have to look it up. What's your name?" },
+    { "speaker": "customer", "text": "Robert Harrison. My doctor sent the prescription already." },
+    { "speaker": "agent", "text": "Hold on... okay it's stuck in authorization." },
+    { "speaker": "customer", "text": "For a month? That can't be right. Can you push it through?" },
+    { "speaker": "agent", "text": "That's up to the insurance, not us. You'd have to call them." },
+    { "speaker": "customer", "text": "This is ridiculous, I can't sleep without this thing." },
+    { "speaker": "agent", "text": "I understand, but there's nothing I can do. You'll just have to wait." },
+    { "speaker": "customer", "text": "Unbelievable." }
+  ]
+}

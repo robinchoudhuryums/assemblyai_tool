@@ -1,0 +1,19 @@
+{
+  "title": "CGM Eligibility Question — Acceptable Handling",
+  "scenario": "Customer asks about CGM coverage. Agent gives accurate information but doesn't take initiative on next steps.",
+  "qualityTier": "acceptable",
+  "equipment": "Continuous Glucose Monitor",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS, this is Morgan." },
+    { "speaker": "customer", "text": "I wanted to see if I can get a continuous glucose monitor through my insurance." },
+    { "speaker": "agent", "text": "Most insurances cover those if you're on insulin. Are you?" },
+    { "speaker": "customer", "text": "Yes." },
+    { "speaker": "agent", "text": "Then you probably qualify. Your doctor will need to send us a prescription and a Certificate of Medical Necessity." },
+    { "speaker": "customer", "text": "Okay, what do I do next?" },
+    { "speaker": "agent", "text": "Just have your doctor fax that paperwork to our intake team. Once we receive it we'll process your order." },
+    { "speaker": "customer", "text": "Do you have the fax number?" },
+    { "speaker": "agent", "text": "It's on our website under 'providers.'" },
+    { "speaker": "customer", "text": "Alright, I'll let my doctor know." }
+  ]
+}

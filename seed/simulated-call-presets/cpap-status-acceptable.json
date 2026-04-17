@@ -1,0 +1,19 @@
+{
+  "title": "CPAP Order Status — Acceptable Handling",
+  "scenario": "Customer asks about a delayed CPAP order. Agent answers correctly but does not go the extra mile.",
+  "qualityTier": "acceptable",
+  "equipment": "CPAP",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS, this is Jordan." },
+    { "speaker": "customer", "text": "Hi, I ordered a CPAP machine a few weeks ago and I haven't gotten it yet." },
+    { "speaker": "agent", "text": "Okay, what's your name and date of birth?" },
+    { "speaker": "customer", "text": "Patricia Nelson, July 22, 1962." },
+    { "speaker": "agent", "text": "Let me check... yeah, it looks like we're still waiting on insurance authorization." },
+    { "speaker": "customer", "text": "How long does that usually take?" },
+    { "speaker": "agent", "text": "It varies. Usually a couple more weeks. You'll get a call when it ships." },
+    { "speaker": "customer", "text": "Okay, I guess I'll just wait then." },
+    { "speaker": "agent", "text": "Yeah. Anything else?" },
+    { "speaker": "customer", "text": "No, that's it." }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "title": "Oxygen Concentrator Malfunction — Poor Handling",
+  "scenario": "Customer urgently reports a malfunctioning concentrator. Agent is dismissive, fails to check for backup oxygen, and offers no urgency.",
+  "qualityTier": "poor",
+  "equipment": "Oxygen Concentrator",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS." },
+    { "speaker": "customer", "text": "My oxygen machine stopped working, I can't breathe properly!" },
+    { "speaker": "agent", "text": "Okay calm down. What's the model number?" },
+    { "speaker": "customer", "text": "I don't know — I need help now, I'm getting dizzy." },
+    { "speaker": "agent", "text": "I need the model number to look up your account." },
+    { "speaker": "customer", "text": "Please, I feel really bad." },
+    { "speaker": "agent", "text": "Ma'am, there's nothing I can do without the information. You should call 911 if it's an emergency." },
+    { "speaker": "customer", "text": "I just need a working oxygen machine." },
+    { "speaker": "agent", "text": "We can schedule a replacement but it takes a few days. I need your account info first." },
+    { "speaker": "customer", "text": "This is a disaster." }
+  ]
+}

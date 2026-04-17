@@ -1,0 +1,19 @@
+{
+  "title": "CGM Eligibility Question — Excellent Handling",
+  "scenario": "Customer asks if they're covered for a Continuous Glucose Monitor. Agent explains criteria clearly and offers next steps.",
+  "qualityTier": "excellent",
+  "equipment": "Continuous Glucose Monitor",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "Thanks for calling UMS, this is Jamie. How can I help?" },
+    { "speaker": "customer", "text": "Hi, my endocrinologist mentioned a continuous glucose monitor and I wanted to see if my insurance would cover it." },
+    { "speaker": "agent", "text": "Great question. I can definitely help you understand your options. Medicare and most insurances cover CGMs when certain criteria are met. Can I ask, are you on insulin currently?" },
+    { "speaker": "customer", "text": "Yes, I take it multiple times a day." },
+    { "speaker": "agent", "text": "Perfect — that's one of the main coverage criteria. The next step is your doctor submitting a prescription and a Certificate of Medical Necessity. I can fax the form directly to their office today if you have their fax number." },
+    { "speaker": "customer", "text": "Oh, I don't know the fax off the top of my head." },
+    { "speaker": "agent", "text": "No problem at all. Can I have your doctor's name and clinic? I'll look it up in our system." },
+    { "speaker": "customer", "text": "Dr. Hernandez at Westside Endocrinology." },
+    { "speaker": "agent", "text": "Found them. I'll fax the Certificate of Medical Necessity and a welcome packet today. Once they send it back, typical turnaround from start to shipping is about ten business days. I'll call you when everything is approved." },
+    { "speaker": "customer", "text": "Thank you so much, that was really clear." }
+  ]
+}

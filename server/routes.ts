@@ -26,6 +26,7 @@ import { registerUserRoutes } from "./routes/users";
 import { registerSnapshotRoutes } from "./routes/snapshots";
 import { registerGamificationRoutes } from "./routes/gamification";
 import { registerConfigRoutes } from "./routes/config";
+import { registerSimulatedCallRoutes } from "./routes/simulated-calls";
 
 // Pipeline
 import { processAudioFile, shouldUseBatchMode } from "./routes/pipeline";
@@ -184,6 +185,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           language,
           filePath,
         });
+      } else if (job.type === "generate_simulated_call") {
+        // Simulated Call Generator — renders TTS + stitches the MP3 + uploads
+        // to S3. Failures set status='failed' + error on the simulated_calls
+        // row; the job queue still counts this as a success if we caught the
+        // error, or a retryable failure if we let it throw.
+        const { simulatedCallId } = job.payload as { simulatedCallId: string };
+        const { runSimulator } = await import("./services/call-simulator");
+        const { updateSimulatedCall } = await import("./services/simulated-call-storage");
+        const { broadcastSimulatedCallUpdate } = await import("./services/websocket");
+        try {
+          broadcastSimulatedCallUpdate(simulatedCallId, "generating");
+          await runSimulator(simulatedCallId);
+          broadcastSimulatedCallUpdate(simulatedCallId, "ready");
+        } catch (err) {
+          const message = (err as Error).message;
+          logger.error("simulator job failed", { simulatedCallId, error: message });
+          await updateSimulatedCall(simulatedCallId, {
+            status: "failed",
+            error: message.slice(0, 1000),
+          });
+          broadcastSimulatedCallUpdate(simulatedCallId, "failed", { error: message });
+          throw err; // let the JobQueue apply retry/dead-letter semantics
+        }
       } else if (job.type === "batch_snapshots") {
         // A8/F18: batch snapshot generation runs as a background job so the
         // request that triggers it doesn't sit waiting for minutes. Results
@@ -233,6 +257,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     getJobQueue: () => jobQueue,
     shouldUseBatchMode,
   });
+  // Simulated Call Generator (admin-only, inherits the /api/admin MFA gate).
+  registerSimulatedCallRoutes(router, () => jobQueue);
 
   // Start scheduled report generation
   import("./services/scheduled-reports").then(m => m.startReportScheduler()).catch(err => {
