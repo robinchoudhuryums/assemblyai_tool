@@ -32,6 +32,7 @@ import { z } from "zod";
 import { aiProvider } from "./ai-factory";
 import { BedrockClientError } from "./bedrock";
 import { logger } from "./logger";
+import { getModelForTier } from "./model-tiers";
 import {
   simulatedCallScriptSchema,
   CIRCUMSTANCE_META,
@@ -280,19 +281,11 @@ export interface GenerateFromScenarioInput {
   useSonnet?: boolean;
 }
 
-// Model IDs used by the generator. Haiku is the default because cold-start
-// generation is mostly structural — Sonnet is overkill for most cases
-// and ~10× more expensive. Admins who want richer dialogue can flip the
-// useSonnet flag at call time.
-//
-// Haiku ID is env-configurable (BEDROCK_HAIKU_MODEL) because the baked-in
-// default has drifted relative to AWS Bedrock's actual catalog at least
-// once (Claude 4.x Haiku rolled out with a different version stamp than
-// initially documented). Sonnet follows the existing BEDROCK_MODEL var
-// (primary analysis model) so changing one tenant's Sonnet also updates
-// the generator's Sonnet path.
-const GENERATOR_HAIKU_MODEL = process.env.BEDROCK_HAIKU_MODEL || "us.anthropic.claude-haiku-4-5-20251001";
-const GENERATOR_SONNET_MODEL = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
+// Model IDs used by the generator now route through the tier abstraction
+// (model-tiers.ts). "fast" = Haiku-class (the cost-optimized default);
+// "strong" = Sonnet-class (the useSonnet=true opt-in). Admins can override
+// either tier at runtime via PATCH /api/admin/model-tiers without a code
+// change.
 
 function buildGeneratorPrompt(input: GenerateFromScenarioInput): string {
   const targetTurns = Math.max(4, Math.min(input.targetTurnCount ?? 10, 30));
@@ -364,7 +357,7 @@ export async function generateScriptFromScenario(
   }
 
   const prompt = buildGeneratorPrompt(input);
-  const primaryModel = input.useSonnet ? GENERATOR_SONNET_MODEL : GENERATOR_HAIKU_MODEL;
+  const primaryModel = input.useSonnet ? getModelForTier("strong") : getModelForTier("fast");
 
   // 8192 tokens gives enough headroom for up to ~30 turns of dialogue
   // (the generator's max). The default 2048 caps out around 8-10 turns

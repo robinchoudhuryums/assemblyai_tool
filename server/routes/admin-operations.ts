@@ -13,6 +13,13 @@ import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
 import { getBedrockCircuitBreakerState } from "../services/bedrock";
 import { is8x8Enabled } from "../services/telephony-8x8";
 import { getPipelineSettingsWithMeta, setPipelineSettings } from "../services/pipeline-settings";
+import {
+  MODEL_TIERS,
+  getAllTierSnapshots,
+  setTierOverride,
+  clearTierOverride,
+  type ModelTier,
+} from "../services/model-tiers";
 import { z } from "zod";
 
 export function registerOperationsRoutes(
@@ -406,4 +413,61 @@ export function registerOperationsRoutes(
       res.status(500).json({ message: "Failed to update pipeline settings" });
     }
   });
+
+  // ==================== MODEL TIER OVERRIDES ====================
+  // Runtime per-tier model ID overrides, backed by S3. Three tiers
+  // (strong / fast / reasoning) cover the entire app's use of Anthropic
+  // models. Overriding the "strong" tier also propagates to the
+  // aiProvider singleton + bedrockBatchService via the tier service's
+  // notifySingletonsOfChange hook.
+
+  router.get("/api/admin/model-tiers", requireRole("admin"), (_req, res) => {
+    res.json({ tiers: getAllTierSnapshots() });
+  });
+
+  const modelTiersPatchSchema = z.object({
+    tier: z.enum(["strong", "fast", "reasoning"]),
+    // `null` clears the override and falls back through env / default.
+    // String = set new override.
+    model: z.string().min(1).max(500).nullable(),
+    reason: z.string().max(500).optional(),
+  }).strict();
+
+  router.patch("/api/admin/model-tiers", requireRole("admin"), async (req, res) => {
+    const parsed = modelTiersPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid model-tiers patch",
+        errors: parsed.error.flatten(),
+        issues: parsed.error.issues.map((i) => ({
+          path: i.path.join("."),
+          code: i.code,
+          message: i.message,
+        })),
+      });
+    }
+    const { tier, model, reason } = parsed.data;
+    const updatedBy = req.user?.username || "admin";
+    try {
+      if (model === null) {
+        await clearTierOverride(tier as ModelTier, updatedBy);
+      } else {
+        await setTierOverride(tier as ModelTier, model, updatedBy, reason);
+      }
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: model === null ? "clear_model_tier_override" : "set_model_tier_override",
+        resourceType: "model_tier",
+        resourceId: tier,
+        detail: model === null ? `cleared ${tier}` : `set ${tier} to ${model}${reason ? ` (${reason})` : ""}`,
+      });
+      res.json({ tiers: getAllTierSnapshots() });
+    } catch (err) {
+      logger.error("model-tiers: PATCH failed", { error: (err as Error).message });
+      res.status(500).json({ message: "Failed to update model tier" });
+    }
+  });
+  // Suppress "unused" warning for MODEL_TIERS if Zod enum is used instead of it.
+  void MODEL_TIERS;
 }

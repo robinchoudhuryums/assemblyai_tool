@@ -23,6 +23,7 @@ import { captureException } from "../services/sentry";
 import { evaluateBadges } from "../services/gamification";
 import { logger } from "../services/logger";
 import { getPipelineSettings } from "../services/pipeline-settings";
+import { getModelForTier } from "../services/model-tiers";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -428,7 +429,7 @@ export async function processAudioFile(
         if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
           try {
             const { BedrockProvider } = await import("../services/bedrock");
-            const haikuModel = process.env.BEDROCK_HAIKU_MODEL || "us.anthropic.claude-haiku-4-5-20251001";
+            const haikuModel = getModelForTier("fast");
             analysisProvider = BedrockProvider.createWithModel(haikuModel);
             usingHaiku = true;
             logger.info("pipeline: using Haiku for short routine call", { callId, callDurationSeconds, maxSec: HAIKU_SHORT_CALL_MAX_SEC, estimatedTokens, haikuModel });
