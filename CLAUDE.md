@@ -396,6 +396,10 @@ Access requests can request "viewer" or "manager" roles (not admin).
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
 
+# Simulated Call Generator (admin-only QA tool — optional feature)
+ELEVENLABS_API_KEY              # ElevenLabs TTS API key (required to use the feature)
+ELEVENLABS_COST_PER_CHAR        # Override per-char cost for spend tracking (default: 0.0003 = $0.30/1K chars)
+
 # Authentication (PostgreSQL users table is primary; AUTH_USERS env var is fallback)
 AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2 (fallback if no DB users)
 
