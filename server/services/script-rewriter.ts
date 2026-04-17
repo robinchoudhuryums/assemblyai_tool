@@ -242,9 +242,177 @@ export async function rewriteScript(input: RewriteInput): Promise<RewriteResult>
   };
 }
 
+// ── Script generation from a scenario description ──────────────────
+//
+// Different use case from rewriteScript: the admin has a title + scenario
+// description but NO existing turns. The model is asked to produce a
+// full script from scratch. Reuses the same JSON extraction + Zod
+// validation + voice-preservation contract as rewriteScript.
+
+/**
+ * ElevenLabs voice IDs are not round-trippable through a cold-start
+ * prompt (the model has never seen them). We pass them in and
+ * force-restore on output. Same defense applies to qualityTier.
+ */
+export interface GenerateFromScenarioInput {
+  title: string;
+  scenario?: string;
+  equipment?: string;
+  qualityTier: "poor" | "acceptable" | "excellent";
+  voices: { agent: string; customer: string };
+  /** Requested number of turns. Model may produce ±20%. Default 10. */
+  targetTurnCount?: number;
+  /** Set true to route through Sonnet instead of the default (Haiku). */
+  useSonnet?: boolean;
+}
+
+// Model IDs used by the generator. Haiku is the default because cold-start
+// generation is mostly structural — Sonnet is overkill for most cases
+// and ~10× more expensive. Admins who want richer dialogue can flip the
+// useSonnet flag at call time.
+const GENERATOR_HAIKU_MODEL = "us.anthropic.claude-haiku-4-5-20251001";
+const GENERATOR_SONNET_MODEL = "us.anthropic.claude-sonnet-4-6";
+
+function buildGeneratorPrompt(input: GenerateFromScenarioInput): string {
+  const targetTurns = Math.max(4, Math.min(input.targetTurnCount ?? 10, 30));
+  const tierExpectation = {
+    excellent: "Excellent handling: the agent is warm, proactive, solves the customer's issue efficiently, offers follow-up, and leaves the customer satisfied.",
+    acceptable: "Acceptable handling: the agent answers correctly but doesn't go the extra mile. Tone is neutral, resolution is adequate.",
+    poor: "Poor handling: the agent is curt, dismissive, or unhelpful. May fail to resolve the issue or leave the customer frustrated.",
+  }[input.qualityTier];
+
+  return [
+    "You are a writer producing realistic customer-service phone call scripts for a medical-supply company's QA training tool. Generate a script from scratch given a title and a scenario description.",
+    "",
+    "Rules:",
+    `1. Target approximately ${targetTurns} turns (±20% is fine). Natural back-and-forth — agent and customer alternate.`,
+    "2. Every spoken turn must have non-empty `text`. Do not emit hold turns unless the scenario clearly calls for one.",
+    "3. Preserve the voices mapping EXACTLY as given. Do not substitute voice IDs.",
+    "4. Preserve the qualityTier exactly as given.",
+    "5. The script should reflect a full realistic call: greeting, problem statement, resolution attempt, closing.",
+    "6. Tone and outcome must match the quality tier expectation below.",
+    "7. Output MUST be valid JSON matching this shape EXACTLY:",
+    "",
+    "{",
+    '  "title": string,',
+    '  "scenario": string,',
+    '  "qualityTier": "poor" | "acceptable" | "excellent",',
+    '  "equipment": string (optional),',
+    '  "voices": { "agent": string, "customer": string },',
+    '  "turns": Array<',
+    '    | { "speaker": "agent" | "customer", "text": string }',
+    '    | { "speaker": "hold", "duration": number }',
+    "  >",
+    "}",
+    "",
+    "8. Return ONLY the JSON. No markdown, no prose, no code fences.",
+    "",
+    `## TARGET QUALITY TIER: ${input.qualityTier}`,
+    tierExpectation,
+    "",
+    "## SCRIPT TO GENERATE",
+    "```json",
+    JSON.stringify({
+      title: input.title,
+      scenario: input.scenario ?? "",
+      qualityTier: input.qualityTier,
+      equipment: input.equipment ?? "",
+      voices: input.voices,
+      targetTurns,
+    }, null, 2),
+    "```",
+    "",
+    "Return ONLY the generated script JSON. Preserve the voices mapping exactly.",
+  ].join("\n");
+}
+
+export async function generateScriptFromScenario(
+  input: GenerateFromScenarioInput,
+): Promise<RewriteResult> {
+  if (!aiProvider.isAvailable || !aiProvider.generateText) {
+    throw new ScriptRewriterError(
+      "AI provider is not configured — set AWS credentials to enable script generation",
+      "unavailable",
+    );
+  }
+  if (!input.title.trim()) {
+    throw new ScriptRewriterError(
+      "Title is required to generate a script",
+      "validation_error",
+    );
+  }
+
+  const prompt = buildGeneratorPrompt(input);
+  const modelId = input.useSonnet ? GENERATOR_SONNET_MODEL : GENERATOR_HAIKU_MODEL;
+
+  let raw: string;
+  try {
+    raw = await aiProvider.generateText(prompt, modelId);
+  } catch (err) {
+    throw new ScriptRewriterError(
+      `Bedrock generateText failed: ${(err as Error).message}`,
+      "model_error",
+      err,
+    );
+  }
+
+  const jsonBlob = extractJsonObject(raw);
+  if (!jsonBlob) {
+    logger.warn("script-generator: model response had no JSON block", { sample: raw.slice(0, 200) });
+    throw new ScriptRewriterError(
+      "Model response did not contain a JSON object",
+      "parse_error",
+      { sample: raw.slice(0, 200) },
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonBlob);
+  } catch (err) {
+    throw new ScriptRewriterError(
+      `Model JSON was malformed: ${(err as Error).message}`,
+      "parse_error",
+      { jsonBlob: jsonBlob.slice(0, 500) },
+    );
+  }
+
+  const result = simulatedCallScriptSchema.safeParse(parsed);
+  if (!result.success) {
+    logger.warn("script-generator: generated script failed schema validation", {
+      error: result.error.format(),
+    });
+    throw new ScriptRewriterError(
+      "Generated script failed schema validation",
+      "validation_error",
+      result.error.flatten(),
+    );
+  }
+
+  // Force-restore voices + tier so the model cannot drift these, same
+  // contract as rewriteScript. Also preserve the admin-supplied title
+  // verbatim — the model sometimes rewrites it into something wordier
+  // and we want the Library card to match what the admin typed.
+  const script: SimulatedCallScript = {
+    ...result.data,
+    title: input.title,
+    scenario: input.scenario ?? result.data.scenario,
+    qualityTier: input.qualityTier,
+    voices: input.voices,
+  };
+
+  return {
+    script,
+    rawResponse: raw,
+    promptChars: prompt.length,
+    responseChars: raw.length,
+  };
+}
+
 // Test seam — exported for unit tests so they can exercise the
 // validator + voice-preservation logic without hitting Bedrock.
 export const _internal = {
   buildRewritePrompt,
+  buildGeneratorPrompt,
   extractJsonObject,
 };

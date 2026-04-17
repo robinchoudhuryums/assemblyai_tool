@@ -33,7 +33,7 @@ export interface AIAnalysisProvider {
   readonly isAvailable: boolean;
   readonly modelId?: string;
   analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis>;
-  generateText?(prompt: string): Promise<string>;
+  generateText?(prompt: string, modelIdOverride?: string): Promise<string>;
   /** Swap the underlying model at runtime (A/B test promotion). Optional — not all providers support runtime swap. */
   setModel?(modelId: string): void;
 }

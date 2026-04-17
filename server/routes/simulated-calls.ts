@@ -36,7 +36,7 @@ import {
 import { elevenLabsClient, type ElevenLabsVoice } from "../services/elevenlabs-client";
 import { isFfmpegAvailable } from "../services/audio-stitcher";
 import { broadcastSimulatedCallUpdate } from "../services/websocket";
-import { rewriteScript, ScriptRewriterError } from "../services/script-rewriter";
+import { rewriteScript, generateScriptFromScenario, ScriptRewriterError } from "../services/script-rewriter";
 import { z } from "zod";
 
 const DAILY_GENERATION_CAP = Math.max(
@@ -331,6 +331,70 @@ export function registerSimulatedCallRoutes(
           error: (err as Error).message,
         });
         sendError(res, 500, "Failed to rewrite script");
+      }
+    },
+  );
+
+  // ── Generate turns from title + scenario (cold start) ──────
+  // Returns a script populated with AI-generated turns. The admin uses
+  // this from the Generate form when they have a scenario description
+  // but don't want to write the dialogue manually. Response is a PREVIEW
+  // — the frontend merges the turns into the script state and the admin
+  // still submits via the existing /generate endpoint. No persistence
+  // happens here.
+  const generateFromScenarioBodySchema = z.object({
+    title: z.string().min(1).max(500),
+    scenario: z.string().max(2000).optional(),
+    equipment: z.string().max(255).optional(),
+    qualityTier: z.enum(["poor", "acceptable", "excellent"]),
+    voices: z.object({
+      agent: z.string().min(1),
+      customer: z.string().min(1),
+    }),
+    targetTurnCount: z.number().int().min(4).max(30).optional(),
+    useSonnet: z.boolean().optional(),
+  });
+
+  router.post(
+    "/api/admin/simulated-calls/generate-from-scenario",
+    requireAuth,
+    requireRole("admin"),
+    requireMFASetup,
+    async (req, res) => {
+      const parsed = generateFromScenarioBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendValidationError(res, "Invalid generate-from-scenario request", parsed.error);
+      }
+
+      try {
+        const result = await generateScriptFromScenario(parsed.data);
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "generate_script_from_scenario",
+          resourceType: "simulated_call",
+          detail: `title=${parsed.data.title.slice(0, 60)}; tier=${parsed.data.qualityTier}; turns=${parsed.data.targetTurnCount ?? 10}; sonnet=${parsed.data.useSonnet ? "true" : "false"}`,
+        });
+        res.json({
+          script: result.script,
+          promptChars: result.promptChars,
+          responseChars: result.responseChars,
+          modelTier: parsed.data.useSonnet ? "sonnet" : "haiku",
+        });
+      } catch (err) {
+        if (err instanceof ScriptRewriterError) {
+          const statusByStage: Record<typeof err.stage, number> = {
+            unavailable: 503,
+            model_error: 502,
+            parse_error: 502,
+            validation_error: 400,
+          };
+          return sendError(res, statusByStage[err.stage], err.message);
+        }
+        logger.error("failed to generate script from scenario", {
+          error: (err as Error).message,
+        });
+        sendError(res, 500, "Failed to generate script");
       }
     },
   );

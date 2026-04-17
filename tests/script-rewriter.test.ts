@@ -11,6 +11,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   rewriteScript,
+  generateScriptFromScenario,
   ScriptRewriterError,
   _internal,
 } from "../server/services/script-rewriter.js";
@@ -260,5 +261,120 @@ describe("rewriteScript — parse error paths", () => {
         return true;
       },
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// generateScriptFromScenario (cold-start, no base script)
+// ─────────────────────────────────────────────────────────────
+describe("generateScriptFromScenario — prompt construction", () => {
+  it("includes the title + scenario in the prompt", () => {
+    const prompt = _internal.buildGeneratorPrompt({
+      title: "CPAP mask return",
+      scenario: "Customer received a mask that doesn't fit and wants to return it.",
+      qualityTier: "acceptable",
+      voices: { agent: "voice-a", customer: "voice-b" },
+    });
+    assert.ok(prompt.includes("CPAP mask return"));
+    assert.ok(prompt.includes("doesn't fit"));
+    assert.ok(prompt.includes("voice-a"));
+    assert.ok(prompt.includes("voice-b"));
+  });
+
+  it("honors targetTurnCount in the prompt instructions", () => {
+    const prompt = _internal.buildGeneratorPrompt({
+      title: "t",
+      qualityTier: "excellent",
+      voices: { agent: "a", customer: "b" },
+      targetTurnCount: 14,
+    });
+    assert.ok(prompt.includes("14 turns"), "expected explicit turn count in prompt");
+  });
+
+  it("clamps targetTurnCount to [4,30]", () => {
+    const low = _internal.buildGeneratorPrompt({
+      title: "t", qualityTier: "acceptable",
+      voices: { agent: "a", customer: "b" }, targetTurnCount: 1,
+    });
+    const high = _internal.buildGeneratorPrompt({
+      title: "t", qualityTier: "acceptable",
+      voices: { agent: "a", customer: "b" }, targetTurnCount: 99,
+    });
+    assert.ok(low.includes("4 turns"), "lower bound should clamp to 4");
+    assert.ok(high.includes("30 turns"), "upper bound should clamp to 30");
+  });
+
+  it("describes the requested quality tier in the prompt", () => {
+    const poor = _internal.buildGeneratorPrompt({
+      title: "t", qualityTier: "poor",
+      voices: { agent: "a", customer: "b" },
+    });
+    const excellent = _internal.buildGeneratorPrompt({
+      title: "t", qualityTier: "excellent",
+      voices: { agent: "a", customer: "b" },
+    });
+    assert.ok(/curt|dismissive|unhelpful/i.test(poor));
+    assert.ok(/warm|proactive/i.test(excellent));
+  });
+});
+
+describe("generateScriptFromScenario — execution", () => {
+  it("throws validation_error when title is empty", async () => {
+    mockProvider({ available: true, response: "" });
+    await assert.rejects(
+      () => generateScriptFromScenario({
+        title: "   ",
+        qualityTier: "acceptable",
+        voices: { agent: "a", customer: "b" },
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof ScriptRewriterError);
+        assert.equal((err as ScriptRewriterError).stage, "validation_error");
+        return true;
+      },
+    );
+  });
+
+  it("throws unavailable when AI provider is not configured", async () => {
+    mockProvider({ available: false });
+    await assert.rejects(
+      () => generateScriptFromScenario({
+        title: "t",
+        qualityTier: "acceptable",
+        voices: { agent: "a", customer: "b" },
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof ScriptRewriterError);
+        assert.equal((err as ScriptRewriterError).stage, "unavailable");
+        return true;
+      },
+    );
+  });
+
+  it("force-restores voices + title + qualityTier from the caller", async () => {
+    // Model tries to drift all three — the generator must ignore those drifts.
+    const modelOutput = JSON.stringify({
+      title: "REWRITTEN TITLE",
+      scenario: "model-written scenario",
+      qualityTier: "poor",
+      equipment: "CPAP",
+      voices: { agent: "ATTACKER", customer: "MALICIOUS" },
+      turns: [
+        { speaker: "agent", text: "Hello." },
+        { speaker: "customer", text: "Hi." },
+      ],
+    });
+    mockProvider({ available: true, response: modelOutput });
+    const result = await generateScriptFromScenario({
+      title: "Admin's title",
+      scenario: "Admin's scenario",
+      qualityTier: "excellent",
+      voices: { agent: "admin-agent", customer: "admin-customer" },
+    });
+    assert.equal(result.script.title, "Admin's title");
+    assert.equal(result.script.qualityTier, "excellent");
+    assert.equal(result.script.voices.agent, "admin-agent");
+    assert.equal(result.script.voices.customer, "admin-customer");
+    assert.equal(result.script.turns.length, 2);
   });
 });
