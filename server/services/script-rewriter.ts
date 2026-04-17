@@ -284,8 +284,15 @@ export interface GenerateFromScenarioInput {
 // generation is mostly structural — Sonnet is overkill for most cases
 // and ~10× more expensive. Admins who want richer dialogue can flip the
 // useSonnet flag at call time.
-const GENERATOR_HAIKU_MODEL = "us.anthropic.claude-haiku-4-5-20251001";
-const GENERATOR_SONNET_MODEL = "us.anthropic.claude-sonnet-4-6";
+//
+// Haiku ID is env-configurable (BEDROCK_HAIKU_MODEL) because the baked-in
+// default has drifted relative to AWS Bedrock's actual catalog at least
+// once (Claude 4.x Haiku rolled out with a different version stamp than
+// initially documented). Sonnet follows the existing BEDROCK_MODEL var
+// (primary analysis model) so changing one tenant's Sonnet also updates
+// the generator's Sonnet path.
+const GENERATOR_HAIKU_MODEL = process.env.BEDROCK_HAIKU_MODEL || "us.anthropic.claude-haiku-4-5-20251001";
+const GENERATOR_SONNET_MODEL = process.env.BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-6";
 
 function buildGeneratorPrompt(input: GenerateFromScenarioInput): string {
   const targetTurns = Math.max(4, Math.min(input.targetTurnCount ?? 10, 30));

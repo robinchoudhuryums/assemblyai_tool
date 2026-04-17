@@ -440,6 +440,7 @@ S3_BUCKET                       # Default: ums-call-archive (audio blobs when DB
 
 # AI Model
 BEDROCK_MODEL                   # Default: us.anthropic.claude-sonnet-4-6 (see server/services/bedrock.ts)
+BEDROCK_HAIKU_MODEL             # Override the Haiku model ID used for short-call optimization + scenario generator (default: us.anthropic.claude-haiku-4-5-20251001). Set to your AWS account's actual Haiku inference profile ID if the default returns "The provided model identifier is invalid."
 BEDROCK_TIMEOUT_MS              # Bedrock Converse API timeout in ms (default: 120000 / 2 min)
 BEDROCK_EMBEDDING_TIMEOUT_MS    # Bedrock embedding API timeout in ms (default: 15000 / 15 sec)
 ASSEMBLYAI_POLL_MAX_MINUTES     # Max minutes to poll AssemblyAI before timeout (default: 5)

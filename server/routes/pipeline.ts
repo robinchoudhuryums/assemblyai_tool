@@ -417,35 +417,60 @@ export async function processAudioFile(
         }
 
         // Cost optimization: use Haiku for short routine calls (≤ 2min, no flags, no custom template)
-        // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call
+        // Haiku is 3x cheaper for input, 3x cheaper for output — saves ~67% per call.
+        // Haiku model ID is env-configurable via BEDROCK_HAIKU_MODEL because the
+        // baked-in default has drifted relative to AWS Bedrock's actual catalog
+        // at least once. If the ID is wrong (400 "invalid model identifier"),
+        // the try/catch below falls back to the default aiProvider.
         const isRoutineShort = callDurationSeconds <= HAIKU_SHORT_CALL_MAX_SEC && !promptTemplate && estimatedTokens < HAIKU_SHORT_CALL_MAX_TOKENS;
         let analysisProvider = aiProvider;
+        let usingHaiku = false;
         if (isRoutineShort && !process.env.BEDROCK_MODEL?.includes("haiku")) {
           try {
             const { BedrockProvider } = await import("../services/bedrock");
-            const haikuModel = "us.anthropic.claude-haiku-4-5-20251001";
+            const haikuModel = process.env.BEDROCK_HAIKU_MODEL || "us.anthropic.claude-haiku-4-5-20251001";
             analysisProvider = BedrockProvider.createWithModel(haikuModel);
-            // Rough rate differential: Sonnet $3/$15 per 1M vs Haiku $0.80/$4 per 1M.
-            // Savings per call depend on in/out mix; ~70% is a typical ballpark
-            // but left qualitative here rather than hard-coded.
-            logger.info("pipeline: using Haiku for short routine call", { callId, callDurationSeconds, maxSec: HAIKU_SHORT_CALL_MAX_SEC, estimatedTokens });
+            usingHaiku = true;
+            logger.info("pipeline: using Haiku for short routine call", { callId, callDurationSeconds, maxSec: HAIKU_SHORT_CALL_MAX_SEC, estimatedTokens, haikuModel });
           } catch (haikuErr) {
             logger.warn("pipeline: Haiku provider creation failed, using default model", { callId, error: (haikuErr as Error).message });
           }
         }
 
+        const { BedrockClientError } = await import("../services/bedrock");
+
+        const invokeAnalysis = async (provider: typeof aiProvider) =>
+          provider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+
         try {
-          aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+          aiAnalysis = await invokeAnalysis(analysisProvider);
         } catch (firstErr) {
-          // A12/F17: 1-retry budget on parse/schema failures. The first call may
-          // have gotten a malformed response that a second try can recover.
-          const firstMsg = (firstErr as Error).message || "";
-          const isParseFailure = /JSON|parse|schema/i.test(firstMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(firstMsg);
-          if (isParseFailure) {
-            logger.warn("pipeline: AI parse failure on first attempt, retrying once", { callId, error: firstMsg });
-            aiAnalysis = await analysisProvider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
+          // Haiku fallback: if the Haiku-specialised provider was rejected by
+          // Bedrock with a 4xx (except 429), re-run on the default provider.
+          // Covers the "invalid model identifier" error class seen when the
+          // baked-in Haiku ID drifts ahead of AWS Bedrock's catalog.
+          const isHaikuClientError =
+            usingHaiku &&
+            firstErr instanceof BedrockClientError &&
+            (firstErr as InstanceType<typeof BedrockClientError>).status !== 429;
+          if (isHaikuClientError) {
+            logger.warn("pipeline: Haiku invocation rejected by Bedrock, falling back to default model", {
+              callId,
+              status: (firstErr as InstanceType<typeof BedrockClientError>).status,
+              error: (firstErr as Error).message,
+            });
+            aiAnalysis = await invokeAnalysis(aiProvider);
           } else {
-            throw firstErr;
+            // A12/F17: 1-retry budget on parse/schema failures. The first call may
+            // have gotten a malformed response that a second try can recover.
+            const firstMsg = (firstErr as Error).message || "";
+            const isParseFailure = /JSON|parse|schema/i.test(firstMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(firstMsg);
+            if (isParseFailure) {
+              logger.warn("pipeline: AI parse failure on first attempt, retrying once", { callId, error: firstMsg });
+              aiAnalysis = await invokeAnalysis(analysisProvider);
+            } else {
+              throw firstErr;
+            }
           }
         }
         logger.info("pipeline: step 4/6 AI analysis complete", { callId });
