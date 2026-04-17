@@ -124,7 +124,16 @@ export async function apiRequest(
   data?: unknown | undefined,
 ): Promise<Response> {
   const headers: Record<string, string> = {};
-  if (data) headers["Content-Type"] = "application/json";
+  // Server CSRF middleware (server/index.ts) rejects POST/PATCH/PUT/DELETE
+  // to /api/* that lack Content-Type: application/json (or the multipart
+  // alternative). Setting it on every mutating method — not just when a
+  // body is present — keeps no-body requests like DELETE /api/calls/:id
+  // from 403'ing with "CSRF check failed: Content-Type must be
+  // application/json". Browsers won't set this header cross-origin
+  // without a preflight, so it's a valid same-origin signal even when
+  // the body is empty.
+  const isMutation = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+  if (isMutation) headers["Content-Type"] = "application/json";
   // Double-submit CSRF: echo the server-set cookie value in a custom header
   const csrf = getCsrfToken();
   if (csrf) headers["x-csrf-token"] = csrf;
