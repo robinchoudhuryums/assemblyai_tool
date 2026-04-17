@@ -46,16 +46,19 @@ jobs:
         run: npm run check
 
       - name: Run backend unit tests with coverage
-        run: npm run test:coverage
+        # Capture output via tee so the threshold check step can grep it
+        # without re-running the test suite (double-runs can fail due to
+        # --test-force-exit leaving residual state between invocations).
+        run: npm run test:coverage 2>&1 | tee coverage-output.log
 
       - name: Check backend coverage threshold
         run: |
-          # Extract statement coverage from c8 text-summary output.
+          # Extract statement coverage from c8 text-summary output (captured above).
           # Threshold set to 45% — actual coverage is ~46% as of 2026-04-17.
           # NOTE: CLAUDE.md previously documented coverage as ~67% but the
           # actual measurement is lower. Investigation deferred; for now this
           # gate catches regressions below current level.
-          STMT=$(npm run test:coverage 2>&1 | grep "Statements" | head -1 | grep -oP '[\d.]+%' | head -1 | tr -d '%')
+          STMT=$(grep "Statements" coverage-output.log | head -1 | grep -oP '[\d.]+%' | head -1 | tr -d '%' || true)
           echo "Backend statement coverage: ${STMT}%"
           if [ -z "$STMT" ]; then
             echo "::warning::Could not parse coverage — skipping gate"
