@@ -26,7 +26,7 @@ const navigation: NavItem[] = [
   { nameKey: "nav.performance", href: "/performance", icon: Users },
   { nameKey: "nav.reports", href: "/reports", icon: TrendUp },
   { nameKey: "nav.insights", href: "/insights", icon: Buildings },
-  { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: UsersThree },
+  { nameKey: "nav.teamAnalytics", href: "/analytics/teams", icon: UsersThree, requireRole: ["manager", "admin"] },
   { nameKey: "nav.agentCompare", href: "/analytics/compare", icon: GitDiff },
   { nameKey: "nav.heatmap", href: "/analytics/heatmap", icon: CalendarDots },
   { nameKey: "nav.clusters", href: "/analytics/clusters", icon: Stack },
