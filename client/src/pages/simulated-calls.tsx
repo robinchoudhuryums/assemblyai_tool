@@ -1090,7 +1090,11 @@ function ScenarioGeneratorButton({
         "/api/admin/simulated-calls/generate-from-scenario",
         body,
       );
-      return (await res.json()) as { script: SimulatedCallScript; modelTier: string };
+      return (await res.json()) as {
+        script: SimulatedCallScript;
+        modelTier: string;
+        fellBackFromHaiku?: boolean;
+      };
     },
     onSuccess: (data) => {
       setScript({
@@ -1099,10 +1103,21 @@ function ScenarioGeneratorButton({
         // (title, scenario, qualityTier, equipment, voices) authoritative.
         turns: data.script.turns,
       });
-      toast({
-        title: "Turns generated",
-        description: `${data.script.turns.length} turns (${data.modelTier}). Review + edit as needed.`,
-      });
+      // If the server fell back from Haiku to the default model, surface it
+      // so the admin knows (a) why they were charged Sonnet rates and
+      // (b) that they can enable Haiku 4.5 in AWS Bedrock Model Access for
+      // cheaper future generations.
+      if (data.fellBackFromHaiku) {
+        toast({
+          title: "Turns generated (using Sonnet — Haiku unavailable)",
+          description: `${data.script.turns.length} turns. Haiku 4.5 isn't enabled in your AWS account; Sonnet was used instead (~10× cost). Enable Haiku 4.5 in AWS Bedrock → Model Access for cheaper generations.`,
+        });
+      } else {
+        toast({
+          title: "Turns generated",
+          description: `${data.script.turns.length} turns (${data.modelTier}). Review + edit as needed.`,
+        });
+      }
       setOpen(false);
     },
     onError: (err: Error) => {

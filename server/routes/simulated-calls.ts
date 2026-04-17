@@ -379,7 +379,10 @@ export function registerSimulatedCallRoutes(
           script: result.script,
           promptChars: result.promptChars,
           responseChars: result.responseChars,
-          modelTier: parsed.data.useSonnet ? "sonnet" : "haiku",
+          // Actual model tier used — may differ from what the admin requested
+          // if Haiku wasn't accessible and the generator fell back.
+          modelTier: result.modelUsed ?? (parsed.data.useSonnet ? "sonnet" : "haiku"),
+          fellBackFromHaiku: result.fellBackFromHaiku === true,
         });
       } catch (err) {
         if (err instanceof ScriptRewriterError) {
