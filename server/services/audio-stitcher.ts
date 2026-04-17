@@ -112,6 +112,20 @@ export async function generateSilence(
 export type ConnectionQuality = "clean" | "phone" | "degraded" | "poor";
 export type BackgroundNoise = "none" | "office" | "callcenter" | "static";
 
+/**
+ * A single backchannel clip to overlay on the stitched primary track.
+ * `offsetMs` is the absolute offset from the START of the stitched track
+ * where the backchannel should begin playing. `volumeDb` is applied to
+ * the clip before mixing (negative value = quieter). See call-simulator.ts
+ * for placement logic.
+ */
+export interface BackchannelOverlay {
+  clipPath: string;
+  offsetMs: number;
+  /** Default -10 dB — audible but clearly secondary. */
+  volumeDb?: number;
+}
+
 export interface StitchOptions {
   /** Clips in order — may be speech, silence, or hold music. All MP3. */
   clipPaths: string[];
@@ -122,6 +136,13 @@ export interface StitchOptions {
   backgroundNoiseLevel: number; // 0–1
   /** Output MP3 path. */
   outPath: string;
+  /**
+   * Optional backchannel clips to overlay on top of the stitched primary
+   * track. Placed at absolute offsets (ms from start). Mixed BEFORE codec
+   * simulation so the backchannels receive the same phone-line coloring
+   * as the primary speakers (which is what you'd hear on a real call).
+   */
+  backchannels?: BackchannelOverlay[];
 }
 
 /**
@@ -236,11 +257,62 @@ export async function stitchAndPostProcess(
     timeoutMs: 120_000,
   });
 
+  // Step 2b: if backchannels are provided, pre-mix them onto the primary
+  // track so the subsequent codec-simulation pass colors both the primary
+  // speakers and the backchannels the same way. Skipped entirely when no
+  // overlays are requested so the simple path keeps its existing behavior.
+  const bcs = (opts.backchannels ?? []).filter((b) => b.offsetMs >= 0);
+  let postProcessInputPath = mergedPath;
+  if (bcs.length > 0) {
+    const premixedPath = path.join(dir, "premixed.mp3");
+    const filterParts: string[] = [];
+    // Each backchannel: input index N gets delayed + attenuated, labeled [bcN].
+    for (let i = 0; i < bcs.length; i++) {
+      const inputIdx = i + 1; // input 0 is the merged primary
+      const db = bcs[i].volumeDb ?? -10;
+      const delayMs = Math.max(0, Math.floor(bcs[i].offsetMs));
+      filterParts.push(
+        `[${inputIdx}:a]adelay=${delayMs}|${delayMs},volume=${db}dB[bc${i}]`,
+      );
+    }
+    // Mix all backchannels together, then mix the result with the primary.
+    // duration=first on the outer amix clamps to the primary track length
+    // so a backchannel that lands near the end doesn't extend the output.
+    const bcLabels = bcs.map((_, i) => `[bc${i}]`).join("");
+    if (bcs.length > 1) {
+      filterParts.push(
+        `${bcLabels}amix=inputs=${bcs.length}:duration=longest:normalize=0[bcmix]`,
+      );
+      filterParts.push(
+        `[0:a][bcmix]amix=inputs=2:duration=first:normalize=0[premix]`,
+      );
+    } else {
+      // Single backchannel — skip the inner amix step.
+      filterParts.push(
+        `[0:a][bc0]amix=inputs=2:duration=first:normalize=0[premix]`,
+      );
+    }
+    const bcInputs = bcs.flatMap((b) => ["-i", b.clipPath]);
+    await runFfmpeg({
+      args: [
+        "-i", mergedPath,
+        ...bcInputs,
+        "-filter_complex", filterParts.join(";"),
+        "-map", "[premix]",
+        "-c:a", "libmp3lame",
+        "-q:a", "4",
+        premixedPath,
+      ],
+      timeoutMs: 180_000,
+    });
+    postProcessInputPath = premixedPath;
+  }
+
   // Step 3: post-process filter graph (codec sim + background noise).
   const { filter, extraInputs } = buildPostProcessFilter(opts);
   await runFfmpeg({
     args: [
-      "-i", mergedPath,
+      "-i", postProcessInputPath,
       ...extraInputs,
       "-filter_complex", filter,
       "-map", "[out]",

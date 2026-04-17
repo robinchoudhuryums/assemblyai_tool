@@ -65,6 +65,19 @@ export const simulatedCallConfigSchema = z.object({
   // Post-generation: optionally pipe the finished audio into the real
   // analysis pipeline. Defaults false to avoid accidental spend spikes.
   analyzeAfterGeneration: z.boolean().default(false),
+
+  // Realism: inject filler words ("um", "uh") into TTS text based on
+  // qualityTier (excellent=none, acceptable=light, poor=heavy). Applied
+  // at the TTS-call boundary only — the stored script is NOT mutated.
+  // Defaults ON so existing presets get realistic prosody automatically.
+  disfluencies: z.boolean().default(true),
+
+  // Realism: overlay short affirmations ("mm-hmm", "okay") from the
+  // opposite speaker under eligible primary turns. Adds 1–3 extra
+  // ElevenLabs calls per eligible turn (~5–10% cost uplift for calls
+  // with many long turns). Off by default on poor-tier calls because
+  // poor handling rarely includes active listening.
+  backchannels: z.boolean().default(true),
 });
 
 // ── Generation request (what the API accepts) ────────────────

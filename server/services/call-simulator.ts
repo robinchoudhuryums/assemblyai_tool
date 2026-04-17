@@ -32,8 +32,16 @@ import {
   writeClip,
   stitchAndPostProcess,
   generateSilence,
+  probeDurationSeconds,
   isFfmpegAvailable,
+  type BackchannelOverlay,
 } from "./audio-stitcher";
+import { addDisfluencies, pickBackchannel } from "./disfluency";
+
+/** Minimum duration (seconds) for a primary turn to get a backchannel overlay. */
+const BACKCHANNEL_MIN_TURN_SEC = 4;
+/** Skip backchannels on poor-tier calls — poor handling rarely has active listening. */
+const BACKCHANNEL_SKIP_TIERS = new Set(["poor"]);
 
 /**
  * Sample a gap duration from the configured distribution.
@@ -85,7 +93,10 @@ export async function runSimulator(
 
   const result = await withTempDir(async (dir) => {
     // Step 1: synthesize each turn (or silence for hold) into a buffer/file.
+    // We also record per-turn durations so backchannel placement in step 1b
+    // can compute absolute offsets without re-probing every file.
     const clipPaths: string[] = [];
+    const clipDurationsSec: number[] = [];
     const gapPlan: number[] = [];
     let totalChars = 0;
 
@@ -95,8 +106,72 @@ export async function runSimulator(
         totalChars += chars;
       });
       clipPaths.push(clipPath);
+      clipDurationsSec.push(await probeDurationSeconds(clipPath));
       if (i < script.turns.length - 1) {
         gapPlan.push(sampleGap(config));
+      }
+    }
+
+    // Step 1b: plan + render backchannels. Disabled via config OR when the
+    // call's quality tier is in BACKCHANNEL_SKIP_TIERS. Each backchannel is
+    // a short TTS clip from the OPPOSITE speaker's voice, placed within the
+    // primary turn's duration window. `totalChars` is bumped by each
+    // backchannel so cost tracking stays accurate.
+    const backchannels: BackchannelOverlay[] = [];
+    const shouldBackchannel =
+      config.backchannels !== false &&
+      !BACKCHANNEL_SKIP_TIERS.has(script.qualityTier);
+    if (shouldBackchannel) {
+      let absoluteMs = 0;
+      for (let i = 0; i < script.turns.length; i++) {
+        const turn = script.turns[i];
+        const turnDurSec = clipDurationsSec[i];
+        // Only spoken turns over MIN seconds qualify. Hold/interrupt turns
+        // are excluded — holds have no speech to listen to, and interrupts
+        // are already vocally layered by design.
+        if (
+          (turn.speaker === "agent" || turn.speaker === "customer") &&
+          turnDurSec >= BACKCHANNEL_MIN_TURN_SEC
+        ) {
+          const opposite = turn.speaker === "agent" ? "customer" : "agent";
+          const oppositeVoice = opposite === "agent" ? script.voices.agent : script.voices.customer;
+          // 1 backchannel for 4–9s turns, 2 for 9+s.
+          const count = turnDurSec >= 9 ? 2 : 1;
+          for (let k = 0; k < count; k++) {
+            const text = pickBackchannel(opposite);
+            try {
+              const { audio, characterCount } = await elevenLabsClient.textToSpeech({
+                voiceId: oppositeVoice,
+                text,
+              });
+              totalChars += characterCount;
+              const bcPath = await writeClip(dir, `bc-${i}-${k}.mp3`, audio);
+              // Place within the 35–75% window of the turn so the backchannel
+              // lands mid-sentence rather than at speaker boundaries.
+              const low = 0.35, high = 0.75;
+              const frac = count === 1
+                ? low + Math.random() * (high - low)
+                : low + ((k + 0.5) / count) * (high - low);
+              backchannels.push({
+                clipPath: bcPath,
+                offsetMs: Math.round((absoluteMs + turnDurSec * 1000 * frac)),
+                volumeDb: -10,
+              });
+            } catch (err) {
+              // Backchannel generation is best-effort — a rate-limit or
+              // network blip here must NOT fail the whole call. Log and skip.
+              logger.warn("simulator: backchannel render failed (non-blocking)", {
+                simulatedCallId,
+                turnIndex: i,
+                error: (err as Error).message,
+              });
+            }
+          }
+        }
+        absoluteMs += turnDurSec * 1000;
+        if (i < script.turns.length - 1) {
+          absoluteMs += (gapPlan[i] ?? 0) * 1000;
+        }
       }
     }
 
@@ -108,6 +183,7 @@ export async function runSimulator(
       connectionQuality: config.connectionQuality,
       backgroundNoise: config.backgroundNoise,
       backgroundNoiseLevel: config.backgroundNoiseLevel,
+      backchannels: backchannels.length > 0 ? backchannels : undefined,
       outPath,
     });
 
@@ -186,7 +262,11 @@ async function renderTurn(
     // resumes is the caller's responsibility — they'd model it as three
     // turns). Treating interrupt as a single clip keeps the MVP honest.
     const voice = turn.primarySpeaker === "agent" ? script.voices.agent : script.voices.customer;
-    const combinedText = `${turn.text} ... ${turn.interruptText}`;
+    const combinedText = maybeAddDisfluencies(
+      `${turn.text} ... ${turn.interruptText}`,
+      script.qualityTier,
+      config.disfluencies,
+    );
     const { audio, characterCount } = await elevenLabsClient.textToSpeech({
       voiceId: voice,
       text: combinedText,
@@ -195,12 +275,31 @@ async function renderTurn(
     return writeClip(dir, `turn-${index}.mp3`, audio);
   }
 
-  // Standard spoken turn.
+  // Standard spoken turn. Disfluencies are applied to the TTS request only;
+  // the stored script is untouched so admins see what they wrote.
   const voice = turn.speaker === "agent" ? script.voices.agent : script.voices.customer;
+  const ttsText = maybeAddDisfluencies(turn.text, script.qualityTier, config.disfluencies);
   const { audio, characterCount } = await elevenLabsClient.textToSpeech({
     voiceId: voice,
-    text: turn.text,
+    text: ttsText,
   });
   charTally(characterCount);
   return writeClip(dir, `turn-${index}.mp3`, audio);
+}
+
+/**
+ * Gate disfluency injection behind the config flag. Kept as a helper so
+ * renderTurn reads cleanly at every call site and the qualityTier-to-rate
+ * mapping lives in one place (see `disfluency.ts`).
+ */
+function maybeAddDisfluencies(
+  text: string,
+  qualityTier: string,
+  enabled: boolean | undefined,
+): string {
+  if (enabled === false) return text;
+  if (qualityTier !== "excellent" && qualityTier !== "acceptable" && qualityTier !== "poor") {
+    return text;
+  }
+  return addDisfluencies(text, qualityTier);
 }

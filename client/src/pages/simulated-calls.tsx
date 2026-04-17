@@ -5,7 +5,7 @@
  *   - Generate: script builder form (or paste JSON) + voice picker + quality config
  *   - Library: table of generated calls with status, cost, audio player, actions
  */
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -18,7 +18,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Microphone, Play, Plus, SpinnerGap, Trash, WarningCircle, CheckCircle, PaperPlaneTilt } from "@phosphor-icons/react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Microphone, Pause, Play, Plus, SpinnerGap, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
 import type {
   SimulatedCall,
   SimulatedCallStatus,
@@ -31,6 +33,9 @@ interface Voice {
   name: string;
   category?: string;
   labels?: Record<string, string>;
+  /** ElevenLabs CDN URL of a short preview clip — renders a play button in the picker. */
+  preview_url?: string;
+  description?: string;
 }
 
 interface ListResponse {
@@ -53,6 +58,8 @@ const DEFAULT_CONFIG: SimulatedCallConfig = {
   backgroundNoiseLevel: 0.15,
   holdMusicUrl: null,
   analyzeAfterGeneration: false,
+  disfluencies: true,
+  backchannels: true,
 };
 
 const EMPTY_SCRIPT: SimulatedCallScript = {
@@ -489,6 +496,33 @@ function GenerateForm({
                 step={0.1}
               />
             </div>
+
+            {/* Realism toggles — both default ON. Disable to get clean, fluent
+                TTS without filler words or active-listening overlays. */}
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div>
+                <Label className="cursor-pointer">Filler words (um/uh)</Label>
+                <p className="text-xs text-muted-foreground">Rate scales with quality tier</p>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={config.disfluencies !== false}
+                onChange={(e) => setConfig({ ...config, disfluencies: e.target.checked })}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="cursor-pointer">Backchannel overlays</Label>
+                <p className="text-xs text-muted-foreground">"mm-hmm", "okay" under long turns</p>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={config.backchannels !== false}
+                onChange={(e) => setConfig({ ...config, backchannels: e.target.checked })}
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -589,7 +623,7 @@ function FormScriptBuilder({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Agent voice</Label>
-          <VoiceSelect
+          <VoicePicker
             voices={voices}
             value={script.voices.agent}
             onChange={(v) => update({ voices: { ...script.voices, agent: v } })}
@@ -597,7 +631,7 @@ function FormScriptBuilder({
         </div>
         <div>
           <Label>Customer voice</Label>
-          <VoiceSelect
+          <VoicePicker
             voices={voices}
             value={script.voices.customer}
             onChange={(v) => update({ voices: { ...script.voices, customer: v } })}
@@ -667,30 +701,211 @@ function FormScriptBuilder({
   );
 }
 
-function VoiceSelect({
+// ─────────────────────────────────────────────────────────────
+// Voice bank — popover-based picker with search, filter chips,
+// and inline preview playback (uses ElevenLabs preview_url field).
+// Replaces the prior plain-Select VoiceSelect.
+// ─────────────────────────────────────────────────────────────
+
+type GenderFilter = "all" | "female" | "male";
+
+function matchesGender(voice: Voice, filter: GenderFilter): boolean {
+  if (filter === "all") return true;
+  const g = String(voice.labels?.gender ?? "").toLowerCase();
+  return g === filter;
+}
+
+function matchesSearch(voice: Voice, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  const hay = [
+    voice.name,
+    voice.description ?? "",
+    ...Object.values(voice.labels ?? {}),
+  ].join(" ").toLowerCase();
+  return hay.includes(needle);
+}
+
+function voiceMetaLine(voice: Voice): string {
+  const labels = voice.labels ?? {};
+  return [labels.gender, labels.age, labels.accent, labels.description]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * Replacement for VoiceSelect. A Popover trigger showing the currently
+ * selected voice; clicking opens a searchable, filterable list of
+ * voices. Each row has a ▶ button that plays the voice's preview clip
+ * via a single shared <audio> element (only one preview plays at a time).
+ */
+function VoicePicker({
   voices,
   value,
   onChange,
+  placeholder = "Select voice",
 }: {
   voices: Voice[];
   value: string;
   onChange: (v: string) => void;
+  placeholder?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [gender, setGender] = useState<GenderFilter>("all");
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const filtered = useMemo(() => {
+    return voices.filter(
+      (v) => matchesGender(v, gender) && matchesSearch(v, query),
+    );
+  }, [voices, gender, query]);
+
+  const selected = voices.find((v) => v.voice_id === value);
+
+  // Stop any playing preview when the popover closes or component unmounts.
+  useEffect(() => {
+    if (!open && audioRef.current) {
+      audioRef.current.pause();
+      setPreviewingId(null);
+    }
+  }, [open]);
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause();
+    };
+  }, []);
+
+  function playPreview(voice: Voice, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!voice.preview_url) return;
+    // If this voice is currently playing, pause.
+    if (previewingId === voice.voice_id) {
+      audioRef.current?.pause();
+      setPreviewingId(null);
+      return;
+    }
+    // Otherwise, switch to this voice's preview.
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.addEventListener("ended", () => setPreviewingId(null));
+    }
+    audioRef.current.src = voice.preview_url;
+    audioRef.current.play().then(() => setPreviewingId(voice.voice_id)).catch(() => {
+      // Autoplay block or network error — silently ignore, the user can retry.
+      setPreviewingId(null);
+    });
+  }
+
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger><SelectValue placeholder="Select voice" /></SelectTrigger>
-      <SelectContent>
-        {voices.length === 0 ? (
-          <SelectItem value={value || "none"}>Loading voices…</SelectItem>
-        ) : (
-          voices.map((v) => (
-            <SelectItem key={v.voice_id} value={v.voice_id}>
-              {v.name}
-              {v.labels?.accent ? ` — ${v.labels.accent}` : ""}
-            </SelectItem>
-          ))
-        )}
-      </SelectContent>
-    </Select>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          className="w-full justify-between font-normal"
+        >
+          <span className="truncate">
+            {selected ? selected.name : (voices.length === 0 ? "Loading voices…" : placeholder)}
+            {selected?.labels?.accent ? (
+              <span className="text-muted-foreground ml-1">— {selected.labels.accent}</span>
+            ) : null}
+          </span>
+          <CaretDown className="w-4 h-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[380px] p-0" align="start">
+        <div className="border-b p-2 space-y-2">
+          <div className="relative">
+            <MagnifyingGlass className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name, accent, description…"
+              className="pl-8 h-8"
+              autoFocus
+            />
+          </div>
+          <div className="flex gap-1">
+            {(["all", "female", "male"] as GenderFilter[]).map((g) => (
+              <Button
+                key={g}
+                size="sm"
+                variant={gender === g ? "default" : "outline"}
+                className="h-7 text-xs capitalize flex-1"
+                onClick={() => setGender(g)}
+              >
+                {g}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <ScrollArea className="h-72">
+          {filtered.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">
+              No voices match your filter.
+            </div>
+          ) : (
+            <ul className="p-1">
+              {filtered.map((v) => {
+                const isSelected = v.voice_id === value;
+                const isPlaying = previewingId === v.voice_id;
+                return (
+                  <li key={v.voice_id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChange(v.voice_id);
+                        setOpen(false);
+                      }}
+                      className={
+                        "w-full text-left px-2 py-2 rounded-md flex items-center gap-2 hover:bg-muted " +
+                        (isSelected ? "bg-muted" : "")
+                      }
+                    >
+                      {v.preview_url ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 shrink-0"
+                          onClick={(e) => playPreview(v, e)}
+                          aria-label={isPlaying ? `Pause preview of ${v.name}` : `Play preview of ${v.name}`}
+                        >
+                          {isPlaying ? (
+                            <Pause className="w-4 h-4" weight="fill" />
+                          ) : (
+                            <Play className="w-4 h-4" weight="fill" />
+                          )}
+                        </Button>
+                      ) : (
+                        <div className="w-8 h-8 shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium truncate">{v.name}</span>
+                          {isSelected && (
+                            <CheckCircle className="w-4 h-4 text-green-600 shrink-0" weight="fill" />
+                          )}
+                        </div>
+                        {voiceMetaLine(v) && (
+                          <div className="text-xs text-muted-foreground truncate">
+                            {voiceMetaLine(v)}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </ScrollArea>
+        <div className="border-t p-2 text-xs text-muted-foreground">
+          {filtered.length} of {voices.length} voice{voices.length === 1 ? "" : "s"}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
