@@ -5,9 +5,65 @@
  * allowing the app to fall back to S3 or in-memory storage.
  */
 import pg from "pg";
+import fs from "fs";
+import path from "path";
 import { logger } from "../services/logger";
 
 let pool: pg.Pool | null = null;
+
+/**
+ * Locate the AWS RDS CA bundle so production TLS verification works
+ * even when the caller hasn't set NODE_EXTRA_CA_CERTS. pm2 sets that env
+ * var via ecosystem.config.cjs for the main app process, but one-off
+ * scripts (seed-admin, seed, migration helpers) don't inherit it and
+ * previously failed with "self-signed certificate in certificate chain".
+ *
+ * Resolution order:
+ *   1. NODE_EXTRA_CA_CERTS (if set AND readable) — canonical path,
+ *      Node has already loaded it into the global trust store.
+ *   2. `RDS_CA_BUNDLE = "<path>"` inside ecosystem.config.cjs — matches
+ *      the deploy's source of truth so docs stay accurate.
+ *   3. Well-known EC2 defaults (ec2-user / ubuntu homedirs).
+ *
+ * Returns the resolved CA content (PEM string), or undefined if no bundle
+ * could be located. Callers that find nothing fall back to Node's default
+ * trust store — which is what the old behavior was.
+ */
+function resolveRdsCaBundle(): string | undefined {
+  const candidates: string[] = [];
+
+  // 1. Honor NODE_EXTRA_CA_CERTS first so the pm2 path is byte-identical.
+  if (process.env.NODE_EXTRA_CA_CERTS) {
+    candidates.push(process.env.NODE_EXTRA_CA_CERTS);
+  }
+
+  // 2. Parse ecosystem.config.cjs for the operator's declared path.
+  try {
+    const ecosystemPath = path.resolve(process.cwd(), "ecosystem.config.cjs");
+    if (fs.existsSync(ecosystemPath)) {
+      const content = fs.readFileSync(ecosystemPath, "utf8");
+      const match = /RDS_CA_BUNDLE\s*=\s*["']([^"']+)["']/.exec(content);
+      if (match) candidates.push(match[1]);
+    }
+  } catch {
+    // ignore — ecosystem file parsing is best-effort
+  }
+
+  // 3. Well-known default EC2 locations.
+  candidates.push("/home/ec2-user/global-bundle.pem");
+  candidates.push("/home/ubuntu/global-bundle.pem");
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return fs.readFileSync(candidate, "utf8");
+      }
+    } catch {
+      // permission error / unreadable — try next
+    }
+  }
+  return undefined;
+}
 
 export function getPool(): pg.Pool | null {
   if (pool) return pool;
@@ -15,21 +71,31 @@ export function getPool(): pg.Pool | null {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) return null;
 
+  // HIPAA: SSL with certificate verification for production.
+  // RDS uses Amazon-issued certificates; rejectUnauthorized: true ensures
+  // the server certificate is validated, preventing MITM attacks.
+  // Production ALWAYS enforces cert validation (DB_SSL_REJECT_UNAUTHORIZED is ignored).
+  // Non-production allows self-signed certs for staging/dev with SSL.
+  //
+  // When NODE_EXTRA_CA_CERTS is unset (e.g. seed-admin, one-off scripts),
+  // we fall back to reading the CA bundle directly into the pg config via
+  // `ssl.ca`. This keeps `rejectUnauthorized: true` intact.
+  let sslConfig: pg.PoolConfig["ssl"];
+  if (process.env.NODE_ENV === "production") {
+    const ca = resolveRdsCaBundle();
+    sslConfig = ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: true };
+  } else if (process.env.DATABASE_URL?.includes("sslmode=require")) {
+    sslConfig = { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" };
+  } else {
+    sslConfig = undefined;
+  }
+
   pool = new pg.Pool({
     connectionString,
     max: 20,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
-    // HIPAA: SSL with certificate verification for production.
-    // RDS uses Amazon-issued certificates; rejectUnauthorized: true ensures
-    // the server certificate is validated, preventing MITM attacks.
-    // Production ALWAYS enforces cert validation (DB_SSL_REJECT_UNAUTHORIZED is ignored).
-    // Non-production allows self-signed certs for staging/dev with SSL.
-    ssl: process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: true }
-      : process.env.DATABASE_URL?.includes("sslmode=require")
-        ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" }
-        : undefined,
+    ssl: sslConfig,
   });
 
   pool.on("error", (err) => {
