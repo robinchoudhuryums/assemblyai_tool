@@ -1,17 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
+import { CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient as sharedQueryClient } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
 import type { AccessRequest } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
-type TabView = "users" | "requests" | "roles";
+type TabView = "users" | "requests" | "roles" | "pipeline";
 
 interface DbUser {
   id: string;
@@ -207,6 +209,10 @@ export default function AdminPage() {
           <Button variant={tab === "roles" ? "default" : "outline"} size="sm" onClick={() => setTab("roles")}>
             <Shield className="w-4 h-4 mr-2" />
             Role Definitions
+          </Button>
+          <Button variant={tab === "pipeline" ? "default" : "outline"} size="sm" onClick={() => setTab("pipeline")}>
+            <Sliders className="w-4 h-4 mr-2" />
+            Pipeline Settings
           </Button>
         </div>
 
@@ -636,7 +642,204 @@ export default function AdminPage() {
             ))}
           </div>
         )}
+
+        {/* ════════════════ PIPELINE SETTINGS TAB ════════════════ */}
+        {tab === "pipeline" && <PipelineSettingsCard />}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pipeline quality-gate settings — runtime-tunable thresholds that
+// control when the audio-processing pipeline skips Bedrock analysis.
+// Backed by /api/admin/pipeline-settings; persists to S3.
+// ─────────────────────────────────────────────────────────────
+interface PipelineSettingsResponse {
+  minCallDurationSec: number;
+  minTranscriptLength: number;
+  minTranscriptConfidence: number;
+  source: {
+    minCallDurationSec: "default" | "env" | "override";
+    minTranscriptLength: "default" | "env" | "override";
+    minTranscriptConfidence: "default" | "env" | "override";
+  };
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+function PipelineSettingsCard() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<PipelineSettingsResponse>({
+    queryKey: ["/api/admin/pipeline-settings"],
+  });
+
+  const [draft, setDraft] = useState<{
+    minCallDurationSec: string;
+    minTranscriptLength: string;
+    minTranscriptConfidence: string;
+  }>({ minCallDurationSec: "", minTranscriptLength: "", minTranscriptConfidence: "" });
+
+  // Populate the draft when the query resolves. Kept as strings so the
+  // user can clear a field to type a new value without React numeric
+  // coercion eating keystrokes.
+  useEffect(() => {
+    if (data) {
+      setDraft({
+        minCallDurationSec: String(data.minCallDurationSec),
+        minTranscriptLength: String(data.minTranscriptLength),
+        minTranscriptConfidence: String(data.minTranscriptConfidence),
+      });
+    }
+  }, [data]);
+
+  const saveMut = useMutation({
+    mutationFn: async (patch: Record<string, number | null>) => {
+      const res = await apiRequest("PATCH", "/api/admin/pipeline-settings", patch);
+      return res.json() as Promise<PipelineSettingsResponse>;
+    },
+    onSuccess: () => {
+      sharedQueryClient.invalidateQueries({ queryKey: ["/api/admin/pipeline-settings"] });
+      toast({ title: "Settings saved", description: "New thresholds apply to the next call processed." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const resetField = (key: "minCallDurationSec" | "minTranscriptLength" | "minTranscriptConfidence") => {
+    // null = clear override, fall back to env/default baseline.
+    saveMut.mutate({ [key]: null });
+  };
+
+  const handleSave = () => {
+    const parsed: Record<string, number> = {};
+    const fields: Array<[keyof typeof draft, number, number]> = [
+      ["minCallDurationSec", 0, 600],
+      ["minTranscriptLength", 0, 10_000],
+      ["minTranscriptConfidence", 0, 1],
+    ];
+    for (const [key, lo, hi] of fields) {
+      const n = parseFloat(draft[key]);
+      if (!Number.isFinite(n) || n < lo || n > hi) {
+        toast({
+          title: "Invalid value",
+          description: `${key}: must be a number between ${lo} and ${hi}.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      // Only send fields the admin actually changed.
+      if (data && n !== data[key]) parsed[key] = n;
+    }
+    if (Object.keys(parsed).length === 0) {
+      toast({ title: "No changes", description: "Nothing to save." });
+      return;
+    }
+    saveMut.mutate(parsed);
+  };
+
+  if (isLoading || !data) {
+    return <Skeleton className="h-64" />;
+  }
+
+  const sourceBadge = (src: "default" | "env" | "override") => {
+    const color = src === "override" ? "bg-purple-200 text-purple-900" : src === "env" ? "bg-blue-200 text-blue-900" : "bg-gray-200 text-gray-900";
+    const label = src === "override" ? "Override" : src === "env" ? "Env var" : "Default";
+    return <Badge className={`${color} text-[10px]`}>{label}</Badge>;
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sliders className="w-5 h-5" />
+          Pipeline Quality Gates
+        </CardTitle>
+        <CardDescription>
+          Thresholds that control when the audio-processing pipeline skips Bedrock analysis. Lower values process more calls (more AI spend); higher values skip more borderline recordings.
+          Changes apply to the next call processed and survive server restarts (persisted to S3).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <Label>Minimum call duration (seconds): <strong>{data.minCallDurationSec}</strong></Label>
+            <div className="flex items-center gap-2">
+              {sourceBadge(data.source.minCallDurationSec)}
+              {data.source.minCallDurationSec === "override" && (
+                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minCallDurationSec")} disabled={saveMut.isPending}>Reset</button>
+              )}
+            </div>
+          </div>
+          <Input
+            type="number"
+            min={0}
+            max={600}
+            step={1}
+            value={draft.minCallDurationSec}
+            onChange={(e) => setDraft({ ...draft, minCallDurationSec: e.target.value })}
+          />
+          <p className="text-xs text-muted-foreground mt-1">Calls shorter than this skip AI analysis. Typical: 15s. Lower for short-form scripts.</p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <Label>Minimum transcript length (characters): <strong>{data.minTranscriptLength}</strong></Label>
+            <div className="flex items-center gap-2">
+              {sourceBadge(data.source.minTranscriptLength)}
+              {data.source.minTranscriptLength === "override" && (
+                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minTranscriptLength")} disabled={saveMut.isPending}>Reset</button>
+              )}
+            </div>
+          </div>
+          <Input
+            type="number"
+            min={0}
+            max={10_000}
+            step={1}
+            value={draft.minTranscriptLength}
+            onChange={(e) => setDraft({ ...draft, minTranscriptLength: e.target.value })}
+          />
+          <p className="text-xs text-muted-foreground mt-1">Transcripts shorter than this skip AI. Typical: 10 chars. Prevents AI spend on garbled / empty recordings.</p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <Label>Minimum transcript confidence: <strong>{data.minTranscriptConfidence.toFixed(2)}</strong> ({Math.round(data.minTranscriptConfidence * 100)}%)</Label>
+            <div className="flex items-center gap-2">
+              {sourceBadge(data.source.minTranscriptConfidence)}
+              {data.source.minTranscriptConfidence === "override" && (
+                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minTranscriptConfidence")} disabled={saveMut.isPending}>Reset</button>
+              )}
+            </div>
+          </div>
+          <Input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={draft.minTranscriptConfidence}
+            onChange={(e) => setDraft({ ...draft, minTranscriptConfidence: e.target.value })}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            AssemblyAI per-word confidence average below this skips AI. Typical: 0.60. Lower to 0.40–0.50 if poor-tier synthetic calls (disfluency-heavy) aren't clearing the gate.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between pt-4 border-t">
+          <div className="text-xs text-muted-foreground">
+            {data.updatedAt ? (
+              <>Last changed {new Date(data.updatedAt).toLocaleString()}{data.updatedBy ? ` by ${data.updatedBy}` : ""}.</>
+            ) : (
+              <>Using env / default baseline (no admin overrides).</>
+            )}
+          </div>
+          <Button onClick={handleSave} disabled={saveMut.isPending}>
+            {saveMut.isPending ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

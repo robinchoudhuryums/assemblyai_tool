@@ -22,6 +22,7 @@ import { triggerWebhook } from "../services/webhooks";
 import { captureException } from "../services/sentry";
 import { evaluateBadges } from "../services/gamification";
 import { logger } from "../services/logger";
+import { getPipelineSettings } from "../services/pipeline-settings";
 
 // Limit concurrent audio processing to 3 parallel jobs (fallback when no DB)
 export const audioProcessingQueue = new TaskQueue(3);
@@ -180,9 +181,14 @@ export async function processAudioFile(
     // Compute call duration from word-level data
     const callDurationSeconds = Math.floor((transcriptResponse.words?.[transcriptResponse.words.length - 1]?.end || 0) / 1000);
 
+    // Quality gate thresholds — runtime-tunable via the Admin UI
+    // (/api/admin/pipeline-settings). Pulled fresh on every pipeline run
+    // so changes take effect on the NEXT call without a restart.
+    const pipelineSettings = getPipelineSettings();
+
     // Quality gate: skip AI analysis for empty/near-empty transcripts (prevents wasted Bedrock spend)
     const transcriptText = (transcriptResponse.text || "").trim();
-    if (transcriptText.length < 10) {
+    if (transcriptText.length < pipelineSettings.minTranscriptLength) {
       logger.warn("pipeline: empty transcript — skipping AI analysis", { callId, transcriptLength: transcriptText.length });
 
       const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
@@ -211,7 +217,7 @@ export async function processAudioFile(
 
     // Quality gate: skip AI analysis for very low-confidence transcripts (#3)
     const transcriptConfidenceValue = transcriptResponse.confidence || 0;
-    if (transcriptConfidenceValue < 0.6 && transcriptConfidenceValue > 0) {
+    if (transcriptConfidenceValue < pipelineSettings.minTranscriptConfidence && transcriptConfidenceValue > 0) {
       logger.warn("pipeline: low transcript confidence — skipping AI analysis", { callId, confidencePct: Math.round(transcriptConfidenceValue * 100) });
 
       const { transcript, sentiment, analysis } = assemblyAIService.processTranscriptData(transcriptResponse, null, callId);
@@ -391,8 +397,12 @@ export async function processAudioFile(
       }
     }
 
-    // Skip AI for very short calls (< 15 seconds) — likely noise, voicemail, or misdials
-    const tooShortForAI = callDurationSeconds < MIN_CALL_DURATION_FOR_AI_SEC;
+    // Skip AI for very short calls — likely noise, voicemail, or misdials.
+    // Threshold is runtime-tunable via the Admin UI (Pipeline Settings);
+    // the constant-level MIN_CALL_DURATION_FOR_AI_SEC is still imported above
+    // for the `../constants` barrel export compat, but this call site now
+    // uses the settings singleton so changes take effect without restart.
+    const tooShortForAI = callDurationSeconds < pipelineSettings.minCallDurationSec;
 
     if (tooShortForAI) {
       logger.info("pipeline: step 4/6 skipping AI analysis (call too short)", { callId, callDurationSeconds });
