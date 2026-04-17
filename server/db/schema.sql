@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS calls (
   call_category VARCHAR(50),
   content_hash VARCHAR(64),
   external_id VARCHAR(255),
+  -- Simulated Call Generator: marks calls created from synthetic TTS output.
+  -- Synthetic calls are EXCLUDED from all aggregate/learning/reporting paths
+  -- (dashboards, reports, leaderboards, snapshots, best-practice ingest,
+  -- auto-calibration, scoring-feedback corrections, gamification, coaching
+  -- alerts). See "Synthetic call isolation" in CLAUDE.md — this flag is the
+  -- integrity gate between synthetic QA data and real-call learning systems.
+  synthetic BOOLEAN NOT NULL DEFAULT FALSE,
   uploaded_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls (status);
@@ -55,6 +62,10 @@ CREATE INDEX IF NOT EXISTS idx_calls_uploaded_at ON calls (uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_employee_id ON calls (employee_id);
 CREATE INDEX IF NOT EXISTS idx_calls_call_category ON calls (call_category);
 CREATE INDEX IF NOT EXISTS idx_calls_content_hash ON calls (content_hash);
+-- Partial index on the hot path: every dashboard/report/learning query filters
+-- c.synthetic = FALSE. Indexing only the non-synthetic rows keeps the index
+-- small (synthetic rows are a tiny minority) while making the filter cheap.
+CREATE INDEX IF NOT EXISTS idx_calls_synthetic_false ON calls (uploaded_at DESC) WHERE synthetic = FALSE;
 -- Content-hash upload dedupe (A21). The unique partial index rejects duplicate
 -- uploads at insert time so the route handler can 409 on pg 23505. Mirrored in
 -- server/db/pool.ts:runMigrations for upgrades of pre-A21 deployments.
@@ -405,3 +416,35 @@ CREATE TABLE IF NOT EXISTS audit_log_integrity (
 INSERT INTO audit_log_integrity (id, previous_hash)
   VALUES (1, 'genesis')
   ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================
+-- Simulated Calls (synthetic TTS call generator — QA/training tool)
+-- ============================================================
+-- Separate from the `calls` table because most simulated calls never get sent
+-- to the analysis pipeline. When "Send to Analysis" is clicked, a row is
+-- created in `calls` with synthetic = TRUE and linked back via
+-- sent_to_analysis_call_id. Audio lives in S3 under the `simulated/` prefix
+-- using the same storage client as real uploads.
+CREATE TABLE IF NOT EXISTS simulated_calls (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title VARCHAR(500) NOT NULL,
+  scenario TEXT,
+  quality_tier VARCHAR(50),                         -- poor | acceptable | excellent
+  equipment VARCHAR(255),
+  status VARCHAR(50) NOT NULL DEFAULT 'pending',    -- pending | generating | ready | failed
+  script JSONB NOT NULL,                            -- SimulatedCallScript (turns, voices, etc.)
+  config JSONB NOT NULL,                            -- SimulatedCallConfig (timing, codec, noise)
+  audio_s3_key VARCHAR(500),                        -- S3 key of the stitched audio file
+  audio_format VARCHAR(20) DEFAULT 'mp3',           -- mp3 | wav
+  duration_seconds INTEGER,
+  tts_char_count INTEGER DEFAULT 0,                 -- for cost tracking
+  estimated_cost NUMERIC(10,4) DEFAULT 0,
+  error TEXT,
+  created_by VARCHAR(255) NOT NULL,
+  sent_to_analysis_call_id UUID REFERENCES calls(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_simulated_calls_status ON simulated_calls (status);
+CREATE INDEX IF NOT EXISTS idx_simulated_calls_created_by ON simulated_calls (created_by);
+CREATE INDEX IF NOT EXISTS idx_simulated_calls_created_at ON simulated_calls (created_at DESC);

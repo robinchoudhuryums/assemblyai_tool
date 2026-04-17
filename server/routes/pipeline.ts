@@ -595,9 +595,17 @@ export async function processAudioFile(
       }
     }
 
+    // Synthetic-call isolation: look up the call row early so we can gate
+    // learning/reporting side effects below. Simulated calls share the same
+    // processing pipeline but must never trigger auto-assignment, badges,
+    // coaching alerts, best-practice ingest, or gamification webhooks — those
+    // would credit real employees for fake calls and poison the KB/AI.
+    const callBeforeUpdates = await storage.getCall(callId);
+    const isSynthetic = callBeforeUpdates?.synthetic === true;
+
     // Auto-assign to employee based on detected agent name (shared logic from utils.ts)
     let autoAssigned = false;
-    if (aiAnalysis?.detected_agent_name) {
+    if (!isSynthetic && aiAnalysis?.detected_agent_name) {
       const result = await autoAssignEmployee(callId, aiAnalysis.detected_agent_name, storage, `[${callId}] `);
       autoAssigned = result.assigned;
     }
@@ -616,59 +624,76 @@ export async function processAudioFile(
     const completedCall = await storage.getCall(callId);
     const performanceScoreNum = parseFloat(analysis.performanceScore || "0");
 
-    // Auto-generate coaching alerts for low/high scores (non-blocking)
+    // Auto-generate coaching alerts for low/high scores (non-blocking).
+    // Synthetic-call isolation: simulated calls skip ALL of these side
+    // effects. The AI analysis still runs and is stored so the admin can
+    // review it, but no coaching session gets created, no badges awarded,
+    // and the call never lands in the best-practice KB collection.
     try {
       const performanceScore = performanceScoreNum;
       const finalEmployeeId = completedCall?.employeeId;
       const callSummary = (analysis.summary as string) || "";
-      // A12/F11/F21: pass the freshly-built analysis through so the
-      // coaching service doesn't re-fetch it from storage.
-      checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources, {
-        feedback: analysis.feedback,
-        subScores: analysis.subScores,
-        flags: analysis.flags,
-      }).catch(err => {
-        logger.warn("pipeline: coaching alert failed (non-blocking)", { callId, error: (err as Error).message });
-        captureException(err as Error, { callId, errorType: "coaching_alert" });
-      });
 
-      // Gamification: evaluate badges (non-blocking)
-      if (finalEmployeeId) {
-        const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
-        evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
-          logger.warn("pipeline: badge evaluation failed (non-blocking)", { callId, error: (err as Error).message });
-          captureException(err as Error, { callId, errorType: "badge_evaluation" });
+      if (isSynthetic) {
+        logger.info("pipeline: synthetic call — skipping coaching / badges / KB ingest", { callId });
+      } else {
+        // A12/F11/F21: pass the freshly-built analysis through so the
+        // coaching service doesn't re-fetch it from storage.
+        checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources, {
+          feedback: analysis.feedback,
+          subScores: analysis.subScores,
+          flags: analysis.flags,
+        }).catch(err => {
+          logger.warn("pipeline: coaching alert failed (non-blocking)", { callId, error: (err as Error).message });
+          captureException(err as Error, { callId, errorType: "coaching_alert" });
         });
-      }
 
-      // Best practice auto-ingestion: send exceptional calls (≥9.0) to the KB
-      if (performanceScore >= 9.0) {
-        import("../services/best-practice-ingest").then(({ ingestBestPractice }) => {
-          const feedback = analysis.feedback as { strengths?: Array<string | { text: string }> } | undefined;
-          const strengths = (feedback?.strengths || []).map(s => typeof s === "string" ? s : (s as { text: string }).text);
-          ingestBestPractice({
-            callId,
-            callCategory: completedCall?.callCategory || undefined,
-            score: performanceScore,
-            agentName: analysis.detectedAgentName as string | undefined,
-            summary: callSummary,
-            transcript: speakerLabeledText?.slice(0, 5000) || "",
-            strengths,
-          }).catch((err) => {
-            logger.warn("pipeline: best-practice ingestion failed (non-blocking)", { callId, error: (err as Error).message });
-            captureException(err as Error, { callId, errorType: "best_practice_ingest" });
+        // Gamification: evaluate badges (non-blocking)
+        if (finalEmployeeId) {
+          const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
+          evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
+            logger.warn("pipeline: badge evaluation failed (non-blocking)", { callId, error: (err as Error).message });
+            captureException(err as Error, { callId, errorType: "badge_evaluation" });
           });
-        }).catch((err) => {
-          logger.warn("pipeline: best-practice ingest module import failed", { callId, error: (err as Error).message });
-        });
+        }
+
+        // Best practice auto-ingestion: send exceptional calls (≥9.0) to the KB.
+        // CRITICAL: a synthetic "perfect" call reaching this branch would become
+        // a real reference document that the AI grounds future analyses on.
+        if (performanceScore >= 9.0) {
+          import("../services/best-practice-ingest").then(({ ingestBestPractice }) => {
+            const feedback = analysis.feedback as { strengths?: Array<string | { text: string }> } | undefined;
+            const strengths = (feedback?.strengths || []).map(s => typeof s === "string" ? s : (s as { text: string }).text);
+            ingestBestPractice({
+              callId,
+              callCategory: completedCall?.callCategory || undefined,
+              score: performanceScore,
+              agentName: analysis.detectedAgentName as string | undefined,
+              summary: callSummary,
+              transcript: speakerLabeledText?.slice(0, 5000) || "",
+              strengths,
+            }).catch((err) => {
+              logger.warn("pipeline: best-practice ingestion failed (non-blocking)", { callId, error: (err as Error).message });
+              captureException(err as Error, { callId, errorType: "best_practice_ingest" });
+            });
+          }).catch((err) => {
+            logger.warn("pipeline: best-practice ingest module import failed", { callId, error: (err as Error).message });
+          });
+        }
       }
     } catch (alertErr) {
       logger.warn("pipeline: coaching alert check failed (non-blocking)", { callId, error: (alertErr as Error).message });
       captureException(alertErr as Error, { callId, errorType: "coaching_alert_setup" });
     }
 
-    // Trigger webhooks (non-blocking)
+    // Trigger webhooks (non-blocking). Synthetic-call isolation: external
+    // webhook consumers (Slack alerts, etc.) should not receive score.low
+    // / score.exceptional events for simulated calls. Skip the whole block
+    // for synthetic to avoid confusing downstream integrations.
     try {
+      if (isSynthetic) {
+        logger.info("pipeline: synthetic call — skipping webhooks", { callId });
+      }
       const employeeId = completedCall?.employeeId;
       let employeeName: string | undefined;
       if (employeeId) {
@@ -680,43 +705,45 @@ export async function processAudioFile(
         }
       }
 
-      // call.completed
-      triggerWebhook("call.completed", {
-        callId,
-        score: performanceScoreNum,
-        sentiment: sentiment.overallSentiment,
-        duration: callDurationSeconds,
-        employee: employeeName || undefined,
-        fileName: originalName,
-      }).catch(err => {
-        logger.warn("pipeline: webhook delivery failed", { callId, event: "call.completed", error: (err as Error).message });
-        captureException(err as Error, { callId, errorType: "webhook_delivery" });
-      });
-
-      // score.low (score <= 4)
-      if (performanceScoreNum > 0 && performanceScoreNum <= 4) {
-        triggerWebhook("score.low", {
+      if (!isSynthetic) {
+        // call.completed
+        triggerWebhook("call.completed", {
           callId,
           score: performanceScoreNum,
+          sentiment: sentiment.overallSentiment,
+          duration: callDurationSeconds,
           employee: employeeName || undefined,
           fileName: originalName,
         }).catch(err => {
-          logger.warn("pipeline: webhook delivery failed", { callId, event: "score.low", error: (err as Error).message });
+          logger.warn("pipeline: webhook delivery failed", { callId, event: "call.completed", error: (err as Error).message });
           captureException(err as Error, { callId, errorType: "webhook_delivery" });
         });
-      }
 
-      // score.exceptional (score >= 9)
-      if (performanceScoreNum >= 9) {
-        triggerWebhook("score.exceptional", {
-          callId,
-          score: performanceScoreNum,
-          employee: employeeName || undefined,
-          fileName: originalName,
-        }).catch(err => {
-          logger.warn("pipeline: webhook delivery failed", { callId, event: "score.exceptional", error: (err as Error).message });
-          captureException(err as Error, { callId, errorType: "webhook_delivery" });
-        });
+        // score.low (score <= 4)
+        if (performanceScoreNum > 0 && performanceScoreNum <= 4) {
+          triggerWebhook("score.low", {
+            callId,
+            score: performanceScoreNum,
+            employee: employeeName || undefined,
+            fileName: originalName,
+          }).catch(err => {
+            logger.warn("pipeline: webhook delivery failed", { callId, event: "score.low", error: (err as Error).message });
+            captureException(err as Error, { callId, errorType: "webhook_delivery" });
+          });
+        }
+
+        // score.exceptional (score >= 9)
+        if (performanceScoreNum >= 9) {
+          triggerWebhook("score.exceptional", {
+            callId,
+            score: performanceScoreNum,
+            employee: employeeName || undefined,
+            fileName: originalName,
+          }).catch(err => {
+            logger.warn("pipeline: webhook delivery failed", { callId, event: "score.exceptional", error: (err as Error).message });
+            captureException(err as Error, { callId, errorType: "webhook_delivery" });
+          });
+        }
       }
     } catch (webhookErr) {
       logger.warn("pipeline: webhook trigger failed (non-blocking)", { callId, error: (webhookErr as Error).message });

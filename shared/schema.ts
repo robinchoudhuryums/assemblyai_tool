@@ -119,6 +119,9 @@ export const insertCallSchema = z.object({
   callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
   contentHash: z.string().optional(),
   externalId: z.string().max(255).optional(),
+  // Synthetic flag: set to TRUE only for calls promoted from the Simulated
+  // Call Generator. These rows are excluded from all aggregate/learning paths.
+  synthetic: z.boolean().optional(),
 });
 
 export const callSchema = insertCallSchema.extend({

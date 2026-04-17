@@ -1195,6 +1195,36 @@ These are SQL scripts that must be run once during a specific upgrade window. De
 ### Pending fixes (security/correctness gaps introduced this cycle)
 - [x] **`/api/admin/jobs/:id` MFA bypass** — FIXED: `requireMFASetup` added directly to route handler in `snapshots.ts`. No longer depends on middleware mount ordering in `routes.ts`.
 
+## Simulated Call Generator (admin-only QA tool)
+
+Synthetic call recordings for QA training, agent evaluation, and regression-testing the analysis pipeline. Admin-only, gated by MFA (mounted under `/api/admin/*`). **Phase 1 (foundation + isolation) is complete — generation pipeline, API, and UI land in subsequent phases.**
+
+### Isolation guarantee (INV-34 / INV-35)
+
+Synthetic calls live in the `calls` table with `synthetic = TRUE`. Every aggregate query, learning loop, and reporting path excludes them. The following are covered end-to-end:
+
+- **Storage queries** (both Postgres and MemStorage): `getAllCalls`, `getCallsSince`, `getCallsWithDetails`, `getCallsPaginated`, `getCallsSinceWithDetails`, `countCompletedCallsByEmployee`, `getRecentCallsForBadgeEval`, `getLeaderboardData`, `getDashboardMetrics`, `getSentimentDistribution`, `getTopPerformers`, `getFilteredReportMetrics`, `getInsightsData`, `searchCalls`. Intentional exception: `getCallsByStatus` INCLUDES synthetic (orphan recovery needs to reap stalled generate-and-analyze jobs).
+- **Route SQL**: `/api/analytics/trends` (company + per-agent), `/api/export/calls` CSV, `/api/export/team-analytics` CSV, `/api/analytics/heatmap`, `/api/calls/by-tag/:tag`.
+- **Pipeline side-effects** (in `server/routes/pipeline.ts`): `autoAssignEmployee`, `checkAndCreateCoachingAlert`, `evaluateBadges`, `ingestBestPractice`, `triggerWebhook("call.completed" | "score.low" | "score.exceptional")` — all short-circuited when the call row has `synthetic = TRUE`.
+- **Scoring feedback**: PATCH `/api/calls/:id/analysis` does NOT capture a correction when the underlying call is synthetic — prevents synthetic edits from being injected into future real-call prompts as "RECENT SCORING CORRECTIONS".
+
+Regression guard: `tests/synthetic-call-isolation.test.ts` (18 assertions). Adding a new storage query that reads `calls` requires adding a corresponding assertion there.
+
+### Data model
+
+- `calls.synthetic BOOLEAN NOT NULL DEFAULT FALSE` — populated only by the simulated-call pipeline.
+- `simulated_calls` table — holds the script + config + generated-audio metadata. When "Send to Analysis" is clicked, a corresponding row is created in `calls` (with `synthetic = TRUE`) and linked back via `simulated_calls.sent_to_analysis_call_id`.
+- Migrations in `server/db/pool.ts:runMigrations` are idempotent. The `synthetic` column is backfilled to FALSE on existing rows, then SET NOT NULL.
+- Partial index `idx_calls_synthetic_false` keeps the hot-path filter cheap (synthetic rows are a tiny minority).
+
+### Storage service
+
+`server/services/simulated-call-storage.ts` exposes `createSimulatedCall`, `getSimulatedCall`, `listSimulatedCalls`, `updateSimulatedCall`, `deleteSimulatedCall`, `countSimulatedCallsToday`. Uses the pg Pool directly (not the IStorage abstraction) because the feature intrinsically requires PostgreSQL — both the durable JobQueue and the simulated_calls table. `isSimulatedCallsAvailable()` returns false when `DATABASE_URL` is unset; routes guard on this before writing.
+
+### Shared schemas
+
+`shared/simulated-call-schema.ts` exports `SimulatedCallScript`, `SimulatedCallConfig`, `GenerateSimulatedCallRequest`, `SimulatedCall`, `SimulatedCallStatus`, and `InsertSimulatedCall`. The script supports spoken turns (agent/customer), hold events with optional music, and interrupt events for overlapping speech.
+
 ## Long-Term Improvement Roadmap
 
 See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full multi-sprint improvement plan covering testing, security hardening, code quality, accessibility, and infrastructure.
@@ -1263,6 +1293,8 @@ INV-30 | All scheduler setInterval/setTimeout handles must call .unref() | Subsy
 INV-31 | createCallAnalysis must preserve manual_edits on conflict (UPSERT with COALESCE on Postgres, equivalent merge on MemStorage/CloudStorage) — reanalyze never destroys manager corrections | Subsystem: Storage
 INV-32 | Bedrock circuit breaker must NOT count 4xx (except 429) toward the open threshold — only 5xx + 429 indicate unhealthy upstream | Subsystem: AI Processing
 INV-33 | useIdleTimeout must reset on visibilitychange→visible to prevent silent logout while tab is blurred — tab-hidden must NOT reset (HIPAA away-from-machine timeout still applies) | Subsystem: Frontend
+INV-34 | Synthetic calls (`calls.synthetic = TRUE`) MUST be excluded from every aggregate / learning / reporting read path: dashboards, leaderboards, performance snapshots, auto-calibration, scoring-feedback corrections, gamification badges/milestones, best-practice KB ingest, coaching alerts, scheduled reports, insights, analytics, filtered reports, and search. Violation poisons scoring for real agents. Guarded by `tests/synthetic-call-isolation.test.ts`. The single intentional exception is `getCallsByStatus` (orphan recovery). | Subsystem: Storage / AI Processing / Engagement
+INV-35 | Pipeline learning side-effects (`ingestBestPractice`, `evaluateBadges`, `checkAndCreateCoachingAlert`, `autoAssignEmployee`, score.low/score.exceptional webhooks) MUST skip when `call.synthetic === true`. Scoring-correction capture in PATCH /api/calls/:id/analysis MUST also skip synthetic calls. | Subsystem: AI Processing / Engagement
 
 ### Policy Configuration
 Policy threshold: 5/10

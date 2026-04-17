@@ -43,6 +43,7 @@ function mapCall(row: any): Call {
     assemblyAiId: row.assembly_ai_id, callCategory: row.call_category,
     contentHash: row.content_hash,
     externalId: row.external_id ?? undefined,
+    synthetic: row.synthetic === true,
     uploadedAt: row.uploaded_at?.toISOString?.() ?? row.uploaded_at,
   };
 }
@@ -388,9 +389,9 @@ export class PostgresStorage implements IStorage {
   async createCall(call: InsertCall): Promise<Call> {
     const id = randomUUID();
     const { rows } = await this.db.query(
-      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category, content_hash, external_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory, call.contentHash, (call as any).externalId ?? null],
+      `INSERT INTO calls (id, employee_id, file_name, file_path, status, duration, assembly_ai_id, call_category, content_hash, external_id, synthetic)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [id, call.employeeId, call.fileName, call.filePath, call.status ?? "pending", call.duration, call.assemblyAiId, call.callCategory, call.contentHash, (call as any).externalId ?? null, call.synthetic === true],
     );
     return mapCall(rows[0]);
   }
@@ -459,11 +460,17 @@ export class PostgresStorage implements IStorage {
   }
 
   async getAllCalls(): Promise<Call[]> {
-    const { rows } = await this.db.query("SELECT * FROM calls ORDER BY uploaded_at DESC");
+    // Synthetic-call isolation: these rows power aggregate views. Simulated
+    // calls must never contaminate dashboards / reports / learning loops.
+    const { rows } = await this.db.query(
+      "SELECT * FROM calls WHERE synthetic = FALSE ORDER BY uploaded_at DESC",
+    );
     return rows.map(mapCall);
   }
   async getCallsByStatus(status: string): Promise<Call[]> {
-    // A7/F14: indexed via idx_calls_status (see schema.sql)
+    // Used by batch orphan recovery — we intentionally INCLUDE synthetic
+    // calls here so a generate-and-analyze job that stalls still gets reaped.
+    // Every OTHER read path excludes synthetic; this one is the exception.
     const { rows } = await this.db.query(
       "SELECT * FROM calls WHERE status = $1 ORDER BY uploaded_at DESC",
       [status],
@@ -472,7 +479,7 @@ export class PostgresStorage implements IStorage {
   }
   async getCallsSince(since: Date): Promise<Call[]> {
     const { rows } = await this.db.query(
-      "SELECT * FROM calls WHERE uploaded_at >= $1 ORDER BY uploaded_at DESC",
+      "SELECT * FROM calls WHERE uploaded_at >= $1 AND synthetic = FALSE ORDER BY uploaded_at DESC",
       [since],
     );
     return rows.map(mapCall);
@@ -494,8 +501,10 @@ export class PostgresStorage implements IStorage {
 
   // ── A4/F03/F13/F15: hot-path helpers ──────────────────────
   async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    // Synthetic-call isolation: badge milestones must not count simulated calls.
     const { rows } = await this.db.query(
-      `SELECT COUNT(*)::int AS c FROM calls WHERE employee_id = $1 AND status = 'completed'`,
+      `SELECT COUNT(*)::int AS c FROM calls
+       WHERE employee_id = $1 AND status = 'completed' AND synthetic = FALSE`,
       [employeeId],
     );
     return rows[0]?.c ?? 0;
@@ -513,7 +522,7 @@ export class PostgresStorage implements IStorage {
         a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
        FROM calls c
        LEFT JOIN call_analyses a ON a.call_id = c.id
-       WHERE c.employee_id = $1 AND c.status = 'completed'
+       WHERE c.employee_id = $1 AND c.status = 'completed' AND c.synthetic = FALSE
        ORDER BY c.uploaded_at DESC
        LIMIT $2`,
       [employeeId, cappedLimit],
@@ -542,6 +551,7 @@ export class PostgresStorage implements IStorage {
          JOIN call_analyses a ON a.call_id = c.id
          WHERE c.status = 'completed'
            AND c.employee_id IS NOT NULL
+           AND c.synthetic = FALSE
            AND a.performance_score IS NOT NULL
            AND a.performance_score <> ''
            ${sinceClause}
@@ -601,7 +611,7 @@ export class PostgresStorage implements IStorage {
        LEFT JOIN transcripts t ON t.call_id = c.id
        LEFT JOIN sentiment_analyses s ON s.call_id = c.id
        LEFT JOIN call_analyses a ON a.call_id = c.id
-       WHERE c.uploaded_at >= $1${extra}
+       WHERE c.uploaded_at >= $1 AND c.synthetic = FALSE${extra}
        ORDER BY c.uploaded_at DESC`,
       params,
     );
@@ -626,7 +636,7 @@ export class PostgresStorage implements IStorage {
       LEFT JOIN transcripts t ON t.call_id = c.id
       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
-      WHERE 1=1
+      WHERE c.synthetic = FALSE
     `;
     const params: any[] = [];
     let idx = 1;
@@ -658,8 +668,10 @@ export class PostgresStorage implements IStorage {
     const filters = options.filters || {};
     const limit = Math.max(1, Math.min(options.limit || 25, 200));
 
-    // Build WHERE clause for both count and data queries
-    let whereClause = "WHERE 1=1";
+    // Build WHERE clause for both count and data queries.
+    // Synthetic-call isolation: the default calls list never shows simulated
+    // calls — they're only visible under /admin/simulated-calls.
+    let whereClause = "WHERE c.synthetic = FALSE";
     const params: any[] = [];
     let idx = 1;
     if (filters.status) {
@@ -885,11 +897,20 @@ export class PostgresStorage implements IStorage {
 
   // ── Dashboard Metrics ─────────────────────────────────────
   async getDashboardMetrics(): Promise<DashboardMetrics> {
+    // Synthetic-call isolation: aggregate queries must join back to calls to
+    // filter out synthetic rows. The sentiment_analyses / call_analyses tables
+    // don't have a synthetic column, so we filter via the call_id join.
     const { rows } = await this.db.query(`
       SELECT
-        (SELECT COUNT(*) FROM calls)::int AS total_calls,
-        (SELECT COALESCE(AVG(CAST(overall_score AS NUMERIC)) * 10, 0) FROM sentiment_analyses) AS avg_sentiment,
-        (SELECT COALESCE(AVG(CAST(performance_score AS NUMERIC)), 0) FROM call_analyses) AS avg_performance
+        (SELECT COUNT(*) FROM calls WHERE synthetic = FALSE)::int AS total_calls,
+        (SELECT COALESCE(AVG(CAST(s.overall_score AS NUMERIC)) * 10, 0)
+           FROM sentiment_analyses s
+           JOIN calls c ON c.id = s.call_id
+           WHERE c.synthetic = FALSE) AS avg_sentiment,
+        (SELECT COALESCE(AVG(CAST(a.performance_score AS NUMERIC)), 0)
+           FROM call_analyses a
+           JOIN calls c ON c.id = a.call_id
+           WHERE c.synthetic = FALSE) AS avg_performance
     `);
     const r = rows[0];
     return {
@@ -901,11 +922,13 @@ export class PostgresStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
+    // Synthetic-call isolation via join to calls.
     const { rows } = await this.db.query(`
-      SELECT overall_sentiment, COUNT(*)::int AS count
-      FROM sentiment_analyses
-      WHERE overall_sentiment IS NOT NULL
-      GROUP BY overall_sentiment
+      SELECT s.overall_sentiment, COUNT(*)::int AS count
+      FROM sentiment_analyses s
+      JOIN calls c ON c.id = s.call_id
+      WHERE s.overall_sentiment IS NOT NULL AND c.synthetic = FALSE
+      GROUP BY s.overall_sentiment
     `);
     const dist: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
     for (const row of rows) {
@@ -916,6 +939,7 @@ export class PostgresStorage implements IStorage {
   }
 
   async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
+    // Synthetic-call isolation: simulated calls must not inflate employee averages.
     const { rows } = await this.db.query(`
       SELECT e.id, e.name, e.role,
         COUNT(c.id)::int AS total_calls,
@@ -923,6 +947,7 @@ export class PostgresStorage implements IStorage {
       FROM employees e
       JOIN calls c ON c.employee_id = e.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE c.synthetic = FALSE
       GROUP BY e.id, e.name, e.role
       HAVING COUNT(c.id) > 0
       ORDER BY avg_score DESC NULLS LAST
@@ -939,8 +964,9 @@ export class PostgresStorage implements IStorage {
   async getFilteredReportMetrics(filters: {
     from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
   }): Promise<FilteredReportResult> {
-    // Build shared WHERE clause for all sub-queries
-    const where: string[] = ["c.status = 'completed'"];
+    // Build shared WHERE clause for all sub-queries.
+    // Synthetic-call isolation: reports never include simulated calls.
+    const where: string[] = ["c.status = 'completed'", "c.synthetic = FALSE"];
     const params: unknown[] = [];
     let idx = 1;
     if (filters.from) { where.push(`c.uploaded_at >= $${idx++}`); params.push(filters.from); }
@@ -1052,6 +1078,7 @@ export class PostgresStorage implements IStorage {
       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
       WHERE c.status = 'completed' AND a.id IS NOT NULL AND c.uploaded_at >= $1
+        AND c.synthetic = FALSE
       ORDER BY c.uploaded_at DESC
     `, [since]);
     return rows.map(r => ({
@@ -1086,8 +1113,9 @@ export class PostgresStorage implements IStorage {
       LEFT JOIN employees e ON c.employee_id = e.id
       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
-      WHERE to_tsvector('english', coalesce(t.text, '')) @@ plainto_tsquery('english', $1)
-         OR t.text ILIKE $2
+      WHERE c.synthetic = FALSE
+        AND (to_tsvector('english', coalesce(t.text, '')) @@ plainto_tsquery('english', $1)
+             OR t.text ILIKE $2)
       ORDER BY ts_rank(to_tsvector('english', coalesce(t.text, '')), plainto_tsquery('english', $1)) DESC,
                c.uploaded_at DESC
       LIMIT $3

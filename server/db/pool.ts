@@ -183,6 +183,37 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_scheduled_reports_generated_at ON scheduled_reports (generated_at DESC)",
     // MFA recovery codes — scrypt-hashed, single-use recovery tokens for lost-device flow
     "ALTER TABLE mfa_secrets ADD COLUMN IF NOT EXISTS recovery_codes JSONB DEFAULT '[]'",
+    // Simulated Call Generator — synthetic flag on calls + dedicated table.
+    // See docs in schema.sql. The column is NOT NULL DEFAULT FALSE on new
+    // deploys; for upgrades, the two-step ADD + UPDATE + SET NOT NULL pattern
+    // avoids rewriting the whole calls table at once on large tables.
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS synthetic BOOLEAN DEFAULT FALSE",
+    "UPDATE calls SET synthetic = FALSE WHERE synthetic IS NULL",
+    "ALTER TABLE calls ALTER COLUMN synthetic SET NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_calls_synthetic_false ON calls (uploaded_at DESC) WHERE synthetic = FALSE",
+    `CREATE TABLE IF NOT EXISTS simulated_calls (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      title VARCHAR(500) NOT NULL,
+      scenario TEXT,
+      quality_tier VARCHAR(50),
+      equipment VARCHAR(255),
+      status VARCHAR(50) NOT NULL DEFAULT 'pending',
+      script JSONB NOT NULL,
+      config JSONB NOT NULL,
+      audio_s3_key VARCHAR(500),
+      audio_format VARCHAR(20) DEFAULT 'mp3',
+      duration_seconds INTEGER,
+      tts_char_count INTEGER DEFAULT 0,
+      estimated_cost NUMERIC(10,4) DEFAULT 0,
+      error TEXT,
+      created_by VARCHAR(255) NOT NULL,
+      sent_to_analysis_call_id UUID REFERENCES calls(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_simulated_calls_status ON simulated_calls (status)",
+    "CREATE INDEX IF NOT EXISTS idx_simulated_calls_created_by ON simulated_calls (created_by)",
+    "CREATE INDEX IF NOT EXISTS idx_simulated_calls_created_at ON simulated_calls (created_at DESC)",
   ];
 
   // --- pgvector migration (optional, non-blocking) ---

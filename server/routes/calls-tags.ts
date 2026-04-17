@@ -125,7 +125,8 @@ export function registerCallTagRoutes(router: Router) {
          FROM calls c
          INNER JOIN call_tags ct ON ct.call_id = c.id
          LEFT JOIN employees e ON c.employee_id = e.id
-         WHERE ct.tag = $1
+         -- Synthetic-call isolation: tag search excludes simulated calls.
+         WHERE ct.tag = $1 AND c.synthetic = FALSE
          ORDER BY c.uploaded_at DESC
          LIMIT 100`,
         [tag]
