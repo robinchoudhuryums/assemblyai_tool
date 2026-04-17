@@ -1,0 +1,19 @@
+{
+  "title": "CPAP Order Status — Excellent Handling",
+  "scenario": "Customer calls to check on their delayed CPAP authorization. Agent handles the call with empathy, clear explanations, and proactive follow-up.",
+  "qualityTier": "excellent",
+  "equipment": "CPAP",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "Thank you for calling UMS, my name is Alex. How can I help you today?" },
+    { "speaker": "customer", "text": "Hi, I'm calling about my CPAP order. It's been three weeks and I haven't heard anything." },
+    { "speaker": "agent", "text": "I'm sorry to hear it's been delayed. Let me pull up your account right now. Can you verify your date of birth for me?" },
+    { "speaker": "customer", "text": "Yes, it's March 14, 1958." },
+    { "speaker": "agent", "text": "Thank you. I can see your order here — we're waiting on the prior authorization from your insurance. I'll call them right now while you're on the line. Do you mind if I put you on a brief hold?" },
+    { "speaker": "hold", "duration": 8 },
+    { "speaker": "agent", "text": "Thanks for holding. Good news — the authorization is approved. Your CPAP will ship tomorrow and you should have it within three to five business days. I'll send you a tracking email today." },
+    { "speaker": "customer", "text": "Oh wonderful, thank you so much for looking into this right away." },
+    { "speaker": "agent", "text": "Of course. Is there anything else I can help you with?" },
+    { "speaker": "customer", "text": "No, that's everything. Thanks again." }
+  ]
+}

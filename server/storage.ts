@@ -378,7 +378,12 @@ export class MemStorage implements IStorage {
       }
     }
     const id = randomUUID();
-    const newCall: Call = { ...call, id, uploadedAt: new Date().toISOString() };
+    const newCall: Call = {
+      ...call,
+      id,
+      synthetic: call.synthetic === true,
+      uploadedAt: new Date().toISOString(),
+    };
     this.calls.set(id, newCall);
     return newCall;
   }
@@ -419,16 +424,23 @@ export class MemStorage implements IStorage {
     }
   }
   async getAllCalls(): Promise<Call[]> {
-    return [...this.calls.values()].sort(
-      (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
-    );
+    // Synthetic-call isolation — mirror PostgresStorage filter.
+    return [...this.calls.values()]
+      .filter(c => !c.synthetic)
+      .sort(
+        (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
+      );
   }
   async getCallsByStatus(status: string): Promise<Call[]> {
+    // INCLUDES synthetic by design — used by batch orphan recovery. Every
+    // other read path excludes synthetic.
     return [...this.calls.values()].filter(c => c.status === status);
   }
   async getCallsSince(since: Date): Promise<Call[]> {
     const sinceMs = since.getTime();
-    return [...this.calls.values()].filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
+    return [...this.calls.values()].filter(
+      c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs,
+    );
   }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     for (const c of this.calls.values()) {
@@ -445,6 +457,7 @@ export class MemStorage implements IStorage {
   async getCallsWithDetails(
     filters: { status?: string; sentiment?: string; employee?: string } = {}
   ): Promise<CallWithDetails[]> {
+    // getAllCalls() already filters out synthetic; no extra work needed here.
     let calls = await this.getAllCalls();
 
     // Pre-filter on call-level fields BEFORE loading details (avoids unnecessary joins)
@@ -470,16 +483,17 @@ export class MemStorage implements IStorage {
 
   // ── A4/F03/F13/F15: hot-path helpers ───────────────────────
   async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    // Synthetic-call isolation: badge milestones must not count simulated calls.
     let count = 0;
     for (const call of this.calls.values()) {
-      if (call.employeeId === employeeId && call.status === "completed") count++;
+      if (!call.synthetic && call.employeeId === employeeId && call.status === "completed") count++;
     }
     return count;
   }
 
   async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
     const calls = [...this.calls.values()]
-      .filter(c => c.employeeId === employeeId && c.status === "completed")
+      .filter(c => !c.synthetic && c.employeeId === employeeId && c.status === "completed")
       .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
       .slice(0, Math.max(1, Math.min(limit, 200)));
     return Promise.all(calls.map(async (call) => {
@@ -492,7 +506,7 @@ export class MemStorage implements IStorage {
     const sinceMs = options.since ? options.since.getTime() : 0;
     const byEmployee = new Map<string, LeaderboardRow>();
     const sortedCalls = [...this.calls.values()]
-      .filter(c => c.status === "completed" && c.employeeId)
+      .filter(c => !c.synthetic && c.status === "completed" && c.employeeId)
       .filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
     for (const call of sortedCalls) {
@@ -527,7 +541,7 @@ export class MemStorage implements IStorage {
   async getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]> {
     const sinceMs = since.getTime();
     const calls = [...this.calls.values()]
-      .filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs)
+      .filter(c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .filter(c => !employeeId || c.employeeId === employeeId);
     return Promise.all(calls.map(async (call) => {
       const [employee, transcript, sentiment, analysis] = await Promise.all([
@@ -640,9 +654,16 @@ export class MemStorage implements IStorage {
   }
 
   async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const totalCalls = this.calls.size;
-    const sentiments = [...this.sentiments.values()];
-    const analyses = [...this.analyses.values()];
+    // Synthetic-call isolation — build an excluded-call-id set and skip those
+    // transcripts/sentiments/analyses when aggregating.
+    const syntheticCallIds = new Set<string>();
+    let totalCalls = 0;
+    for (const c of this.calls.values()) {
+      if (c.synthetic) syntheticCallIds.add(c.id);
+      else totalCalls++;
+    }
+    const sentiments = [...this.sentiments.values()].filter(s => !syntheticCallIds.has(s.callId));
+    const analyses = [...this.analyses.values()].filter(a => !syntheticCallIds.has(a.callId));
     const avgSentiment = sentiments.length > 0
       ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) / sentiments.length) * 10
       : 0;
@@ -658,8 +679,12 @@ export class MemStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
+    // Synthetic-call isolation.
+    const syntheticCallIds = new Set<string>();
+    for (const c of this.calls.values()) if (c.synthetic) syntheticCallIds.add(c.id);
     const distribution: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
     for (const s of this.sentiments.values()) {
+      if (syntheticCallIds.has(s.callId)) continue;
       const key = s.overallSentiment as keyof SentimentDistribution;
       if (key in distribution) distribution[key]++;
     }
@@ -667,7 +692,8 @@ export class MemStorage implements IStorage {
   }
 
   async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
-    const calls = [...this.calls.values()];
+    // Synthetic-call isolation: skip simulated calls when rolling up per-employee averages.
+    const calls = [...this.calls.values()].filter(c => !c.synthetic);
     const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
     for (const call of calls) {
       if (!call.employeeId) continue;
@@ -694,7 +720,8 @@ export class MemStorage implements IStorage {
   async getFilteredReportMetrics(filters: {
     from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
   }): Promise<FilteredReportResult> {
-    let calls = [...this.calls.values()].filter(c => c.status === "completed");
+    // Synthetic-call isolation — reports never include simulated calls.
+    let calls = [...this.calls.values()].filter(c => !c.synthetic && c.status === "completed");
     if (filters.from) { const d = new Date(filters.from).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() >= d); }
     if (filters.to) { const d = new Date(filters.to).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() <= d); }
     if (filters.employeeId) calls = calls.filter(c => c.employeeId === filters.employeeId);
@@ -765,6 +792,8 @@ export class MemStorage implements IStorage {
     const sinceMs = since.getTime();
     const result: InsightsCallData[] = [];
     for (const c of this.calls.values()) {
+      // Synthetic-call isolation.
+      if (c.synthetic) continue;
       if (c.status !== "completed") continue;
       if (new Date(c.uploadedAt || 0).getTime() < sinceMs) continue;
       const a = this.analyses.get(c.id);

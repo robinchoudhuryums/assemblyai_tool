@@ -78,6 +78,12 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/routes.test.ts` — Route endpoint integration tests (HTTP-level auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD)
   - `tests/route-endpoints.test.ts` — Real route handler integration tests (employees CRUD, calls CRUD, user management, dashboard metrics — mounts actual Express routes with MemStorage)
   - `tests/ssrf.test.ts` — SSRF protection (blocked hostnames, private IPs, metadata endpoints, DNS resolution, IPv6-mapped IPv4, protocol enforcement)
+  - `tests/synthetic-call-isolation.test.ts` — Synthetic-call isolation regression guard (18 assertions — INV-34/INV-35 enforcement across storage queries, gamification, dashboards, reports, insights)
+  - `tests/elevenlabs-client.test.ts` — ElevenLabs TTS client (availability guard, listVoices, textToSpeech buffer return, 429 retry-once behavior, cost estimation defaults and env overrides)
+  - `tests/simulated-call-schema.test.ts` — Simulated Call Generator Zod schemas (spoken/hold/interrupt turns, script + config validation, defaults, clamp ranges)
+  - `tests/disfluency.test.ts` — Disfluency injection (per-tier filler rates, RNG determinism, empty-input safety, backchannel pool structure)
+  - `tests/circumstance-modifiers.test.ts` — Rule-based circumstance modifiers (angry softener stripping, hard_of_hearing repeat prompts, escalation turn appends, composition determinism)
+  - `tests/script-rewriter.test.ts` — Bedrock script rewriter (prompt construction, JSON extraction across fenced/prose wrappers, voice-ID preservation contract, error stages: unavailable/model_error/parse_error/validation_error)
 - **Frontend test files** (`client/src/`):
   - `lib/display-utils.test.ts` — toDisplayString (type coercion, XSS sanitization), extractErrorMessage
   - `lib/saved-filters.test.ts` — localStorage CRUD for saved search filter presets
@@ -102,7 +108,7 @@ npx vite build       # Frontend-only build (useful for quick verification)
 client/src/pages/        # Route pages (dashboard, transcripts, employees, etc.)
 client/src/components/   # UI components (ui/ = shadcn, tables/, transcripts/, dashboard/)
 server/db/               # PostgreSQL schema (schema.sql) and connection pool (pool.ts)
-server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger, RAG client, RAG hybrid search, prompt guard, PHI redactor, resilience (circuit breaker), correlation ID, tracing (OpenTelemetry), trace spans, medical synonyms, scoring feedback loop, best practice ingestion, error handler middleware
+server/services/         # AI provider (Bedrock), AI factory, S3 client, AssemblyAI, WebSocket, job queue, TOTP, security monitor, vulnerability scanner, incident response, batch inference/scheduler, webhooks, coaching alerts, gamification, auto-calibration, telephony-8x8, AWS credentials, URL validator (SSRF), scoring calibration, call clustering, logger, RAG client, RAG hybrid search, prompt guard, PHI redactor, resilience (circuit breaker), correlation ID, tracing (OpenTelemetry), trace spans, medical synonyms, scoring feedback loop, best practice ingestion, error handler middleware, ElevenLabs client, audio stitcher (ffmpeg), call simulator, simulated-call storage, disfluency injection, circumstance modifiers, script rewriter (Bedrock)
 server/constants.ts      # Centralized scoring thresholds (LOW_SCORE, HIGH_SCORE, STREAK, etc.)
 server/routes/           # Modular route files (auth, calls, admin, users, analytics, coaching, gamification, etc.)
 server/routes.ts         # Route coordinator + batch scheduler + job queue init
@@ -354,6 +360,18 @@ tests/                   # Unit tests (Node test runner)
 
 Test calls are stored separately from production data (`ab-tests/{id}.json`), never assigned to employees, and never included in dashboard metrics, reports, or performance scores.
 
+### Simulated Call Generator (admin only, MFA-gated)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/admin/simulated-calls/generate` | Enqueue a generation job. Returns `202 { simulatedCallId, status, dailyUsed, dailyCap }`. Enforces `SIMULATED_CALL_DAILY_CAP` per admin. |
+| GET | `/api/admin/simulated-calls` | List generations for the current admin + `dailyUsed` / `dailyCap` fields. |
+| GET | `/api/admin/simulated-calls/:id` | Single generation row. |
+| GET | `/api/admin/simulated-calls/:id/audio` | Stream the stitched MP3 from S3 (`audio/mpeg`). |
+| POST | `/api/admin/simulated-calls/:id/analyze` | Send to the real analysis pipeline. Creates a `synthetic=TRUE` `calls` row with `external_id="sim:<id>"`, enqueues `process_audio`, links back via `simulated_calls.sent_to_analysis_call_id`. Also invoked automatically by the generation job worker when `config.analyzeAfterGeneration === true`. |
+| POST | `/api/admin/simulated-calls/:id/rewrite` | Bedrock script rewriter (Phase B). Body: `{ circumstances: Circumstance[] (1–4), targetQualityTier? }`. Returns a PREVIEW of the rewritten script (does NOT persist). Admin confirms by submitting the preview to `/generate`. Cost: ~$0.003 on Haiku / ~$0.034 on Sonnet per rewrite. |
+| DELETE | `/api/admin/simulated-calls/:id` | Delete generation + best-effort S3 audio cleanup. |
+| GET | `/api/admin/simulated-calls/voices` | Cached (24h) ElevenLabs voice-list proxy. |
+
 ### Usage / Spend Tracking (admin only)
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
@@ -395,6 +413,10 @@ Access requests can request "viewer" or "manager" roles (not admin).
 # Required
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
+
+# Simulated Call Generator (admin-only QA tool — optional feature)
+ELEVENLABS_API_KEY              # ElevenLabs TTS API key (required to use the feature)
+ELEVENLABS_COST_PER_CHAR        # Override per-char cost for spend tracking (default: 0.0003 = $0.30/1K chars)
 
 # Authentication (PostgreSQL users table is primary; AUTH_USERS env var is fallback)
 AUTH_USERS                      # Format: user:pass:role:name,user2:pass2:role2:name2 (fallback if no DB users)
@@ -902,7 +924,7 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | Module | Files | Responsibility |
 |--------|-------|---------------|
 | **Server Entry** | `server/index.ts`, `server/vite.ts`, `server/types.d.ts` | Express bootstrap. Middleware order: X-Forwarded-For validation → correlation ID (UUID-validated, truncated, falls back to randomUUID) → HTTPS redirect → CORS → `wafPreBody` → `express.json({limit:"1mb"})` → `express.urlencoded({limit:"1mb"})` → `wafPostBody` → security headers → audit logging → CSRF double-submit (timingSafeEqual on hashed tokens) → legacy CSRF Content-Type check → routes → `globalErrorHandler` (AppError-aware, transitional `{message, error:{...}}` shape, prod 5xx sanitization). Env validation, graceful shutdown, Vite dev server integration. `types.d.ts` holds Express.User and SessionData type augmentations. |
-| **Route Coordinator** | `server/routes.ts` | Registers all 12 sub-routers, configures multer, initializes job queue + batch scheduler + calibration + telephony schedulers, handles AssemblyAI webhook endpoint |
+| **Route Coordinator** | `server/routes.ts` | Registers all 13 sub-routers, configures multer, initializes job queue + batch scheduler + calibration + telephony schedulers, handles AssemblyAI webhook endpoint |
 | **Auth & Sessions** | `server/auth.ts`, `server/routes/auth.ts` | Passport.js local strategy, session management (PostgreSQL or memorystore), password hashing/complexity, account lockout, session fingerprinting, MFA two-step flow. `deserializeUser` validates UUID format before DB lookup — non-UUID IDs (from AUTH_USERS) skip DB, go to env-var fallback. |
 | **Call Routes** | `server/routes/calls.ts`, `server/routes/calls-tags.ts` | Call CRUD, audio streaming, transcript/sentiment/analysis retrieval, tagging, annotations |
 | **Pipeline** | `server/routes/pipeline.ts` | Core audio processing: transcription → quality gates → RAG fetch → injection detection → AI analysis → score calibration → storage → coaching/badges/webhooks |
@@ -1177,12 +1199,15 @@ These log a warning but allow the server to start. The app appears healthy but h
 - [ ] `DISABLE_SECURE_COOKIE` set in production — `server/auth.ts:234`, `server/index.ts:74`. Silently disables HTTPS-only session cookies, enabling session hijacking over HTTP. No startup warning. **MEDIUM risk** — security degradation without visibility.
 - [ ] `BEDROCK_MODEL` must be in `BEDROCK_PRICING` if set — `server/index.ts` startup and `server/routes/utils.ts:warnOnUnknownBedrockModel`. Without this, cost tracking silently records $0 for affected calls while AWS still bills. **LOW risk** (warning now fires loudly at boot + once per unknown model at runtime via `logger.warn`); was **HIGH** risk before this fix.
 - [ ] **Viewer user accounts must be linkable to an employee row** — `server/auth.ts:getUserEmployeeId()` matches `username→email` then `displayName→name`. If no match, viewers see empty call lists and 403 on agent endpoints. Silent degradation — no startup warning. **MEDIUM risk** — viewer appears authenticated but sees no data. Ensure DB employee records use the same email as the corresponding user's login.
+- [ ] `ELEVENLABS_API_KEY` — `server/services/elevenlabs-client.ts` emits a startup warn when unset. The Simulated Calls sidebar nav entry is still visible to admins regardless, but the `/api/admin/simulated-calls/generate` and `/voices` routes return 503 on use. No in-UI "feature unavailable" banner. **MEDIUM risk** — admin clicks a visible feature and sees repeated 503s with no explanation.
+- [ ] `ffmpeg-static` binary executable on the deploy target — validated lazily via `isFfmpegAvailable()` in `server/services/audio-stitcher.ts`; `/generate` returns 503 if the check fails. No startup validation. Bundled via the `ffmpeg-static` npm package, so a clean `npm install` on Linux/Mac should work; rare cross-platform or permission issues may surface. **LOW risk** — bundled binary, rarely breaks.
 
 ### Manual seed required (no startup check, no migration)
 Operator must populate this state outside of any automated path. CI does not catch missing data.
 
 - [ ] **`prompt_templates` table seeded with company-specific rows** — `server/routes/pipeline.ts:261` calls `getPromptTemplateByCategory(callCategory)`. Empty table → fallback to generic default prompt. **MEDIUM risk** — pipeline silently runs against generic rubrics, scores produced are not company-specific. Not validated, not warned about, no admin UI bootstrap.
 - [ ] **Pre-existing MFA-enrolled users have 0 recovery codes after ae2f30c deploy** — The `mfa_secrets.recovery_codes` column migration is idempotent (`ADD COLUMN IF NOT EXISTS ... DEFAULT '[]'`), so no manual migration is required. However, users who enrolled in MFA before this deploy will see "0 recovery codes remaining" in the MFA dialog until they click "Regenerate Recovery Codes" to self-serve. Login still works via TOTP; recovery-code verification will silently fail until regeneration. **LOW risk** — voluntary feature gap, not functional break. Suggested mitigation: include a note in release notes directing MFA-enrolled users to regenerate.
+- [ ] **`simulated_calls` preset library empty after fresh deploy** — `npm run seed` populates 12 preset scripts (`seed/simulated-call-presets/*.json`) under `createdBy='system'`, idempotent via title match. If the seed step is skipped, admins see an empty Library tab but can still build scripts manually in the Generate tab. **LOW risk** — cosmetic / feature-completeness, not a functional break.
 
 ### One-time migration backfills
 These are SQL scripts that must be run once during a specific upgrade window. Deploying without them leaves orphaned state.
@@ -1195,6 +1220,84 @@ These are SQL scripts that must be run once during a specific upgrade window. De
 ### Pending fixes (security/correctness gaps introduced this cycle)
 - [x] **`/api/admin/jobs/:id` MFA bypass** — FIXED: `requireMFASetup` added directly to route handler in `snapshots.ts`. No longer depends on middleware mount ordering in `routes.ts`.
 
+## Simulated Call Generator (admin-only QA tool)
+
+Synthetic call recordings for QA training, agent evaluation, and regression-testing the analysis pipeline. Admin-only, gated by MFA (mounted under `/api/admin/*`). All four build phases complete (foundation + isolation, TTS/ffmpeg backend, API/jobs/seed, frontend UI).
+
+### Isolation guarantee (INV-34 / INV-35)
+
+Synthetic calls live in the `calls` table with `synthetic = TRUE`. Every aggregate query, learning loop, and reporting path excludes them. The following are covered end-to-end:
+
+- **Storage queries** (both Postgres and MemStorage): `getAllCalls`, `getCallsSince`, `getCallsWithDetails`, `getCallsPaginated`, `getCallsSinceWithDetails`, `countCompletedCallsByEmployee`, `getRecentCallsForBadgeEval`, `getLeaderboardData`, `getDashboardMetrics`, `getSentimentDistribution`, `getTopPerformers`, `getFilteredReportMetrics`, `getInsightsData`, `searchCalls`. Intentional exception: `getCallsByStatus` INCLUDES synthetic (orphan recovery needs to reap stalled generate-and-analyze jobs).
+- **Route SQL**: `/api/analytics/trends` (company + per-agent), `/api/export/calls` CSV, `/api/export/team-analytics` CSV, `/api/analytics/heatmap`, `/api/calls/by-tag/:tag`.
+- **Pipeline side-effects** (in `server/routes/pipeline.ts`): `autoAssignEmployee`, `checkAndCreateCoachingAlert`, `evaluateBadges`, `ingestBestPractice`, `triggerWebhook("call.completed" | "score.low" | "score.exceptional")` — all short-circuited when the call row has `synthetic = TRUE`.
+- **Scoring feedback**: PATCH `/api/calls/:id/analysis` does NOT capture a correction when the underlying call is synthetic — prevents synthetic edits from being injected into future real-call prompts as "RECENT SCORING CORRECTIONS".
+
+Regression guard: `tests/synthetic-call-isolation.test.ts` (18 assertions). Adding a new storage query that reads `calls` requires adding a corresponding assertion there.
+
+### Data model
+
+- `calls.synthetic BOOLEAN NOT NULL DEFAULT FALSE` — populated only by the simulated-call pipeline.
+- `simulated_calls` table — holds the script + config + generated-audio metadata. When "Send to Analysis" is clicked, a corresponding row is created in `calls` (with `synthetic = TRUE`) and linked back via `simulated_calls.sent_to_analysis_call_id`.
+- Migrations in `server/db/pool.ts:runMigrations` are idempotent. The `synthetic` column is backfilled to FALSE on existing rows, then SET NOT NULL.
+- Partial index `idx_calls_synthetic_false` keeps the hot-path filter cheap (synthetic rows are a tiny minority).
+
+### Generation pipeline
+
+- `server/services/elevenlabs-client.ts` — raw REST wrapper for the ElevenLabs TTS API. Mirrors the `AssemblyAIService` pattern: config from env, `isAvailable` guard, 429 retry-once with 2s backoff, buffer return + billed character count + latency for each call. `estimateElevenLabsCost()` defaults to $0.0003/char (standard tier), overridable via `ELEVENLABS_COST_PER_CHAR`. Accepts per-call `stability` / `similarityBoost` overrides via `TextToSpeechOptions`.
+- `server/services/audio-stitcher.ts` — ffmpeg wrapper using the static binary from the `ffmpeg-static` npm package (no apt install required on the EC2 target). Exposes `withTempDir` (cleanup-guaranteed temp workspace), `generateSilence`, `stitchAndPostProcess` (codec simulation: clean/phone/degraded/poor + background noise overlay: none/office/callcenter/static via `anoisesrc`; pre-mixes `BackchannelOverlay[]` if provided), `overlayClipOnClip` (two-input amix with `adelay` — used for real interrupt overlap and for single-clip overlays), `probeDurationSeconds`, and `isFfmpegAvailable` for feature gating.
+- `server/services/call-simulator.ts` — orchestrator. Applies circumstance modifiers at step 0 before turn rendering, then renders each script turn via ElevenLabs (text piped through disfluency injection; voice settings resolved per-turn), stitches with gap timing (Box–Muller gaussian for "natural", fixed when configured), uploads the stitched MP3 to S3 under the `simulated/<id>/` prefix, updates the `simulated_calls` row with `audio_s3_key`, `duration_seconds`, `tts_char_count`, `estimated_cost`, `status='ready'`. Throws on any failure.
+- Job type `generate_simulated_call` handled in `server/routes.ts` worker at priority **-10** (yields to real-call `process_audio` at priority 0). Failures set `status='failed'` + error on the row, broadcast the WebSocket event, then re-throw so `JobQueue` applies retry/dead-letter semantics. Retry caps via normal `max_attempts=3`. Reads `uploadedBy` from the job payload so post-generation hooks know the originating admin.
+
+### Realism layers (applied in this order at generation time)
+
+The pipeline layers multiple realism transforms. All are opt-out via config flags; defaults produce the most natural-sounding call.
+
+1. **Circumstance modifiers** (`server/services/circumstance-modifiers.ts`) — rule-based text + structural transforms when `config.circumstances` includes any entry whose `CIRCUMSTANCE_META.ruleBased === true`: `angry` (strips softeners, adds terse prefixes, period→exclamation), `hard_of_hearing` (18% chance prepend "Could you repeat that?" to customer turns), `escalation` (appends 3 turns: customer demand → agent transfer → customer ack). Deterministic with a seeded RNG. Non-rule circumstances (`confused`, `grateful`, `distressed`, `time_pressure`, `non_native_speaker`) are handled by the Bedrock rewriter flow — by the time the simulator runs, the stored script already reflects those.
+2. **Disfluency injection** (`server/services/disfluency.ts`) — text-layer "um/uh" filler insertion at per-tier rates (`excellent`=0, `acceptable`=light, `poor`=heavy). Applied to the TTS request only; `simulated_calls.script` is never mutated. Gated by `config.disfluencies` (default true).
+3. **Per-turn voice settings** — optional `voiceSettings: { stability, similarityBoost }` on each spoken/interrupt turn. Precedence: `turn.voiceSettings` → `script.defaultVoiceSettings` → ElevenLabs client defaults (0.5, 0.75). Only forwarded keys override defaults, so unset turns keep existing pipeline behavior.
+4. **Real interrupt overlap** (via `audio-stitcher.ts:overlayClipOnClip`) — replaces the earlier MVP that concatenated primary+interrupter text into one TTS call. Now renders primary and interrupt with OPPOSITE voices, probes the primary duration, and overlaps the interrupt clip at a random offset in the 65–80% window (min 1s) using ffmpeg `adelay` + `amix` (`duration=longest`). Cost: 2× TTS chars per interrupt turn.
+5. **Backchannel overlays** — during eligible primary turns (≥4s, spoken, non-poor-tier), injects 1–2 short "mm-hmm"/"I see" clips from the opposite speaker via the stitcher's premix pass. Gated by `config.backchannels` (default true; auto-off on `poor` tier).
+
+### Bedrock script rewriter (Phase B)
+
+`server/services/script-rewriter.ts` uses `aiProvider.generateText()` to rewrite a base script for one or more circumstances. Validates output via `simulatedCallScriptSchema`, then **force-restores** `voices` from the base and `qualityTier` from the target so the model cannot swap voice IDs or drift the requested tier. Errors surface as `ScriptRewriterError` with typed `.stage` (`unavailable` / `model_error` / `parse_error` / `validation_error`). Rewrite cost: ~$0.003 on Haiku, ~$0.034 on Sonnet per rewrite — trivial next to the ~$1–2 downstream TTS cost. Exposed via `POST /api/admin/simulated-calls/:id/rewrite` which returns a PREVIEW (does not persist); the admin's confirmation fires the existing `/generate` endpoint with the rewritten script. Circumstance count per request is capped at 4 to bound prompt size.
+
+### Send-to-analysis flow
+
+`POST /api/admin/simulated-calls/:id/analyze` creates a `calls` row with `synthetic=TRUE` and `external_id = "sim:<simulated_call_id>"`. The unique partial index on `external_id` dedupes second clicks (returns 409). The route enqueues the existing `process_audio` job; the pipeline reads audio from S3 via the normal `getAudioFiles` / `downloadAudio` path and runs transcription + analysis. All learning side-effects auto-skip via INV-34/INV-35 — the flag is set BEFORE the pipeline reads the call, so `isSynthetic` branches are hit.
+
+The route delegates to `sendSimulatedCallToAnalysis()` in `server/services/simulated-call-storage.ts`, which also powers the **auto-analyze hook**: when `config.analyzeAfterGeneration === true`, the job worker calls the same helper immediately after `runSimulator` succeeds. Auto-hook failures log at warn level but don't retry the generation job — the ready call is still usable via the manual button. `SendToAnalysisError` exposes typed `.code` (`not_found` / `not_ready` / `already_sent` / `no_job_queue`) that the route maps to HTTP statuses.
+
+### Daily generation cap
+
+`SIMULATED_CALL_DAILY_CAP` env var (default 20, max 500). Enforced per-admin via `countSimulatedCallsToday()` before each `/generate` call. Excess requests return 429. Prevents accidental spend spikes — a 5-minute excellent-tier call ≈ 5000 chars ≈ $1.50 on standard ElevenLabs pricing.
+
+### Frontend
+
+`client/src/pages/simulated-calls.tsx` — single-page admin UI with Library + Generate tabs:
+- **VoicePicker**: Popover with search input, gender filter chips (all/female/male), inline ▶/⏸ preview button per voice using ElevenLabs `preview_url`. Shared `HTMLAudioElement` so only one preview plays at a time; pauses on popover close and unmount.
+- **CircumstancePicker**: togglable chips in the Generate panel, each labeled "Rule" (handled by `circumstance-modifiers.ts`) or "AI" (handled by `script-rewriter.ts`). Selected circumstances surface as orange badges on Library cards.
+- **TurnRow**: per-turn `SlidersHorizontal` toggle opens an inline panel with stability + similarityBoost sliders plus "inherit"/"clear" affordances. Button lights solid when custom settings are set. Only shown for spoken + interrupt turns (hold has no TTS to tune).
+- **VariationDialog**: "Variation" button on ready Library cards opens a two-step modal (circumstance multi-select + target tier → preview → confirm). Preview calls `/rewrite`; confirm calls `/generate` with the rewritten script, carrying the selected circumstances into the new row's `config.circumstances` so Library badges reflect them.
+- **Realism toggles**: Audio Quality panel has checkboxes for `disfluencies`, `backchannels`, and `analyzeAfterGeneration`.
+- Library tab polls every 3s while any generation is active, 15s otherwise; on-focus refetch enabled. Inline `<audio>` player streams directly from the authenticated `/audio` route. Status badges (Queued/Generating/Ready/Failed), quality-tier tag, orange circumstance badges, and an Analyzed badge when the call was sent to analysis.
+- Generate tab supports form mode (add/remove agent/customer/hold turns, Zod-validated) and JSON paste mode. Live summary shows turn/char count + estimated TTS cost + selected-circumstance count before submit.
+- WebSocket event `simulated_call_update` dispatched as `window` event `ws:simulated_call_update` and also triggers `queryClient.invalidateQueries({ queryKey: ["/api/admin/simulated-calls"] })` so status ticks repaint without manual refresh.
+- Sidebar nav entry at `/admin/simulated-calls` under the Admin collapsible section (Microphone icon).
+
+### Seed data
+
+12 preset scripts in `seed/simulated-call-presets/` (4 scenarios × poor/acceptable/excellent quality tiers): CPAP order status, Power Wheelchair billing dispute, Oxygen Concentrator malfunction, CGM eligibility. Uses ElevenLabs default voices available on every account (Adam `pNInz6obpgDQGcFmaJgB`, Rachel `21m00Tcm4TlvDq8ikWAM`). `npm run seed` seeds missing presets under `createdBy='system'`; idempotent via title match — existing rows are untouched so operator-deleted presets won't respawn.
+
+### Storage service
+
+`server/services/simulated-call-storage.ts` exposes `createSimulatedCall`, `getSimulatedCall`, `listSimulatedCalls`, `updateSimulatedCall`, `deleteSimulatedCall`, `countSimulatedCallsToday`. Uses the pg Pool directly (not the IStorage abstraction) because the feature intrinsically requires PostgreSQL — both the durable JobQueue and the simulated_calls table. `isSimulatedCallsAvailable()` returns false when `DATABASE_URL` is unset; routes guard on this before writing.
+
+### Shared schemas
+
+`shared/simulated-call-schema.ts` exports `SimulatedCallScript`, `SimulatedCallConfig`, `GenerateSimulatedCallRequest`, `SimulatedCall`, `SimulatedCallStatus`, and `InsertSimulatedCall`. The script supports spoken turns (agent/customer), hold events with optional music, and interrupt events for overlapping speech.
+
 ## Long-Term Improvement Roadmap
 
 See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full multi-sprint improvement plan covering testing, security hardening, code quality, accessibility, and infrastructure.
@@ -1203,7 +1306,7 @@ See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full mu
 
 ### Test Commands
 ```bash
-npm test                   # Backend (781 tests)
+npm test                   # Backend (869 tests)
 npm run test:client        # Frontend (174 tests)
 npm run check              # TypeScript type check
 ```
@@ -1215,17 +1318,17 @@ Architecture & Code Quality, Security & HIPAA Compliance, Audio Processing Pipel
 Core Architecture & Pipeline:
   server/index.ts, server/routes.ts, server/routes/pipeline.ts, server/routes/utils.ts, server/routes/config.ts, server/routes/admin.ts, server/middleware/waf.ts, server/middleware/rate-limit.ts, server/middleware/error-handler.ts, server/types.d.ts, server/vite.ts, server/constants.ts, server/services/job-queue.ts, server/services/logger.ts, server/services/correlation-id.ts, server/services/tracing.ts, server/services/trace-span.ts, server/services/sentry.ts, server/services/websocket.ts
 Storage Layer / Database:
-  server/storage.ts, server/storage-postgres.ts, server/db/pool.ts, server/db/schema.sql, shared/schema.ts
+  server/storage.ts, server/storage-postgres.ts, server/db/pool.ts, server/db/schema.sql, shared/schema.ts, shared/simulated-call-schema.ts
 AI Processing & Analysis:
-  server/services/assemblyai.ts, server/services/bedrock.ts, server/services/ai-provider.ts, server/services/ai-factory.ts, server/services/active-model.ts, server/services/bedrock-batch.ts, server/services/batch-scheduler.ts, server/services/scoring-calibration.ts, server/services/auto-calibration.ts, server/services/call-clustering.ts
+  server/services/assemblyai.ts, server/services/bedrock.ts, server/services/ai-provider.ts, server/services/ai-factory.ts, server/services/active-model.ts, server/services/bedrock-batch.ts, server/services/batch-scheduler.ts, server/services/scoring-calibration.ts, server/services/auto-calibration.ts, server/services/call-clustering.ts, server/services/call-simulator.ts, server/services/audio-stitcher.ts, server/services/disfluency.ts, server/services/circumstance-modifiers.ts, server/services/script-rewriter.ts
 Security & Compliance:
   server/auth.ts, server/routes/auth.ts, server/routes/users.ts, server/routes/admin-security.ts, server/services/audit-log.ts, server/services/security-monitor.ts, server/services/vulnerability-scanner.ts, server/services/incident-response.ts, server/services/totp.ts, server/services/phi-redactor.ts, server/services/prompt-guard.ts, server/services/url-validator.ts, server/services/resilience.ts, shared/phi-patterns.ts
 AWS & External Integrations:
-  server/services/s3.ts, server/services/sigv4.ts, server/services/aws-credentials.ts, server/services/telephony-8x8.ts, server/services/webhooks.ts
+  server/services/s3.ts, server/services/sigv4.ts, server/services/aws-credentials.ts, server/services/telephony-8x8.ts, server/services/webhooks.ts, server/services/elevenlabs-client.ts
 RAG & Knowledge Base:
   server/services/rag-client.ts, server/services/best-practice-ingest.ts, server/services/medical-synonyms.ts, server/services/scoring-feedback.ts
 Engagement & Reporting:
-  server/services/gamification.ts, server/services/coaching-alerts.ts, server/services/performance-snapshots.ts, server/services/scheduled-reports.ts, server/routes/coaching.ts, server/routes/gamification.ts, server/routes/analytics.ts, server/routes/reports.ts, server/routes/insights.ts, server/routes/snapshots.ts, server/routes/dashboard.ts, server/routes/employees.ts, server/routes/calls.ts, server/routes/calls-tags.ts, server/routes/admin-operations.ts, server/routes/admin-content.ts
+  server/services/gamification.ts, server/services/coaching-alerts.ts, server/services/performance-snapshots.ts, server/services/scheduled-reports.ts, server/services/simulated-call-storage.ts, server/routes/coaching.ts, server/routes/gamification.ts, server/routes/analytics.ts, server/routes/reports.ts, server/routes/insights.ts, server/routes/snapshots.ts, server/routes/dashboard.ts, server/routes/employees.ts, server/routes/calls.ts, server/routes/calls-tags.ts, server/routes/admin-operations.ts, server/routes/admin-content.ts, server/routes/simulated-calls.ts
 Frontend / UI:
   client/src/App.tsx, client/src/pages/, client/src/components/, client/src/lib/queryClient.ts, client/src/lib/i18n.ts, client/src/lib/constants.ts, client/src/lib/safe-storage.ts, client/src/lib/transcript-search.ts, client/src/hooks/
 
@@ -1263,6 +1366,8 @@ INV-30 | All scheduler setInterval/setTimeout handles must call .unref() | Subsy
 INV-31 | createCallAnalysis must preserve manual_edits on conflict (UPSERT with COALESCE on Postgres, equivalent merge on MemStorage/CloudStorage) — reanalyze never destroys manager corrections | Subsystem: Storage
 INV-32 | Bedrock circuit breaker must NOT count 4xx (except 429) toward the open threshold — only 5xx + 429 indicate unhealthy upstream | Subsystem: AI Processing
 INV-33 | useIdleTimeout must reset on visibilitychange→visible to prevent silent logout while tab is blurred — tab-hidden must NOT reset (HIPAA away-from-machine timeout still applies) | Subsystem: Frontend
+INV-34 | Synthetic calls (`calls.synthetic = TRUE`) MUST be excluded from every aggregate / learning / reporting read path: dashboards, leaderboards, performance snapshots, auto-calibration, scoring-feedback corrections, gamification badges/milestones, best-practice KB ingest, coaching alerts, scheduled reports, insights, analytics, filtered reports, and search. Violation poisons scoring for real agents. Guarded by `tests/synthetic-call-isolation.test.ts`. The single intentional exception is `getCallsByStatus` (orphan recovery). | Subsystem: Storage / AI Processing / Engagement
+INV-35 | Pipeline learning side-effects (`ingestBestPractice`, `evaluateBadges`, `checkAndCreateCoachingAlert`, `autoAssignEmployee`, score.low/score.exceptional webhooks) MUST skip when `call.synthetic === true`. Scoring-correction capture in PATCH /api/calls/:id/analysis MUST also skip synthetic calls. | Subsystem: AI Processing / Engagement
 
 ### Policy Configuration
 Policy threshold: 5/10

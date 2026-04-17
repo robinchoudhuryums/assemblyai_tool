@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { MfaSetupDialog } from "@/components/mfa-setup-dialog";
@@ -446,6 +446,19 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 >
                   <CloudArrowUp className="w-5 h-5" />
                   <span>Batch Status</span>
+                </Link>
+                <Link
+                  href="/admin/simulated-calls"
+                  className={cn(
+                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    location === "/admin/simulated-calls"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-simulated-calls"
+                >
+                  <Microphone className="w-5 h-5" />
+                  <span>Simulated Calls</span>
                 </Link>
               </>
             )}

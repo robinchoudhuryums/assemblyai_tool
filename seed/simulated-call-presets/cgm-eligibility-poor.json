@@ -1,0 +1,19 @@
+{
+  "title": "CGM Eligibility Question — Poor Handling",
+  "scenario": "Customer asks about CGM coverage. Agent is vague, unsure, and pushes the customer away without a clear path forward.",
+  "qualityTier": "poor",
+  "equipment": "Continuous Glucose Monitor",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "Hello." },
+    { "speaker": "customer", "text": "Hi, I wanted to see if I could get a continuous glucose monitor." },
+    { "speaker": "agent", "text": "You'd have to check with your insurance." },
+    { "speaker": "customer", "text": "Well my doctor said you supply them." },
+    { "speaker": "agent", "text": "We do but whether it's covered is up to your insurance." },
+    { "speaker": "customer", "text": "Can you tell me what I need to do to get one?" },
+    { "speaker": "agent", "text": "You need a prescription." },
+    { "speaker": "customer", "text": "Okay, then what?" },
+    { "speaker": "agent", "text": "Then you send it to us I guess. I'm not sure about all the details." },
+    { "speaker": "customer", "text": "This isn't very helpful." }
+  ]
+}

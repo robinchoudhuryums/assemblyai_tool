@@ -493,27 +493,35 @@ export function registerCallRoutes(
 
       logger.info("manual edit", { callId, editedBy, reason, fields: editRecord.fieldsChanged.join(", ") });
 
-      // Record scoring correction for the feedback loop (improves future AI analysis)
+      // Record scoring correction for the feedback loop (improves future AI analysis).
+      // Synthetic-call isolation: corrections on simulated calls must NOT be
+      // captured — they'd be injected into future real-call prompts as
+      // "RECENT SCORING CORRECTIONS" and bias the AI's judgment of real agents.
       if (updates.performanceScore || updates.subScores) {
-        import("../services/scoring-feedback").then(({ recordScoringCorrection }) => {
-          const origScore = parseFloat(editRecord.previousValues.performanceScore || existing.performanceScore || "0");
-          const newScore = parseFloat((updates.performanceScore || existing.performanceScore || "0") as string);
-          const subChanges: Record<string, { original: number; corrected: number }> = {};
-          if (updates.subScores && existing.subScores) {
-            const orig = existing.subScores as Record<string, number>;
-            const corr = updates.subScores as Record<string, number>;
-            for (const dim of Object.keys(corr)) {
-              if (orig[dim] !== undefined && orig[dim] !== corr[dim]) {
-                subChanges[dim] = { original: orig[dim], corrected: corr[dim] };
+        const callRow = await storage.getCall(callId);
+        if (callRow?.synthetic) {
+          logger.info("skipping scoring correction capture for synthetic call", { callId });
+        } else {
+          import("../services/scoring-feedback").then(({ recordScoringCorrection }) => {
+            const origScore = parseFloat(editRecord.previousValues.performanceScore || existing.performanceScore || "0");
+            const newScore = parseFloat((updates.performanceScore || existing.performanceScore || "0") as string);
+            const subChanges: Record<string, { original: number; corrected: number }> = {};
+            if (updates.subScores && existing.subScores) {
+              const orig = existing.subScores as Record<string, number>;
+              const corr = updates.subScores as Record<string, number>;
+              for (const dim of Object.keys(corr)) {
+                if (orig[dim] !== undefined && orig[dim] !== corr[dim]) {
+                  subChanges[dim] = { original: orig[dim], corrected: corr[dim] };
+                }
               }
             }
-          }
-          recordScoringCorrection({
-            callId, correctedBy: editedBy, reason: reason.trim(),
-            originalScore: origScore, correctedScore: newScore,
-            subScoreChanges: Object.keys(subChanges).length > 0 ? subChanges : undefined,
-          }).catch(() => {}); // fire-and-forget
-        }).catch(() => {});
+            recordScoringCorrection({
+              callId, correctedBy: editedBy, reason: reason.trim(),
+              originalScore: origScore, correctedScore: newScore,
+              subScoreChanges: Object.keys(subChanges).length > 0 ? subChanges : undefined,
+            }).catch(() => {}); // fire-and-forget
+          }).catch(() => {});
+        }
       }
 
       res.json(updatedAnalysis);

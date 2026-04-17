@@ -13,6 +13,19 @@ const callUpdateSchema = z.object({
   label: z.string().optional(),
 });
 
+/**
+ * Simulated Call Generator events. Dispatched as ws:simulated_call_update
+ * so the regular calls-list cache doesn't invalidate on every tick.
+ * Consumer: client/src/pages/simulated-calls.tsx listens for this.
+ */
+const simulatedCallUpdateSchema = z.object({
+  type: z.literal("simulated_call_update"),
+  simulatedCallId: z.string(),
+  status: z.string(),
+  error: z.string().optional(),
+  title: z.string().optional(),
+});
+
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -88,6 +101,18 @@ export function useWebSocket() {
       ws.onmessage = (event) => {
         try {
           const raw = JSON.parse(event.data);
+
+          // Simulated Call Generator updates — separate event so the calls
+          // list cache isn't invalidated by synthetic-call status ticks.
+          const simParsed = simulatedCallUpdateSchema.safeParse(raw);
+          if (simParsed.success) {
+            window.dispatchEvent(
+              new CustomEvent("ws:simulated_call_update", { detail: simParsed.data }),
+            );
+            qcRef.current.invalidateQueries({ queryKey: ["/api/admin/simulated-calls"] });
+            return;
+          }
+
           const parsed = callUpdateSchema.safeParse(raw);
           if (!parsed.success) return; // Ignore malformed messages
           const data = parsed.data;

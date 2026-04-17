@@ -1,0 +1,19 @@
+{
+  "title": "Oxygen Concentrator Malfunction — Excellent Handling",
+  "scenario": "Customer's oxygen concentrator is beeping and not delivering flow. Agent diagnoses, provides an immediate workaround, and dispatches a replacement.",
+  "qualityTier": "excellent",
+  "equipment": "Oxygen Concentrator",
+  "voices": { "agent": "pNInz6obpgDQGcFmaJgB", "customer": "21m00Tcm4TlvDq8ikWAM" },
+  "turns": [
+    { "speaker": "agent", "text": "UMS, this is Taylor, how can I help you?" },
+    { "speaker": "customer", "text": "My oxygen concentrator is beeping and it's not blowing air, I'm getting really short of breath." },
+    { "speaker": "agent", "text": "Okay, I want to help you right away. First — do you have a portable or backup tank you can use right now?" },
+    { "speaker": "customer", "text": "Yes, I have a small tank from the hospital." },
+    { "speaker": "agent", "text": "Please switch to that right now. Take a breath. While you do that, can you tell me the error code on the display?" },
+    { "speaker": "customer", "text": "It says E02 and the yellow light is flashing." },
+    { "speaker": "agent", "text": "That's a filter alarm — it's a safety shutdown, but it means the unit needs service. I'm dispatching a replacement unit today with priority delivery, and I'm staying on the line until we've confirmed you're stable. Are you feeling better on the tank?" },
+    { "speaker": "customer", "text": "Yes, much better, thank you." },
+    { "speaker": "agent", "text": "Great. The replacement will be there within four hours. The driver will swap the units and take the broken one. I'll call you at six PM to confirm. Is there anything else?" },
+    { "speaker": "customer", "text": "No, you've been incredibly helpful." }
+  ]
+}

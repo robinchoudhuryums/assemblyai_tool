@@ -47,6 +47,7 @@ const MyCoachingPage = lazy(() => import("@/pages/my-coaching"));
 const SecurityPage = lazy(() => import("@/pages/security"));
 const SystemHealthPage = lazy(() => import("@/pages/system-health"));
 const BatchStatusPage = lazy(() => import("@/pages/batch-status"));
+const SimulatedCallsPage = lazy(() => import("@/pages/simulated-calls"));
 const LeaderboardPage = lazy(() => import("@/pages/leaderboard"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const AuthPage = lazy(() => import("@/pages/auth"));
@@ -106,6 +107,7 @@ const ROUTE_TABLE: RouteEntry[] = [
   ["/admin/security", SecurityPage],
   ["/admin/health", SystemHealthPage],
   ["/admin/batch", BatchStatusPage],
+  ["/admin/simulated-calls", SimulatedCallsPage],
   ["/scorecard/:id", AgentScorecardPage],
   ["/analytics/teams", TeamAnalyticsPage],
   ["/analytics/compare", AgentComparePage],
