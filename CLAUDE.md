@@ -42,6 +42,8 @@ npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.t
 npm run test:coverage # Backend tests with c8 coverage report (text + text-summary)
 npm run test:client  # Run frontend tests (Vitest + React Testing Library — 124 tests)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
+npm run seed         # Sync employees from CSV + seed simulated-call presets
+npm run seed-admin   # Bootstrap a DB admin user (see Operator State Checklist)
 npx vite build       # Frontend-only build (useful for quick verification)
 ```
 
@@ -1195,7 +1197,7 @@ These log a warning but allow the server to start. The app appears healthy but h
 - [ ] `RAG_SERVICE_URL` and `RAG_API_KEY` if `RAG_ENABLED=true` — RAG silently disabled, AI uses generic prompts. **MEDIUM risk** — analyses lose company-specific grounding.
 - [ ] `AUTH_USERS` env var OR a row in the `users` table seeded manually — without either, no one can log in. **HIGH risk** — fresh deploy is unusable.
 - [ ] `REQUIRE_MFA=true` without enrolled admins — `server/auth.ts:551` (`requireMFASetup` middleware). ALL `/api/admin/*` routes return 403 for admin/manager users who haven't enrolled MFA. Health check passes, app appears healthy. **HIGH risk** — admin panel completely inaccessible. Recovery: enroll via `/api/auth/mfa/setup` + `/api/auth/mfa/enable` (NOT blocked by `requireMFASetup`).
-- [ ] `REQUIRE_MFA=true` with AUTH_USERS admin/manager — `server/auth.ts:365` (F-06). ENV-VAR admin/manager users are now **blocked at login** because they cannot enroll in MFA (no DB row for TOTP secret). Must create equivalent DB users first. **HIGH risk** — admin access completely blocked if only AUTH_USERS admin exists and REQUIRE_MFA is enabled.
+- [ ] `REQUIRE_MFA=true` with AUTH_USERS admin/manager — `server/auth.ts:365` (F-06). ENV-VAR admin/manager users are now **blocked at login** because they cannot enroll in MFA (no DB row for TOTP secret). **Recovery:** run `npm run seed-admin -- --username=<u> --password=<p> --name=<n>` on the deploy target to create a DB admin row directly (uses the same scrypt hasher + complexity validator as the `/api/users` route). Then log in with that DB user; the MFA setup dialog appears automatically on first login. **HIGH risk** — admin access completely blocked if only AUTH_USERS admin exists and REQUIRE_MFA is enabled and `npm run seed-admin` hasn't been run yet.
 - [ ] `DISABLE_SECURE_COOKIE` set in production — `server/auth.ts:234`, `server/index.ts:74`. Silently disables HTTPS-only session cookies, enabling session hijacking over HTTP. No startup warning. **MEDIUM risk** — security degradation without visibility.
 - [ ] `BEDROCK_MODEL` must be in `BEDROCK_PRICING` if set — `server/index.ts` startup and `server/routes/utils.ts:warnOnUnknownBedrockModel`. Without this, cost tracking silently records $0 for affected calls while AWS still bills. **LOW risk** (warning now fires loudly at boot + once per unknown model at runtime via `logger.warn`); was **HIGH** risk before this fix.
 - [ ] **Viewer user accounts must be linkable to an employee row** — `server/auth.ts:getUserEmployeeId()` matches `username→email` then `displayName→name`. If no match, viewers see empty call lists and 403 on agent endpoints. Silent degradation — no startup warning. **MEDIUM risk** — viewer appears authenticated but sees no data. Ensure DB employee records use the same email as the corresponding user's login.
