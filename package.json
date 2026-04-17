@@ -15,7 +15,8 @@
     "test:client": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "check": "tsc",
-    "seed": "tsx seed.ts"
+    "seed": "tsx seed.ts",
+    "seed-admin": "tsx seed-admin.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
