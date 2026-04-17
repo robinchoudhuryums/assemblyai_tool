@@ -247,6 +247,21 @@ export default function CallsTable() {
 
   const handleBulkReanalyze = () => {
     if (selectedIds.size === 0) return;
+    // Warn if any selected call was quality-gated during the original run —
+    // re-analysis re-transcribes the same audio, which will hit the same
+    // quality gate (low confidence / empty transcript). The admin should
+    // re-upload cleaner audio instead. Allow the run if the user confirms.
+    const gatedCalls = calls.filter((c) => {
+      if (!selectedIds.has(c.id)) return false;
+      const flags = (c.analysis?.flags as unknown[] | undefined) ?? [];
+      return flags.some((f) => f === "low_transcript_quality" || f === "empty_transcript");
+    });
+    if (gatedCalls.length > 0) {
+      const proceed = confirm(
+        `${gatedCalls.length} of the selected call${gatedCalls.length > 1 ? "s were" : " was"} flagged as low transcript quality. Re-analyzing won't improve the result — the same audio will hit the same quality gate. Re-upload higher-quality audio instead.\n\nContinue anyway?`,
+      );
+      if (!proceed) return;
+    }
     reanalyzeMutation.mutate(Array.from(selectedIds));
   };
 

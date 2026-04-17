@@ -929,6 +929,34 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             );
           })()}
 
+          {/* AI Analysis Skipped banner — surfaced prominently when the
+              pipeline quality gate fired (empty transcript or low transcript
+              confidence). Without this, the UI fell back to showing the
+              default score (~5.0) and a verbatim transcript excerpt as the
+              summary, which made it look like the call had been analyzed. */}
+          {call.analysis?.flags && Array.isArray(call.analysis.flags) && (() => {
+            const flagStrs = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
+            const emptyTranscript = flagStrs.includes("empty_transcript");
+            const lowQuality = flagStrs.includes("low_transcript_quality");
+            if (!emptyTranscript && !lowQuality) return null;
+            const reason = emptyTranscript
+              ? "the transcript was empty or under 10 characters"
+              : "the transcript confidence was below 60%";
+            return (
+              <div role="alert" className="rounded-lg p-4 border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900">
+                <h4 className="font-semibold mb-1 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                  <Warning className="w-4 h-4" /> AI analysis skipped
+                </h4>
+                <p className="text-sm text-amber-900 dark:text-amber-200">
+                  The AI scoring step was not run on this call because {reason}. Any score, summary, or feedback shown below is a placeholder — treat them as unavailable rather than as AI-generated insights.
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-300 mt-2">
+                  Re-analysis won't help: it re-transcribes the same audio and will hit the same gate. Re-upload higher-quality audio instead.
+                </p>
+              </div>
+            );
+          })()}
+
           {/* Call Flags */}
           {call.analysis?.flags && Array.isArray(call.analysis.flags) && (call.analysis.flags as unknown[]).length > 0 && (() => {
             const flags = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
