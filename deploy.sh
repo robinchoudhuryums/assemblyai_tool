@@ -154,6 +154,49 @@ if [ "$HEALTHY" != "true" ]; then
   rollback "App failed to respond to /api/health within 30 seconds"
 fi
 
+# Admin-lockout guard — detect the F-06 bootstrap gotcha. On a fresh deploy
+# where REQUIRE_MFA=true is set but no DB admin exists yet, AUTH_USERS-based
+# admins get blocked at login (they can't enroll MFA, no DB row for the TOTP
+# secret). Catch this post-migration + post-health so the operator sees it
+# BEFORE walking away from the terminal. See CLAUDE.md § Operator State
+# Checklist for the full recovery flow.
+#
+# Only runs when:
+#   (a) psql is installed (shell-out check; bundled with postgresql-client on
+#       the default EC2 AMIs but not guaranteed);
+#   (b) DATABASE_URL is reachable via .env; and
+#   (c) REQUIRE_MFA=true is set in .env.
+# Any of (a)–(c) missing → skip silently, this check is opt-in-by-env.
+if command -v psql > /dev/null 2>&1 && [ -f .env ]; then
+  ENV_REQUIRE_MFA=$(grep -E '^REQUIRE_MFA=' .env 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+  ENV_DATABASE_URL=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | head -1 | cut -d'=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  if [ "$ENV_REQUIRE_MFA" = "true" ] && [ -n "$ENV_DATABASE_URL" ]; then
+    # `|| echo ""` so a query error (e.g. users table not yet migrated) is
+    # treated as "unknown" rather than aborting the deploy script.
+    ADMIN_COUNT=$(psql "$ENV_DATABASE_URL" -At -c "SELECT COUNT(*) FROM users WHERE role='admin' AND active=TRUE" 2>/dev/null || echo "")
+    if [ "$ADMIN_COUNT" = "0" ]; then
+      echo ""
+      echo "!!! WARNING — LOCKOUT RISK DETECTED !!!"
+      echo ""
+      echo "  REQUIRE_MFA=true is set in .env, but the \`users\` table has zero"
+      echo "  active admin rows. AUTH_USERS-based admins CANNOT enroll in MFA"
+      echo "  (no DB row to store the TOTP secret) and will be BLOCKED AT LOGIN."
+      echo ""
+      echo "  Recovery: run this on the EC2 box BEFORE logging in:"
+      echo ""
+      echo "    npm run seed-admin -- \\"
+      echo "      --username=<email> \\"
+      echo "      --password='<strong-password>' \\"
+      echo "      --name='<Display Name>'"
+      echo ""
+      echo "  Password must meet HIPAA complexity: 12+ chars, upper, lower,"
+      echo "  digit, special. Single-quote it so the shell doesn't interpret"
+      echo "  ! \$ or other special chars."
+      echo ""
+    fi
+  fi
+fi
+
 echo ""
 echo "=== Deploy complete ==="
 echo "Previous: ${PREV_COMMIT:0:12}"
