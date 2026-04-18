@@ -277,6 +277,15 @@ export class BedrockProvider implements AIAnalysisProvider {
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
+          // INV-32 / F-17 parity: 4xx (except 429 throttling) is a client
+          // problem — bad prompt, schema rejection, invalid model id — and
+          // must NOT count toward the circuit-breaker open threshold.
+          // `generateText` already does this; `analyzeCallTranscript` used to
+          // throw a plain Error here, which tripped the breaker on a single
+          // bad prompt template and browned-out the entire pipeline.
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new BedrockClientError(response.status, `Bedrock API error (${response.status}): ${statusCategory}`);
+          }
           throw new Error(`Bedrock API error (${response.status}): ${statusCategory}`);
         }
 

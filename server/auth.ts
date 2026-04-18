@@ -150,6 +150,7 @@ async function loadUsersFromEnv(): Promise<void> {
   }
 
   const userEntries = authUsersRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  const parsedCount = userEntries.length;
 
   for (const entry of userEntries) {
     const parts = entry.split(":");
@@ -179,6 +180,27 @@ async function loadUsersFromEnv(): Promise<void> {
     });
 
     logger.info("auth: loaded user from AUTH_USERS", { username, role });
+  }
+
+  // F8: Loud boot-time alert when AUTH_USERS was set but every entry was
+  // rejected (weak passwords, malformed rows). Without this, a bad .env
+  // can deploy with zero usable ENV-VAR accounts; the app appears healthy
+  // but nobody can log in (unless DB users exist). PostgreSQL users are
+  // not loaded here, so this check can't confirm the DB has any — it
+  // flags the suspicious state for the operator to investigate.
+  if (parsedCount > 0 && envUsers.length === 0) {
+    const hasDbUsers = !!process.env.DATABASE_URL;
+    logger.error(
+      "auth: AUTH_USERS was set but ALL entries were rejected — no ENV-VAR users available",
+      {
+        parsedEntries: parsedCount,
+        accepted: 0,
+        dbUsersFallback: hasDbUsers,
+        hint: hasDbUsers
+          ? "If DB users exist, this may be intentional; otherwise nobody can log in."
+          : "No DATABASE_URL set either — login will be impossible until AUTH_USERS is fixed or DB users are seeded.",
+      },
+    );
   }
 }
 

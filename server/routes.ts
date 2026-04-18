@@ -34,6 +34,7 @@ import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemb
 
 // Batch scheduler (extracted for testability)
 import { startBatchScheduler } from "./services/batch-scheduler";
+import { startTranscribingReaper } from "./services/transcribing-reaper";
 
 // Auto-calibration and telephony
 import { startCalibrationScheduler } from "./services/auto-calibration";
@@ -309,6 +310,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start batch inference scheduler (extracted to services/batch-scheduler.ts)
   startBatchScheduler();
+
+  // Start transcribing-state orphan reaper. Runs regardless of batch mode
+  // — handles the "server restart mid-transcribe" failure mode where the
+  // pending AssemblyAI promise is lost and the call stays "transcribing"
+  // indefinitely. Symmetric with batch-scheduler.recoverOrphans.
+  startTranscribingReaper();
 
   // Load persisted calibration overrides from S3, then start auto-calibration scheduler
   import("./services/scoring-calibration").then(({ loadPersistedCalibration }) =>
