@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Medal, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
+import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Star, TrendUp, User } from "@phosphor-icons/react";
 import { Avatar, RubricRack, ScoreDial, StatBlock, type RubricValues } from "@/components/dashboard/primitives";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
@@ -374,68 +374,70 @@ export default function MyPerformancePage() {
             {/* My scoring corrections — feedback loop visibility */}
             <MyCorrectionsCard />
 
-            {/* Badges */}
-            {myData.badges.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Medal className="w-4 h-4" />
-                    My Badges ({myData.badges.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-3">
-                    {myData.badges.map(badge => (
-                      <div
-                        key={badge.id}
-                        className="flex items-center gap-2 bg-primary/5 border border-primary/20 rounded-full px-3 py-1.5"
-                        title={badge.description}
-                      >
-                        <Trophy className="w-4 h-4 text-primary" />
-                        <span className="text-sm font-medium">{badge.label}</span>
-                        {badge.earnedAt && (
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(badge.earnedAt).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Weekly Trend */}
-            {myData.weeklyTrend.length > 1 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <TrendUp className="w-4 h-4" />
-                    Weekly Score Trend
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-end gap-2 h-32">
-                    {myData.weeklyTrend.map((week, i) => {
-                      const height = Math.max(10, (week.avgScore / 10) * 100);
-                      const color = week.avgScore >= SCORE_EXCELLENT ? "bg-green-500" : week.avgScore >= SCORE_GOOD ? "bg-primary" : "bg-red-400";
-                      return (
-                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                          <span className="text-xs font-medium">{week.avgScore}</span>
+            {/* Badges + Week strip — 2-column airy block */}
+            {(myData.badges.length > 0 || myData.recentCalls.length > 0) && (
+              <div className="grid gap-10 md:gap-12 md:grid-cols-2">
+                {myData.badges.length > 0 && (
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                      Badges · earned
+                    </div>
+                    <div
+                      className="font-display font-medium text-foreground mt-1 mb-5"
+                      style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+                    >
+                      {badgeHeadline(myData.badges.length)}
+                    </div>
+                    <div className="flex flex-wrap gap-3.5">
+                      {myData.badges.slice(0, 8).map((badge) => (
+                        <div
+                          key={badge.id}
+                          className="bg-card border border-border px-4 py-3.5 min-w-[180px]"
+                          title={badge.description}
+                        >
                           <div
-                            className={`w-full rounded-t ${color} transition-all`}
-                            style={{ height: `${height}%` }}
-                            title={`${week.count} call(s)`}
-                          />
-                          <span className="text-[10px] text-muted-foreground">
-                            {new Date(week.week).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                          </span>
+                            className="font-display text-primary"
+                            style={{ fontSize: 24, lineHeight: 1 }}
+                          >
+                            {BADGE_GLYPH[badge.icon] ?? "★"}
+                          </div>
+                          <div className="text-[13px] font-medium text-foreground mt-1">
+                            {badge.label}
+                          </div>
+                          <div className="font-mono text-[10px] text-muted-foreground mt-0.5">
+                            {badge.earnedAt
+                              ? new Date(badge.earnedAt).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                })
+                              : badge.description.slice(0, 40)}
+                          </div>
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
+                )}
+
+                {myData.recentCalls.length > 0 && (
+                  <div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                      Your week · daily scores
+                    </div>
+                    <div
+                      className="font-display font-medium text-foreground mt-1 mb-5"
+                      style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+                    >
+                      {weekStripHeadline(myData.recentCalls)}
+                    </div>
+                    <div className="bg-card border border-border px-5 py-4">
+                      <WeekStrip calls={myData.recentCalls} />
+                      <div className="mt-4 text-[12px] text-muted-foreground leading-relaxed">
+                        {weekStripFootnote(myData.recentCalls)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Recent calls */}
@@ -636,6 +638,133 @@ function pickExemplar(calls: CallWithDetails[]): Exemplar | null {
     categoryLabel: categoryLabel.charAt(0).toUpperCase() + categoryLabel.slice(1),
     durationMinSec,
   };
+}
+
+/**
+ * Phosphor icon name → unicode glyph for the badge tile. The server sends
+ * the short icon name from BADGE_TYPES; mapping to a glyph keeps the tile
+ * rendering lightweight (no dynamic icon imports) and visually matches
+ * the v3-agent-lens prototype's mono glyphs.
+ */
+const BADGE_GLYPH: Record<string, string> = {
+  star: "★",
+  fire: "♦",
+  lightning: "⚡",
+  rocket: "▲",
+  trophy: "◆",
+  crown: "♛",
+  shield: "⬢",
+  heart: "♥",
+  "check-circle": "✓",
+};
+
+function badgeHeadline(n: number): string {
+  if (n === 1) return "One earned.";
+  if (n < 5) return `${n} earned.`;
+  if (n < 10) return "A handful.";
+  return `${n} and counting.`;
+}
+
+/**
+ * WeekStrip — last-7-days daily score bars, one bar per call. Colored by
+ * score tier (red < 7, copper 7–9, sage ≥ 9). Empty days render a muted
+ * em-dash placeholder.
+ */
+function WeekStrip({ calls }: { calls: CallWithDetails[] }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days: Array<{ label: string; scores: number[] }> = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400000);
+    const label = d.toLocaleDateString(undefined, { weekday: "short" });
+    days.push({ label, scores: [] });
+  }
+
+  for (const call of calls) {
+    if (!call.uploadedAt) continue;
+    const d = new Date(call.uploadedAt);
+    d.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today.getTime() - d.getTime()) / 86400000);
+    if (diffDays < 0 || diffDays > 6) continue;
+    const idx = 6 - diffDays;
+    const score = call.analysis?.performanceScore ? Number(call.analysis.performanceScore) : NaN;
+    if (Number.isFinite(score)) days[idx].scores.push(score);
+  }
+
+  const maxBarHeight = 88;
+  return (
+    <div className="flex items-end gap-5" style={{ height: 120 }}>
+      {days.map((d, i) => (
+        <div key={i} className="flex-1 flex flex-col items-center gap-2">
+          <div className="flex items-end gap-[3px]" style={{ height: maxBarHeight + 2 }}>
+            {d.scores.length === 0 ? (
+              <div
+                className="font-mono text-[10px] text-muted-foreground"
+                style={{ paddingBottom: 40 }}
+              >
+                —
+              </div>
+            ) : (
+              d.scores.map((score, j) => {
+                const h = Math.max(4, (score / 10) * maxBarHeight);
+                const color =
+                  score < 7
+                    ? "var(--destructive)"
+                    : score >= SCORE_EXCELLENT
+                    ? "var(--sage)"
+                    : "var(--accent)";
+                return (
+                  <div
+                    key={j}
+                    title={`${score.toFixed(1)}`}
+                    style={{ width: 8, height: h, background: color }}
+                  />
+                );
+              })
+            )}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+            {d.label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function weekStripHeadline(calls: CallWithDetails[]): string {
+  const scores = calls
+    .map((c) => (c.analysis?.performanceScore ? Number(c.analysis.performanceScore) : NaN))
+    .filter((n) => Number.isFinite(n));
+  if (scores.length === 0) return "Nothing yet.";
+  const low = Math.min(...scores);
+  if (low >= SCORE_EXCELLENT) return "Smooth sailing.";
+  if (low >= SCORE_GOOD) return "Steady week.";
+  return "One to listen back to.";
+}
+
+function weekStripFootnote(calls: CallWithDetails[]): string {
+  let lowestCall: CallWithDetails | null = null;
+  let lowestScore = Infinity;
+  for (const c of calls) {
+    const s = c.analysis?.performanceScore ? Number(c.analysis.performanceScore) : NaN;
+    if (Number.isFinite(s) && s < lowestScore) {
+      lowestScore = s;
+      lowestCall = c;
+    }
+  }
+  if (!lowestCall || !Number.isFinite(lowestScore)) {
+    return "Individual call scores shown above — hover a bar for the exact number.";
+  }
+  const when = lowestCall.uploadedAt
+    ? new Date(lowestCall.uploadedAt).toLocaleDateString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      })
+    : "";
+  const category = lowestCall.callCategory ? ` — ${lowestCall.callCategory}` : "";
+  return `Your lowest call this week was a ${lowestScore.toFixed(1)} (${when}${category}). Worth listening back.`;
 }
 
 /**
