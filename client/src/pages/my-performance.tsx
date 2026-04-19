@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Medal, TrendUp, Trophy, User } from "@phosphor-icons/react";
-import { Avatar, StatBlock } from "@/components/dashboard/primitives";
+import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Medal, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
+import { Avatar, RubricRack, ScoreDial, StatBlock, type RubricValues } from "@/components/dashboard/primitives";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
 interface CorrectionStats {
@@ -223,6 +223,7 @@ export default function MyPerformancePage() {
     positivePct: myData?.positivePct ?? 0,
     streak: myData?.currentStreak ?? 0,
   });
+  const exemplar = myData?.recentCalls ? pickExemplar(myData.recentCalls) : null;
 
   return (
     <div className="min-h-screen bg-background text-foreground font-sans">
@@ -303,6 +304,67 @@ export default function MyPerformancePage() {
                 unit={myData.currentStreak > 0 ? "calls ≥ 8" : "pts"}
               />
             </div>
+
+            {/* Exemplar moment — your best recent call */}
+            {exemplar && (
+              <div className="grid gap-10 md:gap-12 py-10 md:py-12 border-b border-border md:grid-cols-[1fr_300px]">
+                <div>
+                  <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--sage)] flex items-center gap-2">
+                    <Star className="w-3 h-3" weight="fill" />
+                    Your exemplar · {exemplar.categoryLabel}
+                    {exemplar.durationMinSec && (
+                      <span className="text-muted-foreground">· {exemplar.durationMinSec}</span>
+                    )}
+                  </div>
+                  <div
+                    className="font-display font-medium text-foreground mt-1.5 max-w-2xl"
+                    style={{ fontSize: 30, letterSpacing: "-0.5px", lineHeight: 1.2 }}
+                  >
+                    Listen back to your best call this week.
+                  </div>
+                  {exemplar.call.analysis?.summary && typeof exemplar.call.analysis.summary === "string" && (
+                    <p className="text-sm text-muted-foreground mt-3 leading-relaxed max-w-xl">
+                      {exemplar.call.analysis.summary.slice(0, 280)}
+                      {exemplar.call.analysis.summary.length > 280 && "…"}
+                    </p>
+                  )}
+                  <Link
+                    href={`/transcripts/${exemplar.call.id}`}
+                    className="inline-flex items-center gap-1.5 mt-5 font-mono text-[11px] uppercase tracking-[0.12em] text-foreground border border-border px-3 py-2 hover:bg-secondary transition-colors"
+                    data-testid="exemplar-open-transcript"
+                  >
+                    Open transcript
+                    <ArrowRight className="w-3 h-3" />
+                  </Link>
+                </div>
+
+                <div>
+                  <div className="flex justify-center mb-6">
+                    <ScoreDial value={exemplar.score} size={180} label="this call" />
+                  </div>
+                  {exemplar.rubric && (
+                    <>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground text-center mb-3">
+                        Rubric
+                      </div>
+                      <div className="flex justify-center">
+                        <RubricRack rubric={exemplar.rubric} compact />
+                      </div>
+                    </>
+                  )}
+                  {exemplar.suggestion && (
+                    <div className="mt-6 p-4 bg-secondary border border-border">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-1.5">
+                        One thing to try
+                      </div>
+                      <div className="text-[13px] leading-relaxed text-foreground">
+                        {exemplar.suggestion}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Spacer so existing sections below breathe */}
             <div className="h-10" />
@@ -521,6 +583,59 @@ interface HeroStatement {
   prefix: string;
   highlight?: string;
   suffix: string;
+}
+
+interface Exemplar {
+  call: CallWithDetails;
+  score: number;
+  rubric: RubricValues | null;
+  suggestion: string | null;
+  categoryLabel: string;
+  durationMinSec: string | null;
+}
+
+/**
+ * Pick the best recent call to showcase as this week's exemplar. Returns
+ * null when no recent call clears the SCORE_GOOD bar, so the section
+ * can be conditionally rendered.
+ */
+function pickExemplar(calls: CallWithDetails[]): Exemplar | null {
+  const scored = calls
+    .map((c) => ({ c, s: c.analysis?.performanceScore ? Number(c.analysis.performanceScore) : NaN }))
+    .filter((x) => Number.isFinite(x.s) && x.s >= SCORE_GOOD);
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.s - a.s);
+  const { c: call, s: score } = scored[0];
+
+  const sub = call.analysis?.subScores;
+  const rubric: RubricValues | null =
+    sub && sub.compliance != null && sub.customerExperience != null && sub.communication != null && sub.resolution != null
+      ? {
+          compliance: sub.compliance,
+          customerExperience: sub.customerExperience,
+          communication: sub.communication,
+          resolution: sub.resolution,
+        }
+      : null;
+
+  const suggestions = call.analysis?.feedback?.suggestions ?? [];
+  const firstSuggestion = suggestions.find(
+    (s): s is string => typeof s === "string" && s.trim().length > 0,
+  );
+
+  const categoryLabel = (call.callCategory || "Call").toString();
+  const durationMinSec = call.duration
+    ? `${Math.floor(call.duration / 60)}:${String(Math.floor(call.duration % 60)).padStart(2, "0")}`
+    : null;
+
+  return {
+    call,
+    score,
+    rubric,
+    suggestion: firstSuggestion ?? null,
+    categoryLabel: categoryLabel.charAt(0).toUpperCase() + categoryLabel.slice(1),
+    durationMinSec,
+  };
 }
 
 /**
