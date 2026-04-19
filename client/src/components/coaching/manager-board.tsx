@@ -36,22 +36,17 @@ import {
 export interface ManagerBoardProps {
   sessions: CoachingSession[];
   employees: Employee[];
-  togglePending?: boolean;
-  /** Fires when user flips a status via the inline expand. */
-  onUpdateStatus?: (sessionId: string, status: CoachingSession["status"]) => void;
-  /** Fires when user toggles an action-item checkbox. */
-  onToggleActionItem?: (sessionId: string, index: number) => void;
   /** Fires when the "+ Assign new" button is clicked. */
   onAssignNew?: () => void;
+  /** Fires when a BoardCard is clicked — opens the slide-in Detail panel. */
+  onOpenDetail?: (sessionId: string) => void;
 }
 
 export default function ManagerBoard({
   sessions,
   employees,
-  togglePending = false,
-  onUpdateStatus,
-  onToggleActionItem,
   onAssignNew,
+  onOpenDetail,
 }: ManagerBoardProps) {
   const [agentFilter, setAgentFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -150,9 +145,7 @@ export default function ManagerBoard({
             stage={stage}
             items={byStage[stage.id]}
             employeeName={employeeName}
-            togglePending={togglePending}
-            onUpdateStatus={onUpdateStatus}
-            onToggleActionItem={onToggleActionItem}
+            onOpenDetail={onOpenDetail}
           />
         ))}
       </div>
@@ -167,16 +160,12 @@ function StageColumn({
   stage,
   items,
   employeeName,
-  togglePending,
-  onUpdateStatus,
-  onToggleActionItem,
+  onOpenDetail,
 }: {
   stage: (typeof STAGES)[number];
   items: Array<{ session: CoachingSession; stage: Stage }>;
   employeeName: Map<string, string>;
-  togglePending?: boolean;
-  onUpdateStatus?: ManagerBoardProps["onUpdateStatus"];
-  onToggleActionItem?: ManagerBoardProps["onToggleActionItem"];
+  onOpenDetail?: ManagerBoardProps["onOpenDetail"];
 }) {
   return (
     <div
@@ -221,9 +210,7 @@ function StageColumn({
               session={it.session}
               stage={it.stage}
               agentName={employeeName.get(it.session.employeeId) ?? "—"}
-              togglePending={togglePending}
-              onUpdateStatus={onUpdateStatus}
-              onToggleActionItem={onToggleActionItem}
+              onOpenDetail={onOpenDetail}
             />
           ))
         )}
@@ -233,198 +220,90 @@ function StageColumn({
 }
 
 // ─────────────────────────────────────────────────────────────
-// Board card — click to expand inline (Phase 5 replaces with panel)
+// Board card — click opens the slide-in Detail panel.
 // ─────────────────────────────────────────────────────────────
 function BoardCard({
   session,
   stage,
   agentName,
-  togglePending,
-  onUpdateStatus,
-  onToggleActionItem,
+  onOpenDetail,
 }: {
   session: CoachingSession;
   stage: Stage;
   agentName: string;
-  togglePending?: boolean;
-  onUpdateStatus?: ManagerBoardProps["onUpdateStatus"];
-  onToggleActionItem?: ManagerBoardProps["onToggleActionItem"];
+  onOpenDetail?: ManagerBoardProps["onOpenDetail"];
 }) {
-  const [expanded, setExpanded] = useState(false);
   const comp = categoryMeta(session.category);
   const source = deriveSource(session.assignedBy);
   const days = dueDaysFromIso(session.dueDate);
   const actionPlan = Array.isArray(session.actionPlan) ? session.actionPlan : [];
-  const initials = agentName
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0])
-    .join("")
-    .toUpperCase() || "·";
+  const completedCount = actionPlan.filter((a) => a.completed).length;
+  const initials =
+    agentName
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((p) => p[0])
+      .join("")
+      .toUpperCase() || "·";
 
   return (
-    <div
-      className="bg-card border border-border"
+    <button
+      type="button"
+      onClick={() => onOpenDetail && onOpenDetail(session.id)}
+      disabled={!onOpenDetail}
+      className="bg-card border border-border text-left hover:bg-secondary/40 transition-colors disabled:cursor-default disabled:hover:bg-card"
       style={{
         borderLeft: `3px solid oklch(55% 0.14 ${comp.hue})`,
+        padding: "10px 12px",
       }}
       data-testid={`board-card-${session.id}`}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((x) => !x)}
-        className="w-full text-left cursor-pointer hover:bg-secondary/40 transition-colors"
-        style={{ padding: "10px 12px" }}
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-2 mb-2">
-          <Avatar initials={initials} size={20} />
-          <span
-            className="font-mono text-foreground truncate"
-            style={{ fontSize: 10, letterSpacing: "0.02em" }}
-          >
-            {agentName}
-          </span>
-          <div className="flex-1" />
-          <DuePill days={days} />
-        </div>
-        <div
-          className="font-display font-medium text-foreground mb-2"
-          style={{ fontSize: 13, lineHeight: 1.3 }}
+      <div className="flex items-center gap-2 mb-2">
+        <Avatar initials={initials} size={20} />
+        <span
+          className="font-mono text-foreground truncate"
+          style={{ fontSize: 10, letterSpacing: "0.02em" }}
         >
-          {session.title}
-        </div>
-        <div className="flex items-center gap-2">
-          <CompetencyChip category={session.category} compact />
-          <div className="flex-1" />
-          <SourceBadge source={source} compact />
-        </div>
-        {actionPlan.length > 0 && stage !== "open" && (
-          <div className="mt-2.5 flex items-center gap-2">
+          {agentName}
+        </span>
+        <div className="flex-1" />
+        <DuePill days={days} />
+      </div>
+      <div
+        className="font-display font-medium text-foreground mb-2"
+        style={{ fontSize: 13, lineHeight: 1.3 }}
+      >
+        {session.title}
+      </div>
+      <div className="flex items-center gap-2">
+        <CompetencyChip category={session.category} compact />
+        <div className="flex-1" />
+        <SourceBadge source={source} compact />
+      </div>
+      {actionPlan.length > 0 && stage !== "open" && (
+        <div className="mt-2.5 flex items-center gap-2">
+          <div
+            className="flex-1 overflow-hidden bg-secondary"
+            style={{ height: 3, borderRadius: 2 }}
+          >
             <div
-              className="flex-1 overflow-hidden bg-secondary"
-              style={{ height: 3, borderRadius: 2 }}
-            >
-              <div
-                style={{
-                  width: `${(actionPlan.filter((a) => a.completed).length / actionPlan.length) * 100}%`,
-                  height: "100%",
-                  background: "var(--accent)",
-                }}
-              />
-            </div>
-            <div
-              className="font-mono tabular-nums text-muted-foreground"
-              style={{ fontSize: 9 }}
-            >
-              {actionPlan.filter((a) => a.completed).length}/{actionPlan.length}
-            </div>
-          </div>
-        )}
-      </button>
-
-      {expanded && (
-        <div className="border-t border-border px-3 pt-2.5 pb-3">
-          {session.notes && (
-            <p
-              className="text-muted-foreground mb-2.5"
-              style={{ fontSize: 11.5, lineHeight: 1.5 }}
-            >
-              {session.notes}
-            </p>
-          )}
-          {actionPlan.length > 0 && onToggleActionItem && (
-            <div className="flex flex-col gap-1 mb-2.5">
-              {actionPlan.map((item, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => onToggleActionItem(session.id, i)}
-                  disabled={togglePending}
-                  className="flex items-start gap-2 text-left rounded-sm px-1 py-0.5 hover:bg-secondary transition-colors disabled:opacity-60"
-                  style={{ fontSize: 11 }}
-                  aria-label={`Toggle "${item.task}"`}
-                >
-                  <span
-                    className="flex-shrink-0 border flex items-center justify-center"
-                    aria-hidden="true"
-                    style={{
-                      width: 12,
-                      height: 12,
-                      marginTop: 1,
-                      background: item.completed ? "var(--sage)" : "var(--card)",
-                      borderColor: item.completed ? "var(--sage)" : "var(--border)",
-                      color: "var(--paper)",
-                    }}
-                  >
-                    {item.completed && (
-                      <span className="font-mono leading-none" style={{ fontSize: 8 }}>
-                        ✓
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className={item.completed ? "line-through text-muted-foreground" : "text-foreground"}
-                  >
-                    {item.task}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {session.callId && (
-            <Link
-              href={`/transcripts/${session.callId}`}
-              className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2 py-1 text-foreground hover:bg-secondary transition-colors mb-2.5"
-              style={{ fontSize: 9, letterSpacing: "0.1em" }}
-            >
-              Open call →
-            </Link>
-          )}
-          {onUpdateStatus && (
-            <StatusButtons
-              status={session.status}
-              pending={togglePending}
-              onUpdateStatus={(s) => onUpdateStatus(session.id, s)}
+              style={{
+                width: `${(completedCount / actionPlan.length) * 100}%`,
+                height: "100%",
+                background: "var(--accent)",
+              }}
             />
-          )}
+          </div>
+          <div
+            className="font-mono tabular-nums text-muted-foreground"
+            style={{ fontSize: 9 }}
+          >
+            {completedCount}/{actionPlan.length}
+          </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function StatusButtons({
-  status,
-  pending,
-  onUpdateStatus,
-}: {
-  status: CoachingSession["status"];
-  pending?: boolean;
-  onUpdateStatus: (s: CoachingSession["status"]) => void;
-}) {
-  const targets: Array<{ label: string; value: CoachingSession["status"] }> = [];
-  if (status === "pending") targets.push({ label: "Start", value: "in_progress" });
-  if (status !== "completed" && status !== "dismissed") targets.push({ label: "Complete", value: "completed" });
-  if (status !== "dismissed" && status !== "completed") targets.push({ label: "Dismiss", value: "dismissed" });
-  if (status === "completed") targets.push({ label: "Reopen", value: "in_progress" });
-  if (targets.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {targets.map((t) => (
-        <button
-          key={t.value}
-          type="button"
-          onClick={() => onUpdateStatus(t.value)}
-          disabled={pending}
-          className="font-mono uppercase border border-border rounded-sm px-2 py-1 text-foreground hover:bg-secondary transition-colors disabled:opacity-60"
-          style={{ fontSize: 9, letterSpacing: "0.1em" }}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    </button>
   );
 }
 

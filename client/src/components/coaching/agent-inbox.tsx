@@ -48,15 +48,14 @@ export interface AgentInboxData {
 interface AgentInboxProps {
   data: AgentInboxData;
   meName?: string | null;
-  onToggleActionItem?: (sessionId: string, index: number) => void;
-  togglePending?: boolean;
+  /** Click a row / next-action → open slide-in DetailPanel (phase 5). */
+  onOpenDetail?: (sessionId: string) => void;
 }
 
 export default function AgentInbox({
   data,
   meName,
-  onToggleActionItem,
-  togglePending = false,
+  onOpenDetail,
 }: AgentInboxProps) {
   const firstName = (meName || data.employee?.name || "").split(" ")[0] || "there";
   const greeting = getTimeOfDayGreeting();
@@ -122,6 +121,7 @@ export default function AgentInbox({
           <NextActionCard
             session={nextAction.session}
             stage={nextAction.stage}
+            onOpen={onOpenDetail}
           />
         )}
 
@@ -149,8 +149,7 @@ export default function AgentInbox({
                   key={session.id}
                   session={session}
                   stage={stage}
-                  onToggleActionItem={onToggleActionItem}
-                  togglePending={togglePending}
+                  onOpen={onOpenDetail}
                 />
               ))}
             </div>
@@ -172,8 +171,7 @@ export default function AgentInbox({
                   session={session}
                   stage={stage}
                   subdued
-                  onToggleActionItem={onToggleActionItem}
-                  togglePending={togglePending}
+                  onOpen={onOpenDetail}
                 />
               ))}
             </div>
@@ -194,19 +192,24 @@ export default function AgentInbox({
 }
 
 // ─────────────────────────────────────────────────────────────
-// Next-action card
+// Next-action card — click opens the slide-in Detail panel.
 // ─────────────────────────────────────────────────────────────
-function NextActionCard({ session, stage }: { session: CoachingSession; stage: Stage }) {
+function NextActionCard({
+  session,
+  stage,
+  onOpen,
+}: {
+  session: CoachingSession;
+  stage: Stage;
+  onOpen?: (sessionId: string) => void;
+}) {
   const source = deriveSource(session.assignedBy);
   const days = dueDaysFromIso(session.dueDate);
   const growthCopy = growthCopyForCategory(session.category);
   return (
     <div
       className="bg-card border border-border mb-8"
-      style={{
-        borderLeft: "3px solid var(--accent)",
-        padding: "24px 28px",
-      }}
+      style={{ borderLeft: "3px solid var(--accent)", padding: "24px 28px" }}
     >
       <div className="flex justify-between items-start gap-6 mb-3.5">
         <div className="min-w-0">
@@ -250,27 +253,26 @@ function NextActionCard({ session, stage }: { session: CoachingSession; stage: S
         </div>
       )}
 
-      <div className="flex gap-2.5">
-        {session.callId && (
-          <Link
-            href={`/transcripts/${session.callId}`}
+      <div className="flex gap-2.5 flex-wrap">
+        {onOpen && (
+          <button
+            type="button"
+            onClick={() => onOpen(session.id)}
             className="font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-4 py-2.5 text-[var(--paper)] bg-primary border border-primary hover:opacity-90 transition-opacity"
             style={{ fontSize: 11, letterSpacing: "0.1em" }}
             data-testid="next-action-open"
           >
+            Open item →
+          </button>
+        )}
+        {session.callId && (
+          <Link
+            href={`/transcripts/${session.callId}`}
+            className="font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-4 py-2.5 border border-border text-foreground hover:bg-secondary transition-colors"
+            style={{ fontSize: 11, letterSpacing: "0.1em" }}
+          >
             Open call →
           </Link>
-        )}
-        {!session.callId && (
-          <button
-            type="button"
-            className="font-mono uppercase inline-flex items-center rounded-sm px-4 py-2.5 text-[var(--paper)] bg-primary border border-primary cursor-default"
-            style={{ fontSize: 11, letterSpacing: "0.1em" }}
-            disabled
-            aria-label="No evidence call linked"
-          >
-            Take a look →
-          </button>
         )}
       </div>
     </div>
@@ -281,131 +283,65 @@ function NextActionCard({ session, stage }: { session: CoachingSession; stage: S
 // Inbox row — click to expand action items inline
 // (Phase 5 replaces inline expansion with a slide-in Detail panel.)
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Inbox row — click opens the slide-in Detail panel.
+// ─────────────────────────────────────────────────────────────
 function InboxRow({
   session,
   stage,
   subdued,
-  onToggleActionItem,
-  togglePending,
+  onOpen,
 }: {
   session: CoachingSession;
   stage: Stage;
   subdued?: boolean;
-  onToggleActionItem?: (sessionId: string, index: number) => void;
-  togglePending?: boolean;
+  onOpen?: (sessionId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const source = deriveSource(session.assignedBy);
   const days = dueDaysFromIso(session.dueDate);
-  const actionPlan = Array.isArray(session.actionPlan) ? session.actionPlan : [];
-
   return (
-    <div
-      className="bg-card border border-border"
-      style={{ opacity: subdued ? 0.7 : 1 }}
+    <button
+      type="button"
+      onClick={() => onOpen && onOpen(session.id)}
+      disabled={!onOpen}
+      className="grid gap-4 items-center text-left bg-card border border-border hover:bg-secondary transition-colors disabled:cursor-default disabled:hover:bg-card"
+      style={{
+        gridTemplateColumns: "44px minmax(0, 1fr) auto",
+        padding: "14px 18px",
+        opacity: subdued ? 0.7 : 1,
+      }}
+      data-testid={`inbox-row-${session.id}`}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((x) => !x)}
-        className="w-full grid gap-4 items-center cursor-pointer text-left hover:bg-secondary transition-colors"
-        style={{
-          gridTemplateColumns: "44px minmax(0, 1fr) auto",
-          padding: "14px 18px",
-        }}
-        aria-expanded={expanded}
-        data-testid={`inbox-row-${session.id}`}
-      >
-        <GrowthRing stage={stage} size={44} strokeW={3} />
-        <div className="min-w-0">
-          <div
-            className="font-display font-medium text-foreground truncate mb-1"
-            style={{ fontSize: 15, letterSpacing: "-0.1px" }}
-          >
-            {session.title}
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <CompetencyChip category={session.category} compact />
-            <SourceBadge source={source} compact />
-            {days !== null && (
-              <>
-                <span className="font-mono text-muted-foreground" style={{ fontSize: 10 }}>·</span>
-                <DuePill days={days} />
-              </>
-            )}
-          </div>
-        </div>
-        <span
-          className="font-mono text-muted-foreground"
-          style={{ fontSize: 16 }}
-          aria-hidden="true"
+      <GrowthRing stage={stage} size={44} strokeW={3} />
+      <div className="min-w-0">
+        <div
+          className="font-display font-medium text-foreground truncate mb-1"
+          style={{ fontSize: 15, letterSpacing: "-0.1px" }}
         >
-          {expanded ? "↓" : "→"}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="border-t border-border px-[18px] pt-3 pb-4">
-          {session.notes && (
-            <p
-              className="text-muted-foreground mb-3"
-              style={{ fontSize: 12.5, lineHeight: 1.5 }}
-            >
-              {session.notes}
-            </p>
-          )}
-          {actionPlan.length > 0 && onToggleActionItem && (
-            <div className="flex flex-col gap-1.5">
-              {actionPlan.map((item, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => onToggleActionItem(session.id, i)}
-                  disabled={togglePending}
-                  className="flex items-start gap-2.5 text-left rounded-sm px-1.5 py-1 hover:bg-secondary transition-colors disabled:opacity-60"
-                  style={{ fontSize: 12 }}
-                  aria-label={`Toggle "${item.task}" ${item.completed ? "incomplete" : "complete"}`}
-                >
-                  <span
-                    className="flex-shrink-0 border flex items-center justify-center"
-                    aria-hidden="true"
-                    style={{
-                      width: 14,
-                      height: 14,
-                      marginTop: 1,
-                      background: item.completed ? "var(--sage)" : "var(--card)",
-                      borderColor: item.completed ? "var(--sage)" : "var(--border)",
-                      color: "var(--paper)",
-                    }}
-                  >
-                    {item.completed && (
-                      <span className="font-mono leading-none" style={{ fontSize: 10 }}>
-                        ✓
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className={item.completed ? "line-through text-muted-foreground" : "text-foreground"}
-                  >
-                    {item.task}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {session.callId && (
-            <Link
-              href={`/transcripts/${session.callId}`}
-              className="inline-flex items-center gap-1.5 mt-3 font-mono uppercase border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
-              style={{ fontSize: 10, letterSpacing: "0.1em" }}
-            >
-              Open call →
-            </Link>
+          {session.title}
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <CompetencyChip category={session.category} compact />
+          <SourceBadge source={source} compact />
+          {days !== null && (
+            <>
+              <span className="font-mono text-muted-foreground" style={{ fontSize: 10 }}>·</span>
+              <DuePill days={days} />
+            </>
           )}
         </div>
-      )}
-    </div>
+      </div>
+      <span
+        className="font-mono text-muted-foreground"
+        style={{ fontSize: 16 }}
+        aria-hidden="true"
+      >
+        →
+      </span>
+    </button>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────
 // Growth panel (right rail)

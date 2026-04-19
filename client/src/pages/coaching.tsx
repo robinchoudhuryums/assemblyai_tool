@@ -14,6 +14,8 @@ import type { Employee, CoachingSession as BaseCoachingSession } from "@shared/s
 import { COACHING_CATEGORIES } from "@shared/schema";
 import CoachingPageShell from "@/components/coaching/page-shell";
 import ManagerBoard from "@/components/coaching/manager-board";
+import DetailPanel from "@/components/coaching/detail-panel";
+import AssignModal, { type AssignPayload } from "@/components/coaching/assign-modal";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // Extends the strict shared schema with the `employeeName` field that
@@ -112,9 +114,7 @@ function OutcomeWidget({ sessionId, enabled }: { sessionId: string; enabled: boo
 
 export default function CoachingPage() {
   const [showForm, setShowForm] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>("active");
-  const [employeeFilter, setEmployeeFilter] = useState<string>("all");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [openedSessionId, setOpenedSessionId] = useState<string | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -185,21 +185,40 @@ export default function CoachingPage() {
     },
   });
 
-  const filtered = useMemo(() => (sessions || []).filter(s => {
-    if (statusFilter === "active" && (s.status === "completed" || s.status === "dismissed")) return false;
-    if (statusFilter === "completed" && s.status !== "completed") return false;
-    if (employeeFilter !== "all" && s.employeeId !== employeeFilter) return false;
-    return true;
-  }), [sessions, statusFilter, employeeFilter]);
+  // Create-new-session mutation — powers the Assign modal. Triggers
+  // `coaching.created` webhook on the server side (same endpoint the
+  // legacy CoachingForm used, which phase 6 deletes).
+  const assignMutation = useMutation({
+    mutationFn: async (payload: AssignPayload) => {
+      const res = await apiRequest("POST", "/api/coaching", {
+        ...payload,
+        // Manager must appear as the assigner; server echoes
+        // X-User-Name-style identity from the session, but the route
+        // accepts an explicit `assignedBy` field too.
+        assignedBy: "manager",
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/coaching"] });
+      toast({ title: "Coaching session created" });
+      setShowForm(false);
+    },
+  });
 
-  const statusColors: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
-    in_progress: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
-    completed: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
-    dismissed: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300",
-  };
+  const openedSession = useMemo(() => {
+    if (!openedSessionId) return null;
+    return (sessions || []).find((s) => s.id === openedSessionId) ?? null;
+  }, [openedSessionId, sessions]);
 
-  const categoryLabel = (cat: string) => COACHING_CATEGORIES.find(c => c.value === cat)?.label || cat;
+  const openedSessionEmployeeName = useMemo(() => {
+    if (!openedSession) return null;
+    // Server enriches employeeName onto each session; fall back to
+    // looking it up in the employees list if it's not there.
+    if (openedSession.employeeName) return openedSession.employeeName;
+    const emp = (employees || []).find((e) => e.id === openedSession.employeeId);
+    return emp?.name ?? null;
+  }, [openedSession, employees]);
 
   return (
     <CoachingPageShell active="manager">
@@ -217,31 +236,42 @@ export default function CoachingPage() {
         <ManagerBoard
           sessions={sessions || []}
           employees={(employees || []).filter((e) => e.status === "Active")}
-          togglePending={updateMutation.isPending || toggleActionItemMutation.isPending}
-          onUpdateStatus={(id, status) => updateMutation.mutate({ id, updates: { status } })}
-          onToggleActionItem={(id, index) =>
-            toggleActionItemMutation.mutate({ id, index })
-          }
           onAssignNew={() => setShowForm(true)}
+          onOpenDetail={(id) => setOpenedSessionId(id)}
         />
       )}
 
-      {/* Assign-new dialog — wraps the legacy CoachingForm for now.
-          Phase 5 replaces with the Assign modal + transcript prefill. */}
-      <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>New coaching session</DialogTitle>
-          </DialogHeader>
-          <CoachingForm
-            employees={employees || []}
-            onClose={() => setShowForm(false)}
-            prefillEmployeeId={prefillEmployeeId}
-            prefillCallId={prefillCallId}
-            prefillCategory={prefillCategory}
-          />
-        </DialogContent>
-      </Dialog>
+      <DetailPanel
+        session={openedSession}
+        employeeName={openedSessionEmployeeName}
+        canManage
+        togglePending={updateMutation.isPending || toggleActionItemMutation.isPending}
+        onClose={() => setOpenedSessionId(null)}
+        onUpdateStatus={(sessionId, status) =>
+          updateMutation.mutate({ id: sessionId, updates: { status } })
+        }
+        onToggleActionItem={(sessionId, index) =>
+          toggleActionItemMutation.mutate({ id: sessionId, index })
+        }
+      />
+
+      <AssignModal
+        open={showForm}
+        onClose={() => setShowForm(false)}
+        employees={(employees || []).filter((e) => e.status === "Active")}
+        prefillEmployeeId={prefillEmployeeId || undefined}
+        prefillCallId={prefillCallId || undefined}
+        prefillCategory={prefillCategory || undefined}
+        submitPending={assignMutation.isPending}
+        submitError={
+          assignMutation.isError
+            ? (assignMutation.error as Error)?.message || "Could not create session"
+            : null
+        }
+        onSubmit={(payload) => {
+          assignMutation.mutate(payload);
+        }}
+      />
     </CoachingPageShell>
   );
 }

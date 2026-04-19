@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -5,6 +6,7 @@ import { User } from "@phosphor-icons/react";
 import type { CoachingSession } from "@shared/schema";
 import CoachingPageShell from "@/components/coaching/page-shell";
 import AgentInbox from "@/components/coaching/agent-inbox";
+import DetailPanel from "@/components/coaching/detail-panel";
 
 interface MyCoachingData {
   employee: { id: string; name: string } | null;
@@ -21,14 +23,16 @@ interface AuthUser {
 }
 
 /**
- * Agent-facing coaching page. Phase 3 installment — legacy list + summary
- * cards replaced with <AgentInbox> (the warm-paper Variant A layout).
+ * Agent-facing coaching page. Phase 5 installment — click an InboxRow
+ * or the Next-action card to open a slide-in DetailPanel (replaces the
+ * phase-3 inline expand).
  *
- * Data fetch + action-item mutation stay here so useBeforeUnload-style
- * invariants stay with the page; AgentInbox is presentational.
+ * Data fetch + mutations stay here so useBeforeUnload-style invariants
+ * stay with the page; AgentInbox + DetailPanel are presentational.
  */
 export default function MyCoachingPage() {
   const queryClient = useQueryClient();
+  const [openedSessionId, setOpenedSessionId] = useState<string | null>(null);
 
   const { data: myData, isLoading } = useQuery<MyCoachingData>({
     queryKey: ["/api/my-performance"],
@@ -59,6 +63,11 @@ export default function MyCoachingPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/my-performance"] });
     },
   });
+
+  const openedSession =
+    openedSessionId && myData?.coaching
+      ? myData.coaching.find((s) => s.id === openedSessionId) ?? null
+      : null;
 
   return (
     <CoachingPageShell active="agent">
@@ -93,12 +102,20 @@ export default function MyCoachingPage() {
             weeklyTrend: myData.weeklyTrend ?? [],
           }}
           meName={me?.name}
-          onToggleActionItem={(sessionId, index) =>
-            toggleActionItem.mutate({ sessionId, index })
-          }
-          togglePending={toggleActionItem.isPending}
+          onOpenDetail={(id) => setOpenedSessionId(id)}
         />
       )}
+
+      <DetailPanel
+        session={openedSession}
+        employeeName={myData?.employee?.name}
+        canManage={false}
+        togglePending={toggleActionItem.isPending}
+        onClose={() => setOpenedSessionId(null)}
+        onToggleActionItem={(sessionId, index) =>
+          toggleActionItem.mutate({ sessionId, index })
+        }
+      />
     </CoachingPageShell>
   );
 }
