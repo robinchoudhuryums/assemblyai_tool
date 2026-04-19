@@ -80,6 +80,54 @@ export type TopPerformer = Partial<Employee> & {
   totalCalls?: number | null;
 };
 
+// ────── `/api/analytics/trends` response ──────
+
+export interface TrendPeriod {
+  periodStart: string;
+  callCount: number;
+  avgScore: number | null;
+  positiveCount: number;
+  negativeCount: number;
+  avgDuration: number | null;
+}
+
+export interface TrendsResponse {
+  periods: TrendPeriod[];
+  comparisons: { scoreChange: number | null; volumeChange: number; sentimentChange: number | null };
+}
+
+/**
+ * Pull per-stat sparkline arrays out of the weekly trends response. Used
+ * by the Ledger variant to drive the 4 stat-card mini-charts. Each array
+ * is the trailing `n` buckets of the requested metric, in chronological
+ * order (oldest → newest).
+ */
+export function deriveStatSparklines(trends: TrendsResponse | undefined, n = 7): {
+  volume: number[];
+  score: Array<number | null>;
+  sentiment: number[];
+  negative: number[];
+} {
+  if (!trends || !trends.periods || trends.periods.length === 0) {
+    return { volume: [], score: [], sentiment: [], negative: [] };
+  }
+  const slice = trends.periods.slice(-n);
+  const volume: number[] = [];
+  const score: Array<number | null> = [];
+  const sentiment: number[] = [];
+  const negative: number[] = [];
+  for (const p of slice) {
+    volume.push(p.callCount);
+    score.push(p.avgScore);
+    const total = p.callCount || 0;
+    // Net sentiment in [-1, 1]: positive share minus negative share.
+    const net = total > 0 ? (p.positiveCount - p.negativeCount) / total : 0;
+    sentiment.push(Math.round(net * 100) / 100);
+    negative.push(p.negativeCount);
+  }
+  return { volume, score, sentiment, negative };
+}
+
 // ────── Derivation helpers ──────
 
 /**
@@ -149,6 +197,24 @@ export function extractFlagged(calls: CallWithDetails[]): CallWithDetails[] {
     if (isBad) out.push(c);
   }
   return out;
+}
+
+/**
+ * Split calls into the bad + good buckets the alert ribbons render.
+ * Bad = `low_score` OR `agent_misconduct*`; good = `exceptional_call`.
+ */
+export function partitionFlaggedForAlert(calls: CallWithDetails[]): { bad: CallWithDetails[]; good: CallWithDetails[] } {
+  const bad: CallWithDetails[] = [];
+  const good: CallWithDetails[] = [];
+  for (const c of calls) {
+    const flags = c.analysis?.flags;
+    if (!Array.isArray(flags) || flags.length === 0) continue;
+    const isBad = flags.some((f) => typeof f === "string" && (f === "low_score" || f.startsWith("agent_misconduct")));
+    const isGood = flags.includes("exceptional_call");
+    if (isBad) bad.push(c);
+    if (isGood) good.push(c);
+  }
+  return { bad, good };
 }
 
 export function extractExemplar(calls: CallWithDetails[]): CallWithDetails | undefined {

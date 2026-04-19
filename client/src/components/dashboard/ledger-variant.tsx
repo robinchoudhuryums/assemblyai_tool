@@ -22,16 +22,20 @@ import {
 } from "./primitives";
 import {
   deriveHourlyCurve,
+  deriveStatSparklines,
   extractExemplar,
   extractFlagged,
   formatClock,
   formatDuration,
   initialsFromName,
+  partitionFlaggedForAlert,
   safeAvg,
   type TopPerformer,
+  type TrendsResponse,
   type WeeklyChangesResponse,
   type HeatmapResponse,
 } from "./variant-utils";
+import FlaggedAlertRibbons from "./flagged-alert-ribbons";
 
 export default function LedgerVariant() {
   const { data: metrics } = useQuery<DashboardMetrics>({ queryKey: ["/api/dashboard/metrics"] });
@@ -39,10 +43,12 @@ export default function LedgerVariant() {
   const { data: weekly } = useQuery<WeeklyChangesResponse>({ queryKey: ["/api/dashboard/weekly-changes"] });
   const { data: performers } = useQuery<TopPerformer[]>({ queryKey: ["/api/dashboard/performers"] });
   const { data: heatmap } = useQuery<HeatmapResponse>({ queryKey: ["/api/analytics/heatmap"] });
+  const { data: trends } = useQuery<TrendsResponse>({ queryKey: ["/api/analytics/trends?period=weekly&weeks=7"] });
   const { data: callsResponse } = useQuery<PaginatedCalls>({ queryKey: ["/api/calls"] });
 
   const calls: CallWithDetails[] = callsResponse?.calls ?? [];
   const flagged = useMemo(() => extractFlagged(calls).slice(0, 5), [calls]);
+  const ribbon = useMemo(() => partitionFlaggedForAlert(calls), [calls]);
   const exemplarBase = useMemo(() => {
     const out: CallWithDetails[] = [];
     for (const c of calls) {
@@ -83,10 +89,21 @@ export default function LedgerVariant() {
     [],
   );
 
-  // Sparkline data for the 4 stat blocks (hourly volume / hourly avgScore / etc.).
-  // If heatmap data isn't loaded yet, render flat sparklines to preserve layout.
-  const volumeSpark = curve.volume.length > 0 ? curve.volume : new Array(12).fill(0);
-  const sentimentSpark = curve.sentiment.map((v) => (v == null ? 0 : v));
+  // Sparkline data for the 4 stat blocks — real weekly trend series from
+  // /api/analytics/trends?weeks=7. Each stat gets the appropriate metric.
+  // If trends haven't loaded yet, fall back to the hourly heatmap rollup
+  // so layout is preserved but the shapes read as approximations.
+  const sparks = useMemo(() => deriveStatSparklines(trends, 7), [trends]);
+  const volumeSpark = sparks.volume.length > 0 ? sparks.volume : curve.volume.length > 0 ? curve.volume : [];
+  const scoreSpark =
+    sparks.score.length > 0
+      ? sparks.score
+      : curve.sentiment.map((v) => (v == null ? null : 5 + v * 5));
+  const sentimentSpark = sparks.sentiment.length > 0 ? sparks.sentiment : curve.sentiment.map((v) => (v == null ? 0 : v));
+  const flaggedSpark =
+    sparks.negative.length > 0
+      ? sparks.negative
+      : curve.sentiment.map((v) => (v == null ? 0 : Math.max(0, -v * 10)));
 
   const scoreDelta = weekly?.scoreDelta ?? null;
   const flaggedDelta = weekly
@@ -159,6 +176,11 @@ export default function LedgerVariant() {
       >
         {/* LEFT — main content */}
         <div>
+          {(ribbon.bad.length > 0 || ribbon.good.length > 0) && (
+            <div style={{ paddingBottom: 24 }}>
+              <FlaggedAlertRibbons badCalls={ribbon.bad} goodCalls={ribbon.good} />
+            </div>
+          )}
           {/* Four stats across */}
           <div
             style={{
@@ -170,7 +192,7 @@ export default function LedgerVariant() {
             }}
           >
             <StatBlock
-              label="Calls · 24h"
+              label="Calls · week"
               value={(metrics?.totalCalls ?? 0).toString()}
               spark={volumeSpark}
               sparkColor="var(--accent)"
@@ -180,7 +202,7 @@ export default function LedgerVariant() {
               value={(metrics?.avgPerformanceScore ?? 0).toFixed(1)}
               unit="/10"
               delta={scoreDelta ?? undefined}
-              spark={sentimentSpark.map((v) => 5 + v * 5)}
+              spark={scoreSpark}
               sparkColor="var(--accent)"
             />
             <StatBlock
@@ -195,7 +217,7 @@ export default function LedgerVariant() {
               value={String(weekly?.flags?.lowScore?.current ?? 0)}
               unit="calls"
               delta={flaggedDelta != null ? -flaggedDelta : undefined}
-              spark={sentimentSpark.map((v) => Math.max(0, -v * 10))}
+              spark={flaggedSpark}
               sparkColor="var(--destructive)"
             />
           </div>
@@ -229,7 +251,7 @@ export default function LedgerVariant() {
           {/* Sentiment curve */}
           <div style={{ padding: "24px 0", borderBottom: "1px solid var(--border)" }}>
             <SectionHeader kicker="Last 7 days · hourly rollup" title="Sentiment & volume curve" />
-            <SentimentCurve sentiment={curve.sentiment} volume={curve.volume} width={820} height={180} />
+            <SentimentCurve sentiment={curve.sentiment} volume={curve.volume} height={180} />
             <div
               className="font-mono text-[10px] text-muted-foreground"
               style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" }}
