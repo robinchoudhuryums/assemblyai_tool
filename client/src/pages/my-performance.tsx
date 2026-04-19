@@ -1,10 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Star, TrendUp, User } from "@phosphor-icons/react";
+import { ArrowRight, ArrowUp, ArrowDown, GitDiff, Star, User } from "@phosphor-icons/react";
 import { Avatar, RubricRack, ScoreDial, StatBlock, type RubricValues } from "@/components/dashboard/primitives";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
@@ -440,107 +439,198 @@ export default function MyPerformancePage() {
               </div>
             )}
 
-            {/* Recent calls */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <TrendUp className="w-4 h-4" />
-                  Recent Calls
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {myData.recentCalls.length === 0 ? (
-                  <p className="text-muted-foreground text-sm">No calls yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {myData.recentCalls.slice(0, 10).map(call => {
-                      const score = call.analysis?.performanceScore ? Number(call.analysis.performanceScore) : null;
-                      return (
-                        <Link key={call.id} href={`/transcripts/${call.id}`}>
-                          <div className="flex items-center justify-between p-2 rounded-lg hover:bg-muted cursor-pointer transition-colors">
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs text-muted-foreground w-20">
-                                {new Date(call.uploadedAt || "").toLocaleDateString()}
-                              </span>
-                              <span className="text-sm truncate max-w-xs">
-                                {call.analysis?.summary
-                                  ? (typeof call.analysis.summary === "string" ? call.analysis.summary : "").slice(0, 60) + "..."
-                                  : "No summary"}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {call.sentiment?.overallSentiment && (
-                                <Badge variant="outline" className={`text-xs ${
-                                  call.sentiment.overallSentiment === "positive" ? "border-green-300 text-green-600" :
-                                  call.sentiment.overallSentiment === "negative" ? "border-red-300 text-red-600" : ""
-                                }`}>
-                                  {call.sentiment.overallSentiment}
-                                </Badge>
-                              )}
-                              {score != null && (
-                                <span className={`text-sm font-bold ${score >= SCORE_EXCELLENT ? "text-green-600" : score >= SCORE_GOOD ? "text-foreground" : "text-red-500"}`}>
-                                  {score.toFixed(1)}
-                                </span>
-                              )}
-                              <ArrowRight className="w-3 h-3 text-muted-foreground" />
-                            </div>
+            {/* Recent calls — document-style row list */}
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                Recent calls · your last {Math.min(myData.recentCalls.length, 10)}
+              </div>
+              <div
+                className="font-display font-medium text-foreground mt-1 mb-5"
+                style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+              >
+                {myData.recentCalls.length === 0 ? "Nothing yet." : "Walk the tape."}
+              </div>
+              {myData.recentCalls.length === 0 ? (
+                <div className="bg-card border border-border py-10 text-center text-sm text-muted-foreground">
+                  No calls yet. Your analyzed calls will appear here.
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  {myData.recentCalls.slice(0, 10).map((call, idx) => {
+                    const score = call.analysis?.performanceScore
+                      ? Number(call.analysis.performanceScore)
+                      : null;
+                    const scoreColor =
+                      score == null
+                        ? "text-muted-foreground"
+                        : score >= SCORE_EXCELLENT
+                        ? "text-[var(--sage)]"
+                        : score >= SCORE_GOOD
+                        ? "text-foreground"
+                        : "text-destructive";
+                    const summary =
+                      typeof call.analysis?.summary === "string"
+                        ? call.analysis.summary
+                        : "";
+                    return (
+                      <Link
+                        key={call.id}
+                        href={`/transcripts/${call.id}`}
+                        className={`group grid items-center gap-4 px-4 py-3.5 bg-card border border-border hover:bg-secondary transition-colors ${
+                          idx > 0 ? "border-t-0" : ""
+                        }`}
+                        style={{ gridTemplateColumns: "96px 1fr auto" }}
+                        data-testid="recent-call-row"
+                      >
+                        <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground tabular-nums">
+                          {call.uploadedAt
+                            ? new Date(call.uploadedAt).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                              })
+                            : "—"}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[13px] text-foreground truncate">
+                            {summary
+                              ? summary.slice(0, 120) + (summary.length > 120 ? "…" : "")
+                              : "No summary"}
                           </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                          <div className="font-mono text-[10px] text-muted-foreground mt-0.5 flex items-center gap-2.5">
+                            {call.callCategory && (
+                              <span className="uppercase tracking-[0.08em]">
+                                {call.callCategory}
+                              </span>
+                            )}
+                            {call.sentiment?.overallSentiment && (
+                              <span className="inline-flex items-center gap-1">
+                                <span
+                                  className="inline-block w-1.5 h-1.5 rounded-full"
+                                  style={{
+                                    background:
+                                      call.sentiment.overallSentiment === "positive"
+                                        ? "var(--sage)"
+                                        : call.sentiment.overallSentiment === "negative"
+                                        ? "var(--destructive)"
+                                        : "var(--muted-foreground)",
+                                  }}
+                                />
+                                <span className="uppercase tracking-[0.08em]">
+                                  {call.sentiment.overallSentiment}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {score != null && (
+                            <span
+                              className={`font-display font-medium tabular-nums ${scoreColor}`}
+                              style={{ fontSize: 20, letterSpacing: "-0.5px" }}
+                            >
+                              {score.toFixed(1)}
+                            </span>
+                          )}
+                          <ArrowRight className="w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* Coaching sessions with self-service action item toggle */}
             {myData.coaching.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <ClipboardText className="w-4 h-4" />
-                    Coaching & Feedback
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {myData.coaching.slice(0, 5).map(session => {
-                      const statusColor = session.status === "completed" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
-                        session.status === "in_progress" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
-                        "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
-                      return (
-                        <div key={session.id} className="border border-border rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <h4 className="text-sm font-medium">{session.title}</h4>
-                            <Badge className={`text-xs ${statusColor}`}>{session.status}</Badge>
-                          </div>
-                          {session.notes && <p className="text-xs text-muted-foreground mb-2">{session.notes.slice(0, 150)}</p>}
-                          {session.actionPlan && Array.isArray(session.actionPlan) && (
-                            <div className="space-y-1">
-                              {(session.actionPlan as Array<{ task: string; completed: boolean }>).map((item, i) => (
-                                <button
-                                  key={i}
-                                  className="flex items-center gap-2 text-xs w-full text-left hover:bg-muted/50 rounded px-1 py-0.5 transition-colors"
-                                  onClick={() => toggleActionItem.mutate({ sessionId: session.id, index: i })}
-                                  disabled={toggleActionItem.isPending}
-                                  aria-label={`Toggle "${item.task}" ${item.completed ? "incomplete" : "complete"}`}
-                                >
-                                  <span className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
-                                    item.completed ? "bg-green-500 border-green-500 text-white" : "border-muted-foreground/30"
-                                  }`}>
-                                    {item.completed && "✓"}
-                                  </span>
-                                  <span className={item.completed ? "line-through text-muted-foreground" : ""}>{item.task}</span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                  Coaching & feedback
+                </div>
+                <div
+                  className="font-display font-medium text-foreground mt-1 mb-5"
+                  style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+                >
+                  {coachingHeadline(myData.coaching)}
+                </div>
+                <div className="flex flex-col gap-3">
+                  {myData.coaching.slice(0, 5).map((session) => {
+                    const statusMeta = coachingStatusMeta(session.status);
+                    const actionPlan = Array.isArray(session.actionPlan)
+                      ? (session.actionPlan as Array<{ task: string; completed: boolean }>)
+                      : [];
+                    return (
+                      <div
+                        key={session.id}
+                        className="bg-card border border-border px-5 py-4"
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <h4 className="text-[14px] font-medium text-foreground">
+                            {session.title}
+                          </h4>
+                          <span
+                            className={`font-mono text-[9px] uppercase tracking-[0.12em] px-2 py-0.5 border rounded-sm whitespace-nowrap ${statusMeta.cls}`}
+                          >
+                            {statusMeta.label}
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
+                        {session.notes && (
+                          <p className="text-[12px] text-muted-foreground leading-relaxed mb-3">
+                            {session.notes.slice(0, 220)}
+                            {session.notes.length > 220 && "…"}
+                          </p>
+                        )}
+                        {actionPlan.length > 0 && (
+                          <div className="space-y-1.5">
+                            {actionPlan.map((item, i) => (
+                              <button
+                                key={i}
+                                className="flex items-start gap-2.5 text-[12px] w-full text-left hover:bg-secondary rounded-sm px-1.5 py-1 transition-colors disabled:opacity-60"
+                                onClick={() =>
+                                  toggleActionItem.mutate({
+                                    sessionId: session.id,
+                                    index: i,
+                                  })
+                                }
+                                disabled={toggleActionItem.isPending}
+                                aria-label={`Toggle "${item.task}" ${
+                                  item.completed ? "incomplete" : "complete"
+                                }`}
+                              >
+                                <span
+                                  className={`flex-shrink-0 w-[14px] h-[14px] border flex items-center justify-center mt-[1px] ${
+                                    item.completed
+                                      ? "bg-[var(--sage)] border-[var(--sage)] text-[var(--paper)]"
+                                      : "border-border"
+                                  }`}
+                                  aria-hidden="true"
+                                >
+                                  {item.completed && (
+                                    <span
+                                      className="font-mono leading-none"
+                                      style={{ fontSize: 10 }}
+                                    >
+                                      ✓
+                                    </span>
+                                  )}
+                                </span>
+                                <span
+                                  className={
+                                    item.completed
+                                      ? "line-through text-muted-foreground"
+                                      : "text-foreground"
+                                  }
+                                >
+                                  {item.task}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
             </div>
@@ -741,6 +831,38 @@ function weekStripHeadline(calls: CallWithDetails[]): string {
   if (low >= SCORE_EXCELLENT) return "Smooth sailing.";
   if (low >= SCORE_GOOD) return "Steady week.";
   return "One to listen back to.";
+}
+
+function coachingHeadline(sessions: CoachingSession[]): string {
+  const open = sessions.filter((s) => s.status !== "completed").length;
+  if (open === 0) return "All caught up.";
+  if (open === 1) return "One open thread.";
+  return `${open} open threads.`;
+}
+
+function coachingStatusMeta(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "completed":
+      return {
+        label: "Done",
+        cls: "border-[color-mix(in_oklch,var(--sage),transparent_50%)] text-[var(--sage)] bg-[var(--sage-soft)]",
+      };
+    case "in_progress":
+      return {
+        label: "In progress",
+        cls: "border-primary text-primary bg-[color-mix(in_oklch,var(--primary),transparent_88%)]",
+      };
+    case "open":
+      return {
+        label: "Open",
+        cls: "border-[color-mix(in_oklch,var(--amber),transparent_50%)] text-[color-mix(in_oklch,var(--amber),var(--ink)_35%)] bg-[var(--amber-soft)]",
+      };
+    default:
+      return {
+        label: status,
+        cls: "border-border text-muted-foreground bg-muted",
+      };
+  }
 }
 
 function weekStripFootnote(calls: CallWithDetails[]): string {
