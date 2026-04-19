@@ -196,10 +196,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   // MUST be called before early returns to respect Rules of Hooks
   const transcriptSegments = useMemo(() => {
     if (call?.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0) {
-      return generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+      const base = generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+      return enrichSegmentSentiment(base, call?.sentiment?.segments);
     }
     return [];
-  }, [call?.transcript?.words]);
+  }, [call?.transcript?.words, call?.sentiment?.segments]);
 
   // Compute search matches across segments
   // MUST be called before early returns to respect Rules of Hooks
@@ -367,6 +368,31 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
     segments.push(currentSegment);
     return segments;
+  }
+
+  // Enrich transcript segments with per-utterance sentiment from the
+  // sentiment_analyses.segments array (AssemblyAI sentiment_analysis_results,
+  // persisted end-to-end but previously unused at the frontend). Matches by
+  // timestamp midpoint overlap — sentiment utterances and word-derived
+  // segments don't align 1:1, but midpoint-in-range is a good-enough match
+  // for a visible dot.
+  function enrichSegmentSentiment(
+    segments: TranscriptSegment[],
+    sentimentSegments: Array<{ start?: number; end?: number; sentiment?: string }> | undefined,
+  ): TranscriptSegment[] {
+    if (!sentimentSegments || sentimentSegments.length === 0) return segments;
+    return segments.map((seg) => {
+      const mid = (seg.start + seg.end) / 2;
+      const match = sentimentSegments.find(
+        (s) => typeof s.start === "number" && typeof s.end === "number" && mid >= s.start && mid <= s.end,
+      );
+      if (!match?.sentiment) return seg;
+      const s = match.sentiment.toLowerCase();
+      if (s === "positive" || s === "negative") {
+        return { ...seg, sentiment: s };
+      }
+      return seg;
+    });
   }
 
   const jumpToTime = (timeMs: number) => {
@@ -723,7 +749,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               </button>
             </div>
           )}
-          <div ref={transcriptContainerRef} className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
+          <div
+            ref={transcriptContainerRef}
+            className="bg-card border border-border overflow-y-auto"
+            style={{ padding: "24px 28px", maxHeight: 384 }}
+          >
             {call.status !== 'completed' ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground">
@@ -731,36 +761,97 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 </p>
               </div>
             ) : call.transcript?.text ? (
-              <div className="space-y-3">
-                {transcriptSegments.map((segment, index) => (
-                  <div
-                    key={index}
-                    className={`transcript-line p-2 rounded cursor-pointer transition-colors ${
-                      index === activeSegmentIndex ? 'bg-primary/10 ring-1 ring-primary/30' : ''
-                    }`}
-                    onClick={() => jumpToTime(segment.start)}
-                    data-testid={`transcript-segment-${index}`}
-                  >
-                    <div className="flex items-start space-x-3">
-                      <button
-                        className="text-xs text-muted-foreground bg-background px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground"
-                        onClick={() => jumpToTime(segment.start)}
+              <div>
+                {transcriptSegments.map((segment, index) => {
+                  const active = index === activeSegmentIndex;
+                  const past = currentTime >= segment.end;
+                  const isAgent = segment.speaker === 'Agent';
+                  const dotColor =
+                    segment.sentiment === "positive"
+                      ? "var(--sage)"
+                      : segment.sentiment === "negative"
+                      ? "var(--destructive)"
+                      : null;
+                  return (
+                    <div
+                      key={index}
+                      className="grid gap-4 cursor-pointer transition-colors rounded-sm"
+                      style={{
+                        gridTemplateColumns: "48px 1fr",
+                        padding: "10px 12px",
+                        margin: "2px -12px",
+                        background: active ? "var(--accent-soft)" : "transparent",
+                        opacity: past || active ? 1 : 0.82,
+                      }}
+                      onClick={() => jumpToTime(segment.start)}
+                      data-testid={`transcript-segment-${index}`}
+                    >
+                      {/* Timestamp */}
+                      <div
+                        className="font-mono tabular-nums"
+                        style={{
+                          fontSize: 11,
+                          color: active ? "var(--accent)" : "var(--muted-foreground)",
+                          fontWeight: active ? 600 : 400,
+                          paddingTop: 3,
+                        }}
                       >
-                        <Clock className="w-3 h-3 mr-1 inline" />
                         {formatTimestamp(segment.start)}
-                      </button>
-                      <div className="flex-1">
-                        <p className={`text-sm font-medium ${segment.speaker === 'Agent' ? 'text-primary' : 'text-gray-600'}`}>
-                          {segment.speaker === 'Agent' ? `Agent (${call.employee?.name}):` : 'Customer:'}
-                        </p>
-                        <p className="text-foreground">{highlightKeywords(segment.text, index)}</p>
                       </div>
-                      <Badge className={getSentimentColor(segment.sentiment)}>
-                        {segment.sentiment.charAt(0).toUpperCase() + segment.sentiment.slice(1)}
-                      </Badge>
+
+                      {/* Content */}
+                      <div style={{ minWidth: 0 }}>
+                        {/* Speaker header */}
+                        <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                          <span
+                            className="font-display font-semibold"
+                            style={{
+                              fontSize: 12,
+                              color: isAgent ? "var(--accent)" : "var(--foreground)",
+                              letterSpacing: "0.02em",
+                            }}
+                          >
+                            {isAgent
+                              ? call.employee?.name || "Agent"
+                              : "Customer"}
+                          </span>
+                          <span
+                            className="font-mono uppercase text-muted-foreground"
+                            style={{ fontSize: 9, letterSpacing: "0.12em" }}
+                          >
+                            {isAgent ? "Agent" : "Patient"}
+                          </span>
+                          {dotColor && (
+                            <span
+                              aria-label={`${segment.sentiment} sentiment`}
+                              title={segment.sentiment}
+                              style={{
+                                display: "inline-block",
+                                width: 6,
+                                height: 6,
+                                borderRadius: "50%",
+                                background: dotColor,
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Text */}
+                        <div
+                          className="text-foreground"
+                          style={{
+                            fontSize: 14,
+                            lineHeight: 1.58,
+                            borderLeft: isAgent ? "none" : "2px solid var(--border)",
+                            paddingLeft: isAgent ? 0 : 10,
+                          }}
+                        >
+                          {highlightKeywords(segment.text, index)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8">
