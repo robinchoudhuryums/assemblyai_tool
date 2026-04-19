@@ -10,6 +10,7 @@
  * `--paper-2`, `--paper-card`) come from the app-wide theme in
  * `client/src/index.css`.
  */
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 // ───────────────────────────────────────────────────────────
@@ -51,11 +52,49 @@ export function Sparkline({ data, width = 90, height = 18, stroke = "currentColo
 interface SentimentCurveProps {
   sentiment: Array<number | null>;
   volume: number[];
+  /** Fixed render width. If omitted the component measures its parent and tracks it. */
   width?: number;
   height?: number;
 }
 
-export function SentimentCurve({ sentiment, volume, width = 820, height = 180 }: SentimentCurveProps) {
+/**
+ * `useContainerWidth` — light ResizeObserver hook. Returns the current
+ * width of the wrapper div. Avoids pulling in a ui-resize package just
+ * for the two charts that need it.
+ */
+function useContainerWidth<T extends HTMLElement>(fallback: number): [React.RefObject<T>, number] {
+  const ref = useRef<T>(null);
+  const [w, setW] = useState<number>(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const box = entry.contentRect;
+        if (box.width > 0) setW(Math.round(box.width));
+      }
+    });
+    ro.observe(el);
+    // Seed with the first synchronous measurement so the initial render
+    // doesn't flash at `fallback` before the observer fires.
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0) setW(Math.round(rect.width));
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+export function SentimentCurve({ sentiment, volume, width, height = 180 }: SentimentCurveProps) {
+  const [wrapRef, measuredWidth] = useContainerWidth<HTMLDivElement>(820);
+  const effectiveWidth = width ?? measuredWidth;
+  return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
+      <SentimentCurveSVG sentiment={sentiment} volume={volume} width={effectiveWidth} height={height} />
+    </div>
+  );
+}
+
+function SentimentCurveSVG({ sentiment, volume, width, height }: { sentiment: Array<number | null>; volume: number[]; width: number; height: number }) {
   const pad = { l: 32, r: 16, t: 16, b: 28 };
   const w = width - pad.l - pad.r;
   const h = height - pad.t - pad.b;

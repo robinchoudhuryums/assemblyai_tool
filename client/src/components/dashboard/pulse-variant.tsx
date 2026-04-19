@@ -30,11 +30,13 @@ import {
   extractExemplar,
   extractFlagged,
   initialsFromName,
+  partitionFlaggedForAlert,
   safeAvg,
   type TopPerformer,
   type WeeklyChangesResponse,
   type HeatmapResponse,
 } from "./variant-utils";
+import FlaggedAlertRibbons from "./flagged-alert-ribbons";
 
 export default function PulseVariant() {
   const { data: metrics } = useQuery<DashboardMetrics>({ queryKey: ["/api/dashboard/metrics"] });
@@ -45,6 +47,7 @@ export default function PulseVariant() {
 
   const calls: CallWithDetails[] = callsResponse?.calls ?? [];
   const flagged = useMemo(() => extractFlagged(calls).slice(0, 4), [calls]);
+  const ribbon = useMemo(() => partitionFlaggedForAlert(calls), [calls]);
   const exemplar = useMemo(() => extractExemplar(calls), [calls]);
   const curve = useMemo(() => deriveHourlyCurve(heatmap?.cells), [heatmap]);
 
@@ -55,6 +58,11 @@ export default function PulseVariant() {
   return (
     <div className="bg-background text-foreground font-sans min-h-full">
       <div className="px-14 py-10">
+        {(ribbon.bad.length > 0 || ribbon.good.length > 0) && (
+          <div className="mb-8">
+            <FlaggedAlertRibbons badCalls={ribbon.bad} goodCalls={ribbon.good} />
+          </div>
+        )}
         {/* Hero: score + sentiment curve */}
         <div
           className="grid gap-14 items-center pb-10 border-b border-border"
@@ -150,7 +158,7 @@ export default function PulseVariant() {
               </div>
             </div>
             <div className="w-full">
-              <SentimentCurve sentiment={curve.sentiment} volume={curve.volume} width={920} height={220} />
+              <SentimentCurve sentiment={curve.sentiment} volume={curve.volume} height={220} />
             </div>
           </div>
         </div>
