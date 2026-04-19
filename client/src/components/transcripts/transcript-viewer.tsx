@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, DownloadSimple, FileText, Flag, FloppyDisk, Gauge, MagnifyingGlass, Pause, PencilSimple, Play, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, FileText, Flag, FloppyDisk, MagnifyingGlass, PencilSimple, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,6 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
-import { SPEED_OPTIONS } from "@/lib/constants";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
@@ -52,17 +51,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   /** Milliseconds of silence before splitting into a new transcript segment */
   const SEGMENT_GAP_MS = 2000;
 
-  const cycleSpeed = useCallback(() => {
-    setPlaybackRate(prev => {
-      // SPEED_OPTIONS is `as const`, so its element type is the literal
-      // union, not `number`. Widen for indexOf since `prev` is just a number.
-      const speeds: readonly number[] = SPEED_OPTIONS;
-      const idx = speeds.indexOf(prev);
-      const next = speeds[(idx + 1) % speeds.length];
-      if (audioRef.current) audioRef.current.playbackRate = next;
-      return next;
-    });
-  }, []);
+  // cycleSpeed removed in phase 5 — the bottom-docked Scrubber owns the
+  // rate selector now. setPlaybackRate still drives audioRef.playbackRate
+  // from the Scrubber's onRate callback.
 
   // Apply volume / mute to the audio element whenever they change. Also
   // persist the volume so the user's preferred level sticks across
@@ -85,11 +76,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
 
-  // Transcript search state
-  const [searchOpen, setSearchOpen] = useState(false);
+  // Transcript search state — query is driven by ViewerHeader via
+  // `transcript:search-query` window events; we keep only the query +
+  // match index locally.
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatchIdx, setSearchMatchIdx] = useState(0);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
   // Warn before navigating away with unsaved edits
@@ -144,30 +135,59 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     editMutation.mutate({ updates, reason: editReason.trim() });
   };
 
-  // Close edit mode on Escape key (broadcast from App.tsx)
+  // Close edit mode on Escape key (broadcast from App.tsx).
+  // Phase-5 note: the legacy "close search popup on Escape" branch was
+  // dropped when the in-column search bar moved into ViewerHeader.
   useEffect(() => {
     const onEscape = () => {
-      if (searchOpen) { setSearchOpen(false); setSearchQuery(""); return; }
+      if (searchQuery) { setSearchQuery(""); return; }
       if (isEditing) setIsEditing(false);
     };
     window.addEventListener("app:escape", onEscape);
     return () => window.removeEventListener("app:escape", onEscape);
-  }, [isEditing, searchOpen]);
+  }, [isEditing, searchQuery]);
 
-  // Ctrl+F / Cmd+F to open transcript search
+  // Ctrl+F / Cmd+F focuses the ViewerHeader search input. Keeps the
+  // familiar shortcut working without reopening the old popup.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-        // Only intercept if transcript viewer is visible
         const el = transcriptContainerRef.current;
         if (!el) return;
+        const headerInput = document.getElementById("transcript-header-search") as HTMLInputElement | null;
+        if (!headerInput) return;
         e.preventDefault();
-        setSearchOpen(true);
-        setTimeout(() => searchInputRef.current?.focus(), 50);
+        headerInput.focus();
+        headerInput.select();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Bridge: ViewerHeader controls (search / export / download) dispatch
+  // window events; the viewer listens and handles them. Keeps the header
+  // presentational without prop-drilling across a sibling. Handlers go
+  // through refs so the window listener always calls the current closure
+  // (otherwise an empty-deps effect would capture stale call data).
+  const exportHandlerRef = useRef<() => void>(() => {});
+  const downloadHandlerRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onSearch = (e: Event) => {
+      const detail = (e as CustomEvent<{ query: string }>).detail;
+      setSearchQuery(detail?.query ?? "");
+      setSearchMatchIdx(0);
+    };
+    const onExport = () => exportHandlerRef.current();
+    const onDownload = () => downloadHandlerRef.current();
+    window.addEventListener("transcript:search-query", onSearch);
+    window.addEventListener("transcript:export", onExport);
+    window.addEventListener("transcript:download", onDownload);
+    return () => {
+      window.removeEventListener("transcript:search-query", onSearch);
+      window.removeEventListener("transcript:export", onExport);
+      window.removeEventListener("transcript:download", onDownload);
+    };
   }, []);
 
   // toDisplayString is a pure function imported from @/lib/display-utils — no memoization needed
@@ -533,6 +553,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
+  // Re-bind every render so the window event listeners always call the
+  // latest closure (captures current `call` / `transcriptSegments`).
+  exportHandlerRef.current = handleExportTranscript;
+  downloadHandlerRef.current = handleDownloadAudio;
+
   const highlightKeywords = (text: string | any, segmentIndex?: number): React.ReactNode => {
     const str = typeof text === "string" ? text : toDisplayString(text);
     // Build combined regex for topics + search
@@ -580,93 +605,79 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   );
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="transcript-viewer">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-semibold text-foreground">Call Transcript</h3>
-          <p className="text-sm text-muted-foreground">
-            {call.employee?.name} • {new Date(call.uploadedAt || "").toLocaleDateString()}
-          </p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
-            <MagnifyingGlass className="w-4 h-4 mr-1" />
-            Search
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
-            <FileText className="w-4 h-4 mr-1" />
-            Export
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
-            <DownloadSimple className="w-4 h-4 mr-1" />
-            Download
-          </Button>
-          <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
-            {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
-            {isPlaying ? "Pause" : "Play Audio"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={skipToNextSegment} aria-label="Skip to next segment" title="Skip silence / next speaker">
-            <SkipForward className="w-4 h-4" />
-          </Button>
-          <Button size="sm" variant="outline" onClick={jumpToFlagged} aria-label="Jump to next negative sentiment" title="Jump to next flagged moment">
-            <Flag className="w-4 h-4" />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={cycleSpeed}
-            title="Playback speed"
-            className="w-16 text-xs font-mono"
-          >
-            <Gauge className="w-3 h-3 mr-1" />
-            {playbackRate}x
-          </Button>
-          {/* Volume control — popover with a slider + mute toggle. Volume
-              persists to localStorage; mute is session-only. */}
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-                title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              >
-                {muted || volume === 0
-                  ? <SpeakerX className="w-4 h-4" />
-                  : volume < 0.5
-                    ? <SpeakerLow className="w-4 h-4" />
-                    : <SpeakerHigh className="w-4 h-4" />}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-48 p-3" align="end">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Volume</span>
-                  <button
-                    type="button"
-                    onClick={() => setMuted((v) => !v)}
-                    className="text-foreground hover:underline"
-                  >
-                    {muted ? "Unmute" : "Mute"}
-                  </button>
-                </div>
-                <Slider
-                  value={[muted ? 0 : volume]}
-                  onValueChange={([v]) => {
-                    setVolume(v);
-                    if (v > 0 && muted) setMuted(false);
-                  }}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                />
-                <div className="text-[10px] text-muted-foreground text-right">
-                  {Math.round((muted ? 0 : volume) * 100)}%
-                </div>
+    <div data-testid="transcript-viewer">
+      {/* Compact secondary toolbar — only controls that aren't already in
+          the ViewerHeader (search/export/download) or the Scrubber
+          (play/rate). Kept here because these are functional shortcuts
+          without a better home: skip to next segment, jump to next
+          flagged moment, and the volume popover. */}
+      <div className="flex items-center justify-end gap-1.5 mb-3">
+        <button
+          type="button"
+          onClick={skipToNextSegment}
+          aria-label="Skip to next segment"
+          title="Skip silence / next speaker"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <SkipForward style={{ width: 12, height: 12 }} />
+          Skip
+        </button>
+        <button
+          type="button"
+          onClick={jumpToFlagged}
+          aria-label="Jump to next flagged moment"
+          title="Jump to next negative sentiment"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <Flag style={{ width: 12, height: 12 }} />
+          Flag
+        </button>
+        {/* Volume popover — persisted to localStorage; mute is session-only. */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              className="font-mono inline-flex items-center border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+            >
+              {muted || volume === 0
+                ? <SpeakerX style={{ width: 12, height: 12 }} />
+                : volume < 0.5
+                  ? <SpeakerLow style={{ width: 12, height: 12 }} />
+                  : <SpeakerHigh style={{ width: 12, height: 12 }} />}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-3" align="end">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Volume</span>
+                <button
+                  type="button"
+                  onClick={() => setMuted((v) => !v)}
+                  className="text-foreground hover:underline"
+                >
+                  {muted ? "Unmute" : "Mute"}
+                </button>
               </div>
-            </PopoverContent>
-          </Popover>
-        </div>
+              <Slider
+                value={[muted ? 0 : volume]}
+                onValueChange={([v]) => {
+                  setVolume(v);
+                  if (v > 0 && muted) setMuted(false);
+                }}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+              <div className="text-[10px] text-muted-foreground text-right">
+                {Math.round((muted ? 0 : volume) * 100)}%
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Hidden audio element that streams from S3 via the API */}
@@ -677,41 +688,40 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          {/* Transcript search bar */}
-          {searchOpen && (
-            <div className="flex items-center gap-2 mb-2 bg-muted rounded-lg px-3 py-2">
-              <MagnifyingGlass className="w-4 h-4 text-muted-foreground shrink-0" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search transcript..."
-                className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    goToMatch(e.shiftKey ? searchMatchIdx - 1 : searchMatchIdx + 1);
-                  }
-                  if (e.key === "Escape") {
-                    setSearchOpen(false);
-                    setSearchQuery("");
-                  }
-                }}
-              />
-              {searchQuery && (
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {searchMatches.length > 0 ? `${searchMatchIdx + 1}/${searchMatches.length}` : "0 results"}
-                </span>
-              )}
-              <button onClick={() => goToMatch(searchMatchIdx - 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Previous match">
+          {/* Search hit chip — driven by ViewerHeader's search input via
+              `transcript:search-query` events. Prev / next buttons walk the
+              matches and scroll the column to the hit segment. */}
+          {searchQuery && (
+            <div
+              className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
+              role="status"
+              aria-live="polite"
+            >
+              <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
+              <span
+                className="font-mono tabular-nums text-foreground flex-1 truncate"
+                style={{ fontSize: 11 }}
+              >
+                {searchMatches.length > 0
+                  ? `${searchMatchIdx + 1} / ${searchMatches.length}`
+                  : "0 results"}
+                <span className="text-muted-foreground"> · "{searchQuery}"</span>
+              </span>
+              <button
+                onClick={() => goToMatch(searchMatchIdx - 1)}
+                disabled={searchMatches.length === 0}
+                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                aria-label="Previous match"
+              >
                 <CaretUp className="w-3.5 h-3.5" />
               </button>
-              <button onClick={() => goToMatch(searchMatchIdx + 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Next match">
+              <button
+                onClick={() => goToMatch(searchMatchIdx + 1)}
+                disabled={searchMatches.length === 0}
+                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                aria-label="Next match"
+              >
                 <CaretDown className="w-3.5 h-3.5" />
-              </button>
-              <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Close search">
-                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}

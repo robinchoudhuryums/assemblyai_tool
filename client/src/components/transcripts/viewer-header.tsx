@@ -17,11 +17,12 @@
  * `TranscriptViewer` already populates — TanStack Query de-dupes so this
  * doesn't cause a second network call.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   DownloadSimple,
+  FileText,
   MagnifyingGlass,
   Plus,
 } from "@phosphor-icons/react";
@@ -101,6 +102,29 @@ export default function ViewerHeader({ callId }: { callId: string }) {
   const [roleView, setRoleView] = useState<"agent" | "manager">(
     canManage ? "manager" : "agent",
   );
+  const [searchValue, setSearchValue] = useState("");
+
+  // Emit role-view changes so the side rail can relabel panels.
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("transcript:role-change", { detail: { role: roleView } }),
+    );
+  }, [roleView]);
+
+  // Debounce the search dispatch to avoid regex-churning the transcript on
+  // every keystroke. 120ms feels snappy enough to read as "live".
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("transcript:search-query", { detail: { query: searchValue } }),
+      );
+    }, 120);
+    return () => window.clearTimeout(id);
+  }, [searchValue]);
+
+  const coachingHref = canManage
+    ? `/coaching?newSession=true&callId=${encodeURIComponent(callId)}`
+    : "/coaching";
 
   const agentInitials = call?.employee?.name
     ? call.employee.name
@@ -142,19 +166,22 @@ export default function ViewerHeader({ callId }: { callId: string }) {
 
         <div className="flex-1" />
 
-        {/* Inline search — visual only in phase 1; wired in phase 2 */}
+        {/* Inline search — dispatches `transcript:search-query` events;
+            transcript-viewer listens and drives its searchQuery state. */}
         <label className="relative">
           <MagnifyingGlass
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
             style={{ width: 12, height: 12 }}
           />
           <input
+            id="transcript-header-search"
             type="search"
             placeholder="Search transcript…"
-            disabled
-            className="bg-secondary border border-border rounded-sm pl-7 pr-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary disabled:opacity-70 disabled:cursor-not-allowed"
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.target.value)}
+            className="bg-secondary border border-border rounded-sm pl-7 pr-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
             style={{ width: 180 }}
-            aria-label="Search transcript (wired in phase 2)"
+            aria-label="Search transcript (Ctrl+F)"
           />
         </label>
 
@@ -199,29 +226,43 @@ export default function ViewerHeader({ callId }: { callId: string }) {
           </div>
         )}
 
-        {/* Export — visual only; existing TranscriptViewer still exports below */}
+        {/* Export transcript as text — dispatched to TranscriptViewer */}
         <button
           type="button"
-          disabled
-          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+          onClick={() => window.dispatchEvent(new CustomEvent("transcript:export"))}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
           style={{ fontSize: 10, letterSpacing: "0.1em" }}
-          aria-label="Export transcript (wired in phase 5)"
+          aria-label="Export transcript as text file"
+          data-testid="export-transcript"
         >
-          <DownloadSimple style={{ width: 12, height: 12 }} />
+          <FileText style={{ width: 12, height: 12 }} />
           Export
         </button>
 
+        {/* Download audio */}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("transcript:download"))}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          aria-label="Download audio file"
+          data-testid="download-audio"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          Download
+        </button>
+
         {canManage && roleView === "manager" && (
-          <button
-            type="button"
-            disabled
-            className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity disabled:opacity-70 disabled:cursor-not-allowed"
+          <Link
+            href={coachingHref}
+            className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity"
             style={{ fontSize: 10, letterSpacing: "0.1em" }}
-            aria-label="New coaching note (wired in phase 5)"
+            aria-label="New coaching note for this call"
+            data-testid="new-coaching-note"
           >
             <Plus style={{ width: 12, height: 12 }} />
             New coaching note
-          </button>
+          </Link>
         )}
       </div>
 

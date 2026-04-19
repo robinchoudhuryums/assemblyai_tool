@@ -15,6 +15,7 @@
  * stay in `transcript-viewer.tsx` and render directly below the side
  * rail. Manual edit indicator also stays inline in the parent.
  */
+import { useEffect, useState } from "react";
 import type { CallWithDetails } from "@shared/schema";
 import { Clock, FloppyDisk, PencilSimple, X } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,21 @@ interface SideRailProps {
 
 export default function SideRail(props: SideRailProps) {
   const { call } = props;
+  // Agent ↔ manager view toggle, driven by ViewerHeader's role toggle
+  // via window events. Defaults to "agent" for viewers (ViewerHeader
+  // never emits "manager" for that role, so they stay here).
+  const [roleView, setRoleView] = useState<"agent" | "manager">("agent");
+  useEffect(() => {
+    const onRoleChange = (e: Event) => {
+      const detail = (e as CustomEvent<{ role?: "agent" | "manager" }>).detail;
+      if (detail?.role === "agent" || detail?.role === "manager") {
+        setRoleView(detail.role);
+      }
+    };
+    window.addEventListener("transcript:role-change", onRoleChange);
+    return () => window.removeEventListener("transcript:role-change", onRoleChange);
+  }, []);
+
   const score = call.analysis?.performanceScore
     ? Number(call.analysis.performanceScore)
     : null;
@@ -201,8 +217,8 @@ export default function SideRail(props: SideRailProps) {
         </Panel>
       )}
 
-      {/* Panel 3 — Coaching highlights (strengths + suggestions) */}
-      <CoachingPanel {...props} />
+      {/* Panel 3 — Coaching highlights (agent) / QA flags (manager) */}
+      <CoachingPanel {...props} roleView={roleView} />
 
       {/* Panel 4 — Commitments & follow-ups */}
       {call.analysis?.actionItems &&
@@ -274,7 +290,8 @@ function CoachingPanel({
   call,
   onSeek,
   parseTimestampString,
-}: SideRailProps) {
+  roleView,
+}: SideRailProps & { roleView: "agent" | "manager" }) {
   const feedback = call.analysis?.feedback;
   if (
     !feedback ||
@@ -290,7 +307,9 @@ function CoachingPanel({
 
   return (
     <Panel>
-      <SectionLabel>Coaching highlights</SectionLabel>
+      <SectionLabel>
+        {roleView === "manager" ? "QA flags" : "Coaching highlights"}
+      </SectionLabel>
       <div className="mt-3 flex flex-col gap-2">
         {strengths.map((item, i) => (
           <Highlight
