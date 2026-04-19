@@ -16,7 +16,7 @@ import { SPEED_OPTIONS } from "@/lib/constants";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
-import AudioWaveformDisplay from "./audio-waveform";
+import Scrubber from "./scrubber";
 
 interface TranscriptViewerProps {
   callId: string;
@@ -671,43 +671,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
       {/* Hidden audio element that streams from S3 via the API */}
       <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="auto" />
 
-      {/* Audio waveform / progress bar */}
-      {audioReady && (
-        <div className="mb-4">
-          <div className="flex items-center space-x-3">
-            <span className="text-xs text-muted-foreground w-10 text-right">
-              {formatTimestamp(currentTime)}
-            </span>
-            <div className="flex-1">
-              <AudioWaveformDisplay
-                audioRef={audioRef}
-                currentTime={currentTime}
-                duration={audioDuration}
-                onSeek={(ms) => {
-                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
-                  setCurrentTime(ms);
-                }}
-              />
-              {/* Fallback range input (shown briefly while waveform loads) */}
-              <input
-                type="range"
-                className="w-full h-1.5 accent-primary cursor-pointer mt-1"
-                min={0}
-                max={audioDuration}
-                value={currentTime}
-                onChange={(e) => {
-                  const ms = Number(e.target.value);
-                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
-                  setCurrentTime(ms);
-                }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground w-10">
-              {formatTimestamp(audioDuration)}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Waveform + sentiment ribbon moved to the bottom-docked Scrubber
+          rendered after the main grid — see end of this component. */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
@@ -1230,6 +1195,34 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           <AnnotationsPanel callId={callId} currentTime={currentTime} onJump={jumpToTime} />
         </div>
       </div>
+
+      {/* Bottom-docked scrubber — waveform + per-utterance sentiment
+          ribbon. Phase 3 installment; phase 5 prunes the duplicate top-bar
+          play/skip/speed/volume controls above. */}
+      {audioReady && (
+        <div
+          className="mt-5 pt-4 border-t border-border"
+          data-testid="scrubber-dock"
+        >
+          <Scrubber
+            audioRef={audioRef}
+            currentTime={currentTime}
+            duration={audioDuration}
+            playing={isPlaying}
+            playbackRate={playbackRate}
+            sentimentSegments={call.sentiment?.segments}
+            onSeek={(ms) => {
+              if (audioRef.current) audioRef.current.currentTime = ms / 1000;
+              setCurrentTime(ms);
+            }}
+            onTogglePlay={togglePlayPause}
+            onRate={(r) => {
+              setPlaybackRate(r);
+              if (audioRef.current) audioRef.current.playbackRate = r;
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
