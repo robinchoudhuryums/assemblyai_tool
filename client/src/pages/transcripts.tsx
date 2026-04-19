@@ -1,7 +1,8 @@
 import { useParams } from "wouter";
 import { Link } from "wouter";
-import { CaretRight, House, Warning } from "@phosphor-icons/react";
+import { Warning } from "@phosphor-icons/react";
 import TranscriptViewer from "@/components/transcripts/transcript-viewer";
+import ViewerHeader from "@/components/transcripts/viewer-header";
 import CallsTable from "@/components/tables/calls-table";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,26 +32,8 @@ export default function Transcripts() {
   // If we have a specific call ID, show the transcript viewer
   if (callId) {
     return (
-      <div className="min-h-screen" data-testid="transcript-detail-page">
-        {/* Header with Breadcrumbs */}
-        <header className="bg-card border-b border-border px-6 py-4">
-          <nav className="flex items-center text-sm text-muted-foreground mb-2">
-            <Link href="/" className="hover:text-foreground transition-colors">
-              <House className="w-4 h-4" />
-            </Link>
-            <CaretRight className="w-3 h-3 mx-2" />
-            <Link href="/transcripts" className="hover:text-foreground transition-colors">
-              Transcripts
-            </Link>
-            <CaretRight className="w-3 h-3 mx-2" />
-            <span className="text-foreground font-medium">Call Details</span>
-          </nav>
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Call Transcript</h2>
-            <p className="text-muted-foreground">Interactive transcript with sentiment analysis and performance insights</p>
-          </div>
-        </header>
-
+      <div className="min-h-screen bg-background text-foreground" data-testid="transcript-detail-page">
+        <ViewerHeader callId={callId} />
         <div className="p-6">
           <TranscriptViewer callId={callId} />
         </div>
