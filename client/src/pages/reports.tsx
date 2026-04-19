@@ -555,14 +555,14 @@ export default function ReportsPage() {
             </h3>
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis domain={[0, 10]} tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis domain={[0, 10]} tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
                 <Legend />
-                <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="calls" name="Call Volume" stroke="hsl(var(--muted-foreground))" strokeWidth={1} strokeDasharray="5 5" yAxisId="right" />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
+                <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="calls" name="Call Volume" stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="5 5" yAxisId="right" />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -577,10 +577,10 @@ export default function ReportsPage() {
             </h3>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
+                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
                 <Legend />
                 <Bar dataKey="positive" name="Positive" stackId="sentiment" fill="#22c55e" />
                 <Bar dataKey="neutral" name="Neutral" stackId="sentiment" fill="#94a3b8" />
@@ -695,11 +695,11 @@ export default function ReportsPage() {
                 <h4 className="text-sm font-semibold text-foreground mb-2">Score Trend Over Time</h4>
                 <ResponsiveContainer width="100%" height={200}>
                   <LineChart data={agentProfile.scoreTrend.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                    <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                    <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
-                    <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 4 }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                    <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                    <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
+                    <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

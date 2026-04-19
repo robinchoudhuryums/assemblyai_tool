@@ -601,6 +601,12 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
         } catch (err) {
           logger.error("Failed to stop report scheduler", { error: (err as Error).message });
         }
+        try {
+          const mod = await import("./services/transcribing-reaper");
+          mod.stopTranscribingReaper?.();
+        } catch (err) {
+          logger.error("Failed to stop transcribing reaper", { error: (err as Error).message });
+        }
         // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
         //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s
         //     internal 30s drain deadline; the outer hard-exit timer (30s) also

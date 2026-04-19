@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Simulator — Rehearsal Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff;
+    --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0;
+    --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55);
+    --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35);
+    --display: 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  }
+  body[data-palette="copper"] { --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff; --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0; --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55); --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35); }
+  body[data-palette="indigo"] { --paper:#f7f7fa; --paper-2:#eeeef4; --paper-card:#ffffff; --ink:#16162a; --muted:#6b6b82; --line:#dedde8; --accent:oklch(55% 0.16 268); --accent-soft:oklch(93% 0.04 268); --good:oklch(58% 0.12 170); --warn:oklch(60% 0.18 28); }
+  body[data-palette="forest"] { --paper:#f5f6f2; --paper-2:#eaece4; --paper-card:#ffffff; --ink:#15201a; --muted:#677367; --line:#dbdfd3; --accent:oklch(48% 0.10 155); --accent-soft:oklch(92% 0.04 155); --good:oklch(58% 0.12 165); --warn:oklch(60% 0.16 40); }
+  body[data-palette="slate"]  { --paper:#f6f7f9; --paper-2:#eceef2; --paper-card:#ffffff; --ink:#101418; --muted:#606872; --line:#dadde3; --accent:oklch(55% 0.12 240); --accent-soft:oklch(93% 0.04 240); --good:oklch(58% 0.10 160); --warn:oklch(60% 0.16 30); }
+  body[data-palette="plum"]   { --paper:#faf6f7; --paper-2:#f0eaec; --paper-card:#ffffff; --ink:#241620; --muted:#7a6670; --line:#e4d8dc; --accent:oklch(52% 0.14 340); --accent-soft:oklch(93% 0.04 340); --good:oklch(58% 0.10 165); --warn:oklch(62% 0.16 45); }
+  body[data-palette="mono"]   { --paper:#fafafa; --paper-2:#f0f0f0; --paper-card:#ffffff; --ink:#0a0a0a; --muted:#6b6b6b; --line:#d9d9d9; --accent:#0a0a0a; --accent-soft:#ebebeb; --good:oklch(50% 0.10 160); --warn:oklch(58% 0.16 30); }
+
+  html, body { margin:0; padding:0; background: var(--paper); min-height:100vh; }
+  body { font-family: var(--ui); color: var(--ink); }
+  * { box-sizing: border-box; }
+
+  .appbar { display:flex; align-items:center; gap:12px; padding:12px 28px; background:var(--paper-card); border-bottom:1px solid var(--line); font-size:12px; }
+  .crumbs { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.04em; }
+  .crumbs a { color:var(--muted); text-decoration:none; }
+  .crumbs a:hover { color:var(--ink); }
+  .crumbs .sep { opacity:.4; }
+  .spacer { flex:1; }
+
+  .variant-bar { display:flex; background:var(--paper-card); border:1px solid var(--line); border-radius:3px; padding:2px; }
+  .variant-bar button { background:transparent; border:none; padding:6px 14px; cursor:pointer; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; border-radius:2px; }
+  .variant-bar button.active { background:var(--accent); color:var(--paper); }
+
+  .role-bar { display:flex; background:var(--paper-card); border:1px solid var(--line); border-radius:3px; padding:2px; }
+  .role-bar button { background:transparent; border:none; padding:6px 12px; cursor:pointer; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; }
+  .role-bar button.active { background:var(--ink); color:var(--paper); }
+
+  input[type="text"], input[type="number"] { background:var(--paper-card); border:1px solid var(--line); padding:7px 10px; border-radius:2px; font-family:var(--ui); font-size:13px; color:var(--ink); }
+  input[type="text"]:focus, input[type="number"]:focus, textarea:focus { outline:none; border-color:var(--accent); }
+
+  .icon-btn { background:transparent; border:1px solid var(--line); color:var(--ink); cursor:pointer; padding:6px 10px; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; border-radius:2px; }
+  .icon-btn:hover { background:var(--paper-2); }
+  .icon-btn.primary { background:var(--accent); color:var(--paper); border-color:var(--accent); }
+  .icon-btn.primary:hover { filter:brightness(0.95); }
+
+  select.select { background:var(--paper-card); border:1px solid var(--line); padding:6px 10px; font-family:var(--mono); font-size:11px; color:var(--ink); border-radius:2px; }
+
+  .toggle-pill { display:inline-flex; align-items:center; gap:6px; background:var(--paper-card); border:1px solid var(--line); padding:6px 10px; border-radius:3px; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; cursor:pointer; }
+  .toggle-pill.on { color:var(--accent); border-color:var(--accent); }
+  .toggle-pill .dot { width:6px; height:6px; border-radius:50%; background:var(--muted); }
+  .toggle-pill.on .dot { background:var(--accent); }
+
+  #tweaks { position:fixed; bottom:20px; right:20px; z-index:100; background:var(--paper-card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; font-family:var(--ui); font-size:12px; box-shadow:0 8px 32px rgba(0,0,0,.12); min-width:240px; display:none; }
+  #tweaks.open { display:block; }
+  #tweaks h4 { margin:0 0 10px; font-family:var(--display); font-size:13px; font-weight:600; color:var(--ink); }
+  #tweaks .row { display:flex; justify-content:space-between; align-items:center; margin:8px 0; gap:12px; }
+  #tweaks label { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.1em; font-family:var(--mono); }
+  #tweaks select { border:1px solid var(--line); padding:4px 6px; font-family:var(--mono); font-size:11px; border-radius:3px; background:var(--paper-card); color:var(--ink); }
+  .palette-swatches { display:flex; gap:6px; }
+  .palette-swatches button { width:20px; height:20px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
+  .palette-swatches button.active { border-color:var(--ink); }
+</style>
+</head>
+<body data-mode="light" data-palette="copper">
+<div style="display:flex; min-height:100vh;">
+  <div id="sidebar-root" style="display:contents;"></div>
+  <div id="root" style="flex:1; min-width:0; display:flex; flex-direction:column;"></div>
+</div>
+
+<div id="tweaks">
+  <h4>Tweaks</h4>
+  <div class="row"><label>Role</label>
+    <select id="t-role">
+      <option value="agent">agent (coaching)</option>
+      <option value="manager">manager (coaching)</option>
+      <option value="admin">admin (generator)</option>
+    </select>
+  </div>
+  <div class="row"><label>Session UI</label>
+    <select id="t-variant">
+      <option value="chat">A · Chat</option>
+      <option value="cockpit">B · Cockpit</option>
+      <option value="stage">C · Stage</option>
+    </select>
+  </div>
+  <div class="row"><label>Coach whisper</label>
+    <select id="t-coach">
+      <option value="on">On</option>
+      <option value="off">Off</option>
+    </select>
+  </div>
+  <div class="row"><label>Palette</label><div class="palette-swatches" id="t-palette-swatches"></div></div>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="simulator-data.jsx"></script>
+<script type="text/babel" src="simulator-primitives.jsx"></script>
+<script type="text/babel" src="simulator-session.jsx"></script>
+<script type="text/babel" src="simulator-review.jsx"></script>
+<script type="text/babel" src="simulator-admin-data.jsx"></script>
+<script type="text/babel" src="simulator-admin.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "role": "manager",
+  "variant": "chat",
+  "coach": "on",
+  "palette": "slate"
+}/*EDITMODE-END*/;
+
+const PALETTES = [
+  { id:'copper', swatch:'#b5714a' }, { id:'indigo', swatch:'#4d5bce' },
+  { id:'forest', swatch:'#3f7b5a' }, { id:'slate',  swatch:'#4e7bc4' },
+  { id:'plum',   swatch:'#a0507a' }, { id:'mono',   swatch:'#0a0a0a' },
+];
+
+function App() {
+  const [role, setRole]       = React.useState(TWEAKS.role);
+  const [variant, setVariant] = React.useState(TWEAKS.variant);
+  const [coach, setCoach]     = React.useState(TWEAKS.coach);
+  const [palette, setPalette] = React.useState(TWEAKS.palette);
+
+  // View state: 'library' | 'session' | 'review'
+  const [view, setView]       = React.useState('library');
+  const [activeScenario, setActiveScenario] = React.useState(null);
+
+  React.useEffect(() => { document.body.dataset.palette = palette; }, [palette]);
+  const persist = (edits) => window.parent && window.parent.postMessage({type:'__edit_mode_set_keys', edits}, '*');
+
+  React.useEffect(() => {
+    const wrap = document.getElementById('t-palette-swatches');
+    wrap.innerHTML = '';
+    PALETTES.forEach(p => {
+      const b = document.createElement('button');
+      b.style.background = p.swatch;
+      if (p.id === palette) b.classList.add('active');
+      b.onclick = () => { setPalette(p.id); persist({palette:p.id}); };
+      wrap.appendChild(b);
+    });
+  }, [palette]);
+
+  React.useEffect(() => {
+    const bind = (id, setter, key) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = TWEAKS[key];
+      el.addEventListener('change', () => { setter(el.value); persist({[key]: el.value}); });
+    };
+    bind('t-role', setRole, 'role');
+    bind('t-variant', setVariant, 'variant');
+    bind('t-coach', setCoach, 'coach');
+  }, []);
+
+  React.useEffect(() => { window.updateSidebar && window.updateSidebar({ role }); }, [role]);
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === '__activate_edit_mode') document.getElementById('tweaks').classList.add('open');
+      if (e.data?.type === '__deactivate_edit_mode') document.getElementById('tweaks').classList.remove('open');
+    };
+    window.addEventListener('message', handler);
+    window.parent && window.parent.postMessage({type:'__edit_mode_available'}, '*');
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const startScenario = (s) => { setActiveScenario(s); setView('session'); };
+  const finishSession = () => { setView('review'); };
+  const exitToLibrary = () => { setView('library'); setActiveScenario(null); };
+
+  const SessionComponent = variant === 'cockpit' ? CockpitSession : variant === 'stage' ? StageSession : ChatSession;
+  const isAdmin = role === 'admin';
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh' }}>
+      {/* App bar */}
+      <div className="appbar">
+        <div className="crumbs">
+          <a href="Call Analytics Dashboard.html">Dashboard</a>
+          <span className="sep">›</span>
+          {isAdmin && <span style={{color:'var(--ink)'}}>Call Generator</span>}
+          {!isAdmin && view === 'library' && <span style={{color:'var(--ink)'}}>Simulator</span>}
+          {!isAdmin && view !== 'library' && <><a href="#" onClick={(e)=>{e.preventDefault(); exitToLibrary();}}>Simulator</a>
+            <span className="sep">›</span>
+            <span style={{color:'var(--ink)'}}>{view === 'session' ? activeScenario.title : 'Session review'}</span></>}
+        </div>
+        <div className="spacer"/>
+
+        <div className="role-bar">
+          {['agent','manager','admin'].map(r => (
+            <button key={r} className={role===r?'active':''} onClick={() => { setRole(r); persist({role:r}); }}>
+              {r === 'admin' ? 'Admin' : r === 'manager' ? 'Manager' : 'Agent'}
+            </button>
+          ))}
+        </div>
+
+        {!isAdmin && view === 'library' && (
+          <div className="variant-bar">
+            <button className={variant==='chat'?'active':''} onClick={() => { setVariant('chat'); persist({variant:'chat'}); }}>A · Chat</button>
+            <button className={variant==='cockpit'?'active':''} onClick={() => { setVariant('cockpit'); persist({variant:'cockpit'}); }}>B · Cockpit</button>
+            <button className={variant==='stage'?'active':''} onClick={() => { setVariant('stage'); persist({variant:'stage'}); }}>C · Stage</button>
+          </div>
+        )}
+        {!isAdmin && view === 'session' && (
+          <span className={'toggle-pill ' + (coach==='on'?'on':'')} onClick={() => { const v = coach==='on'?'off':'on'; setCoach(v); persist({coach:v}); }}>
+            <span className="dot"/> Coach whisper {coach==='on'?'on':'off'}
+          </span>
+        )}
+      </div>
+
+      {/* Main */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column' }}>
+        {isAdmin && <SimulatorAdmin/>}
+        {!isAdmin && view === 'library' && <ScenarioLibrary onPickScenario={startScenario}/>}
+        {!isAdmin && view === 'session' && activeScenario && (
+          <SessionComponent scenario={activeScenario} onExit={exitToLibrary} onFinish={finishSession} coachOn={coach==='on'}/>
+        )}
+        {!isAdmin && view === 'review' && activeScenario && (
+          <SessionReview result={SAMPLE_RESULT} scenario={activeScenario} onReplay={()=>setView('session')} onNext={exitToLibrary} onExit={exitToLibrary}/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+mountSidebar({ active: 'simulator', role: TWEAKS.role });
+</script>
+</body>
+</html>

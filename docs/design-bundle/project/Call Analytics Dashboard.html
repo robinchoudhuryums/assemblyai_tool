@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Call Analytics Dashboard — Design Options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:       #faf7f2;
+    --paper-2:     #f2ede4;
+    --paper-card:  #ffffff;
+    --ink:         #221a14;
+    --muted:       #7a6f62;
+    --line:        #e2dcd0;
+
+    --accent:      oklch(62% 0.12 52);
+    --accent-soft: oklch(92% 0.05 55);
+    --good:        oklch(58% 0.09 160);
+    --warn:        oklch(60% 0.14 35);
+
+    --display: 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  }
+
+  /* PALETTES */
+  body[data-palette="copper"] {
+    --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff;
+    --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0;
+    --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55);
+    --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35);
+  }
+  body[data-palette="indigo"] {
+    --paper:#f7f7fa; --paper-2:#eeeef4; --paper-card:#ffffff;
+    --ink:#16162a; --muted:#6b6b82; --line:#dedde8;
+    --accent:oklch(55% 0.16 268); --accent-soft:oklch(93% 0.04 268);
+    --good:oklch(58% 0.12 170); --warn:oklch(60% 0.18 28);
+  }
+  body[data-palette="forest"] {
+    --paper:#f5f6f2; --paper-2:#eaece4; --paper-card:#ffffff;
+    --ink:#15201a; --muted:#677367; --line:#dbdfd3;
+    --accent:oklch(48% 0.10 155); --accent-soft:oklch(92% 0.04 155);
+    --good:oklch(58% 0.12 165); --warn:oklch(60% 0.16 40);
+  }
+  body[data-palette="slate"] {
+    --paper:#f6f7f9; --paper-2:#eceef2; --paper-card:#ffffff;
+    --ink:#101418; --muted:#606872; --line:#dadde3;
+    --accent:oklch(55% 0.12 240); --accent-soft:oklch(93% 0.04 240);
+    --good:oklch(58% 0.10 160); --warn:oklch(60% 0.16 30);
+  }
+  body[data-palette="plum"] {
+    --paper:#faf6f7; --paper-2:#f0eaec; --paper-card:#ffffff;
+    --ink:#241620; --muted:#7a6670; --line:#e4d8dc;
+    --accent:oklch(52% 0.14 340); --accent-soft:oklch(93% 0.04 340);
+    --good:oklch(58% 0.10 165); --warn:oklch(62% 0.16 45);
+  }
+  body[data-palette="mono"] {
+    --paper:#fafafa; --paper-2:#f0f0f0; --paper-card:#ffffff;
+    --ink:#0a0a0a; --muted:#6b6b6b; --line:#d9d9d9;
+    --accent:#0a0a0a; --accent-soft:#ebebeb;
+    --good:oklch(50% 0.10 160); --warn:oklch(58% 0.16 30);
+  }
+
+  /* DARK mode overlay — applied on top of any palette */
+  body[data-mode="dark"] {
+    --paper:       #13110f;
+    --paper-2:     #1c1815;
+    --paper-card:  #1a1612;
+    --ink:         #f3ece0;
+    --muted:       #8a7d6c;
+    --line:        #2d2620;
+    --accent-soft: oklch(30% 0.05 55);
+  }
+  body[data-mode="dark"][data-palette="indigo"]  { --paper:#0f0f17; --paper-2:#17172 ; --paper-2:#17172a; --paper-card:#14142a; --ink:#eeeef8; --muted:#8888a0; --line:#272736; --accent-soft:oklch(28% 0.06 268);}
+  body[data-mode="dark"][data-palette="forest"]  { --paper:#0d120f; --paper-2:#151b16; --paper-card:#131917; --ink:#ecefe8; --muted:#7e8a80; --line:#232b25; --accent-soft:oklch(28% 0.05 155);}
+  body[data-mode="dark"][data-palette="slate"]   { --paper:#0c0f14; --paper-2:#151a22; --paper-card:#13171e; --ink:#ecf0f6; --muted:#7d8694; --line:#242a34; --accent-soft:oklch(28% 0.05 240);}
+  body[data-mode="dark"][data-palette="plum"]    { --paper:#130f12; --paper-2:#1d161b; --paper-card:#1b151a; --ink:#efe6ea; --muted:#8e7782; --line:#2d222a; --accent-soft:oklch(28% 0.06 340);}
+  body[data-mode="dark"][data-palette="mono"]    { --paper:#0a0a0a; --paper-2:#151515; --paper-card:#121212; --ink:#f0f0f0; --muted:#888; --line:#262626; --accent:#f5f5f5; --accent-soft:#222;}
+
+  html, body { margin:0; padding:0; background:#f0eee9; }
+  body { font-family: var(--ui); color: var(--ink); }
+  * { box-sizing: border-box; }
+
+  /* Role picker — a topbar that's part of the presentation, not tweaks */
+  .role-bar {
+    display:flex; align-items:center; gap:0;
+    background:#fff; border:1px solid #d4cec2; border-radius:999px;
+    padding:4px; font-family: var(--ui); font-size:12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .role-bar button {
+    background:transparent; border:none; padding:7px 14px; cursor:pointer;
+    font-family: var(--ui); font-size:12px; color:#6b645b; border-radius:999px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .role-bar button.active { background:#221a14; color:#faf7f2; }
+  .role-bar button .dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:0.6; }
+
+  /* Tweaks panel */
+  #tweaks {
+    position: fixed; bottom: 20px; right: 20px; z-index: 100;
+    background: #fff; border: 1px solid #d4cec2; border-radius: 8px;
+    padding: 14px 16px; font-family: var(--ui); font-size: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    min-width: 240px; display: none;
+  }
+  #tweaks.open { display: block; }
+  #tweaks h4 { margin: 0 0 10px; font-family: var(--display); font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
+  #tweaks .row { display: flex; justify-content: space-between; align-items: center; margin: 8px 0; gap: 12px; }
+  #tweaks label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--mono); }
+  #tweaks select { border: 1px solid #d4cec2; padding: 4px 6px; font-family: var(--mono); font-size: 11px; border-radius: 4px; background: #fff; }
+
+  .palette-swatches { display:flex; gap:6px; }
+  .palette-swatches button {
+    width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+  }
+  .palette-swatches button.active { border-color: #221a14; }
+</style>
+</head>
+<body data-mode="light" data-palette="copper" data-density="balanced">
+<div style="display:flex; min-height:100vh;">
+  <div id="sidebar-root" style="display:contents;"></div>
+  <div id="root" style="flex:1; min-width:0;"></div>
+</div>
+
+<div id="tweaks">
+  <h4>Tweaks</h4>
+  <div class="row"><label>Mode</label>
+    <select id="t-mode"><option value="light">light</option><option value="dark">dark</option></select>
+  </div>
+  <div class="row"><label>Palette</label>
+    <div class="palette-swatches" id="t-palette-swatches"></div>
+  </div>
+  <div class="row"><label>Density</label>
+    <select id="t-density"><option value="airy">airy</option><option value="balanced" selected>balanced</option><option value="compact">compact</option></select>
+  </div>
+  <div class="row"><label>Role</label>
+    <select id="t-role">
+      <option value="viewer">viewer / agent</option>
+      <option value="manager">manager / supervisor</option>
+      <option value="admin">admin</option>
+      <option value="all">all (compare)</option>
+    </select>
+  </div>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="mock-data.jsx"></script>
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="v1-ledger.jsx"></script>
+<script type="text/babel" src="v2-pulse.jsx"></script>
+<script type="text/babel" src="v3-agent-lens.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "mode": "light",
+  "palette": "slate",
+  "density": "balanced",
+  "role": "all"
+}/*EDITMODE-END*/;
+
+const PALETTES = [
+  { id:'copper', name:'Warm paper · copper', swatch:'#b5714a', bg:'#faf7f2' },
+  { id:'indigo', name:'Paper · indigo',      swatch:'#4d5bce', bg:'#f7f7fa' },
+  { id:'forest', name:'Stone · forest',      swatch:'#3f7b5a', bg:'#f5f6f2' },
+  { id:'slate',  name:'Slate · blue',        swatch:'#4e7bc4', bg:'#f6f7f9' },
+  { id:'plum',   name:'Linen · plum',        swatch:'#a0507a', bg:'#faf6f7' },
+  { id:'mono',   name:'Mono · ink',          swatch:'#0a0a0a', bg:'#fafafa' },
+];
+
+// Role → variant
+const VARIANT_BY_ROLE = {
+  viewer:  'agent',   // agent / viewer → Agent Lens
+  manager: 'pulse',   // manager / supervisor → Pulse
+  admin:   'ledger',  // admin → Ledger
+};
+
+function App() {
+  const [role, setRole] = React.useState(TWEAKS.role);
+  const [palette, setPalette] = React.useState(TWEAKS.palette);
+  const [mode, setMode] = React.useState(TWEAKS.mode);
+  const [density, setDensity] = React.useState(TWEAKS.density);
+
+  React.useEffect(() => { document.body.dataset.mode = mode; }, [mode]);
+  React.useEffect(() => { document.body.dataset.palette = palette; }, [palette]);
+  React.useEffect(() => { document.body.dataset.density = density; }, [density]);
+  React.useEffect(() => {
+    const sbRole = role === 'viewer' ? 'agent' : role === 'manager' ? 'manager' : 'admin';
+    window.updateSidebar && window.updateSidebar({ role: sbRole });
+  }, [role]);
+
+  React.useEffect(() => {
+    // Swatch buttons
+    const wrap = document.getElementById('t-palette-swatches');
+    wrap.innerHTML = '';
+    PALETTES.forEach(p => {
+      const b = document.createElement('button');
+      b.style.background = p.swatch;
+      b.title = p.name;
+      if (p.id === palette) b.classList.add('active');
+      b.onclick = () => { setPalette(p.id); persist({palette:p.id}); };
+      wrap.appendChild(b);
+    });
+  }, [palette]);
+
+  const persist = (edits) => {
+    window.parent && window.parent.postMessage({type:'__edit_mode_set_keys', edits}, '*');
+  };
+
+  React.useEffect(() => {
+    const bind = (id, setter, key) => {
+      const el = document.getElementById(id);
+      el.value = TWEAKS[key];
+      el.addEventListener('change', () => { setter(el.value); persist({[key]: el.value}); });
+    };
+    bind('t-mode', setMode, 'mode');
+    bind('t-density', setDensity, 'density');
+    bind('t-role', setRole, 'role');
+
+    const onMsg = (e) => {
+      const d = e.data || {};
+      if (d.type === '__activate_edit_mode') document.getElementById('tweaks').classList.add('open');
+      if (d.type === '__deactivate_edit_mode') document.getElementById('tweaks').classList.remove('open');
+    };
+    window.addEventListener('message', onMsg);
+    window.parent && window.parent.postMessage({type:'__edit_mode_available'}, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const pickRole = (r) => { setRole(r); persist({role:r}); document.getElementById('t-role').value = r; };
+
+  const activeVariant = role === 'all' ? null : VARIANT_BY_ROLE[role];
+  const show = (name) => role === 'all' || activeVariant === name;
+
+  const ROLES = [
+    { id:'viewer',  label:'Agent',      sub:'viewer',  variant:'Agent Lens' },
+    { id:'manager', label:'Manager',    sub:'supervisor / QA', variant:'Pulse' },
+    { id:'admin',   label:'Admin',      sub:'ops lead',     variant:'Ledger' },
+    { id:'all',     label:'Compare all', sub:'',             variant:'' },
+  ];
+
+  return (
+    <DesignCanvas>
+      <div style={{ padding: '20px 60px 20px', maxWidth: 1400 }}>
+        <div style={{ fontFamily:'var(--mono)', fontSize:11, textTransform:'uppercase', letterSpacing:'0.2em', color:'rgba(60,50,40,0.7)' }}>Call Analytics · Dashboard · v2</div>
+        <div style={{ fontFamily:'var(--display)', fontSize:40, fontWeight:500, letterSpacing:-1, color:'rgba(30,20,10,0.92)', marginTop:4 }}>Same screen, shaped by who's looking.</div>
+        <div style={{ fontSize:14, color:'rgba(60,50,40,0.7)', marginTop:6, maxWidth:760, lineHeight:1.55 }}>
+          Role drives layout — admin gets the dense ledger, manager gets the viz-led pulse, agent/viewer gets the airy coaching lens. Switch roles below to jump between views. Six palettes to try from the Tweaks panel.
+        </div>
+
+        <div style={{ marginTop:20, display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
+          <div style={{ fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'0.18em', color:'rgba(60,50,40,0.6)' }}>Signed in as</div>
+          <div className="role-bar">
+            {ROLES.map(r => (
+              <button key={r.id} className={role === r.id ? 'active' : ''} onClick={() => pickRole(r.id)}>
+                <span className="dot"/>
+                {r.label}{r.sub && <span style={{opacity:0.6, marginLeft:4}}>· {r.sub}</span>}
+              </button>
+            ))}
+          </div>
+          {role !== 'all' && (
+            <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'rgba(60,50,40,0.6)' }}>
+              → renders <b style={{color:'rgba(30,20,10,0.9)'}}>{ROLES.find(r=>r.id===role).variant}</b> layout
+            </div>
+          )}
+        </div>
+      </div>
+
+      {show('ledger') && (
+        <DCSection title="Admin · Ledger" subtitle="Dense operations-desk layout. Everything the ops lead needs to scan the whole day at a glance — flagged calls, queue depth, team performance board, hourly sentiment.">
+          <DCArtboard label="1440 × auto" width={1440}>
+            <V1Ledger/>
+          </DCArtboard>
+        </DCSection>
+      )}
+
+      {show('pulse') && (
+        <DCSection title="Manager · Pulse" subtitle="Hero score + continuous sentiment curve as the headline. Managers want a quick read on team health plus the few calls worth their attention.">
+          <DCArtboard label="1440 × auto" width={1440}>
+            <V2Pulse/>
+          </DCArtboard>
+        </DCSection>
+      )}
+
+      {show('agent') && (
+        <DCSection title="Agent · Lens" subtitle="Airy self-review. Opens on what went well, then gently suggests one thing to try. Transcript has inline coaching highlights synced to the waveform.">
+          <DCArtboard label="1440 × auto" width={1440}>
+            <V3AgentLens/>
+          </DCArtboard>
+        </DCSection>
+      )}
+
+      <div style={{ padding:'20px 60px 80px', maxWidth:1100 }}>
+        <div style={{ fontFamily:'var(--mono)', fontSize:11, textTransform:'uppercase', letterSpacing:'0.2em', color:'rgba(60,50,40,0.7)', marginBottom:8 }}>How the routing works</div>
+        <ul style={{ fontSize:13, color:'rgba(40,30,20,0.85)', lineHeight:1.65, paddingLeft:18 }}>
+          <li><b>viewer</b> → Agent Lens. Scoped to their own calls, airy, coaching-forward. No team-wide data.</li>
+          <li><b>manager</b> → Pulse. Team health at a glance + exemplars and flagged calls to action.</li>
+          <li><b>admin</b> → Ledger. Full ops visibility including queue depth, volume trends, and every agent on shift.</li>
+          <li>Implementation: one <code style={{fontFamily:'var(--mono)',background:'rgba(0,0,0,0.05)',padding:'1px 4px'}}>{'<Dashboard/>'}</code> component that picks the layout by user role — shared primitives (rubric rack, sentiment curve, score dial) keep the visual language consistent across roles.</li>
+          <li>Admins can still drill into a manager or agent's view — same components, scoped data.</li>
+        </ul>
+      </div>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+// Sidebar role mapping: role in dashboard can be 'viewer'/'manager'/'admin'/'all' — map to sidebar roles
+const sbRole = TWEAKS.role === 'viewer' ? 'agent' : TWEAKS.role === 'manager' ? 'manager' : 'admin';
+mountSidebar({ active: 'dashboard', role: sbRole });
+</script>
+</body>
+</html>

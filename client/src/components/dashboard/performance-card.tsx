@@ -1,3 +1,8 @@
+/**
+ * @deprecated Replaced by the "Agents · today" leaderboard inside the
+ * Ledger + Pulse dashboard variants. Not rendered by any active page
+ * after design theme installment 2. Kept in-repo for one release cycle.
+ */
 import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";

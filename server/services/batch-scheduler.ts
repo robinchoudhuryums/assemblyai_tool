@@ -148,7 +148,17 @@ async function processBatchResults(
         await storage.createCallAnalysis(updatedAnalysis);
         await storage.updateCall(callId, { status: "completed" });
 
-        if (analysis.detected_agent_name) {
+        // INV-35 defense-in-depth: synthetic calls must never trigger
+        // auto-assignment to a real employee. The simulated-call storage
+        // hard-codes processingMode:"immediate" so synthetic calls don't
+        // normally enter batch mode, but any future caller that omits the
+        // flag would leak employee assignments without this guard. We
+        // already fetched existingCall at line 56 for the overwrite-guard;
+        // reuse it to avoid a second read.
+        const isSynthetic = existingCall?.synthetic === true;
+        if (isSynthetic) {
+          logger.info("Batch: synthetic call — skipping auto-assign", { callId });
+        } else if (analysis.detected_agent_name) {
           await autoAssignEmployee(callId, analysis.detected_agent_name, storage, `[BATCH] `);
         }
 

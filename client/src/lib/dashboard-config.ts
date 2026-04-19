@@ -1,6 +1,13 @@
 /**
  * Dashboard widget configuration — persisted to localStorage.
  * Users can toggle visibility and reorder widgets.
+ *
+ * @deprecated The widget-configurable dashboard was replaced by role-routed
+ * Ledger / Pulse variants in design theme installment 2. This module is
+ * retained as a no-op for one release cycle so existing localStorage
+ * entries don't break and rollback stays painless. No active page calls
+ * `loadWidgetConfig` / `saveWidgetConfig` after the installment 2 cut.
+ * Delete in a later sweep.
  */
 import { safeSet, safeGet } from "./safe-storage";
 

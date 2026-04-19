@@ -139,10 +139,10 @@ export default function InsightsPage() {
                       <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="week" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" />
-                  <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 12 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="week" tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
+                  <YAxis tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                  <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)", fontSize: 12 }} />
                   <Legend />
                   <Area type="monotone" dataKey="positive" name="Positive" stackId="s" stroke="#22c55e" fill="url(#insGreen)" />
                   <Area type="monotone" dataKey="neutral" name="Neutral" stackId="s" stroke="#94a3b8" fill="url(#insGray)" />
@@ -203,10 +203,10 @@ export default function InsightsPage() {
               {insights.topTopics.length > 0 ? (
                 <ResponsiveContainer width="100%" height={Math.max(250, insights.topTopics.slice(0, 8).length * 36)}>
                   <BarChart data={insights.topTopics.slice(0, 8)} layout="vertical" margin={{ left: 100, right: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis type="number" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                    <YAxis dataKey="topic" type="category" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" width={100} interval={0} />
-                    <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 12 }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis type="number" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
+                    <YAxis dataKey="topic" type="category" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" width={100} interval={0} />
+                    <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)", fontSize: 12 }} />
                     <Bar dataKey="count" name="Calls" radius={[0, 4, 4, 0]}>
                       {insights.topTopics.slice(0, 8).map((_, idx) => (
                         <Cell key={idx} fill={`hsl(${210 + idx * 15}, 60%, ${50 + idx * 3}%)`} />

@@ -1,331 +1,71 @@
-import { useMemo, useState, useCallback } from "react";
-import { ArrowCounterClockwise, CaretDown, CaretUp, Eye, EyeSlash, GearSix, MagnifyingGlass, Plus, TrendUp, Trophy, UploadSimple, Warning } from "@phosphor-icons/react";
-import { useTranslation } from "@/lib/i18n";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Link, useLocation } from "wouter";
+/**
+ * Role-routed analytics dashboard.
+ *
+ * Implements the first-installment handoff from Claude Design
+ * (see `docs/design-bundle/project/Call Analytics Dashboard.html`).
+ *
+ *   admin    → Ledger variant  (newspaper/ops-desk, dense)
+ *   manager  → Pulse  variant  (hero score + sentiment curve, card grid)
+ *   viewer   → redirected to `/my-performance` (Agent Lens — Phase 2)
+ *
+ * The widget-configurable layout (dashboard-config.ts) is deprecated;
+ * the new variants are curated. Existing localStorage widget settings
+ * are ignored but not cleared (kept for one release cycle in case
+ * rollback is needed). Deprecated subcomponents still live under
+ * `components/dashboard/` and are marked with `@deprecated`; delete
+ * in a later sweep once the Agent Lens cut has landed too.
+ */
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import MetricsOverview from "@/components/dashboard/metrics-overview";
-import SentimentAnalysis from "@/components/dashboard/sentiment-analysis";
-import PerformanceCard from "@/components/dashboard/performance-card";
-import WeeklyChangesWidget from "@/components/dashboard/weekly-changes";
-import FileUpload from "@/components/upload/file-upload";
-import CallsTable from "@/components/tables/calls-table";
-import type { CallWithDetails, PaginatedCalls } from "@shared/schema";
-import { loadWidgetConfig, saveWidgetConfig, moveWidget, toggleWidget, DEFAULT_WIDGETS, type WidgetConfig } from "@/lib/dashboard-config";
+import { useLocation } from "wouter";
+import LedgerVariant from "@/components/dashboard/ledger-variant";
+import PulseVariant from "@/components/dashboard/pulse-variant";
+
+interface AuthUser {
+  id: string;
+  username: string;
+  role?: string;
+  name?: string;
+}
 
 export default function Dashboard() {
   const [, navigate] = useLocation();
-  const { t } = useTranslation();
-  const [widgets, setWidgets] = useState<WidgetConfig[]>(loadWidgetConfig);
-  const [showConfig, setShowConfig] = useState(false);
-
-  const updateWidgets = useCallback((updater: (prev: WidgetConfig[]) => WidgetConfig[]) => {
-    setWidgets(prev => {
-      const next = updater(prev);
-      saveWidgetConfig(next);
-      return next;
-    });
-  }, []);
-
-  const isVisible = useCallback((id: string) => widgets.find(w => w.id === id)?.visible ?? true, [widgets]);
-
-  // Fetch recent calls to extract flagged ones for the dashboard alert panel.
-  // Convention: omit filter params from the query key when none are set —
-  // empty-string sentinels create cache-key noise that doesn't match the
-  // filter-less variants used by sidebar / mutations.
-  const { data: callsResponse } = useQuery<PaginatedCalls>({
-    queryKey: ["/api/calls"],
+  // /api/auth/me is already populated by the session-gate in App.tsx; this
+  // query is served from cache and doesn't hit the network.
+  const { data: user, isLoading } = useQuery<AuthUser | null>({
+    queryKey: ["/api/auth/me"],
   });
-  const calls = callsResponse?.calls;
+  const role = (user?.role || "viewer").toLowerCase();
 
-  // Single pass over calls to classify flagged calls
-  const { flaggedCalls, badCalls, goodCalls } = useMemo(() => {
-    const flagged: CallWithDetails[] = [];
-    const bad: CallWithDetails[] = [];
-    const good: CallWithDetails[] = [];
-    for (const c of calls || []) {
-      const flags = c.analysis?.flags;
-      if (!Array.isArray(flags) || flags.length === 0) continue;
-      const isBad = flags.some(f => typeof f === "string" && (f === "low_score" || f.startsWith("agent_misconduct")));
-      const isGood = flags.includes("exceptional_call");
-      if (isBad || isGood) {
-        flagged.push(c);
-        if (isBad) bad.push(c);
-        if (isGood) good.push(c);
-      }
-    }
-    return { flaggedCalls: flagged, badCalls: bad, goodCalls: good };
-  }, [calls]);
+  // Viewers get routed to their personal dashboard. App-level routing
+  // *should* already send them there, but a viewer who lands on
+  // /dashboard via a stale bookmark or link shouldn't see an empty ops
+  // desk. Effect fires once per mount after the user query resolves.
+  useEffect(() => {
+    if (isLoading) return;
+    if (role === "viewer") navigate("/my-performance", { replace: true });
+  }, [isLoading, role, navigate]);
 
-  // Compute daily trend data from calls for the last 30 days
-  const trendData = useMemo(() => {
-    if (!calls || calls.length === 0) return [];
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  if (isLoading) {
+    return (
+      <div
+        className="min-h-screen bg-background"
+        aria-busy="true"
+        aria-live="polite"
+        data-testid="dashboard-page"
+      />
+    );
+  }
 
-    const dayMap = new Map<string, { calls: number; positive: number; neutral: number; negative: number; totalScore: number; scored: number }>();
-
-    // Initialize last 30 days
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(5, 10); // MM-DD
-      dayMap.set(key, { calls: 0, positive: 0, neutral: 0, negative: 0, totalScore: 0, scored: 0 });
-    }
-
-    for (const call of calls) {
-      const date = new Date(call.uploadedAt || 0);
-      if (date < thirtyDaysAgo) continue;
-      const key = date.toISOString().slice(5, 10);
-      const entry = dayMap.get(key);
-      if (!entry) continue;
-      entry.calls++;
-      const sent = call.sentiment?.overallSentiment;
-      if (sent === "positive") entry.positive++;
-      else if (sent === "negative") entry.negative++;
-      else if (sent === "neutral") entry.neutral++;
-      if (call.analysis?.performanceScore) {
-        entry.totalScore += parseFloat(call.analysis.performanceScore);
-        entry.scored++;
-      }
-    }
-
-    return Array.from(dayMap.entries()).map(([day, data]) => ({
-      day,
-      calls: data.calls,
-      positive: data.positive,
-      neutral: data.neutral,
-      negative: data.negative,
-      avgScore: data.scored > 0 ? Math.round((data.totalScore / data.scored) * 10) / 10 : null,
-    }));
-  }, [calls]);
+  // While the redirect is in-flight, render nothing rather than the
+  // admin/manager variant.
+  if (role === "viewer") {
+    return <div data-testid="dashboard-page" className="min-h-screen bg-background" />;
+  }
 
   return (
-    <div className="min-h-screen" data-testid="dashboard-page">
-      {/* Header */}
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">{t("dashboard.title")}</h2>
-            <p className="text-muted-foreground">{t("dashboard.subtitle")}</p>
-          </div>
-          <div className="flex items-center space-x-4">
-            <Button
-              variant="outline"
-              className="w-64 justify-start text-muted-foreground"
-              onClick={() => navigate("/search")}
-              data-testid="search-input"
-            >
-              <MagnifyingGlass className="w-4 h-4 mr-2" />
-              {t("dashboard.searchCalls")}
-            </Button>
-            <Link href="/upload">
-              <Button data-testid="upload-call-button">
-                <Plus className="w-4 h-4 mr-2" />
-                {t("dashboard.uploadCall")}
-              </Button>
-            </Link>
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => setShowConfig(!showConfig)} aria-label="Customize dashboard">
-            <GearSix className="w-4 h-4" />
-          </Button>
-        </div>
-      </header>
-
-      {/* Widget configuration panel */}
-      {showConfig && (
-        <div className="bg-card border-b border-border px-6 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-foreground">Customize Dashboard</h3>
-            <Button
-              variant="ghost" size="sm" className="text-xs h-7"
-              onClick={() => updateWidgets(() => DEFAULT_WIDGETS)}
-            >
-              <ArrowCounterClockwise className="w-3 h-3 mr-1" /> Reset
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {widgets.map((w, i) => (
-              <div key={w.id} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1">
-                <button
-                  onClick={() => updateWidgets(prev => toggleWidget(prev, w.id))}
-                  className="text-muted-foreground hover:text-foreground"
-                  aria-label={w.visible ? `Hide ${w.label}` : `Show ${w.label}`}
-                >
-                  {w.visible ? <Eye className="w-3 h-3" /> : <EyeSlash className="w-3 h-3" />}
-                </button>
-                <span className={`text-xs ${w.visible ? "text-foreground" : "text-muted-foreground line-through"}`}>{w.label}</span>
-                <button
-                  onClick={() => updateWidgets(prev => moveWidget(prev, w.id, "up"))}
-                  disabled={i === 0}
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  aria-label={`Move ${w.label} up`}
-                >
-                  <CaretUp className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={() => updateWidgets(prev => moveWidget(prev, w.id, "down"))}
-                  disabled={i === widgets.length - 1}
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  aria-label={`Move ${w.label} down`}
-                >
-                  <CaretDown className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="p-6 space-y-6">
-        {/* Flagged Calls Alert Banner */}
-        {isVisible("alerts") && flaggedCalls.length > 0 && (
-          <div className="space-y-4">
-            {badCalls.length > 0 && (
-              <div role="alert" className="bg-gradient-to-r from-red-50 to-white/90 dark:from-red-950/50 dark:to-slate-900/90 rounded-xl border border-red-200 dark:border-red-900/60 p-5 backdrop-blur-sm">
-                <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/50 dark:to-red-800/30 ring-1 ring-inset ring-red-300/50 dark:ring-red-700/30 flex items-center justify-center shrink-0 shadow-[0_0_8px_rgba(239,68,68,0.18)]">
-                    <Warning className="w-5 h-5 text-red-500" weight="fill" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-red-600 dark:text-red-400 text-base">
-                      {badCalls.length} Call{badCalls.length > 1 ? "s" : ""} Need Attention
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                      Calls flagged for low scores or agent misconduct.
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 mt-3">
-                      {badCalls.slice(0, 5).map(c => (
-                        <Link key={c.id} href={`/transcripts/${c.id}`}>
-                          <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted border-red-200 dark:border-red-800 text-red-700 dark:text-red-300">
-                            {c.employee?.name || "Unassigned"} — {Number(c.analysis?.performanceScore || 0).toFixed(1)}
-                          </Badge>
-                        </Link>
-                      ))}
-                      {badCalls.length > 5 && (
-                        <Link href="/reports">
-                          <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted">+{badCalls.length - 5} more</Badge>
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            {goodCalls.length > 0 && (
-              <div role="status" className="bg-gradient-to-r from-emerald-50 to-white/90 dark:from-emerald-950/50 dark:to-slate-900/90 rounded-xl border border-emerald-200 dark:border-emerald-900/60 p-5 backdrop-blur-sm">
-                <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-200 dark:from-emerald-900/50 dark:to-emerald-800/30 ring-1 ring-inset ring-emerald-300/50 dark:ring-emerald-700/30 flex items-center justify-center shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.18)]">
-                    <Trophy className="w-5 h-5 text-emerald-500" weight="fill" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-emerald-600 dark:text-emerald-400 text-base">
-                      {goodCalls.length} Exceptional Call{goodCalls.length > 1 ? "s" : ""}
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                      Calls where agents went above and beyond.
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 mt-3">
-                      {goodCalls.slice(0, 5).map(c => (
-                        <Link key={c.id} href={`/transcripts/${c.id}`}>
-                          <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300">
-                            {c.employee?.name || "Unassigned"} — {Number(c.analysis?.performanceScore || 0).toFixed(1)}
-                          </Badge>
-                        </Link>
-                      ))}
-                      {goodCalls.length > 5 && (
-                        <Link href="/reports">
-                          <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted">+{goodCalls.length - 5} more</Badge>
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Empty state for new users */}
-        {calls && calls.length === 0 && (
-          <div className="bg-card rounded-xl border border-border p-8 text-center">
-            <UploadSimple className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-            <h3 className="text-lg font-semibold text-foreground mb-1">No calls analyzed yet</h3>
-            <p className="text-sm text-muted-foreground mb-4">Upload your first call recording to get started with AI-powered analysis.</p>
-            <Link href="/upload">
-              <Button>
-                <Plus className="w-4 h-4 mr-2" />
-                Upload Your First Call
-              </Button>
-            </Link>
-          </div>
-        )}
-
-        {/* Metrics Overview */}
-        {isVisible("metrics") && <MetricsOverview />}
-
-        {/* Weekly Change Narrative — what changed this week vs last week */}
-        {isVisible("weeklyChanges") && <WeeklyChangesWidget />}
-
-        {/* Sentiment & Call Volume Trend (Last 30 Days) */}
-        {isVisible("trend") && trendData.length > 0 && trendData.some(d => d.calls > 0) && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <TrendUp className="w-5 h-5 mr-2" />
-              Sentiment &amp; Volume — Last 30 Days
-            </h3>
-            {/* Accessible chart summary for screen readers */}
-            <p className="sr-only">
-              Chart showing {trendData.filter(d => d.calls > 0).length} active days in the last 30 days,
-              with {trendData.reduce((s, d) => s + d.positive, 0)} positive,
-              {" "}{trendData.reduce((s, d) => s + d.neutral, 0)} neutral,
-              and {trendData.reduce((s, d) => s + d.negative, 0)} negative sentiment calls.
-            </p>
-            <ResponsiveContainer width="100%" height={250}>
-              <AreaChart data={trendData}>
-                <defs>
-                  <linearGradient id="greenGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="grayGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="redGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="day" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 12 }} />
-                <Legend />
-                <Area type="monotone" dataKey="positive" name="Positive" stackId="sentiment" stroke="#22c55e" fill="url(#greenGrad)" />
-                <Area type="monotone" dataKey="neutral" name="Neutral" stackId="sentiment" stroke="#94a3b8" fill="url(#grayGrad)" />
-                <Area type="monotone" dataKey="negative" name="Negative" stackId="sentiment" stroke="#ef4444" fill="url(#redGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* File Upload Section */}
-        {isVisible("upload") && <FileUpload />}
-
-        {(isVisible("sentiment") || isVisible("performers")) && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {isVisible("sentiment") && <SentimentAnalysis />}
-            {isVisible("performers") && <PerformanceCard />}
-          </div>
-        )}
-
-        {/* Recent Calls Table */}
-        {isVisible("calls") && <CallsTable />}
-      </div>
+    <div className="min-h-screen bg-background" data-testid="dashboard-page">
+      {role === "admin" ? <LedgerVariant /> : <PulseVariant />}
     </div>
   );
 }

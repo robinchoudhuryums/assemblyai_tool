@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Calls — Search & Browse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff;
+    --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0;
+    --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55);
+    --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35);
+    --display: 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  }
+  body[data-palette="copper"] { --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff; --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0; --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55); --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35); }
+  body[data-palette="indigo"] { --paper:#f7f7fa; --paper-2:#eeeef4; --paper-card:#ffffff; --ink:#16162a; --muted:#6b6b82; --line:#dedde8; --accent:oklch(55% 0.16 268); --accent-soft:oklch(93% 0.04 268); --good:oklch(58% 0.12 170); --warn:oklch(60% 0.18 28); }
+  body[data-palette="forest"] { --paper:#f5f6f2; --paper-2:#eaece4; --paper-card:#ffffff; --ink:#15201a; --muted:#677367; --line:#dbdfd3; --accent:oklch(48% 0.10 155); --accent-soft:oklch(92% 0.04 155); --good:oklch(58% 0.12 165); --warn:oklch(60% 0.16 40); }
+  body[data-palette="slate"]  { --paper:#f6f7f9; --paper-2:#eceef2; --paper-card:#ffffff; --ink:#101418; --muted:#606872; --line:#dadde3; --accent:oklch(55% 0.12 240); --accent-soft:oklch(93% 0.04 240); --good:oklch(58% 0.10 160); --warn:oklch(60% 0.16 30); }
+  body[data-palette="plum"]   { --paper:#faf6f7; --paper-2:#f0eaec; --paper-card:#ffffff; --ink:#241620; --muted:#7a6670; --line:#e4d8dc; --accent:oklch(52% 0.14 340); --accent-soft:oklch(93% 0.04 340); --good:oklch(58% 0.10 165); --warn:oklch(62% 0.16 45); }
+  body[data-palette="mono"]   { --paper:#fafafa; --paper-2:#f0f0f0; --paper-card:#ffffff; --ink:#0a0a0a; --muted:#6b6b6b; --line:#d9d9d9; --accent:#0a0a0a; --accent-soft:#ebebeb; --good:oklch(50% 0.10 160); --warn:oklch(58% 0.16 30); }
+
+  body[data-mode="dark"] { --paper:#13110f; --paper-2:#1c1815; --paper-card:#1a1612; --ink:#f3ece0; --muted:#8a7d6c; --line:#2d2620; --accent-soft:oklch(30% 0.05 55); }
+  body[data-mode="dark"][data-palette="indigo"]  { --paper:#0f0f17; --paper-2:#17172a; --paper-card:#14142a; --ink:#eeeef8; --muted:#8888a0; --line:#272736; --accent-soft:oklch(28% 0.06 268);}
+  body[data-mode="dark"][data-palette="forest"]  { --paper:#0d120f; --paper-2:#151b16; --paper-card:#131917; --ink:#ecefe8; --muted:#7e8a80; --line:#232b25; --accent-soft:oklch(28% 0.05 155);}
+  body[data-mode="dark"][data-palette="slate"]   { --paper:#0c0f14; --paper-2:#151a22; --paper-card:#13171e; --ink:#ecf0f6; --muted:#7d8694; --line:#242a34; --accent-soft:oklch(28% 0.05 240);}
+  body[data-mode="dark"][data-palette="plum"]    { --paper:#130f12; --paper-2:#1d161b; --paper-card:#1b151a; --ink:#efe6ea; --muted:#8e7782; --line:#2d222a; --accent-soft:oklch(28% 0.06 340);}
+  body[data-mode="dark"][data-palette="mono"]    { --paper:#0a0a0a; --paper-2:#151515; --paper-card:#121212; --ink:#f0f0f0; --muted:#888; --line:#262626; --accent:#f5f5f5; --accent-soft:#222;}
+
+  html, body { margin:0; padding:0; background: var(--paper); min-height:100vh; }
+  body { font-family: var(--ui); color: var(--ink); }
+  * { box-sizing: border-box; }
+
+  .appbar { display:flex; align-items:center; gap:12px; padding:12px 28px; background:var(--paper-card); border-bottom:1px solid var(--line); font-size:12px; }
+  .crumbs { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.04em; }
+  .crumbs a { color:var(--muted); text-decoration:none; }
+  .crumbs a:hover { color:var(--ink); }
+  .crumbs .sep { opacity:.4; }
+  .spacer { flex:1; }
+
+  .role-bar { display:flex; background:var(--paper-card); border:1px solid var(--line); border-radius:3px; padding:2px; }
+  .role-bar button { background:transparent; border:none; padding:6px 12px; cursor:pointer; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; }
+  .role-bar button.active { background:var(--ink); color:var(--paper); }
+
+  .icon-btn { background:transparent; border:1px solid var(--line); color:var(--ink); cursor:pointer; padding:6px 10px; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; border-radius:2px; }
+  .icon-btn:hover { background:var(--paper-2); }
+  .icon-btn.primary { background:var(--accent); color:var(--paper); border-color:var(--accent); }
+
+  #tweaks { position:fixed; bottom:20px; right:20px; z-index:100; background:var(--paper-card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; font-family:var(--ui); font-size:12px; box-shadow:0 8px 32px rgba(0,0,0,.12); min-width:240px; display:none; }
+  #tweaks.open { display:block; }
+  #tweaks h4 { margin:0 0 10px; font-family:var(--display); font-size:13px; font-weight:600; color:var(--ink); }
+  #tweaks .row { display:flex; justify-content:space-between; align-items:center; margin:8px 0; gap:12px; }
+  #tweaks label { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.1em; font-family:var(--mono); }
+  #tweaks select { border:1px solid var(--line); padding:4px 6px; font-family:var(--mono); font-size:11px; border-radius:3px; background:var(--paper-card); color:var(--ink); }
+  .palette-swatches { display:flex; gap:6px; }
+  .palette-swatches button { width:20px; height:20px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
+  .palette-swatches button.active { border-color:var(--ink); }
+
+  /* Table */
+  table.calls { width:100%; border-collapse:collapse; font-size:13px; background:var(--paper-card); }
+  table.calls thead th { text-align:left; font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); padding:10px 12px; border-bottom:1px solid var(--line); font-weight:500; background:var(--paper-2); position:sticky; top:0; z-index:2; }
+  table.calls thead th.num { text-align:right; }
+  table.calls tbody td { padding:12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.calls tbody tr { cursor:pointer; }
+  table.calls tbody tr:hover { background:var(--paper-2); }
+  table.calls tbody tr.selected { background:var(--accent-soft); }
+  table.calls .num { font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; }
+
+  /* Density */
+  body[data-density="compact"] table.calls tbody td { padding:7px 12px; }
+  body[data-density="airy"]    table.calls tbody td { padding:16px 14px; }
+
+  input[type="text"], input[type="date"], input[type="number"] { background:var(--paper-card); border:1px solid var(--line); padding:7px 10px; border-radius:2px; font-family:var(--mono); font-size:11px; color:var(--ink); }
+  input[type="text"]:focus, input[type="date"]:focus, input[type="number"]:focus { outline:1px solid var(--accent); }
+
+  select.select { background:var(--paper-card); border:1px solid var(--line); padding:6px 10px; font-family:var(--mono); font-size:11px; color:var(--ink); border-radius:2px; }
+</style>
+</head>
+<body data-mode="light" data-palette="slate" data-density="balanced">
+<div style="display:flex; height:100vh;">
+  <div id="sidebar-root" style="display:contents;"></div>
+  <div id="root" style="flex:1; min-width:0; overflow:hidden;"></div>
+</div>
+
+<div id="tweaks">
+  <h4>Tweaks</h4>
+  <div class="row"><label>Role</label>
+    <select id="t-role">
+      <option value="agent">agent (own)</option>
+      <option value="manager">manager (team)</option>
+      <option value="admin">admin (all)</option>
+    </select>
+  </div>
+  <div class="row"><label>Mode</label><select id="t-mode"><option>light</option><option>dark</option></select></div>
+  <div class="row"><label>Density</label><select id="t-density"><option>airy</option><option selected>balanced</option><option>compact</option></select></div>
+  <div class="row"><label>Palette</label><div class="palette-swatches" id="t-palette-swatches"></div></div>
+
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="calls-data.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "role": "agent",
+  "mode": "light",
+  "palette": "slate",
+  "density": "balanced",
+  "previewOpen": true
+}/*EDITMODE-END*/;
+
+const PALETTES = [
+  { id:'copper', swatch:'#b5714a' }, { id:'indigo', swatch:'#4d5bce' },
+  { id:'forest', swatch:'#3f7b5a' }, { id:'slate',  swatch:'#4e7bc4' },
+  { id:'plum',   swatch:'#a0507a' }, { id:'mono',   swatch:'#0a0a0a' },
+];
+
+const COLS_BY_ROLE = {
+  agent:   ['time','topic','kind','sentiment','score','dur','flags'],
+  manager: ['time','agent','topic','kind','sentiment','score','dur','flags','status'],
+  admin:   ['time','agent','team','topic','kind','sentiment','score','dur','flags','status'],
+};
+
+const COL_HEAD = {
+  time:'Time', agent:'Agent', team:'Team', topic:'Subject', kind:'Type',
+  sentiment:'Sent.', score:'Score', dur:'Dur.', flags:'Flags', status:'Status',
+};
+
+function App() {
+  const [role, setRole]       = React.useState(TWEAKS.role);
+  const [palette, setPalette] = React.useState(TWEAKS.palette);
+  const [mode, setMode]       = React.useState(TWEAKS.mode);
+  const [density, setDensity] = React.useState(TWEAKS.density);
+  const [previewOpen, setPreviewOpen] = React.useState(TWEAKS.previewOpen !== false);
+
+  const [query, setQuery]         = React.useState('');
+  const [view, setView]           = React.useState('all');
+  const [sentiment, setSentiment] = React.useState('all');
+  const [team, setTeam]           = React.useState('all');
+  const [agentFilter, setAgentFilter] = React.useState('all');
+  const [minScore, setMinScore]   = React.useState('');
+  const [maxScore, setMaxScore]   = React.useState('');
+  const [showAdv, setShowAdv]     = React.useState(false);
+  const [selectedId, setSelectedId] = React.useState(CALLS[0]?.id);
+  const [sort, setSort]           = React.useState({ key:'time', dir:'desc' });
+  const [selected, setSelected]   = React.useState(new Set());
+
+  React.useEffect(() => { document.body.dataset.mode = mode; }, [mode]);
+  React.useEffect(() => { document.body.dataset.palette = palette; }, [palette]);
+  React.useEffect(() => { document.body.dataset.density = density; }, [density]);
+  React.useEffect(() => { window.updateSidebar && window.updateSidebar({ role: role === 'admin' ? 'admin' : role === 'manager' ? 'manager' : 'agent' }); }, [role]);
+
+  const persist = (edits) => window.parent && window.parent.postMessage({type:'__edit_mode_set_keys', edits}, '*');
+
+  React.useEffect(() => {
+    const wrap = document.getElementById('t-palette-swatches');
+    wrap.innerHTML = '';
+    PALETTES.forEach(p => {
+      const b = document.createElement('button');
+      b.style.background = p.swatch;
+      if (p.id === palette) b.classList.add('active');
+      b.onclick = () => { setPalette(p.id); persist({palette:p.id}); };
+      wrap.appendChild(b);
+    });
+  }, [palette]);
+
+  React.useEffect(() => {
+    const bind = (id, setter, key) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = TWEAKS[key];
+      el.addEventListener('change', () => { setter(el.value); persist({[key]: el.value}); });
+    };
+    bind('t-role', setRole, 'role');
+    bind('t-mode', setMode, 'mode');
+    bind('t-density', setDensity, 'density');
+
+    const onMsg = (e) => {
+      const d = e.data || {};
+      if (d.type === '__activate_edit_mode') document.getElementById('tweaks').classList.add('open');
+      if (d.type === '__deactivate_edit_mode') document.getElementById('tweaks').classList.remove('open');
+    };
+    window.addEventListener('message', onMsg);
+    window.parent && window.parent.postMessage({type:'__edit_mode_available'}, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  // Apply saved view filter
+  React.useEffect(() => {
+    const v = SAVED_VIEWS.find(x => x.id === view);
+    if (!v) return;
+    // soft apply — don't override search, sentiment etc. already set by user
+  }, [view]);
+
+  // Agent role scopes to Alex Rivera (e1)
+  const rows = React.useMemo(() => {
+    let r = [...CALLS];
+    if (role === 'agent') r = r.filter(c => c.agent === 'e1');
+    if (team !== 'all') r = r.filter(c => c.agentObj.team === team);
+    if (agentFilter !== 'all' && role !== 'agent') r = r.filter(c => c.agent === agentFilter);
+    if (sentiment !== 'all') r = r.filter(c => c.sentiment === sentiment);
+    if (minScore) r = r.filter(c => c.score >= parseFloat(minScore));
+    if (maxScore) r = r.filter(c => c.score <= parseFloat(maxScore));
+    if (query) {
+      const q = query.toLowerCase();
+      r = r.filter(c =>
+        c.topic.toLowerCase().includes(q) ||
+        c.agentObj.name.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q) ||
+        c.kind.toLowerCase().includes(q)
+      );
+    }
+    const v = SAVED_VIEWS.find(x => x.id === view);
+    if (v) {
+      const f = v.filter;
+      if (f.status) r = r.filter(c => c.status === f.status);
+      if (f.maxScore != null) r = r.filter(c => c.score <= f.maxScore);
+      if (f.flag) r = r.filter(c => c.flags.includes(f.flag));
+      if (f.sentiment) r = r.filter(c => c.sentiment === f.sentiment);
+      if (f.team) r = r.filter(c => c.agentObj.team === f.team);
+    }
+    // Sort
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    r.sort((a,b) => {
+      const v = { time: a.sortKey - b.sortKey, score: a.score - b.score, dur: a.durSec - b.durSec,
+                  agent: a.agentObj.name.localeCompare(b.agentObj.name), topic: a.topic.localeCompare(b.topic) }[sort.key] ?? 0;
+      return v * dir;
+    });
+    return r;
+  }, [role, team, agentFilter, sentiment, minScore, maxScore, query, view, sort]);
+
+  const s = summary(rows);
+  const cols = COLS_BY_ROLE[role];
+  const selectedCall = rows.find(r => r.id === selectedId) || rows[0];
+
+  const toggleSel = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const setRoleBtn = (r) => { setRole(r); persist({role:r}); document.getElementById('t-role').value = r; };
+
+  const clearAll = () => {
+    setQuery(''); setSentiment('all'); setTeam('all'); setAgentFilter('all');
+    setMinScore(''); setMaxScore(''); setView('all');
+  };
+
+  const hasFilters = query || sentiment!=='all' || team!=='all' || agentFilter!=='all' || minScore || maxScore || view!=='all';
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      {/* App bar */}
+      <div className="appbar">
+        <div className="crumbs">
+          <a href="Call Analytics Dashboard.html">Dashboard</a>
+          <span className="sep">›</span>
+          <span style={{color:'var(--ink)'}}>Calls</span>
+        </div>
+        <div className="spacer"/>
+        <div className="role-bar">
+          {['agent','manager','admin'].map(r => (
+            <button key={r} className={role===r?'active':''} onClick={()=>setRoleBtn(r)}>{r}</button>
+          ))}
+        </div>
+        <button className="icon-btn">⇣ Export CSV</button>
+        <button className="icon-btn primary">＋ Upload</button>
+      </div>
+
+      {/* Page header */}
+      <div style={{padding:'22px 28px 16px', background:'var(--paper)', borderBottom:'1px solid var(--line)'}}>
+        <div style={{fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'.18em', color:'var(--muted)'}}>
+          {role === 'agent' ? 'My calls' : role === 'manager' ? 'Team calls' : 'All calls'} · last 7 days
+        </div>
+        <div style={{display:'flex', alignItems:'baseline', gap:18, marginTop:4, flexWrap:'wrap'}}>
+          <div style={{fontFamily:'var(--display)', fontSize:30, fontWeight:500, letterSpacing:-.6, color:'var(--ink)', lineHeight:1.15}}>
+            {s.n} calls
+          </div>
+          <div style={{display:'flex', gap:22, color:'var(--muted)', fontSize:12, fontFamily:'var(--mono)'}}>
+            <span>AVG <b style={{color:'var(--ink)', fontVariantNumeric:'tabular-nums'}}>{s.avg.toFixed(1)}</b></span>
+            <span style={{color:'var(--good)'}}>●</span>
+            <span>{s.pos} pos · {s.neg} neg</span>
+            <span style={{opacity:.5}}>|</span>
+            <span>{s.flagged} flagged</span>
+            <span style={{opacity:.5}}>|</span>
+            <span style={{color: s.needsReview > 0 ? 'var(--warn)' : 'var(--muted)'}}>{s.needsReview} need review</span>
+            <span style={{opacity:.5}}>|</span>
+            <span>{s.totalMin} min reviewed</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div style={{padding:'14px 28px', background:'var(--paper)', borderBottom:'1px solid var(--line)', display:'flex', flexDirection:'column', gap:10}}>
+        {/* Saved views + search */}
+        <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+          {/* Views */}
+          <div style={{display:'flex', gap:4}}>
+            {SAVED_VIEWS.filter(v => role !== 'agent' || v.id === 'all' || v.id === 'low_score' || v.id === 'exemplars').map(v => (
+              <button key={v.id}
+                onClick={() => setView(v.id)}
+                style={{
+                  fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'.08em',
+                  padding:'6px 10px', borderRadius:2,
+                  border:`1px solid ${view===v.id ? 'var(--ink)' : 'var(--line)'}`,
+                  background: view===v.id ? 'var(--ink)' : 'var(--paper-card)',
+                  color: view===v.id ? 'var(--paper)' : 'var(--ink)',
+                  cursor:'pointer',
+                }}
+              >{v.name}</button>
+            ))}
+          </div>
+
+          <div className="spacer"/>
+
+          {/* Search */}
+          <div style={{position:'relative'}}>
+            <svg width="12" height="12" viewBox="0 0 12 12" style={{position:'absolute', left:9, top:'50%', transform:'translateY(-50%)', color:'var(--muted)'}}>
+              <circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+              <line x1="7.8" y1="7.8" x2="11" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            <input type="text" placeholder="Search topic, agent, ID…" value={query} onChange={e=>setQuery(e.target.value)} style={{paddingLeft:26, width:260}}/>
+          </div>
+
+          <button className="icon-btn" onClick={()=>setShowAdv(!showAdv)}>
+            {showAdv ? '⌃' : '⌄'} filters
+          </button>
+          {hasFilters && <button className="icon-btn" onClick={clearAll}>✕ clear</button>}
+        </div>
+
+        {/* Advanced */}
+        {showAdv && (
+          <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', paddingTop:8, borderTop:'1px solid var(--line)'}}>
+            <label style={filterLbl}>Sentiment
+              <select className="select" value={sentiment} onChange={e=>setSentiment(e.target.value)}>
+                <option value="all">All</option><option value="positive">Positive</option>
+                <option value="neutral">Neutral</option><option value="negative">Negative</option>
+              </select>
+            </label>
+            {role !== 'agent' && (
+              <label style={filterLbl}>Team
+                <select className="select" value={team} onChange={e=>setTeam(e.target.value)}>
+                  <option value="all">All</option>
+                  {[...new Set(AGENTS.map(a=>a.team))].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+            )}
+            {role !== 'agent' && (
+              <label style={filterLbl}>Agent
+                <select className="select" value={agentFilter} onChange={e=>setAgentFilter(e.target.value)}>
+                  <option value="all">All</option>
+                  {AGENTS.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+            )}
+            <label style={filterLbl}>Score ≥
+              <input type="number" min="0" max="10" step="0.5" placeholder="0" value={minScore} onChange={e=>setMinScore(e.target.value)} style={{width:60}}/>
+            </label>
+            <label style={filterLbl}>Score ≤
+              <input type="number" min="0" max="10" step="0.5" placeholder="10" value={maxScore} onChange={e=>setMaxScore(e.target.value)} style={{width:60}}/>
+            </label>
+            <div className="spacer"/>
+            <button className="icon-btn">⊕ save as view</button>
+          </div>
+        )}
+      </div>
+
+      {/* Bulk bar */}
+      {selected.size > 0 && (
+        <div style={{padding:'10px 28px', background:'var(--accent-soft)', borderBottom:'1px solid var(--accent)', display:'flex', alignItems:'center', gap:14}}>
+          <span style={{fontFamily:'var(--mono)', fontSize:11, color:'var(--ink)'}}>{selected.size} selected</span>
+          <button className="icon-btn">Flag for review</button>
+          {role !== 'agent' && <button className="icon-btn">Assign coaching</button>}
+          <button className="icon-btn">Add tag…</button>
+          <button className="icon-btn">⇣ Export</button>
+          <div className="spacer"/>
+          <button className="icon-btn" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
+
+      {/* Body: table + preview */}
+      <div style={{flex:1, display:'flex', overflow:'hidden'}}>
+        {/* Table */}
+        <div style={{flex:1, overflow:'auto', background:'var(--paper-card)'}}>
+          {rows.length === 0 ? (
+            <EmptyState onClear={clearAll}/>
+          ) : (
+            <table className="calls">
+              <thead>
+                <tr>
+                  <th style={{width:26}}>
+                    <input type="checkbox"
+                      checked={selected.size === rows.length && rows.length > 0}
+                      onChange={() => {
+                        if (selected.size === rows.length) setSelected(new Set());
+                        else setSelected(new Set(rows.map(r => r.id)));
+                      }}
+                    />
+                  </th>
+                  {cols.map(k => (
+                    <th key={k} className={['score','dur'].includes(k) ? 'num' : ''}
+                      onClick={() => ['time','score','dur','agent','topic'].includes(k) && setSort({key:k, dir: sort.key===k && sort.dir==='desc' ? 'asc' : 'desc'})}
+                      style={{cursor: ['time','score','dur','agent','topic'].includes(k) ? 'pointer' : 'default'}}
+                    >
+                      {COL_HEAD[k]}
+                      {sort.key===k && <span style={{marginLeft:4, opacity:.6}}>{sort.dir==='desc'?'▼':'▲'}</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(c => (
+                  <Row key={c.id} c={c} cols={cols}
+                    active={selectedId === c.id}
+                    sel={selected.has(c.id)}
+                    onToggle={() => toggleSel(c.id)}
+                    onPick={() => setSelectedId(c.id)}
+                    previewOpen={previewOpen}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Preview rail — collapsible */}
+        {previewOpen && selectedCall && (
+          <PreviewRail call={selectedCall} role={role} onClose={() => { setPreviewOpen(false); persist({previewOpen:false}); }}/>
+        )}
+        {!previewOpen && (
+          <button
+            onClick={() => { setPreviewOpen(true); persist({previewOpen:true}); }}
+            title="Show preview"
+            style={{
+              position:'fixed', right:0, top:'50%',
+              background:'var(--paper-card)', border:'1px solid var(--line)', borderRight:'none',
+              padding:'18px 6px', cursor:'pointer', color:'var(--muted)',
+              fontFamily:'var(--mono)', fontSize:10, letterSpacing:'.12em', textTransform:'uppercase',
+              writingMode:'vertical-rl', transform:'translateY(-50%) rotate(180deg)',
+              borderTopLeftRadius:3, borderBottomLeftRadius:3,
+            }}
+          >‹ preview</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const filterLbl = { display:'flex', alignItems:'center', gap:6, fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'.1em', color:'var(--muted)' };
+
+const Row = ({ c, cols, active, sel, onToggle, onPick, previewOpen }) => {
+  const sentColor = c.sentiment === 'positive' ? 'var(--good)' : c.sentiment === 'negative' ? 'var(--warn)' : 'var(--muted)';
+  const scoreColor = c.score >= 8.5 ? 'var(--good)' : c.score >= 7 ? 'var(--ink)' : 'var(--warn)';
+
+  const cell = (k) => {
+    switch (k) {
+      case 'time': return <div><div style={{fontFamily:'var(--mono)', fontSize:11, color:'var(--muted)'}}>{c.at}</div><div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--muted)', opacity:.6}}>{c.id.toUpperCase()}</div></div>;
+      case 'agent': return <div style={{display:'flex', alignItems:'center', gap:8}}>
+        <Avatar initials={c.agentObj.initials} size={22}/>
+        <div>
+          <div style={{fontSize:13, color:'var(--ink)'}}>{c.agentObj.name}</div>
+          <div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--muted)'}}>{c.agentObj.team}</div>
+        </div>
+      </div>;
+      case 'team': return <div style={{fontSize:12, color:'var(--ink)'}}>{c.agentObj.team}</div>;
+      case 'topic': return <div style={{maxWidth:320}}>
+        <div style={{fontSize:13, color:'var(--ink)', fontWeight: active ? 500 : 400}}>{c.topic}</div>
+      </div>;
+      case 'kind': return <span style={{fontFamily:'var(--mono)', fontSize:10, padding:'2px 7px', background:'var(--paper-2)', border:'1px solid var(--line)', letterSpacing:'.05em'}}>{c.kind}</span>;
+      case 'sentiment': return <div style={{display:'flex', alignItems:'center', gap:6}}>
+        <span style={{width:8, height:8, borderRadius:'50%', background:sentColor}}/>
+        <span style={{fontSize:11, color:'var(--muted)'}}>{c.sentiment}</span>
+      </div>;
+      case 'score': return <span style={{fontFamily:'var(--mono)', fontWeight:500, color:scoreColor, fontVariantNumeric:'tabular-nums'}}>{c.score.toFixed(1)}</span>;
+      case 'dur': return <span style={{fontFamily:'var(--mono)', color:'var(--muted)', fontVariantNumeric:'tabular-nums'}}>{c.dur}</span>;
+      case 'flags': return <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+        {c.flags.map(f => <span key={f} style={{fontFamily:'var(--mono)', fontSize:9, padding:'2px 6px', letterSpacing:'.06em', color: FLAG_MAP[f].color, border:`1px solid ${FLAG_MAP[f].color}`, borderRadius:2, opacity:.9}}>{FLAG_MAP[f].label}</span>)}
+      </div>;
+      case 'status': return <span style={{fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'.1em', color: c.status==='review' ? 'var(--warn)' : 'var(--muted)'}}>{c.status}</span>;
+      default: return null;
+    }
+  };
+
+  return (
+    <tr className={active && previewOpen ? 'selected' : ''}
+        onClick={() => {
+          if (previewOpen) onPick();
+          else window.location.href = 'Call Transcript Viewer.html';
+        }}>
+      <td onClick={(e)=>{e.stopPropagation(); onToggle();}}>
+        <input type="checkbox" checked={sel} onChange={()=>{}}/>
+      </td>
+      {cols.map(k => (
+        <td key={k} className={['score','dur'].includes(k) ? 'num' : ''}>{cell(k)}</td>
+      ))}
+    </tr>
+  );
+};
+
+const PreviewRail = ({ call, role, onClose }) => {
+  const sentColor = call.sentiment === 'positive' ? 'var(--good)' : call.sentiment === 'negative' ? 'var(--warn)' : 'var(--muted)';
+  return (
+    <div style={{width:380, flexShrink:0, borderLeft:'1px solid var(--line)', background:'var(--paper)', padding:'18px 20px', overflow:'auto'}}>
+      <div style={{display:'flex', alignItems:'center', gap:8}}>
+        <div style={{flex:1, fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'.14em', color:'var(--muted)'}}>
+          {call.id.toUpperCase()} · {call.at}
+        </div>
+        <button onClick={onClose} title="Collapse preview" style={{
+          background:'transparent', border:'1px solid var(--line)', borderRadius:2,
+          padding:'3px 8px', cursor:'pointer', color:'var(--muted)',
+          fontFamily:'var(--mono)', fontSize:10, letterSpacing:'.08em',
+        }}>››</button>
+      </div>
+      <div style={{fontFamily:'var(--display)', fontSize:20, fontWeight:500, letterSpacing:-.3, color:'var(--ink)', marginTop:4, lineHeight:1.25}}>
+        {call.topic}
+      </div>
+
+      <div style={{display:'flex', alignItems:'center', gap:10, marginTop:14}}>
+        <Avatar initials={call.agentObj.initials} size={30}/>
+        <div>
+          <div style={{fontSize:13, color:'var(--ink)'}}>{call.agentObj.name}</div>
+          <div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--muted)'}}>{call.agentObj.team}</div>
+        </div>
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:16, paddingTop:16, borderTop:'1px solid var(--line)'}}>
+        <Stat label="Score" value={call.score.toFixed(1)} color={call.score >= 8.5 ? 'var(--good)' : call.score >= 7 ? 'var(--ink)' : 'var(--warn)'}/>
+        <Stat label="Duration" value={call.dur}/>
+        <Stat label="Sentiment" value={call.sentiment} color={sentColor}/>
+        <Stat label="Type" value={call.kind}/>
+      </div>
+
+      {call.flags.length > 0 && (
+        <div style={{marginTop:16}}>
+          <div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'.14em', marginBottom:8}}>Flags</div>
+          <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+            {call.flags.map(f => <span key={f} style={{fontFamily:'var(--mono)', fontSize:10, padding:'3px 8px', color: FLAG_MAP[f].color, border:`1px solid ${FLAG_MAP[f].color}`, borderRadius:2}}>{FLAG_MAP[f].label}</span>)}
+          </div>
+        </div>
+      )}
+
+      <div style={{marginTop:18, paddingTop:18, borderTop:'1px solid var(--line)'}}>
+        <div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'.14em', marginBottom:8}}>AI summary</div>
+        <div style={{fontSize:13, lineHeight:1.6, color:'var(--ink)'}}>
+          {call.sentiment === 'positive'
+            ? `Agent handled ${call.topic.toLowerCase()} with clear empathy and follow-through. Rubric items strong across the board.`
+            : call.sentiment === 'negative'
+              ? `Call escalated — ${call.topic.toLowerCase()}. Review recommended for compliance and resolution rubric items.`
+              : `Routine ${call.kind.toLowerCase()} call. Standard resolution, no coaching flags raised.`}
+        </div>
+      </div>
+
+      <div style={{marginTop:18, display:'flex', gap:8}}>
+        <a href="Call Transcript Viewer.html" className="icon-btn primary" style={{textDecoration:'none', textAlign:'center', flex:1}}>Open transcript →</a>
+        {role !== 'agent' && <button className="icon-btn">＋ coach</button>}
+      </div>
+    </div>
+  );
+};
+
+const Stat = ({ label, value, color }) => (
+  <div>
+    <div style={{fontFamily:'var(--mono)', fontSize:9, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'.14em'}}>{label}</div>
+    <div style={{fontFamily:'var(--display)', fontSize:20, fontWeight:500, color: color || 'var(--ink)', letterSpacing:-.3, marginTop:2, fontVariantNumeric:'tabular-nums'}}>{value}</div>
+  </div>
+);
+
+const EmptyState = ({ onClear }) => (
+  <div style={{padding:'80px 28px', textAlign:'center'}}>
+    <div style={{fontFamily:'var(--display)', fontSize:22, color:'var(--ink)', marginBottom:6}}>Nothing matches those filters.</div>
+    <div style={{fontSize:13, color:'var(--muted)', marginBottom:20}}>Try broadening your query or clearing filters.</div>
+    <button className="icon-btn" onClick={onClear}>✕ clear filters</button>
+  </div>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+mountSidebar({ active: 'calls', role: TWEAKS.role === 'admin' ? 'admin' : TWEAKS.role === 'manager' ? 'manager' : 'agent' });
+</script>
+</body>
+</html>

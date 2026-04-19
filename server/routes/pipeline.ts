@@ -327,10 +327,18 @@ export async function processAudioFile(
         timestamp: new Date().toISOString(),
       };
 
+      // Track whether the S3 pending item was written so we can clean it up
+      // on partial-failure fall-through. Without this, a partial failure
+      // leaves an orphan pending item: the batch scheduler later picks it
+      // up, submits AWS-billable work, and the INV-28 "already completed"
+      // guard only kicks in AFTER the AWS round-trip. Better to delete the
+      // pending item on fall-through so batch never sees it.
+      let pendingItemUploaded = false;
+      const pendingKey = `batch-inference/pending/${callId}.json`;
       try {
         const s3Client = storage.getObjectStorageClient();
         if (s3Client) {
-          await s3Client.uploadJson(`batch-inference/pending/${callId}.json`, {
+          await s3Client.uploadJson(pendingKey, {
             ...pendingItem,
             transcriptResponse: {
               text: transcriptResponse.text,
@@ -340,6 +348,7 @@ export async function processAudioFile(
               status: transcriptResponse.status,
             },
           });
+          pendingItemUploaded = true;
         }
         logger.info("pipeline: step 4/6 deferred to batch analysis (50% cost savings)", { callId });
         broadcastCallUpdate(callId, "awaiting_analysis", { step: 4, totalSteps: 6, label: "Queued for batch analysis..." });
@@ -395,6 +404,18 @@ export async function processAudioFile(
         return;
       } catch (batchErr) {
         logger.warn("pipeline: failed to defer to batch (falling back to on-demand)", { callId, error: (batchErr as Error).message });
+        // Clean up the orphaned pending item if it made it to S3 before the
+        // downstream storage writes failed. If left in place, the batch
+        // scheduler would submit the call to AWS Bedrock (billable) only to
+        // discover via INV-28 that on-demand already completed it.
+        if (pendingItemUploaded) {
+          try {
+            const s3Client = storage.getObjectStorageClient();
+            if (s3Client) await s3Client.deleteObject(pendingKey);
+          } catch (cleanupErr) {
+            logger.warn("pipeline: failed to clean up orphaned batch pending item", { callId, error: (cleanupErr as Error).message });
+          }
+        }
       }
     }
 

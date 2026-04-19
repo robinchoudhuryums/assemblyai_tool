@@ -1,3 +1,10 @@
+/**
+ * @deprecated Replaced by the role-routed Ledger / Pulse dashboard variants
+ * (see `client/src/components/dashboard/ledger-variant.tsx`,
+ * `pulse-variant.tsx`). Not rendered by any active page after design theme
+ * installment 2. Kept in-repo for one release cycle in case of rollback;
+ * delete in a later sweep together with the other legacy widgets.
+ */
 import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowCounterClockwise, Clock, Heart, Phone, Star, Warning } from "@phosphor-icons/react";
