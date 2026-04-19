@@ -1,3 +1,9 @@
+/**
+ * @deprecated The weekly-changes narrative now renders inline inside the
+ * Ledger / Pulse dashboard variants (as the AI briefing + manager hero).
+ * Not rendered by any active page after design theme installment 2.
+ * Kept in-repo for one release cycle.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { ArrowUp, ArrowDown, TrendUp, Warning, Star } from "@phosphor-icons/react";

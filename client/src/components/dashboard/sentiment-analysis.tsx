@@ -1,3 +1,8 @@
+/**
+ * @deprecated Replaced by the sentiment curve in the Ledger / Pulse
+ * variants. Not rendered by any active page after design theme
+ * installment 2. Kept in-repo for one release cycle in case of rollback.
+ */
 import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
