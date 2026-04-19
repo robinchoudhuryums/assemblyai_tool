@@ -17,6 +17,7 @@ import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
 import Scrubber from "./scrubber";
+import SideRail from "./side-rail";
 
 interface TranscriptViewerProps {
   callId: string;
@@ -845,216 +846,27 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             </div>
           )}
 
-          <div className="bg-muted rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="font-semibold text-foreground">Call Summary</h4>
-              {!isEditing && call.analysis && (
-                <Button size="sm" variant="ghost" onClick={startEditing} className="h-7 text-xs">
-                  <PencilSimple className="w-3 h-3 mr-1" /> Edit
-                </Button>
-              )}
-            </div>
-
-            {isEditing ? (
-              <div className="space-y-3">
-                <div>
-                  <Label className="text-xs">Performance Score (0-10)</Label>
-                  <Input
-                    type="number" min="0" max="10" step="0.1"
-                    value={editScore}
-                    onChange={e => setEditScore(e.target.value)}
-                    className="h-8 text-sm"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">Summary</Label>
-                  <textarea
-                    value={editSummary}
-                    onChange={e => setEditSummary(e.target.value)}
-                    className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-red-600">Reason for Edit *</Label>
-                  <Input
-                    value={editReason}
-                    onChange={e => setEditReason(e.target.value)}
-                    placeholder="Why is this edit needed?"
-                    className="h-8 text-sm"
-                  />
-                </div>
-                {editMutation.isError && (
-                  <p className="text-xs text-red-500">{editMutation.error?.message}</p>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    size="sm" onClick={handleSaveEdit}
-                    disabled={!editReason.trim() || editMutation.isPending}
-                    className="h-7 text-xs"
-                  >
-                    <FloppyDisk className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "Save"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-7 text-xs">
-                    <X className="w-3 h-3 mr-1" /> Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2 text-sm">
-                <p><strong>Duration:</strong> {call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s` : 'Unknown'}</p>
-                <p><strong>Status:</strong> <Badge>{toDisplayString(call.status)}</Badge></p>
-                <p><strong>Sentiment:</strong> {call.sentiment?.overallSentiment && typeof call.sentiment.overallSentiment === "string" ? (
-                  <Badge className={getSentimentColor(call.sentiment.overallSentiment)}>
-                    {call.sentiment.overallSentiment.charAt(0).toUpperCase() + call.sentiment.overallSentiment.slice(1)}
-                  </Badge>
-                ) : 'Unknown'}</p>
-                <div className="flex items-center gap-2">
-                  <strong className="text-sm">Performance:</strong>
-                  {call.analysis?.performanceScore ? (
-                    <ScoreRing score={Number(call.analysis.performanceScore)} size={40} strokeWidth={3} />
-                  ) : (
-                    <span className="text-sm text-muted-foreground">N/A</span>
-                  )}
-                </div>
-                {call.analysis?.subScores && (
-                  <div className="mt-2 pt-2 border-t border-border space-y-1.5">
-                    {[
-                      { label: "Compliance", key: "compliance", color: "text-blue-600", bar: "from-blue-500 to-blue-400" },
-                      { label: "Customer Exp.", key: "customerExperience", color: "text-green-600", bar: "from-green-500 to-emerald-400" },
-                      { label: "Communication", key: "communication", color: "text-purple-600", bar: "from-purple-500 to-violet-400" },
-                      { label: "Resolution", key: "resolution", color: "text-amber-600", bar: "from-amber-500 to-yellow-400" },
-                    ].map(dim => {
-                      const val = (call.analysis!.subScores as Record<string, number | undefined>)?.[dim.key];
-                      if (val == null) return null;
-                      return (
-                        <div key={dim.key}>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">{dim.label}</span>
-                            <span className={`font-semibold ${dim.color}`}>{Number(val).toFixed(1)}</span>
-                          </div>
-                          <div className="w-full h-1.5 bg-muted-foreground/20 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar} score-bar-fill`} style={{ width: `${Number(val) * 10}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {call.analysis?.detectedAgentName && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    <strong>Detected Agent:</strong> {toDisplayString(call.analysis.detectedAgentName)}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {!isEditing && call.analysis?.summary && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Key Points</h4>
-              <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-                {toDisplayString(call.analysis.summary).split('\n').map((point, index) => (
-                  point.trim() && <li key={index}>{point.trim().replace(/^- /, '')}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {call.analysis?.topics && Array.isArray(call.analysis.topics) && call.analysis.topics.length > 0 && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Key Topics</h4>
-              <div className="flex flex-wrap gap-2">
-                {call.analysis.topics.map((topic: unknown, index: number) => (
-                  <Badge key={index} variant="outline" className="bg-primary/10 text-primary">
-                    {toDisplayString(topic)}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {call.analysis?.actionItems && Array.isArray(call.analysis.actionItems) && call.analysis.actionItems.length > 0 && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Action Items</h4>
-              <ul className="space-y-1 text-sm">
-                {call.analysis.actionItems.map((item: unknown, index: number) => (
-                  <li key={index} className="flex items-center space-x-2">
-                    <div className="w-2 h-2 bg-green-600 rounded-full"></div>
-                    <span>{toDisplayString(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (() => {
-            const feedback = call.analysis.feedback as { strengths?: unknown[]; suggestions?: unknown[] };
-            return (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">AI Feedback</h4>
-              <div className="space-y-2 text-sm">
-                {Array.isArray(feedback.strengths) && feedback.strengths.length > 0 && (
-                  <div>
-                    <p className="font-medium text-green-600">Strengths:</p>
-                    <ul className="space-y-1.5 text-muted-foreground">
-                      {feedback.strengths.map((item: unknown, index: number) => {
-                        const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
-                        return (
-                          <li key={index} className="flex items-start gap-2">
-                            <span className="text-green-500 mt-0.5 shrink-0">+</span>
-                            <span className="flex-1">{text}</span>
-                            {ts && (() => {
-                              const parsedMs = parseTimestampString(ts);
-                              if (parsedMs === null) return null;
-                              return (
-                                <button
-                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                  onClick={() => jumpToTime(parsedMs)}
-                                >
-                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                                </button>
-                              );
-                            })()}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-                {Array.isArray(feedback.suggestions) && feedback.suggestions.length > 0 && (
-                  <div>
-                    <p className="font-medium text-primary">Suggestions:</p>
-                    <ul className="space-y-1.5 text-muted-foreground">
-                      {feedback.suggestions.map((item: unknown, index: number) => {
-                        const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
-                        return (
-                          <li key={index} className="flex items-start gap-2">
-                            <span className="text-amber-500 mt-0.5 shrink-0">!</span>
-                            <span className="flex-1">{text}</span>
-                            {ts && (() => {
-                              const parsedMs = parseTimestampString(ts);
-                              if (parsedMs === null) return null;
-                              return (
-                                <button
-                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                  onClick={() => jumpToTime(parsedMs)}
-                                >
-                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                                </button>
-                              );
-                            })()}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-            );
-          })()}
+          {/* Side rail (Phase 4) — score + rubric + AI verdict, AI summary,
+              coaching highlights, commitments, topics. Replaces the legacy
+              bg-muted Card stack. Editing state still owned here so
+              useBeforeUnload keeps consistent unsaved-changes detection. */}
+          <SideRail
+            call={call}
+            onSeek={jumpToTime}
+            parseTimestampString={parseTimestampString}
+            isEditing={isEditing}
+            editScore={editScore}
+            editSummary={editSummary}
+            editReason={editReason}
+            editError={editMutation.isError ? (editMutation.error?.message || "Save failed") : null}
+            editPending={editMutation.isPending}
+            onStartEditing={startEditing}
+            onCancelEditing={() => setIsEditing(false)}
+            onChangeEditScore={setEditScore}
+            onChangeEditSummary={setEditSummary}
+            onChangeEditReason={setEditReason}
+            onSave={handleSaveEdit}
+          />
 
           {/* AI Analysis Skipped banner — surfaced prominently when the
               pipeline quality gate fired (empty transcript or low transcript
