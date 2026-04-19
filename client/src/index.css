@@ -1,45 +1,74 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* App-wide theme tokens — "warm paper" system (Claude Design handoff, first
+   installment). Document-like aesthetic: paper-cream background, espresso
+   ink, copper accent, sage good, warm-red warn. Anti-glass by default —
+   hairline borders + generous whitespace instead of blur. Sequential page
+   designs will land as they're shared; the token set is designed to carry
+   them without per-page skin overrides.
+   — Fonts: Inter Tight (display) / Inter (ui) / IBM Plex Mono (metadata,
+     numerics, small-caps labels). Loaded via <link> in client/index.html.
+   — Palette references Simulator.html from docs/design-bundle/. */
 :root {
-  --background: hsl(210, 40%, 94%);
-  --foreground: hsl(220, 25%, 15%);
-  --card: hsla(210, 40%, 98%, 0.45);
-  --card-foreground: hsl(220, 25%, 15%);
-  --popover: hsla(210, 30%, 98%, 0.8);
-  --popover-foreground: hsl(220, 25%, 15%);
-  --primary: hsl(217, 91%, 60%);
-  --primary-foreground: hsl(0, 0%, 100%);
-  --secondary: hsl(220, 18%, 90%);
-  --secondary-foreground: hsl(220, 25%, 25%);
-  --muted: hsl(220, 18%, 91%);
-  --muted-foreground: hsl(220, 10%, 42%);
-  --accent: hsl(217, 91%, 60%);
-  --accent-foreground: hsl(0, 0%, 100%);
-  --destructive: hsl(0, 84%, 60%);
-  --destructive-foreground: hsl(0, 0%, 100%);
-  --border: hsl(220, 18%, 82%);
-  --input: hsl(220, 18%, 90%);
-  --ring: hsl(217, 91%, 60%);
-  --chart-1: hsl(217, 91%, 60%);
-  --chart-2: hsl(158, 64%, 52%);
-  --chart-3: hsl(45, 93%, 58%);
-  --chart-4: hsl(316, 65%, 65%);
-  --chart-5: hsl(28, 80%, 52%);
-  --sidebar: hsla(210, 30%, 97%, 0.55);
-  --sidebar-foreground: hsl(210, 25%, 8%);
-  --sidebar-primary: hsl(204, 88%, 53%);
-  --sidebar-primary-foreground: hsl(0, 0%, 100%);
-  --sidebar-accent: hsl(212, 52%, 93%);
-  --sidebar-accent-foreground: hsl(204, 88%, 53%);
-  --sidebar-border: hsl(205, 25%, 82%);
-  --sidebar-ring: hsl(203, 89%, 53%);
+  /* Raw palette (bundle tokens) */
+  --paper: oklch(97% 0.008 85);             /* #faf7f2 */
+  --paper-2: oklch(94% 0.012 82);           /* #f2ede4 */
+  --paper-card: hsl(0, 0%, 100%);
+  --ink: oklch(19% 0.02 40);                /* #221a14 */
+  --muted-ink: oklch(52% 0.018 60);         /* #7a6f62 */
+  --hairline: oklch(89% 0.012 70);          /* #e2dcd0 */
+  --copper: oklch(62% 0.12 52);
+  --copper-soft: oklch(92% 0.05 55);
+  --sage: oklch(58% 0.09 160);
+  --sage-soft: oklch(94% 0.05 160);
+  --warm-red: oklch(60% 0.14 35);
+  --warm-red-soft: oklch(95% 0.04 30);
+  --amber: oklch(70% 0.14 85);
+  --amber-soft: oklch(97% 0.05 85);
+
+  /* shadcn-facing aliases — component library consumes these unchanged */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-card);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-card);
+  --popover-foreground: var(--ink);
+  --primary: var(--copper);
+  --primary-foreground: var(--paper);
+  --secondary: var(--paper-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--paper-2);
+  --muted-foreground: var(--muted-ink);
+  --accent: var(--copper);
+  --accent-foreground: var(--paper);
+  --destructive: var(--warm-red);
+  --destructive-foreground: var(--paper);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--copper);
+
+  --chart-1: var(--copper);
+  --chart-2: var(--sage);
+  --chart-3: var(--amber);
+  --chart-4: oklch(58% 0.12 268);
+  --chart-5: oklch(62% 0.14 320);
+
+  --sidebar: var(--paper-card);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--copper);
+  --sidebar-primary-foreground: var(--paper);
+  --sidebar-accent: var(--copper-soft);
+  --sidebar-accent-foreground: var(--copper);
+  --sidebar-border: var(--hairline);
+  --sidebar-ring: var(--copper);
+
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-serif: Georgia, serif;
-  --font-mono: Menlo, monospace;
-  --radius: 0.5rem;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --radius: 0.25rem;
   --shadow-2xs: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.06);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -103,33 +132,54 @@
 }
 
 .dark {
-  --background: hsl(220, 30%, 7%);
-  --foreground: hsl(220, 15%, 95%);
-  --card: hsla(220, 30%, 9%, 0.85);
-  --card-foreground: hsl(220, 15%, 95%);
-  --popover: hsla(220, 30%, 9%, 0.9);
-  --popover-foreground: hsl(220, 15%, 95%);
-  --primary: hsl(217, 91%, 60%);
-  --primary-foreground: hsl(0, 0%, 100%);
-  --secondary: hsl(220, 30%, 12%);
-  --secondary-foreground: hsl(220, 15%, 75%);
-  --muted: hsl(220, 30%, 12%);
-  --muted-foreground: hsl(220, 15%, 55%);
-  --accent: hsl(217, 91%, 60%);
-  --accent-foreground: hsl(0, 0%, 100%);
-  --destructive: hsl(0, 84%, 60%);
-  --destructive-foreground: hsl(0, 0%, 100%);
-  --border: hsl(220, 30%, 18%);
-  --input: hsl(220, 30%, 12%);
-  --ring: hsl(217, 91%, 60%);
-  --sidebar: hsl(228, 9.8039%, 10%);
-  --sidebar-foreground: hsl(0, 0%, 85.0980%);
-  --sidebar-primary: hsl(202.8169, 89.1213%, 53.1373%);
-  --sidebar-primary-foreground: hsl(0, 0%, 100%);
-  --sidebar-accent: hsl(205.7143, 70%, 7.8431%);
-  --sidebar-accent-foreground: hsl(203.7736, 87.6033%, 52.5490%);
-  --sidebar-border: hsl(205.7143, 15.7895%, 26.0784%);
-  --sidebar-ring: hsl(202.8169, 89.1213%, 53.1373%);
+  /* Dark-mode palette — aligned with the new design system. Preserves the
+     existing dark aesthetic (the app is already HIPAA-compliant and
+     deployed with a dark mode) but shifts primary/accent from cobalt blue
+     to copper to match the light palette. Surfaces keep the cool neutral
+     base to avoid a muddy-warm dark mode. */
+  --paper: hsl(220, 28%, 7%);
+  --paper-2: hsl(220, 25%, 11%);
+  --paper-card: hsl(220, 25%, 9%);
+  --ink: hsl(36, 20%, 92%);
+  --muted-ink: hsl(30, 10%, 60%);
+  --hairline: hsl(220, 18%, 18%);
+  --copper: oklch(70% 0.12 52);
+  --copper-soft: oklch(30% 0.06 52);
+  --sage: oklch(68% 0.10 160);
+  --sage-soft: oklch(30% 0.06 160);
+  --warm-red: oklch(68% 0.16 30);
+  --warm-red-soft: oklch(30% 0.08 30);
+  --amber: oklch(75% 0.14 85);
+  --amber-soft: oklch(30% 0.06 85);
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-card);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-card);
+  --popover-foreground: var(--ink);
+  --primary: var(--copper);
+  --primary-foreground: hsl(220, 28%, 7%);
+  --secondary: var(--paper-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--paper-2);
+  --muted-foreground: var(--muted-ink);
+  --accent: var(--copper);
+  --accent-foreground: hsl(220, 28%, 7%);
+  --destructive: var(--warm-red);
+  --destructive-foreground: hsl(220, 28%, 7%);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--copper);
+
+  --sidebar: var(--paper-card);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--copper);
+  --sidebar-primary-foreground: hsl(220, 28%, 7%);
+  --sidebar-accent: var(--copper-soft);
+  --sidebar-accent-foreground: var(--copper);
+  --sidebar-border: var(--hairline);
+  --sidebar-ring: var(--copper);
 }
 
 @layer base {
@@ -145,7 +195,7 @@
   /* Accessibility: visible focus indicators for keyboard navigation.
      Uses :focus-visible so outlines only appear on keyboard focus, not mouse clicks. */
   *:focus-visible {
-    outline: 2px solid hsl(var(--ring));
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
     border-radius: 2px;
   }

@@ -103,14 +103,14 @@ export default function AudioWaveformDisplay({ audioRef, currentTime, duration, 
 
       const isPast = (i / barCount) < progress;
       ctx.fillStyle = isPast
-        ? "hsl(var(--primary))"
-        : "hsl(var(--muted-foreground) / 0.5)";
+        ? "var(--primary)"
+        : "color-mix(in oklch, var(--muted-foreground), transparent 50%)";
       ctx.fillRect(x + 0.5, y, Math.max(barWidth - 1, 1), barHeight);
     }
 
     // Playhead line
     const px = progress * w;
-    ctx.fillStyle = "hsl(var(--primary))";
+    ctx.fillStyle = "var(--primary)";
     ctx.fillRect(px - 1, 0, 2, h);
   }, [waveformData, currentTime, duration]);
 

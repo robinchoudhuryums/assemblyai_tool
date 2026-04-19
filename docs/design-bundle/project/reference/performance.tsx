@@ -151,10 +151,10 @@ export default function PerformancePage() {
             </h3>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={chartData} layout="vertical" margin={{ left: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" domain={[0, 10]} tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" width={60} />
-                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)", fontSize: 12 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis type="number" domain={[0, 10]} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" width={60} />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 12 }} />
                 <Bar dataKey="score" name="Avg Score" radius={[0, 4, 4, 0]}>
                   {chartData.map((entry, i) => (
                     <Cell key={i} fill={getScoreColor(entry.score)} />

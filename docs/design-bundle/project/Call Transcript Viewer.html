@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Call Transcript Viewer — Design Options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:       #faf7f2;
+    --paper-2:     #f2ede4;
+    --paper-card:  #ffffff;
+    --ink:         #221a14;
+    --muted:       #7a6f62;
+    --line:        #e2dcd0;
+
+    --accent:      oklch(62% 0.12 52);
+    --accent-soft: oklch(92% 0.05 55);
+    --good:        oklch(58% 0.09 160);
+    --warn:        oklch(60% 0.14 35);
+
+    --display: 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ui:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  }
+
+  body[data-palette="copper"] { --paper:#faf7f2; --paper-2:#f2ede4; --paper-card:#ffffff; --ink:#221a14; --muted:#7a6f62; --line:#e2dcd0; --accent:oklch(62% 0.12 52); --accent-soft:oklch(92% 0.05 55); --good:oklch(58% 0.09 160); --warn:oklch(60% 0.14 35); }
+  body[data-palette="indigo"] { --paper:#f7f7fa; --paper-2:#eeeef4; --paper-card:#ffffff; --ink:#16162a; --muted:#6b6b82; --line:#dedde8; --accent:oklch(55% 0.16 268); --accent-soft:oklch(93% 0.04 268); --good:oklch(58% 0.12 170); --warn:oklch(60% 0.18 28); }
+  body[data-palette="forest"] { --paper:#f5f6f2; --paper-2:#eaece4; --paper-card:#ffffff; --ink:#15201a; --muted:#677367; --line:#dbdfd3; --accent:oklch(48% 0.10 155); --accent-soft:oklch(92% 0.04 155); --good:oklch(58% 0.12 165); --warn:oklch(60% 0.16 40); }
+  body[data-palette="slate"]  { --paper:#f6f7f9; --paper-2:#eceef2; --paper-card:#ffffff; --ink:#101418; --muted:#606872; --line:#dadde3; --accent:oklch(55% 0.12 240); --accent-soft:oklch(93% 0.04 240); --good:oklch(58% 0.10 160); --warn:oklch(60% 0.16 30); }
+  body[data-palette="plum"]   { --paper:#faf6f7; --paper-2:#f0eaec; --paper-card:#ffffff; --ink:#241620; --muted:#7a6670; --line:#e4d8dc; --accent:oklch(52% 0.14 340); --accent-soft:oklch(93% 0.04 340); --good:oklch(58% 0.10 165); --warn:oklch(62% 0.16 45); }
+  body[data-palette="mono"]   { --paper:#fafafa; --paper-2:#f0f0f0; --paper-card:#ffffff; --ink:#0a0a0a; --muted:#6b6b6b; --line:#d9d9d9; --accent:#0a0a0a; --accent-soft:#ebebeb; --good:oklch(50% 0.10 160); --warn:oklch(58% 0.16 30); }
+
+  body[data-mode="dark"] { --paper:#13110f; --paper-2:#1c1815; --paper-card:#1a1612; --ink:#f3ece0; --muted:#8a7d6c; --line:#2d2620; --accent-soft:oklch(30% 0.05 55); }
+  body[data-mode="dark"][data-palette="indigo"]  { --paper:#0f0f17; --paper-2:#17172a; --paper-card:#14142a; --ink:#eeeef8; --muted:#8888a0; --line:#272736; --accent-soft:oklch(28% 0.06 268);}
+  body[data-mode="dark"][data-palette="forest"]  { --paper:#0d120f; --paper-2:#151b16; --paper-card:#131917; --ink:#ecefe8; --muted:#7e8a80; --line:#232b25; --accent-soft:oklch(28% 0.05 155);}
+  body[data-mode="dark"][data-palette="slate"]   { --paper:#0c0f14; --paper-2:#151a22; --paper-card:#13171e; --ink:#ecf0f6; --muted:#7d8694; --line:#242a34; --accent-soft:oklch(28% 0.05 240);}
+  body[data-mode="dark"][data-palette="plum"]    { --paper:#130f12; --paper-2:#1d161b; --paper-card:#1b151a; --ink:#efe6ea; --muted:#8e7782; --line:#2d222a; --accent-soft:oklch(28% 0.06 340);}
+  body[data-mode="dark"][data-palette="mono"]    { --paper:#0a0a0a; --paper-2:#151515; --paper-card:#121212; --ink:#f0f0f0; --muted:#888; --line:#262626; --accent:#f5f5f5; --accent-soft:#222;}
+
+  html, body { margin:0; padding:0; background: var(--paper); min-height:100vh; }
+  body { font-family: var(--ui); color: var(--ink); transition: background 0.2s; }
+  * { box-sizing: border-box; }
+
+  /* Top app bar */
+  .appbar {
+    display:flex; align-items:center; gap:12px;
+    padding:12px 28px;
+    background: var(--paper-card);
+    border-bottom: 1px solid var(--line);
+    font-size:12px;
+  }
+  .appbar .crumbs {
+    display:flex; align-items:center; gap:8px;
+    font-family: var(--mono); font-size:11px; color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .appbar .crumbs a { color: var(--muted); text-decoration:none; }
+  .appbar .crumbs a:hover { color: var(--ink); }
+  .appbar .crumbs .sep { opacity:0.4; }
+  .appbar .spacer { flex:1; }
+
+  /* Role toggle (inline, part of the page) */
+  .role-bar {
+    display:flex; align-items:center; gap:0;
+    background: var(--paper-card); border:1px solid var(--line); border-radius:3px;
+    padding:2px;
+  }
+  .role-bar button {
+    background:transparent; border:none; padding:6px 12px; cursor:pointer;
+    font-family: var(--mono); font-size:10px; color: var(--muted);
+    letter-spacing:0.1em; text-transform:uppercase;
+    display:flex; align-items:center; gap:6px;
+  }
+  .role-bar button.active { background: var(--ink); color: var(--paper); }
+
+  /* Generic minimal icon buttons */
+  .icon-btn {
+    background:transparent; border:1px solid var(--line);
+    color: var(--ink); cursor:pointer; padding:6px 10px;
+    font-family: var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+    border-radius:2px;
+  }
+  .icon-btn:hover { background: var(--paper-2); }
+
+  /* Search */
+  .search-input {
+    background: var(--paper-2); border:1px solid var(--line);
+    padding:6px 10px 6px 28px; border-radius:2px;
+    font-family: var(--mono); font-size:11px; color: var(--ink);
+    width:180px;
+  }
+  .search-input:focus { outline:1px solid var(--accent); }
+
+  /* Tweaks panel */
+  #tweaks {
+    position: fixed; bottom: 20px; right: 20px; z-index: 100;
+    background: var(--paper-card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 14px 16px; font-family: var(--ui); font-size: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    min-width: 240px; display: none;
+  }
+  #tweaks.open { display: block; }
+  #tweaks h4 { margin: 0 0 10px; font-family: var(--display); font-size: 13px; font-weight: 600; letter-spacing: -0.2px; color: var(--ink); }
+  #tweaks .row { display: flex; justify-content: space-between; align-items: center; margin: 8px 0; gap: 12px; }
+  #tweaks label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--mono); }
+  #tweaks select { border: 1px solid var(--line); padding: 4px 6px; font-family: var(--mono); font-size: 11px; border-radius: 3px; background: var(--paper-card); color: var(--ink); }
+  .palette-swatches { display:flex; gap:6px; }
+  .palette-swatches button {
+    width:20px; height:20px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+  }
+  .palette-swatches button.active { border-color: var(--ink); }
+
+  /* Keep the whole viewer viewport-bound so scrubber + transcript behave */
+  .viewer-root { display:flex; flex-direction:column; height: 100%; }
+</style>
+</head>
+<body data-mode="light" data-palette="slate" data-density="balanced">
+<div style="display:flex; height:100vh;">
+  <div id="sidebar-root" style="display:contents;"></div>
+  <div id="root" style="flex:1; min-width:0; overflow:hidden;"></div>
+</div>
+
+<div id="tweaks">
+  <h4>Tweaks</h4>
+  <div class="row"><label>Role</label>
+    <select id="t-role">
+      <option value="agent">agent (self)</option>
+      <option value="manager">manager / QA</option>
+    </select>
+  </div>
+  <div class="row"><label>Mode</label>
+    <select id="t-mode"><option value="light">light</option><option value="dark">dark</option></select>
+  </div>
+  <div class="row"><label>Palette</label>
+    <div class="palette-swatches" id="t-palette-swatches"></div>
+  </div>
+  <div class="row"><label>Playback</label>
+    <select id="t-autoplay"><option value="paused">paused</option><option value="playing">playing</option></select>
+  </div>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="transcript-data.jsx"></script>
+<script type="text/babel" src="scrubber.jsx"></script>
+<script type="text/babel" src="transcript.jsx"></script>
+<script type="text/babel" src="side-rail.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "role": "manager",
+  "mode": "light",
+  "palette": "slate",
+  "autoplay": "playing"
+}/*EDITMODE-END*/;
+
+const PALETTES = [
+  { id:'copper', swatch:'#b5714a' },
+  { id:'indigo', swatch:'#4d5bce' },
+  { id:'forest', swatch:'#3f7b5a' },
+  { id:'slate',  swatch:'#4e7bc4' },
+  { id:'plum',   swatch:'#a0507a' },
+  { id:'mono',   swatch:'#0a0a0a' },
+];
+
+function App() {
+  const [role, setRole]       = React.useState(TWEAKS.role);
+  const [palette, setPalette] = React.useState(TWEAKS.palette);
+  const [mode, setMode]       = React.useState(TWEAKS.mode);
+  const [autoplay, setAutoplay] = React.useState(TWEAKS.autoplay);
+
+  const [playhead, setPlayhead] = React.useState(0);
+  const [playing, setPlaying]   = React.useState(TWEAKS.autoplay === 'playing');
+  const [rate, setRate]         = React.useState(1);
+  const [search, setSearch]     = React.useState('');
+
+  React.useEffect(() => { document.body.dataset.mode = mode; }, [mode]);
+  React.useEffect(() => { document.body.dataset.palette = palette; }, [palette]);
+  React.useEffect(() => { window.updateSidebar && window.updateSidebar({ role: role === 'manager' ? 'manager' : 'agent' }); }, [role]);
+
+  // Fake audio playback
+  React.useEffect(() => {
+    if (!playing) return;
+    let raf, last = performance.now();
+    const tick = (now) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setPlayhead((p) => {
+        const np = p + dt * rate;
+        if (np >= CALL_META.durationSec) { setPlaying(false); return CALL_META.durationSec - 0.01; }
+        return np;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, rate]);
+
+  // Persist helpers
+  const persist = (edits) => {
+    window.parent && window.parent.postMessage({type:'__edit_mode_set_keys', edits}, '*');
+  };
+
+  // Bind tweaks
+  React.useEffect(() => {
+    const wrap = document.getElementById('t-palette-swatches');
+    wrap.innerHTML = '';
+    PALETTES.forEach(p => {
+      const b = document.createElement('button');
+      b.style.background = p.swatch;
+      if (p.id === palette) b.classList.add('active');
+      b.onclick = () => { setPalette(p.id); persist({palette:p.id}); };
+      wrap.appendChild(b);
+    });
+  }, [palette]);
+
+  React.useEffect(() => {
+    const bind = (id, setter, key) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = TWEAKS[key];
+      el.addEventListener('change', () => { setter(el.value); persist({[key]: el.value}); });
+    };
+    bind('t-role',     setRole,     'role');
+    bind('t-mode',     setMode,     'mode');
+    bind('t-autoplay', (v) => { setAutoplay(v); setPlaying(v === 'playing'); setPlayhead(0); }, 'autoplay');
+
+    const onMsg = (e) => {
+      const d = e.data || {};
+      if (d.type === '__activate_edit_mode')   document.getElementById('tweaks').classList.add('open');
+      if (d.type === '__deactivate_edit_mode') document.getElementById('tweaks').classList.remove('open');
+    };
+    window.addEventListener('message', onMsg);
+    window.parent && window.parent.postMessage({type:'__edit_mode_available'}, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  // Keyboard shortcuts
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.code === 'Space') { e.preventDefault(); setPlaying(p => !p); }
+      if (e.code === 'ArrowLeft')  setPlayhead(p => Math.max(0, p - 5));
+      if (e.code === 'ArrowRight') setPlayhead(p => Math.min(CALL_META.durationSec - 1, p + 5));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <div className="viewer-root">
+      {/* App bar */}
+      <div className="appbar">
+        <div className="crumbs">
+          <a href="Call Analytics Dashboard.html">Dashboard</a>
+          <span className="sep">›</span>
+          <a href="#">Transcripts</a>
+          <span className="sep">›</span>
+          <span style={{color:'var(--ink)'}}>{CALL_META.id.toUpperCase()}</span>
+        </div>
+        <div className="spacer"/>
+
+        {/* Inline search */}
+        <div style={{position:'relative'}}>
+          <svg width="12" height="12" viewBox="0 0 12 12" style={{position:'absolute', left:9, top:'50%', transform:'translateY(-50%)', color:'var(--muted)'}}>
+            <circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+            <line x1="7.8" y1="7.8" x2="11" y2="11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          <input className="search-input" placeholder="Search transcript…" value={search} onChange={(e) => setSearch(e.target.value)}/>
+        </div>
+
+        <div className="role-bar">
+          <button className={role === 'agent' ? 'active' : ''} onClick={() => { setRole('agent'); persist({role:'agent'}); document.getElementById('t-role').value='agent'; }}>Agent view</button>
+          <button className={role === 'manager' ? 'active' : ''} onClick={() => { setRole('manager'); persist({role:'manager'}); document.getElementById('t-role').value='manager'; }}>Manager view</button>
+        </div>
+
+        <button className="icon-btn">⇣ Export</button>
+        {role === 'manager' && <button className="icon-btn" style={{background:'var(--accent)', color:'var(--paper)', borderColor:'var(--accent)'}}>＋ New coaching note</button>}
+      </div>
+
+      {/* Call header */}
+      <div style={{
+        padding:'22px 28px 20px',
+        display:'grid',
+        gridTemplateColumns:'1fr auto',
+        gap:20, alignItems:'end',
+        borderBottom:'1px solid var(--line)',
+        background:'var(--paper)',
+      }}>
+        <div>
+          <div style={{fontFamily:'var(--mono)', fontSize:10, textTransform:'uppercase', letterSpacing:'0.18em', color:'var(--muted)'}}>
+            Call transcript · {CALL_META.id.toUpperCase()} · {CALL_META.startedAt}
+          </div>
+          <div style={{fontFamily:'var(--display)', fontSize:28, fontWeight:500, letterSpacing:-0.6, color:'var(--ink)', marginTop:4, lineHeight:1.15}}>
+            {CALL_META.subject}
+          </div>
+          <div style={{display:'flex', gap:22, marginTop:12, flexWrap:'wrap', fontSize:12, color:'var(--muted)'}}>
+            <Meta label="Agent" value={
+              <span style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                <Avatar initials={CALL_META.agent.initials} size={18}/>
+                <span>{CALL_META.agent.name}</span>
+                <span style={{color:'var(--muted)', fontFamily:'var(--mono)', fontSize:10}}>· {CALL_META.agent.team}</span>
+              </span>
+            }/>
+            <Meta label="Patient" value={`${CALL_META.customer.name} · ${CALL_META.customer.id}`}/>
+            <Meta label="Coverage" value={CALL_META.customer.account}/>
+            <Meta label="Channel" value={CALL_META.channel}/>
+            <Meta label="Duration" value={CALL_META.duration}/>
+          </div>
+          <div style={{display:'flex', gap:6, marginTop:10}}>
+            {CALL_META.tags.map(t => (
+              <span key={t} style={{
+                fontFamily:'var(--mono)', fontSize:10, padding:'3px 8px',
+                background:'var(--paper-2)', border:'1px solid var(--line)',
+                color:'var(--ink)', letterSpacing:'0.05em',
+              }}>{t}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Main body: transcript + side rail, with scrubber beneath */}
+      <div style={{flex:1, display:'flex', overflow:'hidden', padding:'16px 28px 0', gap:16}}>
+        {/* Transcript column */}
+        <div style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
+          <Transcript playhead={playhead} onSeek={setPlayhead} role={role} search={search}/>
+        </div>
+
+        {/* Side rail */}
+        <SideRail role={role} playhead={playhead} onSeek={setPlayhead}/>
+      </div>
+
+      {/* Scrubber — docked at bottom */}
+      <div style={{
+        padding:'14px 28px 18px',
+        background:'var(--paper)',
+        borderTop:'1px solid var(--line)',
+      }}>
+        <Scrubber
+          duration={CALL_META.durationSec}
+          playhead={playhead}
+          playing={playing}
+          onSeek={setPlayhead}
+          onTogglePlay={() => setPlaying(p => !p)}
+          rate={rate}
+          onRate={setRate}
+        />
+      </div>
+    </div>
+  );
+}
+
+const Meta = ({ label, value }) => (
+  <div style={{display:'flex', flexDirection:'column', gap:3}}>
+    <span style={{fontFamily:'var(--mono)', fontSize:9, textTransform:'uppercase', letterSpacing:'0.14em', color:'var(--muted)'}}>{label}</span>
+    <span style={{fontSize:13, color:'var(--ink)'}}>{value}</span>
+  </div>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+mountSidebar({ active: 'transcript', role: TWEAKS.role === 'manager' ? 'manager' : 'agent' });
+</script>
+</body>
+</html>

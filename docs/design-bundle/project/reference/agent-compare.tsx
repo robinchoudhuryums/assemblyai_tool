@@ -210,8 +210,8 @@ export default function AgentComparePage() {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={350}>
                     <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="75%">
-                      <PolarGrid stroke="var(--border)" />
-                      <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 12, fill: "var(--muted-foreground)" }} />
+                      <PolarGrid stroke="hsl(var(--border))" />
+                      <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} />
                       <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
                       {comparison.map((agent, i) => (
                         <Radar
@@ -225,7 +225,7 @@ export default function AgentComparePage() {
                         />
                       ))}
                       <Legend />
-                      <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
+                      <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
                     </RadarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -244,10 +244,10 @@ export default function AgentComparePage() {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={sentimentData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                      <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                      <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
+                      <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
+                      <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
                       <Legend />
                       <Bar dataKey="positive" name="Positive" fill="#22c55e" stackId="sent" />
                       <Bar dataKey="neutral" name="Neutral" fill="#94a3b8" stackId="sent" />
