@@ -12,6 +12,7 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import { apiRequest } from "@/lib/queryClient";
 import type { Employee } from "@shared/schema";
 import { COACHING_CATEGORIES } from "@shared/schema";
+import CoachingPageShell from "@/components/coaching/page-shell";
 
 interface CoachingSession {
   id: string;
@@ -189,7 +190,8 @@ export default function CoachingPage() {
   const categoryLabel = (cat: string) => COACHING_CATEGORIES.find(c => c.value === cat)?.label || cat;
 
   return (
-    <div className="min-h-screen" data-testid="coaching-page">
+    <CoachingPageShell active="manager">
+    <div data-testid="coaching-page">
       <header className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
@@ -368,6 +370,7 @@ export default function CoachingPage() {
         })}
       </main>
     </div>
+    </CoachingPageShell>
   );
 }
 

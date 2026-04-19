@@ -16,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { CoachingSession } from "@shared/schema";
+import CoachingPageShell from "@/components/coaching/page-shell";
 
 interface MyCoachingData {
   employee: { id: string; name: string } | null;
@@ -104,7 +105,8 @@ export default function MyCoachingPage() {
   );
 
   return (
-    <div className="min-h-screen">
+    <CoachingPageShell active="agent">
+    <div>
       <header className="bg-card border-b border-border px-6 py-4">
         <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
           <ClipboardText className="w-6 h-6" />
@@ -286,5 +288,6 @@ export default function MyCoachingPage() {
         )}
       </div>
     </div>
+    </CoachingPageShell>
   );
 }
