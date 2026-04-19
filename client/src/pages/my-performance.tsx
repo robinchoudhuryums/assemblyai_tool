@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, Fire, GitDiff, Heart, Medal, Phone, Star, TrendUp, Trophy, User } from "@phosphor-icons/react";
-import { ScoreRing } from "@/components/ui/animated-number";
+import { ArrowRight, ArrowUp, ArrowDown, ClipboardText, GitDiff, Medal, TrendUp, Trophy, User } from "@phosphor-icons/react";
+import { Avatar, StatBlock } from "@/components/dashboard/primitives";
 import type { CallWithDetails, CoachingSession } from "@shared/schema";
 
 interface CorrectionStats {
@@ -208,19 +208,41 @@ export default function MyPerformancePage() {
     },
   });
 
-  return (
-    <div className="min-h-screen">
-      <header className="bg-card border-b border-border px-6 py-4">
-        <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-          <User className="w-6 h-6" />
-          My Performance
-        </h2>
-        <p className="text-muted-foreground">
-          {me?.name ? `Welcome, ${me.name}` : "Your personal performance dashboard"}
-        </p>
-      </header>
+  const greeting = getTimeOfDayGreeting();
+  const firstName = (me?.name || "").split(" ")[0] || "there";
+  const initials = initialsFromName(me?.name);
+  const weekly = myData?.weeklyTrend ?? [];
+  const thisWeek = weekly[weekly.length - 1];
+  const priorWeek = weekly[weekly.length - 2];
+  const scoreDelta = thisWeek && priorWeek ? round1(thisWeek.avgScore - priorWeek.avgScore) : null;
+  const callsDelta = thisWeek && priorWeek ? thisWeek.count - priorWeek.count : null;
+  const thisWeekCallCount = thisWeek?.count ?? 0;
+  const heroStatement = buildHeroStatement({
+    callCount: thisWeekCallCount,
+    avgScore: myData?.avgScore ?? null,
+    positivePct: myData?.positivePct ?? 0,
+    streak: myData?.currentStreak ?? 0,
+  });
 
-      <div className="p-6 space-y-6">
+  return (
+    <div className="min-h-screen bg-background text-foreground font-sans">
+      {/* Topbar — quiet kicker row */}
+      <div className="flex items-center justify-between px-8 md:px-14 py-6 border-b border-border">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-primary" />
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            {thisWeek ? `Your week · ${formatWeekRange(thisWeek.week)}` : "Your performance"}
+          </div>
+        </div>
+        {me?.name && (
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-foreground">{me.name}</div>
+            <Avatar initials={initials} size={32} />
+          </div>
+        )}
+      </div>
+
+      <div className="px-8 md:px-14 py-10 md:py-14 max-w-6xl mx-auto">
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -237,46 +259,55 @@ export default function MyPerformancePage() {
           </Card>
         ) : (
           <>
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <Card className="animate-stagger" style={{ "--stagger": 0 } as React.CSSProperties}>
-                <CardContent className="pt-4 flex items-center gap-4">
-                  {myData.avgScore != null ? (
-                    <ScoreRing score={myData.avgScore} size={56} strokeWidth={4} />
-                  ) : (
-                    <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center text-muted-foreground text-sm">N/A</div>
-                  )}
-                  <div>
-                    <p className="text-xs text-muted-foreground">Avg Score</p>
-                    <p className="text-lg font-bold">{myData.avgScore?.toFixed(1) ?? "N/A"}/10</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="animate-stagger" style={{ "--stagger": 1 } as React.CSSProperties}>
-                <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" /> Total Calls</p>
-                  <p className="text-2xl font-bold">{myData.callCount}</p>
-                </CardContent>
-              </Card>
-              <Card className="animate-stagger" style={{ "--stagger": 2 } as React.CSSProperties}>
-                <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Heart className="w-3 h-3" /> Positive</p>
-                  <p className="text-2xl font-bold text-green-600">{myData.positivePct}%</p>
-                </CardContent>
-              </Card>
-              <Card className="animate-stagger" style={{ "--stagger": 3 } as React.CSSProperties}>
-                <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Fire className="w-3 h-3" /> Streak</p>
-                  <p className="text-2xl font-bold text-orange-500">{myData.currentStreak}</p>
-                </CardContent>
-              </Card>
-              <Card className="animate-stagger" style={{ "--stagger": 4 } as React.CSSProperties}>
-                <CardContent className="pt-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Star className="w-3 h-3" /> Points</p>
-                  <p className="text-2xl font-bold text-primary">{myData.totalPoints.toLocaleString()}</p>
-                </CardContent>
-              </Card>
+            {/* Hero greeting */}
+            <div className="mb-10 md:mb-12">
+              <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+                Good {greeting}, {firstName}
+              </div>
+              <div
+                className="font-display font-normal text-foreground mt-2.5 max-w-4xl"
+                style={{ fontSize: "clamp(32px, 5vw, 56px)", letterSpacing: "-1.5px", lineHeight: 1.05 }}
+              >
+                {heroStatement.prefix}
+                {heroStatement.highlight && (
+                  <span className="text-primary">{heroStatement.highlight}</span>
+                )}
+                {heroStatement.suffix}
+              </div>
             </div>
+
+            {/* BigStat grid — airy 4-column summary */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-10 pb-10 md:pb-12 border-b border-border">
+              <StatBlock
+                label="Your score"
+                value={myData.avgScore != null ? myData.avgScore.toFixed(1) : "—"}
+                unit={myData.avgScore != null ? "/ 10" : undefined}
+                delta={scoreDelta}
+              />
+              <StatBlock
+                label="Calls this week"
+                value={thisWeekCallCount.toString()}
+                delta={callsDelta}
+              />
+              <StatBlock
+                label="Positive sentiment"
+                value={`${myData.positivePct}%`}
+              />
+              <StatBlock
+                label={myData.currentStreak > 0 ? "Current streak" : "Points earned"}
+                value={
+                  myData.currentStreak > 0
+                    ? myData.currentStreak.toString()
+                    : myData.totalPoints.toLocaleString()
+                }
+                unit={myData.currentStreak > 0 ? "calls ≥ 8" : "pts"}
+              />
+            </div>
+
+            {/* Spacer so existing sections below breathe */}
+            <div className="h-10" />
+
+            <div className="space-y-6">
 
             {/* My scoring corrections — feedback loop visibility */}
             <MyCorrectionsCard />
@@ -447,9 +478,87 @@ export default function MyPerformancePage() {
                 </CardContent>
               </Card>
             )}
+
+            </div>
           </>
         )}
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers (Agent Lens — hero/BigStat support)
+// ─────────────────────────────────────────────────────────────
+
+function getTimeOfDayGreeting(): "morning" | "afternoon" | "evening" {
+  const h = new Date().getHours();
+  if (h < 12) return "morning";
+  if (h < 18) return "afternoon";
+  return "evening";
+}
+
+function initialsFromName(name?: string): string {
+  if (!name) return "·";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "·";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+function formatWeekRange(weekStartIso: string): string {
+  const start = new Date(weekStartIso);
+  const end = new Date(start.getTime() + 6 * 86400000);
+  const fmt = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+interface HeroStatement {
+  prefix: string;
+  highlight?: string;
+  suffix: string;
+}
+
+/**
+ * Compose a warm, specific hero line from the week's data. Mirrors the
+ * Agent Lens prototype: mention call count as a copper-highlighted span,
+ * then add a growth-oriented follow-on tailored to the score/sentiment.
+ */
+function buildHeroStatement(ctx: {
+  callCount: number;
+  avgScore: number | null;
+  positivePct: number;
+  streak: number;
+}): HeroStatement {
+  if (ctx.callCount === 0) {
+    return {
+      prefix: "No calls yet this week — ",
+      suffix: "your work will show up here as soon as you start taking calls.",
+    };
+  }
+  const callWord = ctx.callCount === 1 ? "call" : "calls";
+  const prefix = "You handled ";
+  const highlight = `${ctx.callCount} ${callWord}`;
+  let suffix = " this week.";
+
+  const avg = ctx.avgScore ?? 0;
+  if (avg >= SCORE_EXCELLENT && ctx.positivePct >= 60) {
+    suffix += " Your patients left on a high note — and there's one small moment to sharpen.";
+  } else if (avg >= SCORE_EXCELLENT) {
+    suffix += " Strong finish. Here's where to keep going.";
+  } else if (avg >= SCORE_GOOD) {
+    suffix += ctx.streak >= 3
+      ? ` ${ctx.streak} in a row above 8 — let's find the pattern worth keeping.`
+      : " Steady work. Here's where to sharpen.";
+  } else if (ctx.avgScore != null) {
+    suffix += " Let's find the one thing worth working on.";
+  } else {
+    suffix += " A scorecard will appear once analysis completes.";
+  }
+
+  return { prefix, highlight, suffix };
 }
