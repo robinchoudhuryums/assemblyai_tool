@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SCORE_EXCELLENT, SCORE_GOOD } from "@/lib/constants";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { ArrowRight, ArrowUp, ArrowDown, GitDiff, Star, User } from "@phosphor-icons/react";
@@ -39,106 +39,149 @@ function MyCorrectionsCard() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader><CardTitle className="text-sm">My scoring corrections</CardTitle></CardHeader>
-        <CardContent><Skeleton className="h-24 w-full" /></CardContent>
-      </Card>
+      <div>
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+          Your scoring corrections
+        </div>
+        <div className="mt-5 bg-card border border-border px-5 py-4">
+          <Skeleton className="h-16 w-full" />
+        </div>
+      </div>
     );
   }
+
   if (!data || data.stats.total === 0) {
     return (
-      <Card className="bg-muted/30 border-dashed">
-        <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-1.5">
-            <GitDiff className="w-4 h-4" /> My scoring corrections
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-xs text-muted-foreground">
-            You haven't corrected any AI-generated scores yet. When you edit an analysis on the transcript page, your correction is recorded here and injected into future Bedrock prompts so the AI learns from your judgement.
+      <div>
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+          Your scoring corrections
+        </div>
+        <div
+          className="font-display font-medium text-foreground mt-1 mb-5"
+          style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+        >
+          Teach the AI what you see.
+        </div>
+        <div className="border border-dashed border-border bg-secondary/40 px-5 py-5 flex items-start gap-3">
+          <GitDiff className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+          <p className="text-[12px] text-muted-foreground leading-relaxed">
+            You haven't corrected any AI-generated scores yet. When you edit an analysis
+            on the transcript page, your correction is recorded here and injected into
+            future Bedrock prompts so the AI learns from your judgement.
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   const { stats, corrections } = data;
+  const lean =
+    stats.downgrades > stats.upgrades * 2
+      ? { label: "AI scoring high", cls: "text-[color-mix(in_oklch,var(--amber),var(--ink)_35%)]" }
+      : stats.upgrades > stats.downgrades * 2
+      ? { label: "AI scoring low", cls: "text-[color-mix(in_oklch,var(--amber),var(--ink)_35%)]" }
+      : null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm flex items-center gap-1.5">
-          <GitDiff className="w-4 h-4" /> My scoring corrections
-          <span className="text-xs text-muted-foreground font-normal ml-auto">
-            last {stats.windowDays} days
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="p-2 rounded-md bg-muted/50">
-            <div className="text-xl font-bold text-foreground">{stats.total}</div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">corrections</div>
+    <div>
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            Your scoring corrections
           </div>
-          <div className="p-2 rounded-md bg-green-50 dark:bg-green-900/20">
-            <div className="text-xl font-bold text-green-600 dark:text-green-400 flex items-center justify-center gap-0.5">
-              <ArrowUp className="w-4 h-4" />{stats.upgrades}
-            </div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">upgraded</div>
-          </div>
-          <div className="p-2 rounded-md bg-red-50 dark:bg-red-900/20">
-            <div className="text-xl font-bold text-red-600 dark:text-red-400 flex items-center justify-center gap-0.5">
-              <ArrowDown className="w-4 h-4" />{stats.downgrades}
-            </div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">downgraded</div>
+          <div
+            className="font-display font-medium text-foreground mt-1"
+            style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+          >
+            {stats.total === 1 ? "One correction" : `${stats.total} corrections`} on file.
           </div>
         </div>
-        <div className="text-xs text-muted-foreground">
-          Avg. absolute delta: <strong className="text-foreground">{stats.avgDelta.toFixed(1)}</strong> points.{" "}
-          {stats.downgrades > stats.upgrades * 2 && (
-            <span className="text-amber-600 dark:text-amber-400">
-              You downgrade the AI more than you upgrade it — the AI may be scoring too high.
-            </span>
-          )}
-          {stats.upgrades > stats.downgrades * 2 && (
-            <span className="text-amber-600 dark:text-amber-400">
-              You upgrade the AI more than you downgrade — the AI may be scoring too low.
-            </span>
-          )}
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground whitespace-nowrap">
+          last {stats.windowDays} days
         </div>
+      </div>
 
-        {corrections.length > 0 && (
-          <div className="pt-2 border-t border-border">
-            <h5 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">Recent corrections</h5>
-            <div className="space-y-1.5 max-h-48 overflow-y-auto">
-              {corrections.slice(0, 5).map(c => {
-                const delta = c.correctedScore - c.originalScore;
-                const deltaSign = delta > 0 ? "+" : "";
-                return (
-                  <Link
-                    key={c.id}
-                    href={`/transcripts/${c.callId}`}
-                    className="block p-2 rounded hover:bg-accent text-xs"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-muted-foreground">
-                        {c.originalScore.toFixed(1)} → {c.correctedScore.toFixed(1)}
-                      </span>
-                      <span className={`font-semibold ${delta > 0 ? "text-green-600" : "text-red-600"}`}>
-                        {deltaSign}{delta.toFixed(1)}
-                      </span>
-                    </div>
-                    {c.reason && (
-                      <p className="text-muted-foreground truncate mt-0.5">"{c.reason}"</p>
-                    )}
-                  </Link>
-                );
-              })}
-            </div>
+      <div className="mt-5 grid grid-cols-3 gap-3">
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium text-foreground tabular-nums"
+            style={{ fontSize: 28, letterSpacing: "-0.5px", lineHeight: 1 }}
+          >
+            {stats.total}
           </div>
-        )}
-      </CardContent>
-    </Card>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Total
+          </div>
+        </div>
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium tabular-nums flex items-baseline gap-1 text-[var(--sage)]"
+            style={{ fontSize: 28, letterSpacing: "-0.5px", lineHeight: 1 }}
+          >
+            <ArrowUp className="w-4 h-4" weight="bold" />
+            {stats.upgrades}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Upgraded
+          </div>
+        </div>
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium tabular-nums flex items-baseline gap-1 text-destructive"
+            style={{ fontSize: 28, letterSpacing: "-0.5px", lineHeight: 1 }}
+          >
+            <ArrowDown className="w-4 h-4" weight="bold" />
+            {stats.downgrades}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Downgraded
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 text-[12px] text-muted-foreground leading-relaxed">
+        Average absolute delta:{" "}
+        <span className="font-mono tabular-nums text-foreground">{stats.avgDelta.toFixed(1)}</span>{" "}
+        points.
+        {lean && <span className={`ml-1.5 ${lean.cls}`}>Trend — {lean.label}.</span>}
+      </div>
+
+      {corrections.length > 0 && (
+        <div className="mt-5">
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2.5">
+            Recent edits
+          </div>
+          <div className="flex flex-col">
+            {corrections.slice(0, 5).map((c, idx) => {
+              const delta = c.correctedScore - c.originalScore;
+              const deltaSign = delta > 0 ? "+" : "";
+              const deltaColor = delta > 0 ? "text-[var(--sage)]" : "text-destructive";
+              return (
+                <Link
+                  key={c.id}
+                  href={`/transcripts/${c.callId}`}
+                  className={`grid items-center gap-4 px-4 py-3 bg-card border border-border hover:bg-secondary transition-colors ${
+                    idx > 0 ? "border-t-0" : ""
+                  }`}
+                  style={{ gridTemplateColumns: "auto 1fr auto" }}
+                >
+                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
+                    {c.originalScore.toFixed(1)} → {c.correctedScore.toFixed(1)}
+                  </span>
+                  <span className="text-[12px] text-muted-foreground truncate italic">
+                    {c.reason ? `"${c.reason}"` : "No note provided"}
+                  </span>
+                  <span className={`font-mono tabular-nums text-[13px] font-medium ${deltaColor}`}>
+                    {deltaSign}
+                    {delta.toFixed(1)}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
