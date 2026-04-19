@@ -10,25 +10,16 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import { apiRequest } from "@/lib/queryClient";
-import type { Employee } from "@shared/schema";
+import type { Employee, CoachingSession as BaseCoachingSession } from "@shared/schema";
 import { COACHING_CATEGORIES } from "@shared/schema";
 import CoachingPageShell from "@/components/coaching/page-shell";
+import ManagerBoard from "@/components/coaching/manager-board";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-interface CoachingSession {
-  id: string;
-  employeeId: string;
-  employeeName?: string;
-  callId?: string;
-  assignedBy: string;
-  category: string;
-  title: string;
-  notes?: string;
-  actionPlan?: Array<{ task: string; completed: boolean }>;
-  status: "pending" | "in_progress" | "completed" | "dismissed";
-  dueDate?: string;
-  createdAt?: string;
-  completedAt?: string;
-}
+// Extends the strict shared schema with the `employeeName` field that
+// GET /api/coaching enriches onto each row server-side (see
+// server/routes/coaching.ts).
+type CoachingSession = BaseCoachingSession & { employeeName?: string };
 
 interface CoachingOutcome {
   coachingSessionId: string;
@@ -173,6 +164,27 @@ export default function CoachingPage() {
     },
   });
 
+  // Action-item toggle — same endpoint the agent /my-coaching page uses.
+  // `requireAuth` at the route level; managers can toggle any session.
+  const toggleActionItemMutation = useMutation({
+    mutationFn: async ({ id, index }: { id: string; index: number }) => {
+      const { getCsrfToken } = await import("@/lib/queryClient");
+      const res = await fetch(`/api/coaching/${id}/action-item/${index}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}),
+        },
+      });
+      if (!res.ok) throw new Error("Failed to toggle action item");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/coaching"] });
+    },
+  });
+
   const filtered = useMemo(() => (sessions || []).filter(s => {
     if (statusFilter === "active" && (s.status === "completed" || s.status === "dismissed")) return false;
     if (statusFilter === "completed" && s.status !== "completed") return false;
@@ -191,22 +203,36 @@ export default function CoachingPage() {
 
   return (
     <CoachingPageShell active="manager">
-    <div data-testid="coaching-page">
-      <header className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <ClipboardText className="w-6 h-6" /> Coaching & Action Plans
-          </h2>
-          <p className="text-muted-foreground">Assign coaching sessions from flagged calls and track agent improvement.</p>
+      {isLoading ? (
+        <div className="px-6 md:px-10 py-8 text-center text-muted-foreground">
+          Loading coaching sessions...
         </div>
-        <Button onClick={() => setShowForm(!showForm)}>
-          <Plus className="w-4 h-4 mr-2" />
-          New Session
-        </Button>
-      </header>
+      ) : sessionsError ? (
+        <div className="px-6 md:px-10 py-12 text-center text-destructive">
+          <X className="w-8 h-8 mx-auto mb-2" />
+          <p className="font-semibold">Failed to load coaching sessions</p>
+          <p className="text-sm text-muted-foreground">{sessionsError.message}</p>
+        </div>
+      ) : (
+        <ManagerBoard
+          sessions={sessions || []}
+          employees={(employees || []).filter((e) => e.status === "Active")}
+          togglePending={updateMutation.isPending || toggleActionItemMutation.isPending}
+          onUpdateStatus={(id, status) => updateMutation.mutate({ id, updates: { status } })}
+          onToggleActionItem={(id, index) =>
+            toggleActionItemMutation.mutate({ id, index })
+          }
+          onAssignNew={() => setShowForm(true)}
+        />
+      )}
 
-      {showForm && (
-        <div className="bg-card border-b border-border px-6 py-4">
+      {/* Assign-new dialog — wraps the legacy CoachingForm for now.
+          Phase 5 replaces with the Assign modal + transcript prefill. */}
+      <Dialog open={showForm} onOpenChange={setShowForm}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>New coaching session</DialogTitle>
+          </DialogHeader>
           <CoachingForm
             employees={employees || []}
             onClose={() => setShowForm(false)}
@@ -214,162 +240,8 @@ export default function CoachingPage() {
             prefillCallId={prefillCallId}
             prefillCategory={prefillCategory}
           />
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="bg-card border-b border-border px-6 py-3 flex gap-3 items-center">
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="completed">Completed</SelectItem>
-            <SelectItem value="all">All</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="All Employees" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Employees</SelectItem>
-            {employees?.filter(e => e.status === "Active").map(emp => (
-              <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <span className="text-sm text-muted-foreground ml-auto">{filtered.length} session{filtered.length !== 1 ? "s" : ""}</span>
-      </div>
-
-      <main className="p-6 space-y-3">
-        {isLoading && (
-          <div className="text-center py-12 text-muted-foreground">Loading coaching sessions...</div>
-        )}
-
-        {sessionsError && (
-          <div className="text-center py-12 text-destructive">
-            <X className="w-8 h-8 mx-auto mb-2" />
-            <p className="font-semibold">Failed to load coaching sessions</p>
-            <p className="text-sm text-muted-foreground">{sessionsError.message}</p>
-          </div>
-        )}
-
-        {!isLoading && filtered.length === 0 && (
-          <div className="text-center py-16">
-            <ClipboardText className="w-12 h-12 text-muted-foreground/40 mx-auto mb-3" />
-            <h4 className="font-semibold text-foreground mb-1">No coaching sessions</h4>
-            <p className="text-sm text-muted-foreground mb-4">Create coaching sessions from flagged calls or add them manually.</p>
-            <Button onClick={() => setShowForm(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Create First Session
-            </Button>
-          </div>
-        )}
-
-        {filtered.map(session => {
-          const isExpanded = expandedId === session.id;
-          const completedTasks = (session.actionPlan || []).filter(t => t.completed).length;
-          const totalTasks = (session.actionPlan || []).length;
-          const isOverdue = session.dueDate && new Date(session.dueDate) < new Date() && session.status !== "completed";
-
-          return (
-            <div key={session.id} className={`bg-card rounded-lg border ${isOverdue ? "border-red-300 dark:border-red-800" : "border-border"} overflow-hidden`}>
-              <div
-                className="px-5 py-4 flex items-center gap-4 cursor-pointer hover:bg-muted/30 transition-colors"
-                onClick={() => setExpandedId(isExpanded ? null : session.id)}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h4 className="font-semibold text-foreground truncate">{session.title}</h4>
-                    <Badge className={`text-xs ${statusColors[session.status]}`}>
-                      {session.status.replace("_", " ")}
-                    </Badge>
-                    <Badge variant="outline" className="text-xs">{categoryLabel(session.category)}</Badge>
-                    {isOverdue && <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 text-xs">Overdue</Badge>}
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><User className="w-3 h-3" /> {session.employeeName || "Unknown"}</span>
-                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {session.createdAt ? new Date(session.createdAt).toLocaleDateString() : "—"}</span>
-                    {session.dueDate && <span>Due: {new Date(session.dueDate).toLocaleDateString()}</span>}
-                    {totalTasks > 0 && <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> {completedTasks}/{totalTasks} tasks</span>}
-                    <span>Assigned by: {session.assignedBy}</span>
-                  </div>
-                </div>
-                {totalTasks > 0 && (
-                  <div className="w-20">
-                    <div className="w-full h-2 bg-muted-foreground/20 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full bg-gradient-to-r from-green-500 to-emerald-400" style={{ width: `${totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0}%` }} />
-                    </div>
-                  </div>
-                )}
-                {isExpanded ? <CaretUp className="w-4 h-4 text-muted-foreground" /> : <CaretDown className="w-4 h-4 text-muted-foreground" />}
-              </div>
-
-              {isExpanded && (
-                <div className="px-5 pb-4 pt-0 border-t border-border space-y-3">
-                  {session.notes && (
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Notes</p>
-                      <p className="text-sm text-foreground">{session.notes}</p>
-                    </div>
-                  )}
-
-                  {session.callId && (
-                    <Link href={`/transcripts/${session.callId}`} className="text-xs text-primary hover:underline inline-flex items-center gap-1">
-                      <Eye className="w-3 h-3" /> View Referenced Call
-                    </Link>
-                  )}
-
-                  <OutcomeWidget sessionId={session.id} enabled={isExpanded} />
-
-                  {totalTasks > 0 && (
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-2">Action Plan</p>
-                      <div className="space-y-1.5">
-                        {session.actionPlan!.map((task, i) => (
-                          <label key={i} className="flex items-center gap-2 text-sm cursor-pointer group">
-                            <input
-                              type="checkbox"
-                              checked={task.completed}
-                              onChange={() => {
-                                const newPlan = [...session.actionPlan!];
-                                newPlan[i] = { ...newPlan[i], completed: !newPlan[i].completed };
-                                updateMutation.mutate({ id: session.id, updates: { actionPlan: newPlan } });
-                              }}
-                              className="rounded"
-                            />
-                            <span className={task.completed ? "line-through text-muted-foreground" : "text-foreground"}>{task.task}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex gap-2 pt-2">
-                    {session.status === "pending" && (
-                      <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: session.id, updates: { status: "in_progress" } })}>
-                        <Clock className="w-3 h-3 mr-1" /> Start
-                      </Button>
-                    )}
-                    {(session.status === "pending" || session.status === "in_progress") && (
-                      <Button size="sm" onClick={() => updateMutation.mutate({ id: session.id, updates: { status: "completed" } })}>
-                        <CheckCircle className="w-3 h-3 mr-1" /> Complete
-                      </Button>
-                    )}
-                    {session.status !== "dismissed" && session.status !== "completed" && (
-                      <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => updateMutation.mutate({ id: session.id, updates: { status: "dismissed" } })}>
-                        <X className="w-3 h-3 mr-1" /> Dismiss
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </main>
-    </div>
+        </DialogContent>
+      </Dialog>
     </CoachingPageShell>
   );
 }
