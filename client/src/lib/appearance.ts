@@ -1,4 +1,5 @@
 import { safeSet } from "./safe-storage";
+import { VALID_PALETTES, DEFAULT_PALETTE, type PaletteId } from "./palettes";
 
 export type Theme = "light" | "dark";
 export type BackgroundPattern = "none" | "hexagons" | "softWaves" | "neonFlow" | "topoMesh";
@@ -10,6 +11,7 @@ export interface AppearancePrefs {
   theme: Theme;
   background: BackgroundPattern;
   glass: GlassEffect;
+  palette: PaletteId;
 }
 
 const STORAGE_KEY = "appearance";
@@ -18,6 +20,7 @@ const defaults: AppearancePrefs = {
   theme: "light",
   background: "none",
   glass: "strong",
+  palette: DEFAULT_PALETTE,
 };
 
 export function loadAppearance(): AppearancePrefs {
@@ -41,6 +44,7 @@ export function loadAppearance(): AppearancePrefs {
       theme: parsed.theme === "dark" ? "dark" : "light",
       background: VALID_BACKGROUNDS.includes(parsed.background) ? parsed.background : "none",
       glass: ["subtle", "medium", "strong"].includes(parsed.glass) ? parsed.glass : "strong",
+      palette: VALID_PALETTES.includes(parsed.palette) ? parsed.palette : DEFAULT_PALETTE,
     };
   } catch {
     return defaults;
