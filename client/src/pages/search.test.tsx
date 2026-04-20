@@ -33,10 +33,6 @@ vi.mock("@/components/lib/error-boundary", () => ({
   ErrorBoundary: ({ children }: any) => <>{children}</>,
 }));
 
-vi.mock("@/components/search/call-card", () => ({
-  CallCard: ({ call }: any) => <div data-testid="call-card">{call.fileName}</div>,
-}));
-
 vi.mock("@/components/ui/loading", () => ({
   LoadingIndicator: () => <div data-testid="loading">Loading...</div>,
 }));
@@ -66,8 +62,9 @@ describe("SearchPage", () => {
 
   it("shows empty state when no search performed", () => {
     render(<SearchPage />);
-    // Should show instructional text when no query
-    expect(screen.queryByTestId("call-card")).not.toBeInTheDocument();
+    // Empty state renders when neither search nor browse returns rows.
+    // The warm-paper empty state has a distinct testid.
+    expect(screen.queryByTestId("search-empty")).toBeInTheDocument();
   });
 
   it("shows loading state while fetching", () => {
