@@ -250,14 +250,11 @@
     -webkit-backdrop-filter: blur(12px);
   }
 
-  .drop-zone-active {
-    border-color: var(--primary);
-    background-color: hsl(217, 91%, 95%);
-  }
-
-  .dark .drop-zone-active {
-    background-color: hsl(217, 91%, 15%);
-  }
+  /* `.drop-zone-active` utility was deleted in installment 6 phase 5 —
+     it was never referenced by any component (grep confirmed) and was
+     one of the last holdouts of the pre-warm-paper hardcoded-HSL
+     palette. Dropzone active-state styling now lives inline in
+     file-upload.tsx using warm-paper tokens. */
 
   .chart-container {
     position: relative;

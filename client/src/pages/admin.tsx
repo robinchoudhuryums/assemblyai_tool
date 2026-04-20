@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Brain, CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -175,51 +176,78 @@ export default function AdminPage() {
   };
 
   return (
-    <div className="min-h-screen" data-testid="admin-page">
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Administration</h2>
-            <p className="text-muted-foreground">Manage users, access requests, and permissions</p>
-          </div>
-          {pendingRequests.length > 0 && (
-            <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 text-sm px-3 py-1">
-              {pendingRequests.length} pending request{pendingRequests.length > 1 ? "s" : ""}
-            </Badge>
-          )}
-        </div>
-      </header>
+    <div className="min-h-screen bg-background text-foreground" data-testid="admin-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Admin</span>
+        </nav>
+        <div className="flex-1" />
+        {pendingRequests.length > 0 && (
+          <span
+            className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5"
+            style={{
+              fontSize: 10,
+              letterSpacing: "0.1em",
+              background: "var(--amber-soft)",
+              borderColor: "color-mix(in oklch, var(--amber), transparent 50%)",
+              color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+            }}
+          >
+            {pendingRequests.length} pending request{pendingRequests.length > 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
 
-      <div className="p-6 space-y-6">
-        {/* Tabs */}
-        <div className="flex gap-2">
-          <Button variant={tab === "users" ? "default" : "outline"} size="sm" onClick={() => setTab("users")}>
-            <Users className="w-4 h-4 mr-2" />
-            Users
-          </Button>
-          <Button variant={tab === "requests" ? "default" : "outline"} size="sm" onClick={() => setTab("requests")}>
-            <UserPlus className="w-4 h-4 mr-2" />
-            Access Requests
-            {pendingRequests.length > 0 && (
-              <span className="ml-2 bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {pendingRequests.length}
-              </span>
-            )}
-          </Button>
-          <Button variant={tab === "roles" ? "default" : "outline"} size="sm" onClick={() => setTab("roles")}>
-            <Shield className="w-4 h-4 mr-2" />
-            Role Definitions
-          </Button>
-          <Button variant={tab === "pipeline" ? "default" : "outline"} size="sm" onClick={() => setTab("pipeline")}>
-            <Sliders className="w-4 h-4 mr-2" />
-            Pipeline Settings
-          </Button>
-          <Button variant={tab === "models" ? "default" : "outline"} size="sm" onClick={() => setTab("models")}>
-            <Brain className="w-4 h-4 mr-2" />
-            AI Models
-          </Button>
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          Administration
         </div>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+        >
+          {tab === "users" && "Users"}
+          {tab === "requests" && "Access requests"}
+          {tab === "roles" && "Role definitions"}
+          {tab === "pipeline" && "Pipeline settings"}
+          {tab === "models" && "AI models"}
+        </div>
+      </div>
 
+      {/* Tab bar */}
+      <div
+        className="flex gap-2 px-7 py-3 bg-background border-b border-border flex-wrap"
+      >
+        <AdminTab icon={Users} label="Users" active={tab === "users"} onClick={() => setTab("users")} />
+        <AdminTab
+          icon={UserPlus}
+          label="Access Requests"
+          active={tab === "requests"}
+          onClick={() => setTab("requests")}
+          badge={pendingRequests.length > 0 ? pendingRequests.length : undefined}
+        />
+        <AdminTab icon={Shield} label="Role Definitions" active={tab === "roles"} onClick={() => setTab("roles")} />
+        <AdminTab icon={Sliders} label="Pipeline Settings" active={tab === "pipeline"} onClick={() => setTab("pipeline")} />
+        <AdminTab icon={Brain} label="AI Models" active={tab === "models"} onClick={() => setTab("models")} />
+      </div>
+
+      <div className="px-7 py-6 space-y-6">
         {/* ════════════════ USERS TAB ════════════════ */}
         {tab === "users" && (
           <div className="space-y-6">
@@ -1063,5 +1091,54 @@ function ModelTiersCard() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper admin-tab button — mono uppercase with an optional badge
+// (used for the "Access Requests · N pending" indicator).
+// ─────────────────────────────────────────────────────────────
+function AdminTab({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+  badge,
+}: {
+  icon: React.ComponentType<{ style?: React.CSSProperties }>;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  badge?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors ${
+        active
+          ? "bg-foreground text-background border border-foreground"
+          : "bg-card border border-border text-foreground hover:bg-secondary"
+      }`}
+      style={{ fontSize: 10, letterSpacing: "0.1em" }}
+    >
+      <Icon style={{ width: 12, height: 12 }} />
+      {label}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className="inline-flex items-center justify-center rounded-full tabular-nums"
+          style={{
+            width: 16,
+            height: 16,
+            fontSize: 9,
+            background: active ? "var(--background)" : "var(--amber)",
+            color: active ? "var(--foreground)" : "var(--paper)",
+            marginLeft: 2,
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }

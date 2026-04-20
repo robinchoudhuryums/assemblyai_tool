@@ -23,9 +23,13 @@ vi.mock("@/lib/queryClient", () => ({
 
 // A27 made AuthPage call useConfig() to get COMPANY_NAME from /api/config.
 // Stub the hook so we don't need a real QueryClientProvider in the test.
+// The hook returns BOTH `companyName` (tenant name, used by AI prompts) AND
+// `appName` (product brand, used in UI chrome like the login CardTitle).
+// Both must be present or `auth.tsx` will render an empty CardTitle.
 vi.mock("@/hooks/use-config", () => ({
   useConfig: () => ({
-    companyName: "CallAnalyzer",
+    companyName: "UMS (United Medical Supply)",
+    appName: "CallAnalyzer",
     scoring: {
       lowScoreThreshold: 4,
       highScoreThreshold: 9,

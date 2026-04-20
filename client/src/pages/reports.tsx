@@ -5,7 +5,6 @@ import { LoadingIndicator, LoadingDots, ShimmerCard } from "@/components/ui/load
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { Employee } from "@shared/schema";
@@ -309,30 +308,74 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen" data-testid="reports-page">
-      <header className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">Performance Reports</h2>
-          <p className="text-muted-foreground">Filter by time period, employee, or department.</p>
+    <div className="min-h-screen bg-background text-foreground" data-testid="reports-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Reports</span>
+        </nav>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleDownloadCSV}
+          disabled={!report}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="download-csv"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          CSV
+        </button>
+        <button
+          type="button"
+          onClick={handleDownloadReport}
+          disabled={!report}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="download-report"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          Report
+        </button>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          Performance reports · {PRESET_LABELS[datePreset]}
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={handleDownloadCSV} disabled={!report}>
-            <DownloadSimple className="w-4 h-4 mr-2" />
-            CSV
-          </Button>
-          <Button onClick={handleDownloadReport} disabled={!report}>
-            <DownloadSimple className="w-4 h-4 mr-2" />
-            Report
-          </Button>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+        >
+          {reportType === "employee" && selectedEmployee
+            ? (employees?.find((e) => e.id === selectedEmployee)?.name ?? "Employee")
+            : reportType === "department" && selectedDepartment
+            ? `${selectedDepartment}`
+            : "Overall performance"}
         </div>
-      </header>
+      </div>
 
       {/* Filters Bar */}
-      <div className="bg-card border-b border-border px-6 py-4">
+      <div className="bg-background border-b border-border px-7 py-4">
         <div className="flex flex-wrap gap-4 items-end">
           {/* Report Type */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Report Type</Label>
+            <FilterLabel>Report Type</FilterLabel>
             <Select value={reportType} onValueChange={(v) => setReportType(v as ReportType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -346,7 +389,7 @@ export default function ReportsPage() {
           {/* Employee selector */}
           {reportType === "employee" && (
             <div className="min-w-[200px]">
-              <Label className="text-xs text-muted-foreground">Employee</Label>
+              <FilterLabel>Employee</FilterLabel>
               <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
                 <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
                 <SelectContent>
@@ -361,7 +404,7 @@ export default function ReportsPage() {
           {/* Department selector */}
           {reportType === "department" && (
             <div className="min-w-[200px]">
-              <Label className="text-xs text-muted-foreground">Department</Label>
+              <FilterLabel>Department</FilterLabel>
               <Select value={selectedDepartment} onValueChange={setSelectedDepartment}>
                 <SelectTrigger><SelectValue placeholder="Select department" /></SelectTrigger>
                 <SelectContent>
@@ -375,7 +418,7 @@ export default function ReportsPage() {
 
           {/* Call Party Type */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Call Party</Label>
+            <FilterLabel>Call Party</FilterLabel>
             <Select value={callPartyFilter} onValueChange={setCallPartyFilter}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -392,7 +435,7 @@ export default function ReportsPage() {
 
           {/* Date Preset */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Time Period</Label>
+            <FilterLabel>Time Period</FilterLabel>
             <Select value={datePreset} onValueChange={(v) => setDatePreset(v as DatePreset)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -409,34 +452,41 @@ export default function ReportsPage() {
           {datePreset === "custom" && (
             <>
               <div>
-                <Label className="text-xs text-muted-foreground">From</Label>
+                <FilterLabel>From</FilterLabel>
                 <Input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} className="w-[150px]" />
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground">To</Label>
+                <FilterLabel>To</FilterLabel>
                 <Input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} className="w-[150px]" />
               </div>
             </>
           )}
 
           {/* Compare toggle */}
-          <div className="ml-auto">
-            <Button
-              variant={compareEnabled ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCompareEnabled(!compareEnabled)}
-            >
-              <Calendar className="w-3.5 h-3.5 mr-1.5" />
-              {compareEnabled ? "Comparing" : "Compare Periods"}
-            </Button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setCompareEnabled(!compareEnabled)}
+            className={`ml-auto font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-2 transition-colors ${
+              compareEnabled
+                ? "bg-foreground text-background border border-foreground"
+                : "bg-card border border-border text-foreground hover:bg-secondary"
+            }`}
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            data-testid="compare-toggle"
+          >
+            <Calendar style={{ width: 12, height: 12 }} />
+            {compareEnabled ? "Comparing" : "Compare periods"}
+          </button>
         </div>
 
         {/* Comparison row */}
         {compareEnabled && (
           <div className="flex flex-wrap gap-4 items-end mt-3 pt-3 border-t border-border">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <ArrowRight className="w-4 h-4" />
+            <div
+              className="flex items-center gap-2 font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              <ArrowRight style={{ width: 12, height: 12 }} />
               Compare to:
             </div>
             <div className="min-w-[160px]">
@@ -465,34 +515,31 @@ export default function ReportsPage() {
         )}
       </div>
 
-      <main className="p-6 space-y-6">
+      <main className="px-7 py-6 space-y-6">
         {/* Metrics Cards */}
-        <div className="bg-card rounded-lg border border-border p-6">
-          <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-            <ChartBar className="w-5 h-5 mr-2" />
-            Metrics — {PRESET_LABELS[datePreset]}
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+        <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+          <SectionHeader icon={ChartBar} label={`Metrics · ${PRESET_LABELS[datePreset]}`} />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
             <MetricCard
-              label="Total Calls Analyzed"
+              label="Total calls analyzed"
               value={report?.metrics.totalCalls ?? 0}
               format="int"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.totalCalls : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.totalCalls ?? 0, compareReport?.metrics.totalCalls) : null}
             />
             <MetricCard
-              label="Average Sentiment Score"
+              label="Average sentiment"
               value={report?.metrics.avgSentiment ?? 0}
               format="sentiment"
-              color="text-blue-500"
+              color="var(--accent)"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgSentiment : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgSentiment ?? 0, compareReport?.metrics.avgSentiment) : null}
             />
             <MetricCard
-              label="Average Performance Score"
+              label="Average performance"
               value={report?.metrics.avgPerformanceScore ?? 0}
               format="score"
-              color="text-green-500"
+              color="var(--sage)"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgPerformanceScore : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgPerformanceScore ?? 0, compareReport?.metrics.avgPerformanceScore) : null}
             />
@@ -502,204 +549,317 @@ export default function ReportsPage() {
               </div>
             )}
           </div>
-        </div>
+        </section>
 
         {/* Detailed Sub-Scores (toggleable) */}
         {report?.avgSubScores && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-foreground flex items-center">
-                <Sliders className="w-5 h-5 mr-2" />
-                Score Breakdown
-              </h3>
-              <Button
-                variant={showDetailedScores ? "default" : "outline"}
-                size="sm"
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <div className="flex items-center justify-between">
+              <SectionHeader icon={Sliders} label="Score breakdown" />
+              <button
+                type="button"
                 onClick={() => setShowDetailedScores(!showDetailedScores)}
+                className={`font-mono uppercase rounded-sm px-3 py-1.5 transition-colors ${
+                  showDetailedScores
+                    ? "bg-foreground text-background border border-foreground"
+                    : "bg-card border border-border text-foreground hover:bg-secondary"
+                }`}
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
               >
-                {showDetailedScores ? "Hide Details" : "Show Details"}
-              </Button>
+                {showDetailedScores ? "Hide details" : "Show details"}
+              </button>
             </div>
             {showDetailedScores && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-blue-600" barColor="from-blue-500 to-blue-400" />
-                <SubScoreCard icon={Headphones} label="Customer Experience" score={report.avgSubScores.customerExperience} color="text-green-600" barColor="from-green-500 to-emerald-400" />
-                <SubScoreCard icon={ChatCircle} label="Communication" score={report.avgSubScores.communication} color="text-purple-600" barColor="from-purple-500 to-violet-400" />
-                <SubScoreCard icon={CheckCircle} label="Resolution" score={report.avgSubScores.resolution} color="text-amber-600" barColor="from-amber-500 to-yellow-400" />
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
+                <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-[var(--accent)]" barColor="" />
+                <SubScoreCard icon={Headphones} label="Customer exp." score={report.avgSubScores.customerExperience} color="text-[var(--sage)]" barColor="" />
+                <SubScoreCard icon={ChatCircle} label="Communication" score={report.avgSubScores.communication} color="text-[var(--chart-4)]" barColor="" />
+                <SubScoreCard icon={CheckCircle} label="Resolution" score={report.avgSubScores.resolution} color="text-[var(--chart-3)]" barColor="" />
               </div>
             )}
             {!showDetailedScores && (
-              <div className="flex gap-6">
+              <div className="flex flex-wrap gap-8 mt-4">
                 {[
-                  { label: "Compliance", value: report.avgSubScores.compliance, color: "text-blue-600" },
-                  { label: "Customer Exp.", value: report.avgSubScores.customerExperience, color: "text-green-600" },
-                  { label: "Communication", value: report.avgSubScores.communication, color: "text-purple-600" },
-                  { label: "Resolution", value: report.avgSubScores.resolution, color: "text-amber-600" },
-                ].map(s => (
-                  <div key={s.label} className="text-center">
-                    <p className="text-xs text-muted-foreground">{s.label}</p>
-                    <p className={`text-lg font-bold ${s.color}`}>{s.value.toFixed(1)}</p>
-                  </div>
-                ))}
+                  { label: "Compliance", value: report.avgSubScores.compliance },
+                  { label: "Customer Exp.", value: report.avgSubScores.customerExperience },
+                  { label: "Communication", value: report.avgSubScores.communication },
+                  { label: "Resolution", value: report.avgSubScores.resolution },
+                ].map((s) => {
+                  const tier =
+                    s.value >= 8
+                      ? "var(--sage)"
+                      : s.value >= 6
+                      ? "var(--foreground)"
+                      : s.value >= 4
+                      ? "var(--accent)"
+                      : "var(--destructive)";
+                  return (
+                    <div key={s.label}>
+                      <div
+                        className="font-mono uppercase text-muted-foreground"
+                        style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                      >
+                        {s.label}
+                      </div>
+                      <div
+                        className="font-display font-medium tabular-nums mt-1"
+                        style={{ fontSize: 22, color: tier, letterSpacing: "-0.4px" }}
+                      >
+                        {s.value.toFixed(1)}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </div>
+          </section>
         )}
 
-        {/* Trend Chart */}
+        {/* Performance trend (line chart) */}
         {report?.trends && report.trends.length > 0 && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <TrendUp className="w-5 h-5 mr-2" />
-              Performance Trend
-            </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <YAxis domain={[0, 10]} tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                <Legend />
-                <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="calls" name="Call Volume" stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="5 5" yAxisId="right" />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={TrendUp} label="Performance trend" />
+            <div className="mt-4">
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
+                  <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                  <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <YAxis domain={[0, 10]} tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                  <Legend wrapperStyle={CHART_LEGEND} />
+                  <Line type="monotone" dataKey="avgScore" name="Avg score" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="calls" name="Call volume" stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="4 3" yAxisId="right" dot={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
-        {/* Sentiment Trend (stacked bar) */}
+        {/* Sentiment trend (stacked bar) */}
         {report?.trends && report.trends.length > 0 && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smiley className="w-5 h-5 mr-2" />
-              Sentiment Trend
-            </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                <Legend />
-                <Bar dataKey="positive" name="Positive" stackId="sentiment" fill="#22c55e" />
-                <Bar dataKey="neutral" name="Neutral" stackId="sentiment" fill="#94a3b8" />
-                <Bar dataKey="negative" name="Negative" stackId="sentiment" fill="#ef4444" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Smiley} label="Sentiment trend" />
+            <div className="mt-4">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
+                  <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                  <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <YAxis tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                  <Legend wrapperStyle={CHART_LEGEND} />
+                  <Bar dataKey="positive" name="Positive" stackId="sentiment" fill="var(--sage)" />
+                  <Bar dataKey="neutral" name="Neutral" stackId="sentiment" fill="var(--muted-foreground)" />
+                  <Bar dataKey="negative" name="Negative" stackId="sentiment" fill="var(--destructive)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
         {/* Top Performers & Sentiment Breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Star className="w-5 h-5 mr-2" />
-              Top Performers
-            </h3>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Star} label="Top performers" />
             {report?.performers && report.performers.length > 0 ? (
-              <ul className="space-y-3">
-                {report.performers.slice(0, 10).map((p, i) => (
-                  <li key={p.id || i} className="flex justify-between items-center">
-                    <span className="font-medium">
-                      <span className="text-muted-foreground mr-2">{i + 1}.</span>
-                      {p.name}
-                      <span className="text-xs text-muted-foreground ml-2">({p.totalCalls} calls)</span>
-                    </span>
-                    <span className="font-bold text-green-500">
-                      {p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "N/A"}
-                    </span>
-                  </li>
-                ))}
+              <ul className="flex flex-col mt-4">
+                {report.performers.slice(0, 10).map((p, i) => {
+                  const score = p.avgPerformanceScore != null ? Number(p.avgPerformanceScore) : null;
+                  const scoreColor =
+                    score === null
+                      ? "var(--muted-foreground)"
+                      : score >= 8
+                      ? "var(--sage)"
+                      : score >= 6
+                      ? "var(--foreground)"
+                      : "var(--destructive)";
+                  return (
+                    <li
+                      key={p.id || i}
+                      className="flex items-center gap-3 py-2.5"
+                      style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}
+                    >
+                      <span
+                        className="font-mono tabular-nums text-muted-foreground"
+                        style={{ fontSize: 11, width: 18 }}
+                      >
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="text-foreground" style={{ fontSize: 13 }}>
+                          {p.name}
+                        </span>
+                        <span
+                          className="font-mono text-muted-foreground ml-2"
+                          style={{ fontSize: 10 }}
+                        >
+                          {p.totalCalls} {p.totalCalls === 1 ? "call" : "calls"}
+                        </span>
+                      </span>
+                      <span
+                        className="font-mono tabular-nums font-medium"
+                        style={{ fontSize: 13, color: scoreColor }}
+                      >
+                        {score !== null ? score.toFixed(1) : "—"}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
-              <p className="text-muted-foreground text-sm">No data for this period.</p>
+              <p className="text-muted-foreground text-sm mt-4">No data for this period.</p>
             )}
-          </div>
+          </section>
 
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smiley className="w-5 h-5 mr-2" />
-              Sentiment Breakdown
-            </h3>
-            <ul className="space-y-3">
-              {(["positive", "neutral", "negative"] as const).map(key => {
-                const colors = { positive: "text-green-600", neutral: "text-gray-600", negative: "text-red-600" };
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Smiley} label="Sentiment breakdown" />
+            <ul className="flex flex-col mt-4">
+              {(["positive", "neutral", "negative"] as const).map((key, i) => {
+                const color =
+                  key === "positive"
+                    ? "var(--sage)"
+                    : key === "negative"
+                    ? "var(--destructive)"
+                    : "var(--muted-foreground)";
                 const current = report?.sentiment[key] ?? 0;
                 const prev = compareEnabled ? compareReport?.sentiment[key] : undefined;
                 const d = compareEnabled && prev !== undefined ? delta(current, prev) : null;
                 return (
-                  <li key={key} className="flex justify-between items-center">
-                    <span className={`font-medium capitalize ${colors[key]}`}>{key}</span>
-                    <span className="flex items-center gap-2">
-                      <span className="font-bold">{current}</span>
-                      {d && (
-                        <span className={`text-xs ${d.positive ? "text-green-500" : "text-red-500"}`}>
-                          ({d.positive ? "+" : ""}{d.pct}%)
-                        </span>
-                      )}
+                  <li
+                    key={key}
+                    className="flex items-center gap-3 py-2.5"
+                    style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: color,
+                      }}
+                    />
+                    <span
+                      className="flex-1 capitalize text-foreground"
+                      style={{ fontSize: 13 }}
+                    >
+                      {key}
                     </span>
+                    <span
+                      className="font-mono tabular-nums font-medium text-foreground"
+                      style={{ fontSize: 13 }}
+                    >
+                      {current}
+                    </span>
+                    {d && (
+                      <span
+                        className="font-mono tabular-nums"
+                        style={{
+                          fontSize: 10,
+                          color: d.positive ? "var(--sage)" : "var(--destructive)",
+                        }}
+                      >
+                        ({d.positive ? "+" : ""}{d.pct}%)
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
-          </div>
+          </section>
         </div>
 
         {/* Error banners for secondary queries */}
         {compareError && compareEnabled && (
-          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <ErrorBanner>
             Failed to load comparison data: {(compareError as Error).message}
-          </div>
+          </ErrorBanner>
         )}
         {agentProfileError && reportType === "employee" && selectedEmployee && (
-          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <ErrorBanner>
             Failed to load agent profile: {(agentProfileError as Error).message}
-          </div>
+          </ErrorBanner>
         )}
 
         {/* Agent Profile Section (employee reports only) */}
         {reportType === "employee" && selectedEmployee && agentProfile && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-1 flex items-center">
-              <User className="w-5 h-5 mr-2" />
-              Agent Profile: {agentProfile.employee.name}
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={User} label="Agent profile" />
+            <h3
+              className="font-display font-medium text-foreground mt-2"
+              style={{ fontSize: 22, letterSpacing: "-0.4px" }}
+            >
+              {agentProfile.employee.name}
             </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Aggregated feedback from {agentProfile.totalCalls} analyzed calls
-              {agentProfile.employee.role && ` — ${agentProfile.employee.role}`}
+            <p
+              className="text-muted-foreground mt-1 mb-5"
+              style={{ fontSize: 12 }}
+            >
+              Aggregated feedback from {agentProfile.totalCalls} analyzed {agentProfile.totalCalls === 1 ? "call" : "calls"}
+              {agentProfile.employee.role && <> · {agentProfile.employee.role}</>}
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Avg Score</p>
-                <p className="text-2xl font-bold text-green-500">{agentProfile.avgPerformanceScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Best Score</p>
-                <p className="text-2xl font-bold">{agentProfile.highScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Lowest Score</p>
-                <p className="text-2xl font-bold">{agentProfile.lowScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Total Calls</p>
-                <p className="text-2xl font-bold">{agentProfile.totalCalls}</p>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              {[
+                {
+                  label: "Avg score",
+                  value: agentProfile.avgPerformanceScore?.toFixed(1) ?? "—",
+                  color: scoreTierColor(agentProfile.avgPerformanceScore),
+                },
+                {
+                  label: "Best score",
+                  value: agentProfile.highScore?.toFixed(1) ?? "—",
+                  color: "var(--sage)",
+                },
+                {
+                  label: "Lowest score",
+                  value: agentProfile.lowScore?.toFixed(1) ?? "—",
+                  color: "var(--destructive)",
+                },
+                {
+                  label: "Total calls",
+                  value: String(agentProfile.totalCalls),
+                  color: "var(--foreground)",
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="bg-secondary"
+                  style={{ padding: "12px 14px", border: "1px solid var(--border)" }}
+                >
+                  <div
+                    className="font-mono uppercase text-muted-foreground"
+                    style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                  >
+                    {stat.label}
+                  </div>
+                  <div
+                    className="font-display font-medium tabular-nums mt-1"
+                    style={{ fontSize: 24, letterSpacing: "-0.5px", color: stat.color }}
+                  >
+                    {stat.value}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Agent score trend */}
             {agentProfile.scoreTrend.length > 1 && (
               <div className="mb-6">
-                <h4 className="text-sm font-semibold text-foreground mb-2">Score Trend Over Time</h4>
-                <ResponsiveContainer width="100%" height={200}>
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Score trend over time
+                </div>
+                <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={agentProfile.scoreTrend.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
-                    <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
-                    <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                    <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
+                    <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                    <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                    <YAxis domain={[0, 10]} tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                    <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                    <Line type="monotone" dataKey="avgScore" name="Avg score" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} activeDot={{ r: 5 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -708,50 +868,79 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Strengths */}
               <div>
-                <h4 className="text-sm font-semibold text-foreground mb-2 text-green-600">Recurring Strengths</h4>
+                <div
+                  className="font-mono uppercase mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em", color: "var(--sage)" }}
+                >
+                  Recurring strengths
+                </div>
                 {agentProfile.topStrengths.length > 0 ? (
-                  <ul className="space-y-1.5">
+                  <ul className="flex flex-col gap-1.5">
                     {agentProfile.topStrengths.map((s, i) => (
-                      <li key={i} className="text-sm flex items-start gap-2">
-                        <span className="text-green-500 mt-0.5 shrink-0">+</span>
-                        <span className="capitalize">{s.text}</span>
-                        {s.count > 1 && <span className="text-xs text-muted-foreground shrink-0">x{s.count}</span>}
+                      <li key={i} className="flex items-start gap-2" style={{ fontSize: 13 }}>
+                        <span style={{ color: "var(--sage)", marginTop: 1, flexShrink: 0 }}>+</span>
+                        <span className="capitalize text-foreground">{s.text}</span>
+                        {s.count > 1 && (
+                          <span className="font-mono text-muted-foreground flex-shrink-0" style={{ fontSize: 10 }}>
+                            ×{s.count}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No data yet.</p>
+                  <p className="text-muted-foreground" style={{ fontSize: 12 }}>No data yet.</p>
                 )}
               </div>
 
               {/* Suggestions */}
               <div>
-                <h4 className="text-sm font-semibold text-foreground mb-2 text-amber-600">Recurring Suggestions</h4>
+                <div
+                  className="font-mono uppercase mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em", color: "var(--accent)" }}
+                >
+                  Recurring suggestions
+                </div>
                 {agentProfile.topSuggestions.length > 0 ? (
-                  <ul className="space-y-1.5">
+                  <ul className="flex flex-col gap-1.5">
                     {agentProfile.topSuggestions.map((s, i) => (
-                      <li key={i} className="text-sm flex items-start gap-2">
-                        <span className="text-amber-500 mt-0.5 shrink-0">!</span>
-                        <span className="capitalize">{s.text}</span>
-                        {s.count > 1 && <span className="text-xs text-muted-foreground shrink-0">x{s.count}</span>}
+                      <li key={i} className="flex items-start gap-2" style={{ fontSize: 13 }}>
+                        <span style={{ color: "var(--accent)", marginTop: 1, flexShrink: 0 }}>!</span>
+                        <span className="capitalize text-foreground">{s.text}</span>
+                        {s.count > 1 && (
+                          <span className="font-mono text-muted-foreground flex-shrink-0" style={{ fontSize: 10 }}>
+                            ×{s.count}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No data yet.</p>
+                  <p className="text-muted-foreground" style={{ fontSize: 12 }}>No data yet.</p>
                 )}
               </div>
             </div>
 
             {/* Common topics */}
             {agentProfile.commonTopics.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <h4 className="text-sm font-semibold text-foreground mb-2">Common Call Topics</h4>
-                <div className="flex flex-wrap gap-2">
+              <div className="mt-5 pt-5 border-t border-border">
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Common call topics
+                </div>
+                <div className="flex flex-wrap gap-1.5">
                   {agentProfile.commonTopics.map((t, i) => (
-                    <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-primary/10 text-primary font-medium capitalize">
-                      {t.text}
-                      {t.count > 1 && <span className="ml-1 text-muted-foreground">({t.count})</span>}
+                    <span
+                      key={i}
+                      className="font-mono uppercase inline-flex items-center gap-1 bg-secondary border border-border text-foreground"
+                      style={{ fontSize: 10, padding: "3px 8px", letterSpacing: "0.05em" }}
+                    >
+                      <span className="capitalize">{t.text}</span>
+                      {t.count > 1 && (
+                        <span className="text-muted-foreground tabular-nums">({t.count})</span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -760,9 +949,14 @@ export default function ReportsPage() {
 
             {/* Flagged Calls */}
             {agentProfile.flaggedCalls && agentProfile.flaggedCalls.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <h4 className="text-sm font-semibold text-foreground mb-3">Flagged Calls</h4>
-                <div className="space-y-2">
+              <div className="mt-5 pt-5 border-t border-border">
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-3"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Flagged calls
+                </div>
+                <div className="flex flex-col gap-2">
                   {agentProfile.flaggedCalls.map(fc => (
                     <FlaggedCallCard key={fc.id} call={fc} />
                   ))}
@@ -771,41 +965,158 @@ export default function ReportsPage() {
             )}
 
             {/* AI Summary */}
-            <div className="mt-4 pt-4 border-t border-border">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                  <Sparkle className="w-4 h-4" /> AI Performance Summary
-                </h4>
-                <Button
-                  size="sm"
-                  variant={aiSummary ? "outline" : "default"}
+            <div className="mt-5 pt-5 border-t border-border">
+              <div className="flex items-center justify-between mb-3">
+                <div
+                  className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  <Sparkle style={{ width: 12, height: 12 }} /> AI performance summary
+                </div>
+                <button
+                  type="button"
                   onClick={() => summaryMutation.mutate()}
                   disabled={summaryMutation.isPending}
+                  className={`font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    aiSummary
+                      ? "bg-card border border-border text-foreground hover:bg-secondary"
+                      : "bg-primary text-[var(--paper)] border border-primary hover:opacity-90"
+                  }`}
+                  style={{ fontSize: 10, letterSpacing: "0.1em" }}
                 >
-                  <Sparkle className="w-3.5 h-3.5 mr-1.5" />
-                  {summaryMutation.isPending ? "Generating..." : aiSummary ? "Regenerate" : "Generate AI Summary"}
-                </Button>
+                  <Sparkle style={{ width: 12, height: 12 }} />
+                  {summaryMutation.isPending ? "Generating…" : aiSummary ? "Regenerate" : "Generate AI summary"}
+                </button>
               </div>
               {summaryMutation.isError && (
-                <p className="text-sm text-red-500 mb-2">
-                  <Warning className="w-3.5 h-3.5 inline mr-1" />
-                  {summaryMutation.error?.message || "Failed to generate summary"}
-                </p>
+                <div className="mb-3">
+                  <ErrorBanner>
+                    {summaryMutation.error?.message || "Failed to generate summary"}
+                  </ErrorBanner>
+                </div>
               )}
               {aiSummary && (
-                <div className="bg-muted/50 rounded-lg p-4 text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                <div
+                  className="bg-secondary text-foreground whitespace-pre-wrap leading-relaxed"
+                  style={{ padding: "14px 16px", fontSize: 13, border: "1px solid var(--border)" }}
+                >
                   {toDisplayString(aiSummary)}
                 </div>
               )}
               {!aiSummary && !summaryMutation.isPending && (
-                <p className="text-sm text-muted-foreground">
-                  Click "Generate AI Summary" to create a narrative performance review based on aggregated call data.
+                <p className="text-muted-foreground" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                  Click "Generate AI summary" to create a narrative performance review based on
+                  aggregated call data.
                 </p>
               )}
             </div>
-          </div>
+          </section>
         )}
       </main>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier color derivation for score display. Mirrors the CallsTable +
+// CallsPreviewRail score palette (sage ≥ EXCELLENT, foreground ≥
+// GOOD, copper ≥ NEEDS_WORK, destructive below). Accepts null to
+// return a muted fallback.
+// ─────────────────────────────────────────────────────────────
+function scoreTierColor(score: number | null | undefined): string {
+  if (score == null) return "var(--muted-foreground)";
+  if (score >= 8) return "var(--sage)";
+  if (score >= 6) return "var(--foreground)";
+  if (score >= 4) return "var(--accent)";
+  return "var(--destructive)";
+}
+
+// ─────────────────────────────────────────────────────────────
+// Recharts styling constants — keep chart typography + chrome in
+// lockstep with the warm-paper panels. Mono axis ticks, paper-card
+// tooltip bg, hairline borders.
+// ─────────────────────────────────────────────────────────────
+const CHART_TICK = {
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+  fill: "var(--muted-foreground)",
+} as const;
+
+const CHART_TOOLTIP: React.CSSProperties = {
+  background: "var(--card)",
+  border: "1px solid var(--border)",
+  borderRadius: 2,
+  fontSize: 12,
+  fontFamily: "var(--font-sans)",
+};
+
+const CHART_LEGEND: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+};
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper section header: icon + mono uppercase label — used across
+// each panel in the Reports body.
+// ─────────────────────────────────────────────────────────────
+function SectionHeader({
+  icon: Icon,
+  label,
+}: {
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon
+        style={{ width: 14, height: 14, color: "var(--muted-foreground)" }}
+      />
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 10, letterSpacing: "0.14em", fontWeight: 500 }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper error banner: warm-red left stripe + soft bg. Used for
+// secondary-query failures (compare report, agent profile).
+// ─────────────────────────────────────────────────────────────
+function ErrorBanner({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2"
+      style={{
+        background: "var(--warm-red-soft)",
+        border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+        borderLeft: "3px solid var(--destructive)",
+        padding: "10px 14px",
+        fontSize: 12,
+        color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+      }}
+    >
+      <Warning style={{ width: 14, height: 14, marginTop: 1, flexShrink: 0 }} />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper filter-row label (mono uppercase kicker over each Select)
+// ─────────────────────────────────────────────────────────────
+function FilterLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="font-mono uppercase text-muted-foreground mb-1.5"
+      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+    >
+      {children}
     </div>
   );
 }

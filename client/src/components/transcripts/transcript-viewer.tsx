@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, DownloadSimple, FileText, Flag, FloppyDisk, Gauge, MagnifyingGlass, Pause, PencilSimple, Play, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, FileText, Flag, FloppyDisk, MagnifyingGlass, PencilSimple, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -12,11 +12,11 @@ import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
-import { SPEED_OPTIONS } from "@/lib/constants";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreRing } from "@/components/ui/animated-number";
-import AudioWaveformDisplay from "./audio-waveform";
+import Scrubber from "./scrubber";
+import SideRail from "./side-rail";
 
 interface TranscriptViewerProps {
   callId: string;
@@ -51,17 +51,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   /** Milliseconds of silence before splitting into a new transcript segment */
   const SEGMENT_GAP_MS = 2000;
 
-  const cycleSpeed = useCallback(() => {
-    setPlaybackRate(prev => {
-      // SPEED_OPTIONS is `as const`, so its element type is the literal
-      // union, not `number`. Widen for indexOf since `prev` is just a number.
-      const speeds: readonly number[] = SPEED_OPTIONS;
-      const idx = speeds.indexOf(prev);
-      const next = speeds[(idx + 1) % speeds.length];
-      if (audioRef.current) audioRef.current.playbackRate = next;
-      return next;
-    });
-  }, []);
+  // cycleSpeed removed in phase 5 — the bottom-docked Scrubber owns the
+  // rate selector now. setPlaybackRate still drives audioRef.playbackRate
+  // from the Scrubber's onRate callback.
 
   // Apply volume / mute to the audio element whenever they change. Also
   // persist the volume so the user's preferred level sticks across
@@ -84,11 +76,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
 
-  // Transcript search state
-  const [searchOpen, setSearchOpen] = useState(false);
+  // Transcript search state — query is driven by ViewerHeader via
+  // `transcript:search-query` window events; we keep only the query +
+  // match index locally.
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatchIdx, setSearchMatchIdx] = useState(0);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
   // Warn before navigating away with unsaved edits
@@ -143,30 +135,59 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     editMutation.mutate({ updates, reason: editReason.trim() });
   };
 
-  // Close edit mode on Escape key (broadcast from App.tsx)
+  // Close edit mode on Escape key (broadcast from App.tsx).
+  // Phase-5 note: the legacy "close search popup on Escape" branch was
+  // dropped when the in-column search bar moved into ViewerHeader.
   useEffect(() => {
     const onEscape = () => {
-      if (searchOpen) { setSearchOpen(false); setSearchQuery(""); return; }
+      if (searchQuery) { setSearchQuery(""); return; }
       if (isEditing) setIsEditing(false);
     };
     window.addEventListener("app:escape", onEscape);
     return () => window.removeEventListener("app:escape", onEscape);
-  }, [isEditing, searchOpen]);
+  }, [isEditing, searchQuery]);
 
-  // Ctrl+F / Cmd+F to open transcript search
+  // Ctrl+F / Cmd+F focuses the ViewerHeader search input. Keeps the
+  // familiar shortcut working without reopening the old popup.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-        // Only intercept if transcript viewer is visible
         const el = transcriptContainerRef.current;
         if (!el) return;
+        const headerInput = document.getElementById("transcript-header-search") as HTMLInputElement | null;
+        if (!headerInput) return;
         e.preventDefault();
-        setSearchOpen(true);
-        setTimeout(() => searchInputRef.current?.focus(), 50);
+        headerInput.focus();
+        headerInput.select();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Bridge: ViewerHeader controls (search / export / download) dispatch
+  // window events; the viewer listens and handles them. Keeps the header
+  // presentational without prop-drilling across a sibling. Handlers go
+  // through refs so the window listener always calls the current closure
+  // (otherwise an empty-deps effect would capture stale call data).
+  const exportHandlerRef = useRef<() => void>(() => {});
+  const downloadHandlerRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onSearch = (e: Event) => {
+      const detail = (e as CustomEvent<{ query: string }>).detail;
+      setSearchQuery(detail?.query ?? "");
+      setSearchMatchIdx(0);
+    };
+    const onExport = () => exportHandlerRef.current();
+    const onDownload = () => downloadHandlerRef.current();
+    window.addEventListener("transcript:search-query", onSearch);
+    window.addEventListener("transcript:export", onExport);
+    window.addEventListener("transcript:download", onDownload);
+    return () => {
+      window.removeEventListener("transcript:search-query", onSearch);
+      window.removeEventListener("transcript:export", onExport);
+      window.removeEventListener("transcript:download", onDownload);
+    };
   }, []);
 
   // toDisplayString is a pure function imported from @/lib/display-utils — no memoization needed
@@ -196,10 +217,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   // MUST be called before early returns to respect Rules of Hooks
   const transcriptSegments = useMemo(() => {
     if (call?.transcript?.words && Array.isArray(call.transcript.words) && call.transcript.words.length > 0) {
-      return generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+      const base = generateSegmentsFromWords(call.transcript.words as TranscriptWord[]);
+      return enrichSegmentSentiment(base, call?.sentiment?.segments);
     }
     return [];
-  }, [call?.transcript?.words]);
+  }, [call?.transcript?.words, call?.sentiment?.segments]);
 
   // Compute search matches across segments
   // MUST be called before early returns to respect Rules of Hooks
@@ -369,6 +391,31 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return segments;
   }
 
+  // Enrich transcript segments with per-utterance sentiment from the
+  // sentiment_analyses.segments array (AssemblyAI sentiment_analysis_results,
+  // persisted end-to-end but previously unused at the frontend). Matches by
+  // timestamp midpoint overlap — sentiment utterances and word-derived
+  // segments don't align 1:1, but midpoint-in-range is a good-enough match
+  // for a visible dot.
+  function enrichSegmentSentiment(
+    segments: TranscriptSegment[],
+    sentimentSegments: Array<{ start?: number; end?: number; sentiment?: string }> | undefined,
+  ): TranscriptSegment[] {
+    if (!sentimentSegments || sentimentSegments.length === 0) return segments;
+    return segments.map((seg) => {
+      const mid = (seg.start + seg.end) / 2;
+      const match = sentimentSegments.find(
+        (s) => typeof s.start === "number" && typeof s.end === "number" && mid >= s.start && mid <= s.end,
+      );
+      if (!match?.sentiment) return seg;
+      const s = match.sentiment.toLowerCase();
+      if (s === "positive" || s === "negative") {
+        return { ...seg, sentiment: s };
+      }
+      return seg;
+    });
+  }
+
   const jumpToTime = (timeMs: number) => {
     if (!Number.isFinite(timeMs) || timeMs < 0) return;
     const audio = audioRef.current;
@@ -506,6 +553,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     URL.revokeObjectURL(url);
   };
 
+  // Re-bind every render so the window event listeners always call the
+  // latest closure (captures current `call` / `transcriptSegments`).
+  exportHandlerRef.current = handleExportTranscript;
+  downloadHandlerRef.current = handleDownloadAudio;
+
   const highlightKeywords = (text: string | any, segmentIndex?: number): React.ReactNode => {
     const str = typeof text === "string" ? text : toDisplayString(text);
     // Build combined regex for topics + search
@@ -553,177 +605,131 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   );
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="transcript-viewer">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-semibold text-foreground">Call Transcript</h3>
-          <p className="text-sm text-muted-foreground">
-            {call.employee?.name} • {new Date(call.uploadedAt || "").toLocaleDateString()}
-          </p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }} aria-label="Search transcript (Ctrl+F)">
-            <MagnifyingGlass className="w-4 h-4 mr-1" />
-            Search
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportTranscript} aria-label="Export transcript as text file" data-testid="export-transcript">
-            <FileText className="w-4 h-4 mr-1" />
-            Export
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleDownloadAudio} aria-label="Download audio file" data-testid="download-audio">
-            <DownloadSimple className="w-4 h-4 mr-1" />
-            Download
-          </Button>
-          <Button size="sm" onClick={togglePlayPause} aria-label={isPlaying ? "Pause audio" : "Play audio"} data-testid="play-audio">
-            {isPlaying ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
-            {isPlaying ? "Pause" : "Play Audio"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={skipToNextSegment} aria-label="Skip to next segment" title="Skip silence / next speaker">
-            <SkipForward className="w-4 h-4" />
-          </Button>
-          <Button size="sm" variant="outline" onClick={jumpToFlagged} aria-label="Jump to next negative sentiment" title="Jump to next flagged moment">
-            <Flag className="w-4 h-4" />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={cycleSpeed}
-            title="Playback speed"
-            className="w-16 text-xs font-mono"
-          >
-            <Gauge className="w-3 h-3 mr-1" />
-            {playbackRate}x
-          </Button>
-          {/* Volume control — popover with a slider + mute toggle. Volume
-              persists to localStorage; mute is session-only. */}
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-                title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              >
-                {muted || volume === 0
-                  ? <SpeakerX className="w-4 h-4" />
-                  : volume < 0.5
-                    ? <SpeakerLow className="w-4 h-4" />
-                    : <SpeakerHigh className="w-4 h-4" />}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-48 p-3" align="end">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Volume</span>
-                  <button
-                    type="button"
-                    onClick={() => setMuted((v) => !v)}
-                    className="text-foreground hover:underline"
-                  >
-                    {muted ? "Unmute" : "Mute"}
-                  </button>
-                </div>
-                <Slider
-                  value={[muted ? 0 : volume]}
-                  onValueChange={([v]) => {
-                    setVolume(v);
-                    if (v > 0 && muted) setMuted(false);
-                  }}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                />
-                <div className="text-[10px] text-muted-foreground text-right">
-                  {Math.round((muted ? 0 : volume) * 100)}%
-                </div>
+    <div data-testid="transcript-viewer">
+      {/* Compact secondary toolbar — only controls that aren't already in
+          the ViewerHeader (search/export/download) or the Scrubber
+          (play/rate). Kept here because these are functional shortcuts
+          without a better home: skip to next segment, jump to next
+          flagged moment, and the volume popover. */}
+      <div className="flex items-center justify-end gap-1.5 mb-3">
+        <button
+          type="button"
+          onClick={skipToNextSegment}
+          aria-label="Skip to next segment"
+          title="Skip silence / next speaker"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <SkipForward style={{ width: 12, height: 12 }} />
+          Skip
+        </button>
+        <button
+          type="button"
+          onClick={jumpToFlagged}
+          aria-label="Jump to next flagged moment"
+          title="Jump to next negative sentiment"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <Flag style={{ width: 12, height: 12 }} />
+          Flag
+        </button>
+        {/* Volume popover — persisted to localStorage; mute is session-only. */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              className="font-mono inline-flex items-center border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+            >
+              {muted || volume === 0
+                ? <SpeakerX style={{ width: 12, height: 12 }} />
+                : volume < 0.5
+                  ? <SpeakerLow style={{ width: 12, height: 12 }} />
+                  : <SpeakerHigh style={{ width: 12, height: 12 }} />}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-3" align="end">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Volume</span>
+                <button
+                  type="button"
+                  onClick={() => setMuted((v) => !v)}
+                  className="text-foreground hover:underline"
+                >
+                  {muted ? "Unmute" : "Mute"}
+                </button>
               </div>
-            </PopoverContent>
-          </Popover>
-        </div>
+              <Slider
+                value={[muted ? 0 : volume]}
+                onValueChange={([v]) => {
+                  setVolume(v);
+                  if (v > 0 && muted) setMuted(false);
+                }}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+              <div className="text-[10px] text-muted-foreground text-right">
+                {Math.round((muted ? 0 : volume) * 100)}%
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Hidden audio element that streams from S3 via the API */}
       <audio ref={audioRef} src={`/api/calls/${callId}/audio`} preload="auto" />
 
-      {/* Audio waveform / progress bar */}
-      {audioReady && (
-        <div className="mb-4">
-          <div className="flex items-center space-x-3">
-            <span className="text-xs text-muted-foreground w-10 text-right">
-              {formatTimestamp(currentTime)}
-            </span>
-            <div className="flex-1">
-              <AudioWaveformDisplay
-                audioRef={audioRef}
-                currentTime={currentTime}
-                duration={audioDuration}
-                onSeek={(ms) => {
-                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
-                  setCurrentTime(ms);
-                }}
-              />
-              {/* Fallback range input (shown briefly while waveform loads) */}
-              <input
-                type="range"
-                className="w-full h-1.5 accent-primary cursor-pointer mt-1"
-                min={0}
-                max={audioDuration}
-                value={currentTime}
-                onChange={(e) => {
-                  const ms = Number(e.target.value);
-                  if (audioRef.current) audioRef.current.currentTime = ms / 1000;
-                  setCurrentTime(ms);
-                }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground w-10">
-              {formatTimestamp(audioDuration)}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Waveform + sentiment ribbon moved to the bottom-docked Scrubber
+          rendered after the main grid — see end of this component. */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          {/* Transcript search bar */}
-          {searchOpen && (
-            <div className="flex items-center gap-2 mb-2 bg-muted rounded-lg px-3 py-2">
-              <MagnifyingGlass className="w-4 h-4 text-muted-foreground shrink-0" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search transcript..."
-                className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    goToMatch(e.shiftKey ? searchMatchIdx - 1 : searchMatchIdx + 1);
-                  }
-                  if (e.key === "Escape") {
-                    setSearchOpen(false);
-                    setSearchQuery("");
-                  }
-                }}
-              />
-              {searchQuery && (
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {searchMatches.length > 0 ? `${searchMatchIdx + 1}/${searchMatches.length}` : "0 results"}
-                </span>
-              )}
-              <button onClick={() => goToMatch(searchMatchIdx - 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Previous match">
+          {/* Search hit chip — driven by ViewerHeader's search input via
+              `transcript:search-query` events. Prev / next buttons walk the
+              matches and scroll the column to the hit segment. */}
+          {searchQuery && (
+            <div
+              className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
+              role="status"
+              aria-live="polite"
+            >
+              <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
+              <span
+                className="font-mono tabular-nums text-foreground flex-1 truncate"
+                style={{ fontSize: 11 }}
+              >
+                {searchMatches.length > 0
+                  ? `${searchMatchIdx + 1} / ${searchMatches.length}`
+                  : "0 results"}
+                <span className="text-muted-foreground"> · "{searchQuery}"</span>
+              </span>
+              <button
+                onClick={() => goToMatch(searchMatchIdx - 1)}
+                disabled={searchMatches.length === 0}
+                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                aria-label="Previous match"
+              >
                 <CaretUp className="w-3.5 h-3.5" />
               </button>
-              <button onClick={() => goToMatch(searchMatchIdx + 1)} disabled={searchMatches.length === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label="Next match">
+              <button
+                onClick={() => goToMatch(searchMatchIdx + 1)}
+                disabled={searchMatches.length === 0}
+                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                aria-label="Next match"
+              >
                 <CaretDown className="w-3.5 h-3.5" />
-              </button>
-              <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Close search">
-                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
-          <div ref={transcriptContainerRef} className="bg-muted rounded-lg p-4 max-h-96 overflow-y-auto">
+          <div
+            ref={transcriptContainerRef}
+            className="bg-card border border-border overflow-y-auto"
+            style={{ padding: "24px 28px", maxHeight: 384 }}
+          >
             {call.status !== 'completed' ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground">
@@ -731,36 +737,97 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                 </p>
               </div>
             ) : call.transcript?.text ? (
-              <div className="space-y-3">
-                {transcriptSegments.map((segment, index) => (
-                  <div
-                    key={index}
-                    className={`transcript-line p-2 rounded cursor-pointer transition-colors ${
-                      index === activeSegmentIndex ? 'bg-primary/10 ring-1 ring-primary/30' : ''
-                    }`}
-                    onClick={() => jumpToTime(segment.start)}
-                    data-testid={`transcript-segment-${index}`}
-                  >
-                    <div className="flex items-start space-x-3">
-                      <button
-                        className="text-xs text-muted-foreground bg-background px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground"
-                        onClick={() => jumpToTime(segment.start)}
+              <div>
+                {transcriptSegments.map((segment, index) => {
+                  const active = index === activeSegmentIndex;
+                  const past = currentTime >= segment.end;
+                  const isAgent = segment.speaker === 'Agent';
+                  const dotColor =
+                    segment.sentiment === "positive"
+                      ? "var(--sage)"
+                      : segment.sentiment === "negative"
+                      ? "var(--destructive)"
+                      : null;
+                  return (
+                    <div
+                      key={index}
+                      className="grid gap-4 cursor-pointer transition-colors rounded-sm"
+                      style={{
+                        gridTemplateColumns: "48px 1fr",
+                        padding: "10px 12px",
+                        margin: "2px -12px",
+                        background: active ? "var(--accent-soft)" : "transparent",
+                        opacity: past || active ? 1 : 0.82,
+                      }}
+                      onClick={() => jumpToTime(segment.start)}
+                      data-testid={`transcript-segment-${index}`}
+                    >
+                      {/* Timestamp */}
+                      <div
+                        className="font-mono tabular-nums"
+                        style={{
+                          fontSize: 11,
+                          color: active ? "var(--accent)" : "var(--muted-foreground)",
+                          fontWeight: active ? 600 : 400,
+                          paddingTop: 3,
+                        }}
                       >
-                        <Clock className="w-3 h-3 mr-1 inline" />
                         {formatTimestamp(segment.start)}
-                      </button>
-                      <div className="flex-1">
-                        <p className={`text-sm font-medium ${segment.speaker === 'Agent' ? 'text-primary' : 'text-gray-600'}`}>
-                          {segment.speaker === 'Agent' ? `Agent (${call.employee?.name}):` : 'Customer:'}
-                        </p>
-                        <p className="text-foreground">{highlightKeywords(segment.text, index)}</p>
                       </div>
-                      <Badge className={getSentimentColor(segment.sentiment)}>
-                        {segment.sentiment.charAt(0).toUpperCase() + segment.sentiment.slice(1)}
-                      </Badge>
+
+                      {/* Content */}
+                      <div style={{ minWidth: 0 }}>
+                        {/* Speaker header */}
+                        <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                          <span
+                            className="font-display font-semibold"
+                            style={{
+                              fontSize: 12,
+                              color: isAgent ? "var(--accent)" : "var(--foreground)",
+                              letterSpacing: "0.02em",
+                            }}
+                          >
+                            {isAgent
+                              ? call.employee?.name || "Agent"
+                              : "Customer"}
+                          </span>
+                          <span
+                            className="font-mono uppercase text-muted-foreground"
+                            style={{ fontSize: 9, letterSpacing: "0.12em" }}
+                          >
+                            {isAgent ? "Agent" : "Patient"}
+                          </span>
+                          {dotColor && (
+                            <span
+                              aria-label={`${segment.sentiment} sentiment`}
+                              title={segment.sentiment}
+                              style={{
+                                display: "inline-block",
+                                width: 6,
+                                height: 6,
+                                borderRadius: "50%",
+                                background: dotColor,
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Text */}
+                        <div
+                          className="text-foreground"
+                          style={{
+                            fontSize: 14,
+                            lineHeight: 1.58,
+                            borderLeft: isAgent ? "none" : "2px solid var(--border)",
+                            paddingLeft: isAgent ? 0 : 10,
+                          }}
+                        >
+                          {highlightKeywords(segment.text, index)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8">
@@ -789,216 +856,27 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             </div>
           )}
 
-          <div className="bg-muted rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="font-semibold text-foreground">Call Summary</h4>
-              {!isEditing && call.analysis && (
-                <Button size="sm" variant="ghost" onClick={startEditing} className="h-7 text-xs">
-                  <PencilSimple className="w-3 h-3 mr-1" /> Edit
-                </Button>
-              )}
-            </div>
-
-            {isEditing ? (
-              <div className="space-y-3">
-                <div>
-                  <Label className="text-xs">Performance Score (0-10)</Label>
-                  <Input
-                    type="number" min="0" max="10" step="0.1"
-                    value={editScore}
-                    onChange={e => setEditScore(e.target.value)}
-                    className="h-8 text-sm"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">Summary</Label>
-                  <textarea
-                    value={editSummary}
-                    onChange={e => setEditSummary(e.target.value)}
-                    className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-red-600">Reason for Edit *</Label>
-                  <Input
-                    value={editReason}
-                    onChange={e => setEditReason(e.target.value)}
-                    placeholder="Why is this edit needed?"
-                    className="h-8 text-sm"
-                  />
-                </div>
-                {editMutation.isError && (
-                  <p className="text-xs text-red-500">{editMutation.error?.message}</p>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    size="sm" onClick={handleSaveEdit}
-                    disabled={!editReason.trim() || editMutation.isPending}
-                    className="h-7 text-xs"
-                  >
-                    <FloppyDisk className="w-3 h-3 mr-1" /> {editMutation.isPending ? "Saving..." : "Save"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-7 text-xs">
-                    <X className="w-3 h-3 mr-1" /> Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2 text-sm">
-                <p><strong>Duration:</strong> {call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s` : 'Unknown'}</p>
-                <p><strong>Status:</strong> <Badge>{toDisplayString(call.status)}</Badge></p>
-                <p><strong>Sentiment:</strong> {call.sentiment?.overallSentiment && typeof call.sentiment.overallSentiment === "string" ? (
-                  <Badge className={getSentimentColor(call.sentiment.overallSentiment)}>
-                    {call.sentiment.overallSentiment.charAt(0).toUpperCase() + call.sentiment.overallSentiment.slice(1)}
-                  </Badge>
-                ) : 'Unknown'}</p>
-                <div className="flex items-center gap-2">
-                  <strong className="text-sm">Performance:</strong>
-                  {call.analysis?.performanceScore ? (
-                    <ScoreRing score={Number(call.analysis.performanceScore)} size={40} strokeWidth={3} />
-                  ) : (
-                    <span className="text-sm text-muted-foreground">N/A</span>
-                  )}
-                </div>
-                {call.analysis?.subScores && (
-                  <div className="mt-2 pt-2 border-t border-border space-y-1.5">
-                    {[
-                      { label: "Compliance", key: "compliance", color: "text-blue-600", bar: "from-blue-500 to-blue-400" },
-                      { label: "Customer Exp.", key: "customerExperience", color: "text-green-600", bar: "from-green-500 to-emerald-400" },
-                      { label: "Communication", key: "communication", color: "text-purple-600", bar: "from-purple-500 to-violet-400" },
-                      { label: "Resolution", key: "resolution", color: "text-amber-600", bar: "from-amber-500 to-yellow-400" },
-                    ].map(dim => {
-                      const val = (call.analysis!.subScores as Record<string, number | undefined>)?.[dim.key];
-                      if (val == null) return null;
-                      return (
-                        <div key={dim.key}>
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">{dim.label}</span>
-                            <span className={`font-semibold ${dim.color}`}>{Number(val).toFixed(1)}</span>
-                          </div>
-                          <div className="w-full h-1.5 bg-muted-foreground/20 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full bg-gradient-to-r ${dim.bar} score-bar-fill`} style={{ width: `${Number(val) * 10}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {call.analysis?.detectedAgentName && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    <strong>Detected Agent:</strong> {toDisplayString(call.analysis.detectedAgentName)}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {!isEditing && call.analysis?.summary && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Key Points</h4>
-              <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-                {toDisplayString(call.analysis.summary).split('\n').map((point, index) => (
-                  point.trim() && <li key={index}>{point.trim().replace(/^- /, '')}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {call.analysis?.topics && Array.isArray(call.analysis.topics) && call.analysis.topics.length > 0 && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Key Topics</h4>
-              <div className="flex flex-wrap gap-2">
-                {call.analysis.topics.map((topic: unknown, index: number) => (
-                  <Badge key={index} variant="outline" className="bg-primary/10 text-primary">
-                    {toDisplayString(topic)}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {call.analysis?.actionItems && Array.isArray(call.analysis.actionItems) && call.analysis.actionItems.length > 0 && (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">Action Items</h4>
-              <ul className="space-y-1 text-sm">
-                {call.analysis.actionItems.map((item: unknown, index: number) => (
-                  <li key={index} className="flex items-center space-x-2">
-                    <div className="w-2 h-2 bg-green-600 rounded-full"></div>
-                    <span>{toDisplayString(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {call.analysis?.feedback && typeof call.analysis.feedback === "object" && !Array.isArray(call.analysis.feedback) && (() => {
-            const feedback = call.analysis.feedback as { strengths?: unknown[]; suggestions?: unknown[] };
-            return (
-            <div className="bg-muted rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-3">AI Feedback</h4>
-              <div className="space-y-2 text-sm">
-                {Array.isArray(feedback.strengths) && feedback.strengths.length > 0 && (
-                  <div>
-                    <p className="font-medium text-green-600">Strengths:</p>
-                    <ul className="space-y-1.5 text-muted-foreground">
-                      {feedback.strengths.map((item: unknown, index: number) => {
-                        const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
-                        return (
-                          <li key={index} className="flex items-start gap-2">
-                            <span className="text-green-500 mt-0.5 shrink-0">+</span>
-                            <span className="flex-1">{text}</span>
-                            {ts && (() => {
-                              const parsedMs = parseTimestampString(ts);
-                              if (parsedMs === null) return null;
-                              return (
-                                <button
-                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                  onClick={() => jumpToTime(parsedMs)}
-                                >
-                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                                </button>
-                              );
-                            })()}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-                {Array.isArray(feedback.suggestions) && feedback.suggestions.length > 0 && (
-                  <div>
-                    <p className="font-medium text-primary">Suggestions:</p>
-                    <ul className="space-y-1.5 text-muted-foreground">
-                      {feedback.suggestions.map((item: unknown, index: number) => {
-                        const text = toDisplayString(item);
-                        const ts = typeof item === "object" && item !== null ? (item as Record<string, unknown>).timestamp as string | null : null;
-                        return (
-                          <li key={index} className="flex items-start gap-2">
-                            <span className="text-amber-500 mt-0.5 shrink-0">!</span>
-                            <span className="flex-1">{text}</span>
-                            {ts && (() => {
-                              const parsedMs = parseTimestampString(ts);
-                              if (parsedMs === null) return null;
-                              return (
-                                <button
-                                  className="text-xs bg-background text-primary px-1.5 py-0.5 rounded hover:bg-primary hover:text-primary-foreground shrink-0"
-                                  onClick={() => jumpToTime(parsedMs)}
-                                >
-                                  <Clock className="w-3 h-3 mr-0.5 inline" />{ts}
-                                </button>
-                              );
-                            })()}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-            );
-          })()}
+          {/* Side rail (Phase 4) — score + rubric + AI verdict, AI summary,
+              coaching highlights, commitments, topics. Replaces the legacy
+              bg-muted Card stack. Editing state still owned here so
+              useBeforeUnload keeps consistent unsaved-changes detection. */}
+          <SideRail
+            call={call}
+            onSeek={jumpToTime}
+            parseTimestampString={parseTimestampString}
+            isEditing={isEditing}
+            editScore={editScore}
+            editSummary={editSummary}
+            editReason={editReason}
+            editError={editMutation.isError ? (editMutation.error?.message || "Save failed") : null}
+            editPending={editMutation.isPending}
+            onStartEditing={startEditing}
+            onCancelEditing={() => setIsEditing(false)}
+            onChangeEditScore={setEditScore}
+            onChangeEditSummary={setEditSummary}
+            onChangeEditReason={setEditReason}
+            onSave={handleSaveEdit}
+          />
 
           {/* AI Analysis Skipped banner — surfaced prominently when the
               pipeline quality gate fired (empty transcript or low transcript
@@ -1139,6 +1017,34 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           <AnnotationsPanel callId={callId} currentTime={currentTime} onJump={jumpToTime} />
         </div>
       </div>
+
+      {/* Bottom-docked scrubber — waveform + per-utterance sentiment
+          ribbon. Phase 3 installment; phase 5 prunes the duplicate top-bar
+          play/skip/speed/volume controls above. */}
+      {audioReady && (
+        <div
+          className="mt-5 pt-4 border-t border-border"
+          data-testid="scrubber-dock"
+        >
+          <Scrubber
+            audioRef={audioRef}
+            currentTime={currentTime}
+            duration={audioDuration}
+            playing={isPlaying}
+            playbackRate={playbackRate}
+            sentimentSegments={call.sentiment?.segments}
+            onSeek={(ms) => {
+              if (audioRef.current) audioRef.current.currentTime = ms / 1000;
+              setCurrentTime(ms);
+            }}
+            onTogglePlay={togglePlayPause}
+            onRate={(r) => {
+              setPlaybackRate(r);
+              if (audioRef.current) audioRef.current.playbackRate = r;
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

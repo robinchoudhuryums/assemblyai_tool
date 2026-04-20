@@ -1,19 +1,34 @@
+/**
+ * Search page (warm-paper installment 6, phase 4).
+ *
+ * Consolidates onto the Calls-table visual vocabulary from phase 2:
+ * mono uppercase headers, tabular-nums numerics, sentiment dots,
+ * tier-colored scores. Replaces the Card-wrapped CallCard grid with
+ * an inline results table.
+ *
+ * Fetch logic preserved: two parallel queries — `/api/search` when
+ * debouncedQuery has >2 chars, `/api/calls` in browse mode — with
+ * client-side date/score filtering applied in browse mode. URL-param
+ * syncing + 8-field saved-preset CRUD unchanged.
+ */
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookmarkSimple, Calendar, FloppyDisk, Funnel, Heart, MagnifyingGlass, Star, Trash, Users, X } from "@phosphor-icons/react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 import { Link, useLocation, useSearch } from "wouter";
+import { DownloadSimple, MagnifyingGlass, UploadSimple, X } from "@phosphor-icons/react";
 import type { CallWithDetails, Employee, PaginatedCalls } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
-import { LoadingIndicator } from "@/components/ui/loading";
-import { ErrorBoundary } from "@/components/lib/error-boundary";
-import { CallCard } from "@/components/search/call-card";
-import { SEARCH_DEBOUNCE_MS } from "@/lib/constants";
-import { deleteSavedFilter, loadSavedFilters, saveSavedFilter, type SavedFilter } from "@/lib/saved-filters";
+import {
+  SEARCH_DEBOUNCE_MS,
+  SCORE_EXCELLENT,
+  SCORE_GOOD,
+  SCORE_NEEDS_WORK,
+} from "@/lib/constants";
+import {
+  deleteSavedFilter,
+  loadSavedFilters,
+  saveSavedFilter,
+  type SavedFilter,
+} from "@/lib/saved-filters";
 
 export default function SearchPage() {
   const searchParams = useSearch();
@@ -29,18 +44,22 @@ export default function SearchPage() {
   const [maxScore, setMaxScore] = useState(urlParams.get("maxScore") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(urlParams.get("q") || "");
   const [showAdvanced, setShowAdvanced] = useState(
-    !!(urlParams.get("sentiment") || urlParams.get("from") || urlParams.get("minScore") || urlParams.get("status") || urlParams.get("employee"))
+    !!(
+      urlParams.get("sentiment") ||
+      urlParams.get("from") ||
+      urlParams.get("minScore") ||
+      urlParams.get("status") ||
+      urlParams.get("employee")
+    ),
   );
   const { toast } = useToast();
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-    }, SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Sync filter state to URL params for bookmarkable/shareable filters
+  // Sync filter state to URL params for bookmarkable/shareable filters.
   useEffect(() => {
     const params = new URLSearchParams();
     if (searchQuery) params.set("q", searchQuery);
@@ -56,10 +75,8 @@ export default function SearchPage() {
     window.history.replaceState(null, "", newPath);
   }, [searchQuery, sentimentFilter, statusFilter, employeeFilter, dateFrom, dateTo, minScore, maxScore]);
 
-  // F-19: Build search query params with ALL filters that affect results
-  // (status + employee were previously sent server-side but missing from
-  // the cache key, causing stale results when toggling them with a search
-  // query active).
+  // F-19: All filters that affect results must live in the query key so
+  // toggling them invalidates the cache.
   const searchQueryParams: Record<string, string> = { q: debouncedQuery };
   if (sentimentFilter !== "all") searchQueryParams.sentiment = sentimentFilter;
   if (statusFilter !== "all") searchQueryParams.status = statusFilter;
@@ -76,15 +93,17 @@ export default function SearchPage() {
 
   useEffect(() => {
     if (searchError) {
-      toast({ title: "Search Failed", description: searchError.message, variant: "destructive" });
+      toast({
+        title: "Search Failed",
+        description: searchError.message,
+        variant: "destructive",
+      });
     }
   }, [searchError, toast]);
 
-  // F-19: When browsing without a search query, the date-range and score
-  // filters are applied client-side (lines below). They MUST be part of the
-  // queryKey or the cache returns wrong-filter results when the user toggles
-  // them. Same for status/employee/sentiment. Empty-string sentinels are
-  // omitted (CLAUDE.md A14) so this matches ["/api/calls"] invalidation.
+  // CLAUDE.md A14: omit empty-string sentinels from the /api/calls key
+  // so this matches the ["/api/calls"] invalidation pattern used by
+  // mutations.
   const callsQueryKey: Record<string, string> = {};
   if (sentimentFilter !== "all") callsQueryKey.sentiment = sentimentFilter;
   if (statusFilter !== "all") callsQueryKey.status = statusFilter;
@@ -102,27 +121,32 @@ export default function SearchPage() {
     queryKey: ["/api/employees"],
   });
 
-  let displayCalls = (debouncedQuery.length > 2 ? searchResults : allCallsResponse?.calls) ?? [];
+  let displayCalls: CallWithDetails[] =
+    (debouncedQuery.length > 2 ? searchResults : allCallsResponse?.calls) ?? [];
   const isLoading = isLoadingSearch || isLoadingCalls;
 
-  // Apply client-side filters when browsing (no search query)
+  // Browse-mode client-side filtering (F-19).
   if (debouncedQuery.length === 0) {
     if (dateFrom) {
       const from = new Date(dateFrom);
-      displayCalls = displayCalls.filter(c => new Date(c.uploadedAt || 0) >= from);
+      displayCalls = displayCalls.filter((c) => new Date(c.uploadedAt || 0) >= from);
     }
     if (dateTo) {
       const to = new Date(dateTo);
       to.setHours(23, 59, 59, 999);
-      displayCalls = displayCalls.filter(c => new Date(c.uploadedAt || 0) <= to);
+      displayCalls = displayCalls.filter((c) => new Date(c.uploadedAt || 0) <= to);
     }
     if (minScore) {
       const min = parseFloat(minScore);
-      if (!isNaN(min)) displayCalls = displayCalls.filter(c => parseFloat(c.analysis?.performanceScore || "0") >= min);
+      if (!isNaN(min)) {
+        displayCalls = displayCalls.filter((c) => parseFloat(c.analysis?.performanceScore || "0") >= min);
+      }
     }
     if (maxScore) {
       const max = parseFloat(maxScore);
-      if (!isNaN(max)) displayCalls = displayCalls.filter(c => parseFloat(c.analysis?.performanceScore || "10") <= max);
+      if (!isNaN(max)) {
+        displayCalls = displayCalls.filter((c) => parseFloat(c.analysis?.performanceScore || "10") <= max);
+      }
     }
   }
 
@@ -139,13 +163,19 @@ export default function SearchPage() {
     window.history.replaceState(null, "", "/search");
   };
 
-  const hasActiveFilters = sentimentFilter !== "all" || statusFilter !== "all" || employeeFilter !== "all" || dateFrom || dateTo || minScore || maxScore;
+  const hasActiveFilters =
+    sentimentFilter !== "all" ||
+    statusFilter !== "all" ||
+    employeeFilter !== "all" ||
+    !!dateFrom ||
+    !!dateTo ||
+    !!minScore ||
+    !!maxScore;
 
-  // ── Saved filter presets (persisted to localStorage via safe-storage) ──
+  // Saved filter presets (persisted to localStorage via safe-storage).
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(() => loadSavedFilters());
   const [savingName, setSavingName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
-
   const refreshSavedFilters = () => setSavedFilters(loadSavedFilters());
 
   const applySavedFilter = (f: SavedFilter) => {
@@ -164,7 +194,11 @@ export default function SearchPage() {
   const handleSavePreset = () => {
     const name = savingName.trim();
     if (!name) {
-      toast({ title: "Name required", description: "Enter a name for this filter preset.", variant: "destructive" });
+      toast({
+        title: "Name required",
+        description: "Enter a name for this filter preset.",
+        variant: "destructive",
+      });
       return;
     }
     saveSavedFilter({
@@ -191,189 +225,505 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="min-h-screen" data-testid="search-page">
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">Search Calls</h2>
-          <p className="text-muted-foreground">Find specific call recordings using keywords, filters, and criteria</p>
+    <div className="min-h-screen bg-background text-foreground" data-testid="search-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Search</span>
+        </nav>
+        <div className="flex-1" />
+        <button
+          type="button"
+          disabled
+          title="CSV export — coming in a later phase"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground disabled:opacity-70 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          Export CSV
+        </button>
+        <Link
+          href="/upload"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <UploadSimple style={{ width: 12, height: 12 }} />
+          Upload
+        </Link>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          Search calls · {debouncedQuery.length > 0 ? "by query" : "browse all"}
         </div>
-      </header>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+        >
+          {isLoading
+            ? "…"
+            : `${displayCalls.length} ${displayCalls.length === 1 ? "result" : "results"}`}
+        </div>
+      </div>
 
-      <div className="p-6 space-y-6">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2"><MagnifyingGlass className="w-5 h-5" /> Search & Filter</CardTitle>
-              <div className="flex items-center gap-2">
-                {(hasActiveFilters || searchQuery) && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowSaveInput(v => !v)}
-                    title="Save the current filter combination as a preset"
-                  >
-                    <FloppyDisk className="w-4 h-4 mr-1" />
-                    Save preset
-                  </Button>
-                )}
-                <Button variant="ghost" size="sm" onClick={() => setShowAdvanced(!showAdvanced)}>
-                  <Funnel className="w-4 h-4 mr-1" />
-                  {showAdvanced ? "Hide Filters" : "More Filters"}
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="relative">
-              <MagnifyingGlass className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input type="text" placeholder="Search by keywords, transcript content..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10"/>
-            </div>
+      {/* Filter bar */}
+      <div className="px-7 py-4 bg-background border-b border-border flex flex-col gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <label className="relative flex-1 min-w-[260px]">
+            <MagnifyingGlass
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+              style={{ width: 12, height: 12 }}
+            />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search transcript, topic, agent, ID…"
+              className="w-full bg-card border border-border rounded-sm pl-7 pr-2.5 py-1.5 font-mono text-foreground placeholder:text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
+              style={{ fontSize: 11 }}
+              data-testid="search-input"
+            />
+          </label>
+          <FilterSelect
+            value={sentimentFilter}
+            onChange={setSentimentFilter}
+            options={[
+              { value: "all", label: "All sentiment" },
+              { value: "positive", label: "Positive" },
+              { value: "neutral", label: "Neutral" },
+              { value: "negative", label: "Negative" },
+            ]}
+            testId="sentiment-filter"
+          />
+          <FilterSelect
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={[
+              { value: "all", label: "All status" },
+              { value: "completed", label: "Completed" },
+              { value: "processing", label: "Processing" },
+              { value: "failed", label: "Failed" },
+            ]}
+            testId="status-filter"
+          />
+          <FilterSelect
+            value={employeeFilter}
+            onChange={setEmployeeFilter}
+            options={[
+              { value: "all", label: "All employees" },
+              ...(employees ?? []).map((e) => ({ value: e.id, label: e.name })),
+            ]}
+            testId="employee-filter"
+          />
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          >
+            {showAdvanced ? "⌃ Less" : "⌄ More"} filters
+          </button>
+          {(hasActiveFilters || searchQuery) && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowSaveInput((v) => !v)}
+                className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
+              >
+                ⊕ Save preset
+              </button>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
+              >
+                <X style={{ width: 12, height: 12 }} /> Clear
+              </button>
+            </>
+          )}
+        </div>
 
-            {/* Saved filter presets — load/delete. The "Save preset" button in the
-                header opens the save input below when active filters exist. */}
-            {savedFilters.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted-foreground flex items-center gap-1">
-                  <BookmarkSimple className="w-3.5 h-3.5" /> Saved:
-                </span>
-                {savedFilters.map(f => (
-                  <div key={f.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/60">
-                    <button
-                      onClick={() => applySavedFilter(f)}
-                      className="px-2 py-1 hover:bg-accent rounded-l-md text-foreground"
-                      title={`Load: ${f.name}`}
-                    >
-                      {f.name}
-                    </button>
-                    <button
-                      onClick={() => handleDeletePreset(f.id, f.name)}
-                      className="px-1.5 py-1 hover:bg-destructive/20 rounded-r-md text-muted-foreground hover:text-destructive"
-                      title={`Delete: ${f.name}`}
-                      aria-label={`Delete saved filter ${f.name}`}
-                    >
-                      <Trash className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+        {showSaveInput && (
+          <div
+            className="flex items-center gap-2 px-3 py-2 border border-dashed border-border"
+            style={{ background: "var(--secondary)" }}
+          >
+            <input
+              type="text"
+              value={savingName}
+              onChange={(e) => setSavingName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePreset();
+              }}
+              placeholder="e.g. 'My low-score calls this month'"
+              maxLength={60}
+              autoFocus
+              className="flex-1 bg-card border border-border rounded-sm px-2.5 py-1.5 font-mono text-foreground"
+              style={{ fontSize: 11 }}
+            />
+            <button
+              type="button"
+              onClick={handleSavePreset}
+              disabled={!savingName.trim()}
+              className="font-mono uppercase rounded-sm px-3 py-1.5 text-[var(--paper)] bg-primary border border-primary hover:opacity-90 transition-opacity disabled:opacity-50"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSaveInput(false);
+                setSavingName("");
+              }}
+              className="font-mono uppercase border border-border rounded-sm px-3 py-1.5 text-foreground hover:bg-secondary transition-colors"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
 
-            {showSaveInput && (
-              <div className="flex items-center gap-2 p-3 rounded-md border border-dashed border-border bg-muted/30">
-                <Input
-                  type="text"
-                  placeholder="e.g. 'My low-score calls this month'"
-                  value={savingName}
-                  onChange={e => setSavingName(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") handleSavePreset(); }}
-                  autoFocus
-                  maxLength={60}
-                />
-                <Button size="sm" onClick={handleSavePreset} disabled={!savingName.trim()}>Save</Button>
-                <Button size="sm" variant="ghost" onClick={() => { setShowSaveInput(false); setSavingName(""); }}>Cancel</Button>
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
-                <SelectTrigger><Heart className="w-4 h-4 mr-2" /><SelectValue placeholder="All Sentiment" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Sentiment</SelectItem>
-                  <SelectItem value="positive">Positive</SelectItem>
-                  <SelectItem value="neutral">Neutral</SelectItem>
-                  <SelectItem value="negative">Negative</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger><Funnel className="w-4 h-4 mr-2" /><SelectValue placeholder="All Status" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="processing">Processing</SelectItem>
-                  <SelectItem value="failed">Failed</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
-                <SelectTrigger><Users className="w-4 h-4 mr-2" /><SelectValue placeholder="All Employees" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Employees</SelectItem>
-                  {employees?.map(emp => (
-                    <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button variant="outline" onClick={clearFilters} disabled={!searchQuery && !hasActiveFilters}>
-                <X className="w-4 h-4 mr-1" /> Clear Filters
-              </Button>
-            </div>
+        {savedFilters.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Saved:
+            </span>
+            {savedFilters.map((f) => (
+              <span
+                key={f.id}
+                className="inline-flex items-center rounded-sm border border-border"
+                style={{ background: "var(--card)" }}
+              >
+                <button
+                  type="button"
+                  onClick={() => applySavedFilter(f)}
+                  className="font-mono uppercase px-2.5 py-1 text-foreground hover:bg-secondary transition-colors"
+                  style={{ fontSize: 10, letterSpacing: "0.08em" }}
+                  title={`Load: ${f.name}`}
+                >
+                  {f.name}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeletePreset(f.id, f.name)}
+                  aria-label={`Delete saved filter ${f.name}`}
+                  className="border-l border-border px-2 py-1 text-muted-foreground hover:text-destructive transition-colors"
+                  style={{ fontSize: 10 }}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
-            {/* Advanced Filters */}
-            {showAdvanced && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-3 border-t border-border">
-                <div>
-                  <Label className="text-xs text-muted-foreground mb-1 block">
-                    <Calendar className="w-3 h-3 inline mr-1" />From Date
-                  </Label>
-                  <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="h-9" />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground mb-1 block">
-                    <Calendar className="w-3 h-3 inline mr-1" />To Date
-                  </Label>
-                  <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="h-9" />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground mb-1 block">
-                    <Star className="w-3 h-3 inline mr-1" />Min Score
-                  </Label>
-                  <Input type="number" min="0" max="10" step="0.5" placeholder="0" value={minScore} onChange={e => setMinScore(e.target.value)} className="h-9" />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground mb-1 block">
-                    <Star className="w-3 h-3 inline mr-1" />Max Score
-                  </Label>
-                  <Input type="number" min="0" max="10" step="0.5" placeholder="10" value={maxScore} onChange={e => setMaxScore(e.target.value)} className="h-9" />
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {showAdvanced && (
+          <div
+            className="grid gap-3 pt-3 border-t border-border"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}
+          >
+            <AdvancedField label="From date">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full bg-card border border-border rounded-sm px-2.5 py-1.5 font-mono text-foreground"
+                style={{ fontSize: 11 }}
+              />
+            </AdvancedField>
+            <AdvancedField label="To date">
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full bg-card border border-border rounded-sm px-2.5 py-1.5 font-mono text-foreground"
+                style={{ fontSize: 11 }}
+              />
+            </AdvancedField>
+            <AdvancedField label="Min score">
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.5"
+                placeholder="0"
+                value={minScore}
+                onChange={(e) => setMinScore(e.target.value)}
+                className="w-full bg-card border border-border rounded-sm px-2.5 py-1.5 font-mono tabular-nums text-foreground"
+                style={{ fontSize: 11 }}
+              />
+            </AdvancedField>
+            <AdvancedField label="Max score">
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.5"
+                placeholder="10"
+                value={maxScore}
+                onChange={(e) => setMaxScore(e.target.value)}
+                className="w-full bg-card border border-border rounded-sm px-2.5 py-1.5 font-mono tabular-nums text-foreground"
+                style={{ fontSize: 11 }}
+              />
+            </AdvancedField>
+          </div>
+        )}
+      </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Search Results {displayCalls && `(${displayCalls.length} found)`}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex items-center justify-center h-64"><LoadingIndicator text="Searching..." /></div>
-            ) : !displayCalls?.length ? (
-              <div className="text-center py-16">
-                <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">
-                  <MagnifyingGlass className="w-8 h-8 text-primary/60" />
-                </div>
-                <h3 className="text-lg font-medium text-foreground mb-1">
-                  {debouncedQuery.length > 0 ? 'No matching calls found' : 'Search your calls'}
-                </h3>
-                <p className="text-sm text-muted-foreground mb-4 max-w-sm mx-auto">
-                  {debouncedQuery.length > 0
-                    ? 'Try a different search term or adjust your filters.'
-                    : 'Search across transcripts, topics, and call summaries.'}
-                </p>
-                {!debouncedQuery.length && (
-                  <Link href="/upload"><Button variant="outline">Upload Call Recording</Button></Link>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {displayCalls.map((call, index) => (
-                  <ErrorBoundary key={call?.id || index}>
-                    <CallCard call={call} index={index} />
-                  </ErrorBoundary>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* Results */}
+      <div className="px-7 py-6">
+        {isLoading ? (
+          <div
+            className="py-16 text-center text-muted-foreground"
+            data-testid="loading"
+          >
+            Searching…
+          </div>
+        ) : displayCalls.length === 0 ? (
+          <EmptyState hasQuery={debouncedQuery.length > 0} onClear={clearFilters} />
+        ) : (
+          <ResultsTable calls={displayCalls} />
+        )}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Local UI helpers
+// ─────────────────────────────────────────────────────────────
+
+function FilterSelect({
+  value,
+  onChange,
+  options,
+  testId,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  testId?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      data-testid={testId}
+      className="bg-card border border-border rounded-sm text-foreground font-mono"
+      style={{ padding: "6px 10px", fontSize: 11, letterSpacing: "0.04em" }}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function AdvancedField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 10, letterSpacing: "0.1em" }}
+      >
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function EmptyState({ hasQuery, onClear }: { hasQuery: boolean; onClear: () => void }) {
+  return (
+    <div className="py-16 text-center" data-testid="search-empty">
+      <div
+        className="font-display text-foreground mb-2"
+        style={{ fontSize: 22, letterSpacing: "-0.3px" }}
+      >
+        {hasQuery ? "Nothing matches those filters." : "Start searching your calls."}
+      </div>
+      <div className="text-sm text-muted-foreground max-w-sm mx-auto mb-5">
+        {hasQuery
+          ? "Try broadening your query or clearing filters."
+          : "Search across transcripts, topics, and call summaries."}
+      </div>
+      {hasQuery ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-3 py-2 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          <X style={{ width: 12, height: 12 }} /> Clear filters
+        </button>
+      ) : (
+        <Link
+          href="/upload"
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-3 py-2 text-foreground hover:bg-secondary transition-colors"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          Upload a call →
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function ResultsTable({ calls }: { calls: CallWithDetails[] }) {
+  return (
+    <div className="overflow-x-auto bg-card border border-border">
+      <table className="w-full" style={{ borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: "var(--secondary)" }}>
+            <ResultHeader label="Date" />
+            <ResultHeader label="Agent" />
+            <ResultHeader label="Subject" />
+            <ResultHeader label="Sentiment" />
+            <ResultHeader label="Score" numeric />
+            <ResultHeader label="Duration" numeric />
+          </tr>
+        </thead>
+        <tbody>
+          {calls.map((call) => (
+            <ResultRow key={call.id} call={call} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ResultHeader({ label, numeric }: { label: string; numeric?: boolean }) {
+  return (
+    <th
+      className="font-mono uppercase text-muted-foreground"
+      style={{
+        fontSize: 10,
+        letterSpacing: "0.12em",
+        padding: "10px 12px",
+        fontWeight: 500,
+        borderBottom: "1px solid var(--border)",
+        textAlign: numeric ? "right" : "left",
+      }}
+    >
+      {label}
+    </th>
+  );
+}
+
+function ResultRow({ call }: { call: CallWithDetails }) {
+  const [, navigate] = useLocation();
+  const score = call.analysis?.performanceScore ? Number(call.analysis.performanceScore) : null;
+  const scoreColor =
+    score === null
+      ? "var(--muted-foreground)"
+      : score >= SCORE_EXCELLENT
+      ? "var(--sage)"
+      : score >= SCORE_GOOD
+      ? "var(--foreground)"
+      : score >= SCORE_NEEDS_WORK
+      ? "var(--accent)"
+      : "var(--destructive)";
+  const sentiment = call.sentiment?.overallSentiment;
+  const sentColor =
+    sentiment === "positive"
+      ? "var(--sage)"
+      : sentiment === "negative"
+      ? "var(--destructive)"
+      : "var(--muted-foreground)";
+  const summaryStr =
+    typeof call.analysis?.summary === "string" ? call.analysis.summary : "";
+  const subject = summaryStr
+    ? summaryStr.split(/[.!?]/)[0].trim().slice(0, 120)
+    : call.fileName || `Call ${call.id.slice(0, 8).toUpperCase()}`;
+  const durationStr = call.duration
+    ? `${Math.floor(call.duration / 60)}:${String(call.duration % 60).padStart(2, "0")}`
+    : "—";
+
+  return (
+    <tr
+      className="cursor-pointer transition-colors"
+      style={{ borderBottom: "1px solid var(--border)" }}
+      onClick={() => navigate(`/transcripts/${call.id}`)}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--secondary)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      data-testid={`search-result-${call.id}`}
+    >
+      <td
+        className="py-3 px-3 font-mono text-muted-foreground tabular-nums"
+        style={{ fontSize: 11 }}
+      >
+        {call.uploadedAt ? new Date(call.uploadedAt).toLocaleDateString() : "—"}
+      </td>
+      <td className="py-3 px-3" style={{ fontSize: 13 }}>
+        {call.employee?.name ?? "—"}
+      </td>
+      <td className="py-3 px-3 text-foreground" style={{ fontSize: 13 }}>
+        {subject}
+      </td>
+      <td className="py-3 px-3">
+        {sentiment ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: sentColor,
+              }}
+            />
+            <span className="text-muted-foreground" style={{ fontSize: 11 }}>
+              {sentiment}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground" style={{ fontSize: 11 }}>
+            —
+          </span>
+        )}
+      </td>
+      <td
+        className="py-3 px-3 font-mono tabular-nums"
+        style={{
+          textAlign: "right",
+          color: scoreColor,
+          fontSize: 13,
+          fontWeight: score !== null ? 500 : 400,
+        }}
+      >
+        {score !== null ? score.toFixed(1) : "—"}
+      </td>
+      <td
+        className="py-3 px-3 font-mono tabular-nums text-muted-foreground"
+        style={{ textAlign: "right", fontSize: 12 }}
+      >
+        {durationStr}
+      </td>
+    </tr>
   );
 }
