@@ -659,70 +659,127 @@ export default function ReportsPage() {
 
         {/* Top Performers & Sentiment Breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Star className="w-5 h-5 mr-2" />
-              Top Performers
-            </h3>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Star} label="Top performers" />
             {report?.performers && report.performers.length > 0 ? (
-              <ul className="space-y-3">
-                {report.performers.slice(0, 10).map((p, i) => (
-                  <li key={p.id || i} className="flex justify-between items-center">
-                    <span className="font-medium">
-                      <span className="text-muted-foreground mr-2">{i + 1}.</span>
-                      {p.name}
-                      <span className="text-xs text-muted-foreground ml-2">({p.totalCalls} calls)</span>
-                    </span>
-                    <span className="font-bold text-green-500">
-                      {p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "N/A"}
-                    </span>
-                  </li>
-                ))}
+              <ul className="flex flex-col mt-4">
+                {report.performers.slice(0, 10).map((p, i) => {
+                  const score = p.avgPerformanceScore != null ? Number(p.avgPerformanceScore) : null;
+                  const scoreColor =
+                    score === null
+                      ? "var(--muted-foreground)"
+                      : score >= 8
+                      ? "var(--sage)"
+                      : score >= 6
+                      ? "var(--foreground)"
+                      : "var(--destructive)";
+                  return (
+                    <li
+                      key={p.id || i}
+                      className="flex items-center gap-3 py-2.5"
+                      style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}
+                    >
+                      <span
+                        className="font-mono tabular-nums text-muted-foreground"
+                        style={{ fontSize: 11, width: 18 }}
+                      >
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="text-foreground" style={{ fontSize: 13 }}>
+                          {p.name}
+                        </span>
+                        <span
+                          className="font-mono text-muted-foreground ml-2"
+                          style={{ fontSize: 10 }}
+                        >
+                          {p.totalCalls} {p.totalCalls === 1 ? "call" : "calls"}
+                        </span>
+                      </span>
+                      <span
+                        className="font-mono tabular-nums font-medium"
+                        style={{ fontSize: 13, color: scoreColor }}
+                      >
+                        {score !== null ? score.toFixed(1) : "—"}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
-              <p className="text-muted-foreground text-sm">No data for this period.</p>
+              <p className="text-muted-foreground text-sm mt-4">No data for this period.</p>
             )}
-          </div>
+          </section>
 
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smiley className="w-5 h-5 mr-2" />
-              Sentiment Breakdown
-            </h3>
-            <ul className="space-y-3">
-              {(["positive", "neutral", "negative"] as const).map(key => {
-                const colors = { positive: "text-green-600", neutral: "text-gray-600", negative: "text-red-600" };
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Smiley} label="Sentiment breakdown" />
+            <ul className="flex flex-col mt-4">
+              {(["positive", "neutral", "negative"] as const).map((key, i) => {
+                const color =
+                  key === "positive"
+                    ? "var(--sage)"
+                    : key === "negative"
+                    ? "var(--destructive)"
+                    : "var(--muted-foreground)";
                 const current = report?.sentiment[key] ?? 0;
                 const prev = compareEnabled ? compareReport?.sentiment[key] : undefined;
                 const d = compareEnabled && prev !== undefined ? delta(current, prev) : null;
                 return (
-                  <li key={key} className="flex justify-between items-center">
-                    <span className={`font-medium capitalize ${colors[key]}`}>{key}</span>
-                    <span className="flex items-center gap-2">
-                      <span className="font-bold">{current}</span>
-                      {d && (
-                        <span className={`text-xs ${d.positive ? "text-green-500" : "text-red-500"}`}>
-                          ({d.positive ? "+" : ""}{d.pct}%)
-                        </span>
-                      )}
+                  <li
+                    key={key}
+                    className="flex items-center gap-3 py-2.5"
+                    style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: color,
+                      }}
+                    />
+                    <span
+                      className="flex-1 capitalize text-foreground"
+                      style={{ fontSize: 13 }}
+                    >
+                      {key}
                     </span>
+                    <span
+                      className="font-mono tabular-nums font-medium text-foreground"
+                      style={{ fontSize: 13 }}
+                    >
+                      {current}
+                    </span>
+                    {d && (
+                      <span
+                        className="font-mono tabular-nums"
+                        style={{
+                          fontSize: 10,
+                          color: d.positive ? "var(--sage)" : "var(--destructive)",
+                        }}
+                      >
+                        ({d.positive ? "+" : ""}{d.pct}%)
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
-          </div>
+          </section>
         </div>
 
         {/* Error banners for secondary queries */}
         {compareError && compareEnabled && (
-          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <ErrorBanner>
             Failed to load comparison data: {(compareError as Error).message}
-          </div>
+          </ErrorBanner>
         )}
         {agentProfileError && reportType === "employee" && selectedEmployee && (
-          <div role="alert" className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive">
+          <ErrorBanner>
             Failed to load agent profile: {(agentProfileError as Error).message}
-          </div>
+          </ErrorBanner>
         )}
 
         {/* Agent Profile Section (employee reports only) */}
@@ -925,6 +982,30 @@ function SectionHeader({
       >
         {label}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper error banner: warm-red left stripe + soft bg. Used for
+// secondary-query failures (compare report, agent profile).
+// ─────────────────────────────────────────────────────────────
+function ErrorBanner({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2"
+      style={{
+        background: "var(--warm-red-soft)",
+        border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+        borderLeft: "3px solid var(--destructive)",
+        padding: "10px 14px",
+        fontSize: 12,
+        color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+      }}
+    >
+      <Warning style={{ width: 14, height: 14, marginTop: 1, flexShrink: 0 }} />
+      <span>{children}</span>
     </div>
   );
 }
