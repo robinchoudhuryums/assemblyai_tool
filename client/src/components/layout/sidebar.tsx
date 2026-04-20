@@ -185,7 +185,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />
       )}
       <aside className={cn(
-        "w-64 h-full bg-sidebar backdrop-blur-xl border-r border-sidebar-border flex flex-col z-50",
+        "w-64 h-full bg-sidebar border-r border-sidebar-border flex flex-col z-50",
         "lg:relative lg:translate-x-0",
         "fixed inset-y-0 left-0 transition-transform duration-200",
         isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
