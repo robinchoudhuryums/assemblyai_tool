@@ -615,48 +615,46 @@ export default function ReportsPage() {
           </section>
         )}
 
-        {/* Trend Chart */}
+        {/* Performance trend (line chart) */}
         {report?.trends && report.trends.length > 0 && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <TrendUp className="w-5 h-5 mr-2" />
-              Performance Trend
-            </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <YAxis domain={[0, 10]} tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                <Legend />
-                <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="calls" name="Call Volume" stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="5 5" yAxisId="right" />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={TrendUp} label="Performance trend" />
+            <div className="mt-4">
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
+                  <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                  <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <YAxis domain={[0, 10]} tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                  <Legend wrapperStyle={CHART_LEGEND} />
+                  <Line type="monotone" dataKey="avgScore" name="Avg score" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="calls" name="Call volume" stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="4 3" yAxisId="right" dot={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
-        {/* Sentiment Trend (stacked bar) */}
+        {/* Sentiment trend (stacked bar) */}
         {report?.trends && report.trends.length > 0 && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-              <Smiley className="w-5 h-5 mr-2" />
-              Sentiment Trend
-            </h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-                <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                <Legend />
-                <Bar dataKey="positive" name="Positive" stackId="sentiment" fill="#22c55e" />
-                <Bar dataKey="neutral" name="Neutral" stackId="sentiment" fill="#94a3b8" />
-                <Bar dataKey="negative" name="Negative" stackId="sentiment" fill="#ef4444" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={Smiley} label="Sentiment trend" />
+            <div className="mt-4">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={report.trends.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
+                  <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                  <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <YAxis tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                  <Legend wrapperStyle={CHART_LEGEND} />
+                  <Bar dataKey="positive" name="Positive" stackId="sentiment" fill="var(--sage)" />
+                  <Bar dataKey="neutral" name="Neutral" stackId="sentiment" fill="var(--muted-foreground)" />
+                  <Bar dataKey="negative" name="Negative" stackId="sentiment" fill="var(--destructive)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
         {/* Top Performers & Sentiment Breakdown */}
@@ -878,6 +876,32 @@ export default function ReportsPage() {
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// Recharts styling constants — keep chart typography + chrome in
+// lockstep with the warm-paper panels. Mono axis ticks, paper-card
+// tooltip bg, hairline borders.
+// ─────────────────────────────────────────────────────────────
+const CHART_TICK = {
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+  fill: "var(--muted-foreground)",
+} as const;
+
+const CHART_TOOLTIP: React.CSSProperties = {
+  background: "var(--card)",
+  border: "1px solid var(--border)",
+  borderRadius: 2,
+  fontSize: 12,
+  fontFamily: "var(--font-sans)",
+};
+
+const CHART_LEGEND: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+};
 
 // ─────────────────────────────────────────────────────────────
 // Warm-paper section header: icon + mono uppercase label — used across
