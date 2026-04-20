@@ -1,7 +1,6 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-icons/react";
 import { apiRequest, SessionExpiredError } from "@/lib/queryClient";
@@ -139,21 +138,50 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md space-y-6">
-        <Card>
-          <CardHeader className="text-center">
+      <div className="w-full max-w-md flex flex-col gap-4">
+        <div className="bg-card border border-border" style={{ padding: "28px 32px" }}>
+          <div className="text-center">
             {sessionExpired && (
-              <div className="mb-4 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm text-yellow-800 dark:text-yellow-400">
+              <div
+                className="mb-5 text-left"
+                style={{
+                  padding: "10px 14px",
+                  background: "var(--amber-soft)",
+                  border: "1px solid color-mix(in oklch, var(--amber), transparent 50%)",
+                  borderLeft: "3px solid var(--amber)",
+                  fontSize: 12,
+                  color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+                }}
+                role="alert"
+              >
                 Your session has expired. Please sign in again.
               </div>
             )}
-            <div className="flex justify-center mb-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-primary/20 to-primary/5 rounded-lg flex items-center justify-center">
-                <Waveform className="w-6 h-6 text-primary" />
-              </div>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "var(--accent)",
+                }}
+              />
+              <Waveform
+                style={{ width: 14, height: 14, color: "var(--muted-foreground)" }}
+              />
             </div>
-            <CardTitle className="text-2xl">{appName}</CardTitle>
-            <CardDescription>
+            <h1
+              className="font-display font-medium text-foreground"
+              style={{ fontSize: 28, letterSpacing: "-0.4px", lineHeight: 1.1 }}
+            >
+              {appName}
+            </h1>
+            <p
+              className="text-muted-foreground mt-2 max-w-xs mx-auto"
+              style={{ fontSize: 13, lineHeight: 1.5 }}
+            >
               {mfaRequired
                 ? "Enter the verification code from your authenticator app"
                 : view === "login"
@@ -161,15 +189,29 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                   : requestSubmitted
                     ? "Your request has been submitted"
                     : "Request access to the platform"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div className="mt-6">
             {/* MFA VERIFICATION FORM */}
             {mfaRequired && (
               <form onSubmit={handleMfaVerify} className="space-y-4">
-                <div className="flex justify-center mb-2">
-                  <div className="w-14 h-14 bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900/30 dark:to-amber-900/10 rounded-full flex items-center justify-center">
-                    <Key className="w-7 h-7 text-amber-600" />
+                <div className="flex justify-center mb-3">
+                  <div
+                    className="rounded-full flex items-center justify-center"
+                    style={{
+                      width: 48,
+                      height: 48,
+                      border: "1px solid color-mix(in oklch, var(--amber), transparent 50%)",
+                      background: "var(--amber-soft)",
+                    }}
+                  >
+                    <Key
+                      style={{
+                        width: 20,
+                        height: 20,
+                        color: "color-mix(in oklch, var(--amber), var(--ink) 20%)",
+                      }}
+                    />
                   </div>
                 </div>
                 <div>
@@ -386,10 +428,23 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
             {/* REQUEST SUBMITTED CONFIRMATION */}
             {view === "request-access" && requestSubmitted && !mfaRequired && (
               <div className="text-center py-6">
-                <div className="mx-auto w-14 h-14 bg-gradient-to-br from-green-100 to-green-50 dark:from-green-900/30 dark:to-green-900/10 rounded-full flex items-center justify-center mb-4">
-                  <UserPlus className="w-7 h-7 text-green-600" />
+                <div
+                  className="mx-auto rounded-full flex items-center justify-center mb-4"
+                  style={{
+                    width: 48,
+                    height: 48,
+                    border: "1px solid color-mix(in oklch, var(--sage), transparent 50%)",
+                    background: "var(--sage-soft)",
+                  }}
+                >
+                  <UserPlus style={{ width: 20, height: 20, color: "var(--sage)" }} />
                 </div>
-                <h3 className="font-semibold text-foreground mb-1">Request Submitted</h3>
+                <h3
+                  className="font-display font-medium text-foreground mb-1"
+                  style={{ fontSize: 18, letterSpacing: "-0.2px" }}
+                >
+                  Request submitted
+                </h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   An administrator will review your request and set up your account. You'll be notified at <strong>{requestEmail}</strong>.
                 </p>
@@ -398,14 +453,21 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                 </Button>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         {/* Permission levels info card (hidden during MFA) */}
         {!mfaRequired && (
-          <Card className="bg-muted/50 border-dashed">
-            <CardContent className="pt-6">
-              <h4 className="text-sm font-semibold text-foreground mb-3">Permission Levels</h4>
+          <div
+            className="border border-dashed border-border"
+            style={{ background: "var(--secondary)", padding: "20px 24px" }}
+          >
+            <h4
+              className="font-mono uppercase text-muted-foreground mb-3"
+              style={{ fontSize: 10, letterSpacing: "0.14em", fontWeight: 500 }}
+            >
+              Permission Levels
+            </h4>
               <div className="space-y-3">
                 {USER_ROLES.map((role) => (
                   <div key={role.value} className="flex items-start gap-3">
@@ -417,8 +479,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
+          </div>
         )}
       </div>
     </div>
