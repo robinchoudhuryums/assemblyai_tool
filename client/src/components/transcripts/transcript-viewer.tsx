@@ -337,14 +337,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const getSentimentColor = (sentiment?: string) => {
-    switch (sentiment) {
-      case 'positive': return 'sentiment-positive';
-      case 'negative': return 'sentiment-negative';
-      default: return 'sentiment-neutral';
-    }
-  };
-
   interface TranscriptSegment {
     start: number;
     end: number;

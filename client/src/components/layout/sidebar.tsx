@@ -251,11 +251,23 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                           }}
                         >
                           {n.type === "completed" ? (
-                            <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
+                            <CheckCircle
+                              className="w-4 h-4 mt-0.5 shrink-0"
+                              style={{ color: "var(--sage)" }}
+                              weight="fill"
+                            />
                           ) : n.type === "failed" ? (
-                            <Warning className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                            <Warning
+                              className="w-4 h-4 mt-0.5 shrink-0"
+                              style={{ color: "var(--destructive)" }}
+                              weight="fill"
+                            />
                           ) : (
-                            <Warning className="w-4 h-4 text-yellow-500 mt-0.5 shrink-0" />
+                            <Warning
+                              className="w-4 h-4 mt-0.5 shrink-0"
+                              style={{ color: "var(--amber)" }}
+                              weight="fill"
+                            />
                           )}
                           <div className="min-w-0 flex-1">
                             <p className={cn("text-xs", !n.read ? "font-medium text-foreground" : "text-muted-foreground")}>
@@ -324,12 +336,21 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 <Icon className="w-5 h-5" />
                 <span>{name}</span>
                 {showBadge && (
-                  <span className={cn(
-                    "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
-                    isActive
-                      ? "bg-red-500 text-white"
-                      : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
-                  )}>
+                  <span
+                    className="ml-auto font-mono tabular-nums inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full"
+                    style={{
+                      fontSize: 10,
+                      letterSpacing: "0.04em",
+                      fontWeight: 600,
+                      background: isActive ? "var(--paper)" : "var(--warm-red-soft)",
+                      color: isActive
+                        ? "var(--foreground)"
+                        : "var(--destructive)",
+                      border: isActive
+                        ? "none"
+                        : "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+                    }}
+                  >
                     {flaggedCount}
                   </span>
                 )}
@@ -367,12 +388,21 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                   <Shield className="w-5 h-5" />
                   <span>{t("nav.admin")}</span>
                   {pendingRequestCount > 0 && (
-                    <span className={cn(
-                      "ml-auto flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold",
-                      location === "/admin"
-                        ? "bg-yellow-500 text-white"
-                        : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
-                    )}>
+                    <span
+                      className="ml-auto font-mono tabular-nums inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full"
+                      style={{
+                        fontSize: 10,
+                        letterSpacing: "0.04em",
+                        fontWeight: 600,
+                        background: location === "/admin" ? "var(--paper)" : "var(--amber-soft)",
+                        color: location === "/admin"
+                          ? "var(--foreground)"
+                          : "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+                        border: location === "/admin"
+                          ? "none"
+                          : "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                      }}
+                    >
                       {pendingRequestCount}
                     </span>
                   )}
@@ -511,11 +541,16 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 <span
                   className={cn(
                     "w-1.5 h-1.5 rounded-full shrink-0",
-                    wsState === "connected" && "bg-green-500",
-                    wsState === "reconnecting" && "bg-yellow-500 animate-pulse",
-                    wsState === "connecting" && "bg-yellow-500 animate-pulse",
-                    wsState === "disconnected" && "bg-red-500",
+                    (wsState === "reconnecting" || wsState === "connecting") && "animate-pulse",
                   )}
+                  style={{
+                    background:
+                      wsState === "connected"
+                        ? "var(--sage)"
+                        : wsState === "disconnected"
+                        ? "var(--destructive)"
+                        : "var(--amber)",
+                  }}
                   title={`Real-time updates: ${wsState}`}
                 />
               )}

@@ -187,37 +187,87 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
         {/* Status view */}
         {step === "status" && (
           <div className="space-y-4">
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-              <div className={`w-3 h-3 rounded-full ${mfaStatus?.enabled ? "bg-green-500" : "bg-yellow-500"}`} />
+            <div
+              className="flex items-center gap-3 p-3 rounded-sm"
+              style={{ background: "var(--paper-2)" }}
+            >
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{
+                  background: mfaStatus?.enabled ? "var(--sage)" : "var(--amber)",
+                }}
+              />
               <span className="text-sm font-medium text-foreground">
                 MFA is {mfaStatus?.enabled ? "enabled" : "not enabled"}
               </span>
               {mfaStatus?.enabled && (
-                <Badge className="ml-auto bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                  <CheckCircle className="w-3 h-3 mr-1" />Active
-                </Badge>
+                <span
+                  className="ml-auto font-mono uppercase inline-flex items-center gap-1 rounded-sm"
+                  style={{
+                    fontSize: 9,
+                    letterSpacing: "0.12em",
+                    padding: "3px 8px",
+                    background: "var(--sage-soft)",
+                    border: "1px solid color-mix(in oklch, var(--sage), transparent 55%)",
+                    color: "var(--sage)",
+                    fontWeight: 500,
+                  }}
+                >
+                  <CheckCircle className="w-3 h-3" weight="fill" />
+                  Active
+                </span>
               )}
             </div>
 
             {!mfaStatus?.enabled && (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-800">
-                <Warning className="w-4 h-4 text-yellow-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-yellow-800 dark:text-yellow-400">
-                  MFA adds an extra layer of security to your account. You'll need an authenticator app like Google Authenticator or Authy.
+              <div
+                className="flex items-start gap-2 p-3 rounded-sm"
+                style={{
+                  background: "var(--amber-soft)",
+                  border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                  borderLeft: "3px solid var(--amber)",
+                }}
+              >
+                <Warning
+                  className="w-4 h-4 mt-0.5 shrink-0"
+                  style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+                />
+                <p
+                  className="text-xs"
+                  style={{
+                    color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+                    lineHeight: 1.55,
+                  }}
+                >
+                  MFA adds an extra layer of security to your account. You'll need an
+                  authenticator app like Google Authenticator or Authy.
                 </p>
               </div>
             )}
 
             {mfaStatus?.enabled && typeof mfaStatus.recoveryCodesRemaining === "number" && (
-              <div className={`flex items-start gap-2 p-3 rounded-lg text-xs ${
-                mfaStatus.recoveryCodesRemaining <= 2
-                  ? "bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-400"
-                  : "bg-muted/50 text-muted-foreground"
-              }`}>
+              <div
+                className="flex items-start gap-2 p-3 rounded-sm text-xs"
+                style={
+                  mfaStatus.recoveryCodesRemaining <= 2
+                    ? {
+                        background: "var(--warm-red-soft)",
+                        border:
+                          "1px solid color-mix(in oklch, var(--destructive), transparent 55%)",
+                        borderLeft: "3px solid var(--destructive)",
+                        color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+                      }
+                    : {
+                        background: "var(--paper-2)",
+                        color: "var(--muted-foreground)",
+                      }
+                }
+              >
                 <Warning className="w-4 h-4 mt-0.5 shrink-0" />
                 <div>
-                  <p>
-                    <strong>{mfaStatus.recoveryCodesRemaining}</strong> recovery code{mfaStatus.recoveryCodesRemaining === 1 ? "" : "s"} remaining.
+                  <p style={{ lineHeight: 1.55 }}>
+                    <strong className="tabular-nums">{mfaStatus.recoveryCodesRemaining}</strong>{" "}
+                    recovery code{mfaStatus.recoveryCodesRemaining === 1 ? "" : "s"} remaining.
                     {mfaStatus.recoveryCodesRemaining <= 2 && " Regenerate to get a fresh set."}
                   </p>
                 </div>
@@ -243,8 +293,15 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
                   <Button
                     variant="outline"
                     size="sm"
-                    className="text-red-600"
-                    onClick={() => { if (confirm("Disable two-factor authentication?")) disableMutation.mutate(); }}
+                    style={{
+                      color: "var(--destructive)",
+                      borderColor:
+                        "color-mix(in oklch, var(--destructive), transparent 60%)",
+                    }}
+                    onClick={() => {
+                      if (confirm("Disable two-factor authentication?"))
+                        disableMutation.mutate();
+                    }}
                     disabled={disableMutation.isPending}
                   >
                     Disable MFA
@@ -262,12 +319,30 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
         {/* Recovery codes view — shown exactly once after enable/regenerate */}
         {step === "recovery-codes" && recoveryCodes.length > 0 && (
           <div className="space-y-4">
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-800">
-              <Warning className="w-5 h-5 text-yellow-600 mt-0.5 shrink-0" />
-              <div className="text-xs text-yellow-800 dark:text-yellow-400 space-y-1">
+            <div
+              className="flex items-start gap-2 p-3 rounded-sm"
+              style={{
+                background: "var(--amber-soft)",
+                border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                borderLeft: "3px solid var(--amber)",
+              }}
+            >
+              <Warning
+                className="w-5 h-5 mt-0.5 shrink-0"
+                style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+              />
+              <div
+                className="text-xs space-y-1"
+                style={{
+                  color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+                  lineHeight: 1.55,
+                }}
+              >
                 <p className="font-semibold">Save these codes somewhere safe right now.</p>
                 <p>
-                  Each code can be used once if you lose access to your authenticator app. They will <strong>never be shown again</strong> — if you lose them and lose your device, an admin will have to disable MFA for you.
+                  Each code can be used once if you lose access to your authenticator app. They
+                  will <strong>never be shown again</strong> — if you lose them and lose your
+                  device, an admin will have to disable MFA for you.
                 </p>
               </div>
             </div>
@@ -283,7 +358,14 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={copyRecoveryCodes} className="flex-1">
                 {codesCopied ? (
-                  <><CheckCircle className="w-4 h-4 mr-1.5 text-green-500" />Copied</>
+                  <>
+                    <CheckCircle
+                      className="w-4 h-4 mr-1.5"
+                      style={{ color: "var(--sage)" }}
+                      weight="fill"
+                    />
+                    Copied
+                  </>
                 ) : (
                   <><Copy className="w-4 h-4 mr-1.5" />Copy All Codes</>
                 )}
@@ -340,7 +422,15 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
                       {setupData.secret}
                     </code>
                     <Button variant="outline" size="sm" onClick={copySecret} title="Copy secret">
-                      {copied ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copied ? (
+                        <CheckCircle
+                          className="w-4 h-4"
+                          style={{ color: "var(--sage)" }}
+                          weight="fill"
+                        />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
                     </Button>
                   </div>
                 </div>

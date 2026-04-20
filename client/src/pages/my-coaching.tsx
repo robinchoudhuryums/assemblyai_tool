@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { User } from "@phosphor-icons/react";
 import type { CoachingSession } from "@shared/schema";
@@ -74,24 +73,43 @@ export default function MyCoachingPage() {
       {isLoading ? (
         <div className="p-8 space-y-3 max-w-6xl mx-auto">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
-              <CardContent className="pt-6">
-                <Skeleton className="h-20 w-full" />
-              </CardContent>
-            </Card>
+            <div
+              key={i}
+              className="rounded-sm border bg-card p-6"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <Skeleton className="h-20 w-full" />
+            </div>
           ))}
         </div>
       ) : !myData?.employee ? (
         <div className="p-8 max-w-xl mx-auto">
-          <Card>
-            <CardContent className="py-12 text-center text-muted-foreground">
-              <User className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p className="font-medium">No employee profile linked</p>
-              <p className="text-sm mt-1">
-                Ask your manager to link your account to an employee profile to see your coaching data.
-              </p>
-            </CardContent>
-          </Card>
+          <div
+            className="rounded-sm border bg-card text-center py-12 px-6"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <User
+              style={{
+                width: 44,
+                height: 44,
+                margin: "0 auto 12px",
+                color: "var(--muted-foreground)",
+                opacity: 0.5,
+              }}
+            />
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              Unlinked
+            </div>
+            <p className="text-sm text-foreground mt-2" style={{ fontWeight: 500 }}>
+              No employee profile linked
+            </p>
+            <p className="text-sm text-muted-foreground mt-1" style={{ lineHeight: 1.5 }}>
+              Ask your manager to link your account to an employee profile to see your coaching data.
+            </p>
+          </div>
         </div>
       ) : (
         <AgentInbox
