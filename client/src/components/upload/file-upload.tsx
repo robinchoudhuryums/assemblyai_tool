@@ -204,17 +204,39 @@ export default function FileUpload() {
   };
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6">
-      <h3 className="text-lg font-semibold text-foreground mb-4">Upload Call Recordings</h3>
-      <div {...getRootProps()} role="button" aria-label={t("upload.dragDrop")} className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-        isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
-      }`}>
+    <div className="bg-card border border-border" style={{ padding: "24px 28px" }}>
+      <div
+        {...getRootProps()}
+        role="button"
+        aria-label={t("upload.dragDrop")}
+        className="text-center cursor-pointer transition-colors"
+        style={{
+          border: `1.5px dashed ${isDragActive ? "var(--accent)" : "var(--border)"}`,
+          background: isDragActive ? "var(--accent-soft)" : "transparent",
+          padding: "48px 24px",
+        }}
+      >
         <input {...getInputProps()} aria-label={t("upload.dragDrop")} />
-        <CloudArrowUp className={`mx-auto h-12 w-12 ${isDragActive ? "text-primary" : "text-muted-foreground"}`} />
-        <p className="mt-2 text-sm text-muted-foreground">
-          {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select files"}
+        <CloudArrowUp
+          className="mx-auto"
+          style={{
+            width: 44,
+            height: 44,
+            color: isDragActive ? "var(--accent)" : "var(--muted-foreground)",
+          }}
+        />
+        <p
+          className="font-display mt-3 text-foreground"
+          style={{ fontSize: 16, letterSpacing: "-0.2px" }}
+        >
+          {isDragActive ? "Drop files here…" : "Drag & drop files here, or click to select"}
         </p>
-        <p className="text-xs text-muted-foreground mt-1">MP3, WAV, M4A, MP4, FLAC, OGG — up to 100MB per file, {MAX_BATCH_SIZE} files max</p>
+        <p
+          className="font-mono text-muted-foreground mt-2"
+          style={{ fontSize: 10, letterSpacing: "0.08em" }}
+        >
+          MP3 · WAV · M4A · MP4 · FLAC · OGG — up to 100MB per file, {MAX_BATCH_SIZE} files max
+        </p>
       </div>
 
       {uploadFiles.length > 0 && (
