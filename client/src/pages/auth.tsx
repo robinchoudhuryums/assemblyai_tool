@@ -132,7 +132,12 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
   const roleIconComponents: Record<string, typeof Eye> = { viewer: Eye, manager: Gear, admin: Shield };
   const roleIcons: Record<string, React.ReactNode> = Object.fromEntries(
     Object.entries(roleIconComponents).map(([role, Icon]) => [
-      role, <Icon key={role} className={`w-4 h-4 ${ROLE_CONFIG[role]?.color || "text-gray-500"}`} />,
+      role,
+      <Icon
+        key={role}
+        className="w-4 h-4"
+        style={{ color: ROLE_CONFIG[role]?.color || "var(--muted-foreground)" }}
+      />,
     ])
   );
 

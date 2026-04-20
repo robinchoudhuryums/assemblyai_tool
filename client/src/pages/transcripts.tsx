@@ -26,7 +26,12 @@ export default function Transcripts() {
   if (callId && !UUID_RE.test(callId)) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-8" data-testid="transcript-not-found">
-        <Warning className="w-12 h-12 text-amber-500 mb-4" aria-hidden="true" />
+        <Warning
+          className="w-12 h-12 mb-4"
+          style={{ color: "var(--amber)" }}
+          weight="fill"
+          aria-hidden="true"
+        />
         <h2 className="text-xl font-semibold text-foreground mb-2">Call not found</h2>
         <p className="text-sm text-muted-foreground mb-4">
           The call ID <code className="bg-muted px-1.5 py-0.5 rounded">{callId}</code> is not valid.

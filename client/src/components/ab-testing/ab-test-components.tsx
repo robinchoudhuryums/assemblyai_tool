@@ -9,7 +9,8 @@ import { toDisplayString } from "@/lib/display-utils";
 export function ScoreComparison({ label, baseline, test }: { label: string; baseline?: number; test?: number }) {
   const diff = (test ?? 0) - (baseline ?? 0);
   const DiffIcon = diff > 0.5 ? TrendUp : diff < -0.5 ? TrendDown : Minus;
-  const diffColor = diff > 0.5 ? "text-green-600" : diff < -0.5 ? "text-red-600" : "text-muted-foreground";
+  const diffColor =
+    diff > 0.5 ? "var(--sage)" : diff < -0.5 ? "var(--destructive)" : "var(--muted-foreground)";
 
   return (
     <div className="flex items-center justify-between py-1.5">
@@ -18,7 +19,7 @@ export function ScoreComparison({ label, baseline, test }: { label: string; base
         <span className="text-sm font-medium w-12 text-right">{baseline?.toFixed(1) ?? "—"}</span>
         <span className="text-xs text-muted-foreground">vs</span>
         <span className="text-sm font-medium w-12">{test?.toFixed(1) ?? "—"}</span>
-        <span className={`flex items-center gap-0.5 text-xs w-16 ${diffColor}`}>
+        <span className="flex items-center gap-0.5 text-xs w-16" style={{ color: diffColor }}>
           <DiffIcon className="w-3 h-3" />
           {diff > 0 ? "+" : ""}{diff.toFixed(1)}
         </span>
@@ -55,7 +56,7 @@ export function AnalysisPanel({ title, model, analysis, latencyMs }: {
           <CardDescription className="font-mono text-xs">{model}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-2 text-red-600">
+          <div className="flex items-center gap-2" style={{ color: "var(--destructive)" }}>
             <WarningCircle className="w-4 h-4" />
             <span className="text-sm">Analysis failed: {analysis.error}</span>
           </div>
@@ -222,7 +223,15 @@ export function TestResultView({ test }: { test: ABTest }) {
                 <span className="text-xs text-muted-foreground">vs</span>
                 <span className="text-sm font-medium w-12">{test.testLatencyMs ? (test.testLatencyMs / 1000).toFixed(1) + "s" : "—"}</span>
                 {test.baselineLatencyMs && test.testLatencyMs && (
-                  <span className={`text-xs w-16 ${test.testLatencyMs < test.baselineLatencyMs ? "text-green-600" : "text-red-600"}`}>
+                  <span
+                    className="text-xs w-16"
+                    style={{
+                      color:
+                        test.testLatencyMs < test.baselineLatencyMs
+                          ? "var(--sage)"
+                          : "var(--destructive)",
+                    }}
+                  >
                     {((test.testLatencyMs - test.baselineLatencyMs) / 1000).toFixed(1)}s
                   </span>
                 )}

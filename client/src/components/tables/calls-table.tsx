@@ -793,22 +793,36 @@ export default function CallsTable({ onRowSelect, selectedCallId }: CallsTablePr
                         <>
                           {hasExceptional && (
                             <span title="Exceptional Call">
-                              <Trophy className="w-4 h-4 text-emerald-500" />
+                              <Trophy
+                                className="w-4 h-4"
+                                style={{ color: "var(--sage)" }}
+                                weight="fill"
+                              />
                             </span>
                           )}
                           {hasBad && (
                             <span title={flags.filter(f => f !== "exceptional_call" && f !== "medicare_call" && f !== "low_confidence").join(", ")}>
-                              <Warning className="w-4 h-4 text-red-500" />
+                              <Warning
+                                className="w-4 h-4"
+                                style={{ color: "var(--destructive)" }}
+                                weight="fill"
+                              />
                             </span>
                           )}
                           {!hasExceptional && !hasBad && flags.includes("medicare_call") && (
                             <span title="Medicare Call">
-                              <Warning className="w-4 h-4 text-blue-500" />
+                              <Warning
+                                className="w-4 h-4"
+                                style={{ color: "var(--accent)" }}
+                              />
                             </span>
                           )}
                           {hasLowConfidence && (
                             <span title="Low AI Confidence — may need manual review">
-                              <ShieldStar className="w-4 h-4 text-yellow-500" />
+                              <ShieldStar
+                                className="w-4 h-4"
+                                style={{ color: "var(--amber)" }}
+                              />
                             </span>
                           )}
                         </>
@@ -844,8 +858,12 @@ export default function CallsTable({ onRowSelect, selectedCallId }: CallsTablePr
                       <DownloadSimple className="w-4 h-4" />
                     </Button>
                     <Button
-                      size="sm" variant="ghost" className="text-red-500 hover:text-red-600"
-                      aria-label="Delete call" onClick={() => handleDelete(call.id)} disabled={deleteMutation.isPending}
+                      size="sm"
+                      variant="ghost"
+                      style={{ color: "var(--destructive)" }}
+                      aria-label="Delete call"
+                      onClick={() => handleDelete(call.id)}
+                      disabled={deleteMutation.isPending}
                     >
                       <Trash className="w-4 h-4" />
                     </Button>
