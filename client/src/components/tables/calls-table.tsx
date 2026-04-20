@@ -18,7 +18,61 @@ import { Input } from "@/components/ui/input";
 
 type SortField = "date" | "duration" | "score" | "sentiment";
 type SortDir = "asc" | "desc";
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
+/**
+ * Warm-paper table header cell: mono 10px uppercase, muted-foreground,
+ * optional sortable button. Numeric columns right-align both header and
+ * cell content.
+ */
+function HeaderCell({
+  label,
+  sortField,
+  currentSort,
+  dir,
+  onSort,
+  numeric,
+}: {
+  label: string;
+  sortField?: SortField;
+  currentSort?: SortField;
+  dir?: SortDir;
+  onSort?: (f: SortField) => void;
+  numeric?: boolean;
+}) {
+  const sortable = !!sortField && !!onSort;
+  const active = sortable && sortField === currentSort;
+  return (
+    <th
+      className="font-mono uppercase text-muted-foreground"
+      style={{
+        fontSize: 10,
+        letterSpacing: "0.12em",
+        padding: "10px 12px",
+        fontWeight: 500,
+        borderBottom: "1px solid var(--border)",
+        textAlign: numeric ? "right" : "left",
+      }}
+    >
+      {sortable ? (
+        <button
+          type="button"
+          onClick={() => onSort!(sortField!)}
+          className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors uppercase font-mono"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          {label}
+          {active && (
+            <span aria-hidden="true" style={{ opacity: 0.6 }}>
+              {dir === "desc" ? "▼" : "▲"}
+            </span>
+          )}
+        </button>
+      ) : (
+        label
+      )}
+    </th>
+  );
+}
 
 export default function CallsTable() {
   const { t } = useTranslation();
@@ -401,58 +455,75 @@ export default function CallsTable() {
   }
 
   const getSentimentBadge = (sentiment?: string) => {
-    if (!sentiment) return <Badge variant="secondary">Unknown</Badge>;
-    const variants: Record<string, BadgeVariant> = {
-      positive: "default", neutral: "secondary", negative: "destructive",
-    };
+    if (!sentiment) {
+      return <span className="font-mono text-muted-foreground" style={{ fontSize: 11 }}>—</span>;
+    }
+    const color =
+      sentiment === "positive"
+        ? "var(--sage)"
+        : sentiment === "negative"
+        ? "var(--destructive)"
+        : "var(--muted-foreground)";
     return (
-      <Badge variant={variants[sentiment] || "secondary"}>
-        {sentiment.charAt(0).toUpperCase() + sentiment.slice(1)}
-      </Badge>
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color }}
+        />
+        <span className="text-muted-foreground" style={{ fontSize: 11 }}>
+          {sentiment}
+        </span>
+      </span>
     );
   };
 
   const getStatusBadge = (status?: string) => {
-    if (!status) return <Badge variant="secondary">Unknown</Badge>;
-    const colors: Record<string, string> = {
-      completed: "bg-green-100 text-green-800",
-      processing: "bg-blue-100 text-blue-800",
-      failed: "bg-red-100 text-red-800",
+    if (!status) {
+      return <span className="font-mono text-muted-foreground" style={{ fontSize: 10 }}>—</span>;
+    }
+    const meta: Record<string, { label: string; color: string; bg: string }> = {
+      completed: { label: "completed", color: "var(--sage)", bg: "var(--sage-soft)" },
+      processing: { label: "processing", color: "var(--accent)", bg: "var(--accent-soft)" },
+      failed: { label: "failed", color: "var(--destructive)", bg: "var(--warm-red-soft)" },
     };
+    const m = meta[status] || { label: status, color: "var(--muted-foreground)", bg: "var(--secondary)" };
     return (
-      <Badge className={colors[status] || "bg-gray-100 text-gray-800"}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Badge>
+      <span
+        className="font-mono uppercase"
+        style={{
+          background: m.bg,
+          color: m.color,
+          fontSize: 9,
+          letterSpacing: "0.1em",
+          padding: "3px 8px",
+          borderRadius: 2,
+          fontWeight: 500,
+        }}
+      >
+        {m.label}
+      </span>
     );
   };
 
-  const renderStars = (score: number) => {
-    const filledStars = Math.floor(score / 2);
-    const emptyStars = 5 - filledStars;
-    return (
-      <div className="flex text-yellow-400 text-xs">
-        {[...Array(filledStars)].map((_, i) => <Star key={i} className="w-3 h-3 fill-current" />)}
-        {[...Array(emptyStars)].map((_, i) => <Star key={i} className="w-3 h-3" />)}
-      </div>
-    );
-  };
+  // Legacy star rendering kept as a no-op stub — the warm-paper table
+  // shows the score number + tier color instead. Replacement is sage
+  // for >= SCORE_EXCELLENT, foreground for >= SCORE_GOOD, copper for
+  // needs-work, destructive for low. See the score cell below.
+  const renderStars = (_score: number) => null;
 
   return (
-    <div className="bg-card rounded-lg border border-border p-6" data-testid="calls-table">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <h3 className="text-lg font-semibold text-foreground">Recent Calls</h3>
-          <span className="text-xs text-muted-foreground">
-            {sortedCalls.length} total
-          </span>
-          {processingCount > 0 && (
-            <Badge variant="secondary" className="animate-pulse text-xs">
-              <Waveform className="w-3 h-3 mr-1" />
-              {processingCount} processing
-            </Badge>
-          )}
+    <div data-testid="calls-table">
+      {processingCount > 0 && (
+        <div
+          className="font-mono uppercase inline-flex items-center gap-1.5 mb-3 text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          <Waveform className="w-3 h-3 animate-pulse" style={{ color: "var(--accent)" }} />
+          {processingCount} processing
         </div>
-        <div className="flex items-center space-x-2">
+      )}
+      <div className="flex items-center justify-end mb-3 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -541,7 +612,13 @@ export default function CallsTable() {
 
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
-        <div className="bg-primary/5 border border-primary/20 rounded-lg px-4 py-2 mb-3 flex items-center gap-3">
+        <div
+          className="px-4 py-2 mb-3 flex items-center gap-3 flex-wrap"
+          style={{
+            background: "var(--accent-soft)",
+            border: "1px solid color-mix(in oklch, var(--accent), transparent 60%)",
+          }}
+        >
           <span className="text-sm font-medium">{selectedIds.size} selected</span>
           <Select onValueChange={handleBulkAssign}>
             <SelectTrigger className="w-44 h-8 text-xs">
@@ -565,44 +642,44 @@ export default function CallsTable() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full">
+      <div className="overflow-x-auto bg-card border border-border">
+        <table className="w-full" style={{ borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
-            <tr className="border-b border-border">
-              <th className="py-3 px-2 w-8">
+            <tr style={{ background: "var(--secondary)" }}>
+              <th
+                className="font-mono uppercase text-muted-foreground text-left"
+                style={{ fontSize: 10, letterSpacing: "0.12em", padding: "10px 12px", fontWeight: 500, borderBottom: "1px solid var(--border)", width: 32 }}
+              >
                 <button onClick={toggleAll} className="text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded" aria-label={allOnPageSelected ? "Deselect all calls" : "Select all calls"}>
                   {allOnPageSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                 </button>
               </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
-                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("date")}>
-                  {t("table.date")} <SortIcon field="date" />
-                </button>
-              </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.agent")}</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
-                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("duration")}>
-                  {t("table.duration")} <SortIcon field="duration" />
-                </button>
-              </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
-                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("sentiment")}>
-                  {t("sentiment.title")} <SortIcon field="sentiment" />
-                </button>
-              </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">
-                <button className="flex items-center hover:text-foreground" onClick={() => toggleSort("score")}>
-                  {t("table.score")} <SortIcon field="score" />
-                </button>
-              </th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("transcript.callParty")}</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.status")}</th>
-              <th className="text-left py-3 px-2 font-medium text-muted-foreground">{t("table.actions")}</th>
+              <HeaderCell label={t("table.date")} sortField="date" currentSort={sortField} dir={sortDir} onSort={toggleSort} />
+              <HeaderCell label={t("table.agent")} />
+              <HeaderCell label={t("table.duration")} sortField="duration" currentSort={sortField} dir={sortDir} onSort={toggleSort} numeric />
+              <HeaderCell label={t("sentiment.title")} sortField="sentiment" currentSort={sortField} dir={sortDir} onSort={toggleSort} />
+              <HeaderCell label={t("table.score")} sortField="score" currentSort={sortField} dir={sortDir} onSort={toggleSort} numeric />
+              <HeaderCell label={t("transcript.callParty")} />
+              <HeaderCell label={t("table.status")} />
+              <HeaderCell label={t("table.actions")} />
             </tr>
           </thead>
           <tbody>
             {pagedCalls.map((call) => (
-              <tr key={call.id} className={`border-b border-border hover:bg-muted transition-colors ${selectedIds.has(call.id) ? "bg-primary/5" : ""}`}>
+              <tr
+                key={call.id}
+                className="transition-colors"
+                style={{
+                  borderBottom: "1px solid var(--border)",
+                  background: selectedIds.has(call.id) ? "var(--accent-soft)" : "transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (!selectedIds.has(call.id)) e.currentTarget.style.background = "var(--secondary)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!selectedIds.has(call.id)) e.currentTarget.style.background = "transparent";
+                }}
+              >
                 <td className="py-3 px-2">
                   <button onClick={() => toggleOne(call.id)} className="text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded" aria-label={selectedIds.has(call.id) ? `Deselect call ${call.fileName || call.id}` : `Select call ${call.fileName || call.id}`}>
                     {selectedIds.has(call.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
@@ -647,31 +724,28 @@ export default function CallsTable() {
                     </Select>
                   )}
                 </td>
-                <td className="py-3 px-2 text-muted-foreground">
-                  {call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s` : '-'}
+                <td className="py-3 px-3 text-muted-foreground font-mono tabular-nums" style={{ textAlign: "right", fontSize: 12 }}>
+                  {call.duration ? `${Math.floor(call.duration / 60)}:${String(call.duration % 60).padStart(2, "0")}` : "—"}
                 </td>
                 <td className="py-3 px-2">{getSentimentBadge(call.sentiment?.overallSentiment)}</td>
-                <td className="py-3 px-2">
+                <td className="py-3 px-3" style={{ textAlign: "right" }}>
                   {call.analysis?.performanceScore && (() => {
                     const score = Number(call.analysis.performanceScore);
-                    const scoreColor = score >= SCORE_EXCELLENT ? "text-green-600"
-                      : score >= SCORE_GOOD ? "text-blue-600"
-                      : score >= SCORE_NEEDS_WORK ? "text-yellow-600"
-                      : "text-red-600";
-                    const barColor = score >= SCORE_EXCELLENT ? "from-green-500 to-emerald-400"
-                      : score >= SCORE_GOOD ? "from-blue-500 to-cyan-400"
-                      : score >= SCORE_NEEDS_WORK ? "from-yellow-500 to-amber-400"
-                      : "from-red-500 to-orange-400";
+                    const color =
+                      score >= SCORE_EXCELLENT
+                        ? "var(--sage)"
+                        : score >= SCORE_GOOD
+                        ? "var(--foreground)"
+                        : score >= SCORE_NEEDS_WORK
+                        ? "var(--accent)"
+                        : "var(--destructive)";
                     return (
-                      <div className="space-y-1">
-                        <div className="flex items-center space-x-2">
-                          <span className={`font-bold ${scoreColor}`}>{score.toFixed(1)}</span>
-                          {renderStars(score)}
-                        </div>
-                        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full bg-gradient-to-r ${barColor}`} style={{ width: `${score * 10}%` }} />
-                        </div>
-                      </div>
+                      <span
+                        className="font-mono tabular-nums font-medium"
+                        style={{ color, fontSize: 13 }}
+                      >
+                        {score.toFixed(1)}
+                      </span>
                     );
                   })()}
                 </td>
