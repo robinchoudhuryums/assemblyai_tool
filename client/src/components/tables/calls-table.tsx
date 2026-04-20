@@ -74,7 +74,21 @@ function HeaderCell({
   );
 }
 
-export default function CallsTable() {
+export interface CallsTableProps {
+  /**
+   * When provided, clicking a row's content area (outside action
+   * buttons) fires this callback instead of treating the click as a
+   * no-op. The parent uses it to drive the preview rail on the Calls
+   * list page. Individual action buttons (Eye, Play, Download, Delete,
+   * Assign select, checkbox) stopPropagation so they still fire their
+   * own behavior.
+   */
+  onRowSelect?: (callId: string) => void;
+  /** Highlighted row id (drives the selected-state tint). */
+  selectedCallId?: string | null;
+}
+
+export default function CallsTable({ onRowSelect, selectedCallId }: CallsTableProps = {}) {
   const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sentimentFilter, setSentimentFilter] = useState<string>("all");
@@ -671,16 +685,27 @@ export default function CallsTable() {
                 className="transition-colors"
                 style={{
                   borderBottom: "1px solid var(--border)",
-                  background: selectedIds.has(call.id) ? "var(--accent-soft)" : "transparent",
+                  background:
+                    selectedCallId === call.id
+                      ? "var(--accent-soft)"
+                      : selectedIds.has(call.id)
+                      ? "var(--accent-soft)"
+                      : "transparent",
+                  cursor: onRowSelect ? "pointer" : "default",
                 }}
+                onClick={() => onRowSelect && onRowSelect(call.id)}
                 onMouseEnter={(e) => {
-                  if (!selectedIds.has(call.id)) e.currentTarget.style.background = "var(--secondary)";
+                  if (selectedCallId !== call.id && !selectedIds.has(call.id)) {
+                    e.currentTarget.style.background = "var(--secondary)";
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  if (!selectedIds.has(call.id)) e.currentTarget.style.background = "transparent";
+                  if (selectedCallId !== call.id && !selectedIds.has(call.id)) {
+                    e.currentTarget.style.background = "transparent";
+                  }
                 }}
               >
-                <td className="py-3 px-2">
+                <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => toggleOne(call.id)} className="text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded" aria-label={selectedIds.has(call.id) ? `Deselect call ${call.fileName || call.id}` : `Select call ${call.fileName || call.id}`}>
                     {selectedIds.has(call.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
                   </button>
@@ -691,7 +716,7 @@ export default function CallsTable() {
                     <p className="text-xs text-muted-foreground">{new Date(call.uploadedAt || "").toLocaleTimeString()}</p>
                   </div>
                 </td>
-                <td className="py-3 px-2">
+                <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
                   {call.employee ? (
                     <div className="flex items-center space-x-2">
                       <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
@@ -791,7 +816,7 @@ export default function CallsTable() {
                     })()}
                   </div>
                 </td>
-                <td className="py-3 px-2">
+                <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center space-x-2">
                     <Link href={`/transcripts/${call.id}`}>
                       <Button size="sm" variant="ghost" aria-label="View transcript" disabled={call.status !== 'completed'}>
