@@ -15,6 +15,12 @@ import {
   getDateRange, formatMonth, PRESET_LABELS,
   MetricCard, FlaggedCallCard, SubScoreCard,
 } from "@/components/reports/report-components";
+import {
+  scoreTierColor,
+  CHART_TICK,
+  CHART_TOOLTIP,
+  CHART_LEGEND,
+} from "@/components/analytics/chart-primitives";
 
 // ---- Component ----
 
@@ -1018,48 +1024,10 @@ export default function ReportsPage() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Tier color derivation for score display. Mirrors the CallsTable +
-// CallsPreviewRail score palette (sage ≥ EXCELLENT, foreground ≥
-// GOOD, copper ≥ NEEDS_WORK, destructive below). Accepts null to
-// return a muted fallback.
-// ─────────────────────────────────────────────────────────────
-function scoreTierColor(score: number | null | undefined): string {
-  if (score == null) return "var(--muted-foreground)";
-  if (score >= 8) return "var(--sage)";
-  if (score >= 6) return "var(--foreground)";
-  if (score >= 4) return "var(--accent)";
-  return "var(--destructive)";
-}
-
-// ─────────────────────────────────────────────────────────────
-// Recharts styling constants — keep chart typography + chrome in
-// lockstep with the warm-paper panels. Mono axis ticks, paper-card
-// tooltip bg, hairline borders.
-// ─────────────────────────────────────────────────────────────
-const CHART_TICK = {
-  fontSize: 10,
-  fontFamily: "var(--font-mono)",
-  fill: "var(--muted-foreground)",
-} as const;
-
-const CHART_TOOLTIP: React.CSSProperties = {
-  background: "var(--card)",
-  border: "1px solid var(--border)",
-  borderRadius: 2,
-  fontSize: 12,
-  fontFamily: "var(--font-sans)",
-};
-
-const CHART_LEGEND: React.CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 10,
-  textTransform: "uppercase",
-  letterSpacing: "0.08em",
-};
-
-// ─────────────────────────────────────────────────────────────
 // Warm-paper section header: icon + mono uppercase label — used across
-// each panel in the Reports body.
+// each panel in the Reports body. Tier color + Recharts styling were
+// lifted to `components/analytics/chart-primitives` in installment 9
+// (top-of-file import).
 // ─────────────────────────────────────────────────────────────
 function SectionHeader({
   icon: Icon,
