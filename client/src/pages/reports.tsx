@@ -5,7 +5,6 @@ import { LoadingIndicator, LoadingDots, ShimmerCard } from "@/components/ui/load
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { Employee } from "@shared/schema";
@@ -309,30 +308,74 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen" data-testid="reports-page">
-      <header className="bg-card border-b border-border px-6 py-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">Performance Reports</h2>
-          <p className="text-muted-foreground">Filter by time period, employee, or department.</p>
+    <div className="min-h-screen bg-background text-foreground" data-testid="reports-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Reports</span>
+        </nav>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleDownloadCSV}
+          disabled={!report}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="download-csv"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          CSV
+        </button>
+        <button
+          type="button"
+          onClick={handleDownloadReport}
+          disabled={!report}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="download-report"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          Report
+        </button>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          Performance reports · {PRESET_LABELS[datePreset]}
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={handleDownloadCSV} disabled={!report}>
-            <DownloadSimple className="w-4 h-4 mr-2" />
-            CSV
-          </Button>
-          <Button onClick={handleDownloadReport} disabled={!report}>
-            <DownloadSimple className="w-4 h-4 mr-2" />
-            Report
-          </Button>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+        >
+          {reportType === "employee" && selectedEmployee
+            ? (employees?.find((e) => e.id === selectedEmployee)?.name ?? "Employee")
+            : reportType === "department" && selectedDepartment
+            ? `${selectedDepartment}`
+            : "Overall performance"}
         </div>
-      </header>
+      </div>
 
       {/* Filters Bar */}
-      <div className="bg-card border-b border-border px-6 py-4">
+      <div className="bg-background border-b border-border px-7 py-4">
         <div className="flex flex-wrap gap-4 items-end">
           {/* Report Type */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Report Type</Label>
+            <FilterLabel>Report Type</FilterLabel>
             <Select value={reportType} onValueChange={(v) => setReportType(v as ReportType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -346,7 +389,7 @@ export default function ReportsPage() {
           {/* Employee selector */}
           {reportType === "employee" && (
             <div className="min-w-[200px]">
-              <Label className="text-xs text-muted-foreground">Employee</Label>
+              <FilterLabel>Employee</FilterLabel>
               <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
                 <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
                 <SelectContent>
@@ -361,7 +404,7 @@ export default function ReportsPage() {
           {/* Department selector */}
           {reportType === "department" && (
             <div className="min-w-[200px]">
-              <Label className="text-xs text-muted-foreground">Department</Label>
+              <FilterLabel>Department</FilterLabel>
               <Select value={selectedDepartment} onValueChange={setSelectedDepartment}>
                 <SelectTrigger><SelectValue placeholder="Select department" /></SelectTrigger>
                 <SelectContent>
@@ -375,7 +418,7 @@ export default function ReportsPage() {
 
           {/* Call Party Type */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Call Party</Label>
+            <FilterLabel>Call Party</FilterLabel>
             <Select value={callPartyFilter} onValueChange={setCallPartyFilter}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -392,7 +435,7 @@ export default function ReportsPage() {
 
           {/* Date Preset */}
           <div className="min-w-[160px]">
-            <Label className="text-xs text-muted-foreground">Time Period</Label>
+            <FilterLabel>Time Period</FilterLabel>
             <Select value={datePreset} onValueChange={(v) => setDatePreset(v as DatePreset)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -409,34 +452,41 @@ export default function ReportsPage() {
           {datePreset === "custom" && (
             <>
               <div>
-                <Label className="text-xs text-muted-foreground">From</Label>
+                <FilterLabel>From</FilterLabel>
                 <Input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} className="w-[150px]" />
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground">To</Label>
+                <FilterLabel>To</FilterLabel>
                 <Input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} className="w-[150px]" />
               </div>
             </>
           )}
 
           {/* Compare toggle */}
-          <div className="ml-auto">
-            <Button
-              variant={compareEnabled ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCompareEnabled(!compareEnabled)}
-            >
-              <Calendar className="w-3.5 h-3.5 mr-1.5" />
-              {compareEnabled ? "Comparing" : "Compare Periods"}
-            </Button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setCompareEnabled(!compareEnabled)}
+            className={`ml-auto font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-2 transition-colors ${
+              compareEnabled
+                ? "bg-foreground text-background border border-foreground"
+                : "bg-card border border-border text-foreground hover:bg-secondary"
+            }`}
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            data-testid="compare-toggle"
+          >
+            <Calendar style={{ width: 12, height: 12 }} />
+            {compareEnabled ? "Comparing" : "Compare periods"}
+          </button>
         </div>
 
         {/* Comparison row */}
         {compareEnabled && (
           <div className="flex flex-wrap gap-4 items-end mt-3 pt-3 border-t border-border">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <ArrowRight className="w-4 h-4" />
+            <div
+              className="flex items-center gap-2 font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              <ArrowRight style={{ width: 12, height: 12 }} />
               Compare to:
             </div>
             <div className="min-w-[160px]">
@@ -806,6 +856,20 @@ export default function ReportsPage() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper filter-row label (mono uppercase kicker over each Select)
+// ─────────────────────────────────────────────────────────────
+function FilterLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="font-mono uppercase text-muted-foreground mb-1.5"
+      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+    >
+      {children}
     </div>
   );
 }
