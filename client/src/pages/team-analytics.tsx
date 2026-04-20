@@ -392,6 +392,8 @@ export default function TeamAnalyticsPage() {
                   <button
                     type="button"
                     onClick={() => setExpandedTeam(isOpen ? null : team.team)}
+                    aria-expanded={isOpen}
+                    aria-label={`${isOpen ? "Collapse" : "Expand"} ${team.team}`}
                     className="w-full flex items-center gap-4 px-6 py-4 hover:bg-background/60 transition-colors text-left"
                   >
                     <div className="shrink-0">

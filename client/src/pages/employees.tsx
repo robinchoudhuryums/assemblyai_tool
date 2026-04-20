@@ -906,6 +906,8 @@ export default function EmployeesPage() {
                   <button
                     type="button"
                     onClick={() => toggleDept(department)}
+                    aria-expanded={!isCollapsed}
+                    aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${department}`}
                     className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-secondary/40 transition-colors"
                   >
                     <div className="flex items-center gap-3">

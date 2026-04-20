@@ -516,6 +516,7 @@ function PeriodTab({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={`font-mono uppercase inline-flex items-center rounded-sm px-3 py-1.5 transition-colors ${
         active
           ? "bg-foreground text-background border border-foreground"

@@ -229,7 +229,7 @@ function Router() {
       </a>
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
-      <main id="main-content" className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 relative">
+      <main id="main-content" className="flex-1 overflow-auto bg-background relative">
         {/* Background pattern (selected via Settings page) */}
         <BackgroundLayer />
         {/* Mobile hamburger button */}

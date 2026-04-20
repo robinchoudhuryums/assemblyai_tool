@@ -192,6 +192,23 @@
     font-family: var(--font-sans);
   }
 
+  /* Accessibility: respect prefers-reduced-motion. Users who've opted in to
+     the OS-level "reduce motion" setting (motion sensitivity, vestibular
+     disorders) get near-instant transitions instead of the app's pulses,
+     spins, transitions, and animated gradients. A small non-zero duration
+     (0.01ms) is used rather than `none` so one-shot animation callbacks
+     still fire reliably across browsers. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   /* Accessibility: visible focus indicators for keyboard navigation.
      Uses :focus-visible so outlines only appear on keyboard focus, not mouse clicks. */
   *:focus-visible {

@@ -170,18 +170,51 @@ export function MfaSetupDialog({ open, onClose }: { open: boolean; onClose: () =
     }
   };
 
+  // Escape-key to close — custom modal (not shadcn Dialog), so we wire
+  // up the key listener ourselves. resetAndClose is captured in a ref so
+  // the mount effect runs exactly once per open/close toggle.
+  const resetAndCloseRef = useRef(resetAndClose);
+  resetAndCloseRef.current = resetAndClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") resetAndCloseRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={resetAndClose} />
-      <div className="relative bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+      <div
+        className="fixed inset-0 bg-black/50"
+        onClick={resetAndClose}
+        aria-hidden="true"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mfa-dialog-title"
+        className="relative bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4"
+      >
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
+          <h3
+            id="mfa-dialog-title"
+            className="text-lg font-semibold text-foreground flex items-center gap-2"
+          >
             <Shield className="w-5 h-5" />
             Two-Factor Authentication
           </h3>
-          <button onClick={resetAndClose} className="text-muted-foreground hover:text-foreground text-xl leading-none">&times;</button>
+          <button
+            type="button"
+            onClick={resetAndClose}
+            aria-label="Close dialog"
+            className="text-muted-foreground hover:text-foreground text-xl leading-none"
+          >
+            &times;
+          </button>
         </div>
 
         {/* Status view */}

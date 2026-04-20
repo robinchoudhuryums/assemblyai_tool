@@ -204,7 +204,10 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           <LanguageSelector />
           <div className="relative" ref={notifRef}>
               <button
+                type="button"
                 onClick={() => setShowNotifications(!showNotifications)}
+                aria-expanded={showNotifications}
+                aria-haspopup="true"
                 className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
                 title={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "No new notifications"}
                 aria-label={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "Notifications"}
