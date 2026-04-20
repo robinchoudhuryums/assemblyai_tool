@@ -6,18 +6,16 @@
  *   - Library: table of generated calls with status, cost, audio player, actions
  */
 import { useState, useMemo, useEffect, useRef } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -163,6 +161,193 @@ function CircumstanceChip({ id, compact = false }: { id: Circumstance; compact?:
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// Warm-paper primitives (installment 18 — simulated-calls redesign).
+// Kept page-local following the same pattern admin.tsx / settings.tsx
+// use: each installment owns its primitives, and shared ones get
+// hoisted in a future cleanup pass if a second consumer appears.
+// ─────────────────────────────────────────────────────────────
+
+function SectionKicker({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="font-mono uppercase text-muted-foreground"
+      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Panel({
+  kicker,
+  title,
+  description,
+  action,
+  children,
+  dense = false,
+}: {
+  kicker?: string;
+  title?: string;
+  description?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  /** dense: tighter vertical padding for sidebar panels. */
+  dense?: boolean;
+}) {
+  const hasHeader = kicker || title || description || action;
+  return (
+    <div className="rounded-sm border border-border bg-card overflow-hidden">
+      {hasHeader && (
+        <div
+          className={`border-b border-border flex items-start justify-between gap-3 ${
+            dense ? "px-4 py-3" : "px-5 py-4"
+          }`}
+        >
+          <div className="min-w-0 flex-1">
+            {kicker && <SectionKicker>{kicker}</SectionKicker>}
+            {title && (
+              <div
+                className={`font-display font-medium text-foreground ${kicker ? "mt-1" : ""}`}
+                style={{
+                  fontSize: dense ? 15 : 16,
+                  letterSpacing: "-0.2px",
+                  lineHeight: 1.2,
+                }}
+              >
+                {title}
+              </div>
+            )}
+            {description && (
+              <p
+                className="text-sm text-muted-foreground mt-1.5"
+                style={{ maxWidth: 560, lineHeight: 1.5 }}
+              >
+                {description}
+              </p>
+            )}
+          </div>
+          {action && <div className="shrink-0">{action}</div>}
+        </div>
+      )}
+      <div className={dense ? "p-4" : "p-5"}>{children}</div>
+    </div>
+  );
+}
+
+function ToolbarTab({
+  active,
+  count,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  count?: number;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        "font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors border " +
+        (active
+          ? "bg-foreground text-background border-foreground"
+          : "bg-card text-foreground border-border hover:bg-secondary")
+      }
+      style={{ fontSize: 10, letterSpacing: "0.1em" }}
+    >
+      {children}
+      {count !== undefined && (
+        <span className="font-mono tabular-nums" style={{ opacity: active ? 0.75 : 0.55 }}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** Mono-uppercase speaker tag — replaces shadcn Badge in the turn row. */
+function SpeakerTag({ speaker }: { speaker: string }) {
+  const toneStyle: React.CSSProperties = (() => {
+    switch (speaker) {
+      case "agent":
+        return {
+          background: "var(--copper-soft)",
+          color: "var(--accent)",
+          borderColor: "color-mix(in oklch, var(--accent), transparent 55%)",
+        };
+      case "customer":
+        return {
+          background: "var(--sage-soft)",
+          color: "var(--sage)",
+          borderColor: "color-mix(in oklch, var(--sage), transparent 55%)",
+        };
+      case "hold":
+        return {
+          background: "var(--paper-2)",
+          color: "var(--muted-foreground)",
+          borderColor: "var(--border)",
+        };
+      case "interrupt":
+        return {
+          background: "var(--amber-soft)",
+          color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+          borderColor: "color-mix(in oklch, var(--amber), transparent 55%)",
+        };
+      default:
+        return {
+          background: "var(--paper-2)",
+          color: "var(--muted-foreground)",
+          borderColor: "var(--border)",
+        };
+    }
+  })();
+  return (
+    <span
+      className="font-mono uppercase border rounded-sm shrink-0 tracking-[0.1em]"
+      style={{
+        ...toneStyle,
+        fontSize: 9,
+        padding: "3px 6px",
+        marginTop: 8,
+      }}
+    >
+      {speaker}
+    </span>
+  );
+}
+
+/** Mini pill for CircumstancePicker — either "Rule" (accent) or "AI" (sage). */
+function CircumstanceKindPill({ kind }: { kind: "rule" | "ai" }) {
+  const toneStyle: React.CSSProperties =
+    kind === "rule"
+      ? {
+          background: "var(--copper-soft)",
+          color: "var(--accent)",
+          borderColor: "color-mix(in oklch, var(--accent), transparent 55%)",
+        }
+      : {
+          background: "var(--sage-soft)",
+          color: "var(--sage)",
+          borderColor: "color-mix(in oklch, var(--sage), transparent 55%)",
+        };
+  return (
+    <span
+      className="font-mono uppercase border rounded-sm tracking-[0.1em]"
+      style={{
+        ...toneStyle,
+        fontSize: 9,
+        padding: "2px 5px",
+      }}
+    >
+      {kind}
+    </span>
+  );
+}
+
 export default function SimulatedCallsPage() {
   const { toast } = useToast();
   const [tab, setTab] = useState("library");
@@ -200,31 +385,61 @@ export default function SimulatedCallsPage() {
   const capFull = dailyUsed >= dailyCap;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
-      <div className="flex items-end justify-between gap-8">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
-            Admin · Synthetic QA studio
-          </div>
-          <h1 className="font-display text-3xl font-medium tracking-[-0.01em] text-foreground flex items-center gap-3">
-            <Microphone className="w-7 h-7" />
-            Simulated Call Generator
-          </h1>
-          <p className="text-sm text-muted-foreground mt-2 max-w-xl">
-            Generate synthetic call recordings for QA, agent training, and pipeline regression testing.
-          </p>
-        </div>
-        <div
-          className={`font-mono text-[10px] uppercase tracking-[0.14em] px-3 py-1.5 border rounded-sm tabular-nums ${
-            capFull
-              ? "border-destructive text-destructive bg-[color-mix(in_oklch,var(--destructive),transparent_92%)]"
-              : "border-border text-muted-foreground bg-card"
-          }`}
-          data-testid="daily-cap-pill"
+    <div className="min-h-screen bg-background text-foreground" data-testid="simulated-calls-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
         >
-          {dailyUsed} / {dailyCap} today
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <Link href="/admin" className="text-muted-foreground hover:text-foreground transition-colors">
+            Admin
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Simulated Calls</span>
+        </nav>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div className="flex items-end justify-between gap-8">
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
+              Admin · Synthetic QA studio
+            </div>
+            <h1
+              className="font-display font-medium text-foreground flex items-center gap-3"
+              style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+            >
+              <Microphone className="w-6 h-6 shrink-0" style={{ color: "var(--accent)" }} />
+              Simulated Call Generator
+            </h1>
+            <p className="text-sm text-muted-foreground mt-2 max-w-xl">
+              Generate synthetic call recordings for QA, agent training, and pipeline regression testing.
+            </p>
+          </div>
+          <div
+            className={`font-mono text-[10px] uppercase tracking-[0.14em] px-3 py-1.5 border rounded-sm tabular-nums shrink-0 ${
+              capFull
+                ? "border-destructive text-destructive bg-[color-mix(in_oklch,var(--destructive),transparent_92%)]"
+                : "border-border text-muted-foreground bg-card"
+            }`}
+            data-testid="daily-cap-pill"
+          >
+            {dailyUsed} / {dailyCap} today
+          </div>
         </div>
       </div>
+
+      <div className="px-7 py-6 max-w-7xl mx-auto space-y-6">
 
       <div
         className="border border-[color-mix(in_oklch,var(--amber),transparent_50%)] border-l-[3px] border-l-[var(--amber)] bg-[var(--amber-soft)] text-foreground text-sm leading-relaxed px-5 py-3"
@@ -243,35 +458,27 @@ export default function SimulatedCallsPage() {
         </span>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="bg-card border border-border rounded-sm p-0.5 h-auto">
-          <TabsTrigger
-            value="library"
-            className="font-mono text-[10px] uppercase tracking-[0.12em] px-4 py-1.5 rounded-sm data-[state=active]:bg-foreground data-[state=active]:text-background"
-          >
-            Library ({calls.length})
-          </TabsTrigger>
-          <TabsTrigger
-            value="generate"
-            className="font-mono text-[10px] uppercase tracking-[0.12em] px-4 py-1.5 rounded-sm data-[state=active]:bg-foreground data-[state=active]:text-background"
-          >
+      <div className="space-y-5">
+        <div className="flex items-center gap-2" role="tablist" aria-label="Simulated calls">
+          <ToolbarTab active={tab === "library"} count={calls.length} onClick={() => setTab("library")}>
+            Library
+          </ToolbarTab>
+          <ToolbarTab active={tab === "generate"} onClick={() => setTab("generate")}>
             Generate New
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="library" className="mt-6">
+          </ToolbarTab>
+        </div>
+        {tab === "library" ? (
           <LibraryTable
             calls={calls}
             isLoading={isLoading}
             playingId={playingId}
             onPlay={setPlayingId}
           />
-        </TabsContent>
-
-        <TabsContent value="generate" className="mt-6">
+        ) : (
           <GenerateForm voices={voices} capFull={capFull} onSuccess={() => setTab("library")} />
-        </TabsContent>
-      </Tabs>
+        )}
+      </div>
+      </div>
     </div>
   );
 }
@@ -528,7 +735,13 @@ function VariationDialog({
                     >
                       <div className="flex items-center justify-between">
                         <span>{meta.label}</span>
-                        {active && <CheckCircle className="w-4 h-4 text-green-600" weight="fill" />}
+                        {active && (
+                          <CheckCircle
+                            className="w-4 h-4"
+                            style={{ color: "var(--sage)" }}
+                            weight="fill"
+                          />
+                        )}
                       </div>
                     </button>
                   );
@@ -722,45 +935,38 @@ function GenerateForm({
     <div className="grid md:grid-cols-3 gap-6">
       {/* Left 2/3: script builder */}
       <div className="md:col-span-2 space-y-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Script</CardTitle>
-              <CardDescription>
-                Build a call turn-by-turn, or paste an existing JSON script.
-              </CardDescription>
-            </div>
+        <Panel
+          kicker="Script"
+          title={jsonMode ? "JSON script" : "Dialogue builder"}
+          description="Build a call turn-by-turn, or paste an existing JSON script."
+          action={
             <Button variant="outline" size="sm" onClick={() => setJsonMode((v) => !v)}>
               {jsonMode ? "Form mode" : "JSON mode"}
             </Button>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {jsonMode ? (
-              <div>
-                <Label>Script JSON</Label>
-                <Textarea
-                  rows={20}
-                  value={jsonText}
-                  onChange={(e) => setJsonText(e.target.value)}
-                  placeholder={JSON.stringify(EMPTY_SCRIPT, null, 2)}
-                  className="font-mono text-xs"
-                />
-              </div>
-            ) : (
-              <FormScriptBuilder script={script} setScript={setScript} voices={voices} />
-            )}
-          </CardContent>
-        </Card>
+          }
+        >
+          {jsonMode ? (
+            <div className="space-y-2">
+              <Label>Script JSON</Label>
+              <Textarea
+                rows={20}
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                placeholder={JSON.stringify(EMPTY_SCRIPT, null, 2)}
+                className="font-mono text-xs"
+              />
+            </div>
+          ) : (
+            <FormScriptBuilder script={script} setScript={setScript} voices={voices} />
+          )}
+        </Panel>
       </div>
 
       {/* Right 1/3: config + submit */}
       <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Audio Quality</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
+        <Panel kicker="Capture" title="Audio quality" dense>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
               <Label>Connection quality</Label>
               <Select
                 value={config.connectionQuality}
@@ -776,7 +982,7 @@ function GenerateForm({
               </Select>
             </div>
 
-            <div>
+            <div className="space-y-1.5">
               <Label>Background noise</Label>
               <Select
                 value={config.backgroundNoise}
@@ -793,7 +999,7 @@ function GenerateForm({
             </div>
 
             {config.backgroundNoise !== "none" && (
-              <div>
+              <div className="space-y-1.5">
                 <Label>Noise level: {(config.backgroundNoiseLevel * 100).toFixed(0)}%</Label>
                 <Slider
                   value={[config.backgroundNoiseLevel]}
@@ -805,7 +1011,7 @@ function GenerateForm({
               </div>
             )}
 
-            <div>
+            <div className="space-y-1.5">
               <Label>Gap between turns</Label>
               <Select
                 value={config.gapDistribution}
@@ -819,7 +1025,7 @@ function GenerateForm({
               </Select>
             </div>
 
-            <div>
+            <div className="space-y-1.5">
               <Label>Mean gap: {config.gapMeanSeconds.toFixed(2)}s</Label>
               <Slider
                 value={[config.gapMeanSeconds]}
@@ -832,74 +1038,75 @@ function GenerateForm({
 
             {/* Realism toggles — both default ON. Disable to get clean, fluent
                 TTS without filler words or active-listening overlays. */}
-            <div className="flex items-center justify-between pt-2 border-t">
-              <div>
-                <Label className="cursor-pointer">Filler words (um/uh)</Label>
-                <p className="text-xs text-muted-foreground">Rate scales with quality tier</p>
+            <div className="pt-3 -mx-4 px-4 border-t border-border space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <Label className="cursor-pointer">Filler words (um/uh)</Label>
+                  <p className="text-xs text-muted-foreground">Rate scales with quality tier</p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={config.disfluencies !== false}
+                  onChange={(e) => setConfig({ ...config, disfluencies: e.target.checked })}
+                />
               </div>
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={config.disfluencies !== false}
-                onChange={(e) => setConfig({ ...config, disfluencies: e.target.checked })}
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <Label className="cursor-pointer">Backchannel overlays</Label>
-                <p className="text-xs text-muted-foreground">"mm-hmm", "okay" under long turns</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <Label className="cursor-pointer">Backchannel overlays</Label>
+                  <p className="text-xs text-muted-foreground">"mm-hmm", "okay" under long turns</p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={config.backchannels !== false}
+                  onChange={(e) => setConfig({ ...config, backchannels: e.target.checked })}
+                />
               </div>
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={config.backchannels !== false}
-                onChange={(e) => setConfig({ ...config, backchannels: e.target.checked })}
-              />
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t">
-              <div>
-                <Label className="cursor-pointer">Auto-analyze when ready</Label>
-                <p className="text-xs text-muted-foreground">
-                  Send the generated call through the real analysis pipeline automatically. Adds Bedrock + AssemblyAI cost per generation.
-                </p>
+            <div className="pt-3 -mx-4 px-4 border-t border-border">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <Label className="cursor-pointer">Auto-analyze when ready</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Send the generated call through the real analysis pipeline automatically. Adds Bedrock + AssemblyAI cost per generation.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={config.analyzeAfterGeneration === true}
+                  onChange={(e) => setConfig({ ...config, analyzeAfterGeneration: e.target.checked })}
+                />
               </div>
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={config.analyzeAfterGeneration === true}
-                onChange={(e) => setConfig({ ...config, analyzeAfterGeneration: e.target.checked })}
-              />
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
         <CircumstancePicker
           value={config.circumstances ?? []}
           onChange={(next) => setConfig({ ...config, circumstances: next })}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Turns:</span>
-              <span>{script.turns.length}</span>
+        <Panel kicker="Summary" title="Estimate" dense>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between items-baseline">
+              <span className="font-mono uppercase text-muted-foreground" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Turns</span>
+              <span className="font-mono tabular-nums">{script.turns.length}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">TTS chars:</span>
-              <span>{totalChars.toLocaleString()}</span>
+            <div className="flex justify-between items-baseline">
+              <span className="font-mono uppercase text-muted-foreground" style={{ fontSize: 10, letterSpacing: "0.08em" }}>TTS chars</span>
+              <span className="font-mono tabular-nums">{totalChars.toLocaleString()}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Est. cost:</span>
-              <span>${estimatedCost}</span>
+            <div className="flex justify-between items-baseline">
+              <span className="font-mono uppercase text-muted-foreground" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Est. cost</span>
+              <span className="font-mono tabular-nums text-foreground">${estimatedCost}</span>
             </div>
             {(config.circumstances?.length ?? 0) > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Circumstances:</span>
-                <span>{config.circumstances!.length}</span>
+              <div className="flex justify-between items-baseline">
+                <span className="font-mono uppercase text-muted-foreground" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Circumstances</span>
+                <span className="font-mono tabular-nums">{config.circumstances!.length}</span>
               </div>
             )}
             <Button
@@ -910,8 +1117,8 @@ function GenerateForm({
               {generateMut.isPending ? <SpinnerGap className="w-4 h-4 animate-spin mr-2" /> : null}
               Generate
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
       </div>
     </div>
   );
@@ -1054,14 +1261,13 @@ function CircumstancePicker({
   };
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">Circumstances</CardTitle>
-        <CardDescription className="text-xs">
-          Apply to the script at generation time. Rule-based items take effect immediately; the rest only apply when you use "Create Variation" on a generated call (uses AI).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
+    <Panel
+      kicker="Layer"
+      title="Circumstances"
+      description="Apply to the script at generation time. Rule-based items take effect immediately; AI items only apply when you use Create Variation on a generated call."
+      dense
+    >
+      <div className="space-y-2">
         {CIRCUMSTANCE_VALUES.map((c) => {
           const meta = CIRCUMSTANCE_META[c];
           const active = value.includes(c);
@@ -1070,22 +1276,30 @@ function CircumstancePicker({
               key={c}
               type="button"
               onClick={() => toggle(c)}
+              aria-pressed={active}
               className={
-                "w-full text-left px-3 py-2 rounded-md border transition-colors " +
+                "w-full text-left px-3 py-2 rounded-sm border transition-colors " +
                 (active
-                  ? "bg-primary/10 border-primary/50 text-foreground"
-                  : "border-border hover:bg-muted")
+                  ? "bg-[var(--copper-soft)] border-[color-mix(in_oklch,var(--accent),transparent_50%)] text-foreground"
+                  : "bg-transparent border-border hover:bg-secondary")
+              }
+              style={
+                active
+                  ? { boxShadow: "inset 2px 0 0 var(--accent)" }
+                  : undefined
               }
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium text-sm">{meta.label}</span>
-                <div className="flex gap-1 shrink-0">
-                  {meta.ruleBased ? (
-                    <Badge variant="outline" className="text-[10px] h-5">Rule</Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px] h-5 border-purple-400/50 text-purple-600">AI</Badge>
+                <div className="flex items-center gap-1 shrink-0">
+                  <CircumstanceKindPill kind={meta.ruleBased ? "rule" : "ai"} />
+                  {active && (
+                    <CheckCircle
+                      className="w-4 h-4 shrink-0"
+                      style={{ color: "var(--sage)" }}
+                      weight="fill"
+                    />
                   )}
-                  {active && <CheckCircle className="w-4 h-4 text-green-600" weight="fill" />}
                 </div>
               </div>
               <p className="text-xs text-muted-foreground mt-1 leading-snug">
@@ -1094,8 +1308,8 @@ function CircumstancePicker({
             </button>
           );
         })}
-      </CardContent>
-    </Card>
+      </div>
+    </Panel>
   );
 }
 
@@ -1231,13 +1445,22 @@ function ScenarioGeneratorButton({
   };
 
   return (
-    <div className="rounded-md border border-purple-400/40 bg-purple-500/5 p-3 flex items-center justify-between gap-3">
+    <div
+      className="rounded-sm border border-border bg-[var(--copper-soft)]/40 p-3 flex items-center justify-between gap-3"
+      style={{ boxShadow: "inset 2px 0 0 var(--accent)" }}
+    >
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 font-medium text-sm">
-          <Sparkle className="w-4 h-4 text-purple-600" weight="fill" />
+        <div
+          className="font-mono uppercase text-muted-foreground mb-1"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          AI assist
+        </div>
+        <div className="flex items-center gap-1.5 font-display font-medium text-[14px] text-foreground">
+          <Sparkle className="w-4 h-4" style={{ color: "var(--accent)" }} weight="fill" />
           Generate turns from title + scenario
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
           Let AI write the dialogue from your title + scenario description. Haiku by default (~$0.003); Sonnet option for richer dialogue (~$0.034).
         </p>
       </div>
@@ -1245,7 +1468,7 @@ function ScenarioGeneratorButton({
         type="button"
         size="sm"
         variant="outline"
-        className="border-purple-500/50 text-purple-700 hover:bg-purple-500/10 shrink-0"
+        className="shrink-0"
         onClick={handleOpen}
       >
         <Sparkle className="w-4 h-4 mr-1" />
@@ -1265,15 +1488,20 @@ function ScenarioGeneratorButton({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="rounded-md bg-muted p-3 text-xs space-y-1">
-              <div><span className="text-muted-foreground">Title:</span> {script.title || <em>(empty)</em>}</div>
-              {script.scenario && <div><span className="text-muted-foreground">Scenario:</span> {script.scenario}</div>}
-              <div><span className="text-muted-foreground">Quality tier:</span> {script.qualityTier}</div>
+            <div className="rounded-sm border border-border bg-[var(--paper-2)] p-3 text-xs space-y-1">
+              <div><span className="font-mono uppercase text-muted-foreground mr-1" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Title</span> {script.title || <em className="text-muted-foreground">(empty)</em>}</div>
+              {script.scenario && <div><span className="font-mono uppercase text-muted-foreground mr-1" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Scenario</span> {script.scenario}</div>}
+              <div><span className="font-mono uppercase text-muted-foreground mr-1" style={{ fontSize: 10, letterSpacing: "0.08em" }}>Quality tier</span> {script.qualityTier}</div>
             </div>
 
             <div>
               <Label>
-                Target turns: {targetTurns} {targetTurns > 20 && <span className="text-xs text-amber-600">(long call)</span>}
+                Target turns: {targetTurns}{" "}
+                {targetTurns > 20 && (
+                  <span className="text-xs" style={{ color: "var(--amber)" }}>
+                    (long call)
+                  </span>
+                )}
               </Label>
               <Slider
                 value={[targetTurns]}
@@ -1350,9 +1578,7 @@ function TurnRow({
   return (
     <div className="space-y-1">
       <div className="flex gap-2 items-start">
-        <Badge variant="outline" className="shrink-0 mt-2 capitalize">
-          {turn.speaker}
-        </Badge>
+        <SpeakerTag speaker={turn.speaker} />
         {turn.speaker === "hold" ? (
           <Input
             type="number"
@@ -1606,7 +1832,11 @@ function VoicePicker({
                         <div className="flex items-center gap-2">
                           <span className="font-medium truncate">{v.name}</span>
                           {isSelected && (
-                            <CheckCircle className="w-4 h-4 text-green-600 shrink-0" weight="fill" />
+                            <CheckCircle
+                              className="w-4 h-4 shrink-0"
+                              style={{ color: "var(--sage)" }}
+                              weight="fill"
+                            />
                           )}
                         </div>
                         {voiceMetaLine(v) && (
