@@ -515,34 +515,31 @@ export default function ReportsPage() {
         )}
       </div>
 
-      <main className="p-6 space-y-6">
+      <main className="px-7 py-6 space-y-6">
         {/* Metrics Cards */}
-        <div className="bg-card rounded-lg border border-border p-6">
-          <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
-            <ChartBar className="w-5 h-5 mr-2" />
-            Metrics — {PRESET_LABELS[datePreset]}
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+        <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+          <SectionHeader icon={ChartBar} label={`Metrics · ${PRESET_LABELS[datePreset]}`} />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
             <MetricCard
-              label="Total Calls Analyzed"
+              label="Total calls analyzed"
               value={report?.metrics.totalCalls ?? 0}
               format="int"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.totalCalls : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.totalCalls ?? 0, compareReport?.metrics.totalCalls) : null}
             />
             <MetricCard
-              label="Average Sentiment Score"
+              label="Average sentiment"
               value={report?.metrics.avgSentiment ?? 0}
               format="sentiment"
-              color="text-blue-500"
+              color="var(--accent)"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgSentiment : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgSentiment ?? 0, compareReport?.metrics.avgSentiment) : null}
             />
             <MetricCard
-              label="Average Performance Score"
+              label="Average performance"
               value={report?.metrics.avgPerformanceScore ?? 0}
               format="score"
-              color="text-green-500"
+              color="var(--sage)"
               compareValue={compareEnabled && !isCompareLoading ? compareReport?.metrics.avgPerformanceScore : undefined}
               delta={compareEnabled && !isCompareLoading ? delta(report?.metrics.avgPerformanceScore ?? 0, compareReport?.metrics.avgPerformanceScore) : null}
             />
@@ -552,48 +549,70 @@ export default function ReportsPage() {
               </div>
             )}
           </div>
-        </div>
+        </section>
 
         {/* Detailed Sub-Scores (toggleable) */}
         {report?.avgSubScores && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-foreground flex items-center">
-                <Sliders className="w-5 h-5 mr-2" />
-                Score Breakdown
-              </h3>
-              <Button
-                variant={showDetailedScores ? "default" : "outline"}
-                size="sm"
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <div className="flex items-center justify-between">
+              <SectionHeader icon={Sliders} label="Score breakdown" />
+              <button
+                type="button"
                 onClick={() => setShowDetailedScores(!showDetailedScores)}
+                className={`font-mono uppercase rounded-sm px-3 py-1.5 transition-colors ${
+                  showDetailedScores
+                    ? "bg-foreground text-background border border-foreground"
+                    : "bg-card border border-border text-foreground hover:bg-secondary"
+                }`}
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
               >
-                {showDetailedScores ? "Hide Details" : "Show Details"}
-              </Button>
+                {showDetailedScores ? "Hide details" : "Show details"}
+              </button>
             </div>
             {showDetailedScores && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-blue-600" barColor="from-blue-500 to-blue-400" />
-                <SubScoreCard icon={Headphones} label="Customer Experience" score={report.avgSubScores.customerExperience} color="text-green-600" barColor="from-green-500 to-emerald-400" />
-                <SubScoreCard icon={ChatCircle} label="Communication" score={report.avgSubScores.communication} color="text-purple-600" barColor="from-purple-500 to-violet-400" />
-                <SubScoreCard icon={CheckCircle} label="Resolution" score={report.avgSubScores.resolution} color="text-amber-600" barColor="from-amber-500 to-yellow-400" />
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
+                <SubScoreCard icon={Shield} label="Compliance" score={report.avgSubScores.compliance} color="text-[var(--accent)]" barColor="" />
+                <SubScoreCard icon={Headphones} label="Customer exp." score={report.avgSubScores.customerExperience} color="text-[var(--sage)]" barColor="" />
+                <SubScoreCard icon={ChatCircle} label="Communication" score={report.avgSubScores.communication} color="text-[var(--chart-4)]" barColor="" />
+                <SubScoreCard icon={CheckCircle} label="Resolution" score={report.avgSubScores.resolution} color="text-[var(--chart-3)]" barColor="" />
               </div>
             )}
             {!showDetailedScores && (
-              <div className="flex gap-6">
+              <div className="flex flex-wrap gap-8 mt-4">
                 {[
-                  { label: "Compliance", value: report.avgSubScores.compliance, color: "text-blue-600" },
-                  { label: "Customer Exp.", value: report.avgSubScores.customerExperience, color: "text-green-600" },
-                  { label: "Communication", value: report.avgSubScores.communication, color: "text-purple-600" },
-                  { label: "Resolution", value: report.avgSubScores.resolution, color: "text-amber-600" },
-                ].map(s => (
-                  <div key={s.label} className="text-center">
-                    <p className="text-xs text-muted-foreground">{s.label}</p>
-                    <p className={`text-lg font-bold ${s.color}`}>{s.value.toFixed(1)}</p>
-                  </div>
-                ))}
+                  { label: "Compliance", value: report.avgSubScores.compliance },
+                  { label: "Customer Exp.", value: report.avgSubScores.customerExperience },
+                  { label: "Communication", value: report.avgSubScores.communication },
+                  { label: "Resolution", value: report.avgSubScores.resolution },
+                ].map((s) => {
+                  const tier =
+                    s.value >= 8
+                      ? "var(--sage)"
+                      : s.value >= 6
+                      ? "var(--foreground)"
+                      : s.value >= 4
+                      ? "var(--accent)"
+                      : "var(--destructive)";
+                  return (
+                    <div key={s.label}>
+                      <div
+                        className="font-mono uppercase text-muted-foreground"
+                        style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                      >
+                        {s.label}
+                      </div>
+                      <div
+                        className="font-display font-medium tabular-nums mt-1"
+                        style={{ fontSize: 22, color: tier, letterSpacing: "-0.4px" }}
+                      >
+                        {s.value.toFixed(1)}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </div>
+          </section>
         )}
 
         {/* Trend Chart */}
@@ -856,6 +875,32 @@ export default function ReportsPage() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper section header: icon + mono uppercase label — used across
+// each panel in the Reports body.
+// ─────────────────────────────────────────────────────────────
+function SectionHeader({
+  icon: Icon,
+  label,
+}: {
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon
+        style={{ width: 14, height: 14, color: "var(--muted-foreground)" }}
+      />
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 10, letterSpacing: "0.14em", fontWeight: 500 }}
+      >
+        {label}
+      </div>
     </div>
   );
 }

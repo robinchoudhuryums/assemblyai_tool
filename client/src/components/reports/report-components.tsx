@@ -112,11 +112,32 @@ export function MetricCard({
     : `${value.toFixed(1)}/10`;
 
   return (
-    <div>
-      <p className="text-sm text-muted-foreground">{label}</p>
-      <p className={`text-3xl font-bold ${color || ""}`}>{formatted}</p>
+    <div className="text-center">
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 10, letterSpacing: "0.14em" }}
+      >
+        {label}
+      </div>
+      <div
+        className="font-display font-medium tabular-nums mt-2"
+        style={{
+          fontSize: 36,
+          letterSpacing: "-0.8px",
+          lineHeight: 1,
+          color: color || "var(--foreground)",
+        }}
+      >
+        {formatted}
+      </div>
       {d && (
-        <div className={`flex items-center justify-center gap-1 mt-1 text-xs ${d.positive ? "text-green-500" : "text-red-500"}`}>
+        <div
+          className="flex items-center justify-center gap-1 mt-2 font-mono tabular-nums"
+          style={{
+            fontSize: 11,
+            color: d.positive ? "var(--sage)" : "var(--destructive)",
+          }}
+        >
           {d.positive ? <CaretUp className="w-3 h-3" /> : <CaretDown className="w-3 h-3" />}
           <span>{d.positive ? "+" : ""}{d.pct}%</span>
           {compareValue !== undefined && (
@@ -135,10 +156,8 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
   const [playing, setPlaying] = useState(false);
 
   const isGood = call.flagType === "good";
-  const borderClass = isGood ? "border-emerald-200 dark:border-emerald-900" : "border-red-200 dark:border-red-900";
-  const bgClass = isGood ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-red-50/50 dark:bg-red-950/20";
-  const accentClass = isGood ? "text-emerald-600" : "text-red-600";
-  const playerBg = isGood ? "bg-emerald-100 dark:bg-emerald-900/40" : "bg-red-100 dark:bg-red-900/40";
+  const accent = isGood ? "var(--sage)" : "var(--destructive)";
+  const bg = isGood ? "var(--sage-soft)" : "var(--warm-red-soft)";
   const Icon = isGood ? Trophy : Warning;
 
   const togglePlay = () => {
@@ -149,7 +168,16 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
   };
 
   return (
-    <div className={`rounded-lg border p-3 ${borderClass} ${bgClass}`}>
+    <div
+      className="border"
+      style={{
+        background: bg,
+        borderColor: `color-mix(in oklch, ${accent}, transparent 60%)`,
+        borderLeftWidth: 3,
+        borderLeftColor: accent,
+        padding: "10px 12px",
+      }}
+    >
       <audio
         ref={audioRef}
         src={`/api/calls/${call.id}/audio`}
@@ -161,37 +189,52 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
       <div className="flex items-start gap-3">
         <button
           onClick={togglePlay}
-          className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${playerBg} ${accentClass} hover:opacity-80 transition-opacity`}
+          className="rounded-full flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity"
+          style={{
+            width: 36,
+            height: 36,
+            background: `color-mix(in oklch, ${accent}, transparent 80%)`,
+            color: accent,
+          }}
           aria-label={playing ? "Pause audio" : "Play audio"}
         >
           {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
         </button>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <Icon className={`w-3.5 h-3.5 shrink-0 ${accentClass}`} />
-            <span className="text-xs font-medium text-muted-foreground">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <Icon className="shrink-0" style={{ width: 14, height: 14, color: accent }} />
+            <span
+              className="font-mono tabular-nums text-muted-foreground"
+              style={{ fontSize: 11 }}
+            >
               {call.uploadedAt ? new Date(call.uploadedAt).toLocaleDateString() : "Unknown date"}
             </span>
             {call.score != null && (
-              <span className={`text-xs font-bold ${accentClass}`}>{call.score.toFixed(1)}/10</span>
+              <span
+                className="font-mono font-semibold tabular-nums"
+                style={{ fontSize: 11, color: accent }}
+              >
+                {call.score.toFixed(1)}/10
+              </span>
             )}
-            <div className="flex gap-1 ml-auto">
-              {call.flags.map((flag, i) => {
-                const isExceptional = flag === "exceptional_call";
-                const isMisconduct = flag.startsWith("agent_misconduct");
-                const isLow = flag === "low_score";
-                const isMedicare = flag === "medicare_call";
-                const label = isExceptional ? "Exceptional" : isMisconduct ? "Misconduct" : isLow ? "Low Score" : isMedicare ? "Medicare" : flag;
-                const fcolor = isExceptional ? "bg-emerald-200 text-emerald-900" : isMisconduct ? "bg-red-200 text-red-900" : isMedicare ? "bg-blue-200 text-blue-900" : "bg-amber-200 text-amber-900";
-                return <Badge key={i} className={`${fcolor} text-[10px] px-1.5 py-0`}>{label}</Badge>;
-              })}
+            <div className="flex gap-1 ml-auto flex-wrap">
+              {call.flags.map((flag, i) => <FlagPill key={i} flag={flag} />)}
             </div>
           </div>
           {call.summary && (
-            <p className="text-xs text-muted-foreground line-clamp-2">{toDisplayString(call.summary)}</p>
+            <p
+              className="text-muted-foreground line-clamp-2"
+              style={{ fontSize: 12, lineHeight: 1.5 }}
+            >
+              {toDisplayString(call.summary)}
+            </p>
           )}
-          <Link href={`/transcripts/${call.id}`} className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1">
-            <Eye className="w-3 h-3" /> View Full Call
+          <Link
+            href={`/transcripts/${call.id}`}
+            className="font-mono uppercase inline-flex items-center gap-1 mt-1.5 text-foreground hover:text-accent transition-colors"
+            style={{ fontSize: 10, letterSpacing: "0.08em" }}
+          >
+            <Eye className="w-3 h-3" /> View full call
           </Link>
         </div>
       </div>
@@ -199,29 +242,123 @@ export function FlaggedCallCard({ call }: { call: FlaggedCall }) {
   );
 }
 
-export function SubScoreCard({ icon: IconComponent, label, score, color, barColor }: {
-  icon: ComponentType<{ className?: string }>;
+/**
+ * Warm-paper flag pill used on FlaggedCallCard. Matches the
+ * CallsPreviewRail flag pill palette so the same flag reads the same
+ * way across pages.
+ */
+function FlagPill({ flag }: { flag: string }) {
+  const isExceptional = flag === "exceptional_call";
+  const isMisconduct = flag.startsWith("agent_misconduct");
+  const isLow = flag === "low_score";
+  const isMedicare = flag === "medicare_call";
+  const label = isExceptional
+    ? "Exceptional"
+    : isMisconduct
+    ? "Misconduct"
+    : isLow
+    ? "Low score"
+    : isMedicare
+    ? "Medicare"
+    : flag.replace(/_/g, " ");
+  const color = isExceptional
+    ? "var(--sage)"
+    : isMisconduct || isLow
+    ? "var(--destructive)"
+    : isMedicare
+    ? "var(--accent)"
+    : "var(--muted-foreground)";
+  return (
+    <span
+      className="font-mono uppercase"
+      style={{
+        fontSize: 9,
+        padding: "2px 6px",
+        color,
+        border: `1px solid ${color}`,
+        borderRadius: 2,
+        letterSpacing: "0.06em",
+        opacity: 0.9,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+export function SubScoreCard({
+  icon: IconComponent,
+  label,
+  score,
+  color,
+  // barColor kept in signature for back-compat; warm-paper ignores the gradient.
+  barColor: _barColor,
+}: {
+  icon: ComponentType<{ className?: string; style?: React.CSSProperties }>;
   label: string;
   score: number;
   color: string;
   barColor: string;
 }) {
-  const level = score >= SCORE_EXCELLENT ? "Excellent" : score >= SCORE_GOOD ? "Good" : score >= SCORE_NEEDS_WORK ? "Needs Work" : "Critical";
-  const levelColor = score >= SCORE_EXCELLENT ? "text-green-600" : score >= SCORE_GOOD ? "text-blue-600" : score >= SCORE_NEEDS_WORK ? "text-yellow-600" : "text-red-600";
+  const level =
+    score >= SCORE_EXCELLENT
+      ? "Excellent"
+      : score >= SCORE_GOOD
+      ? "Good"
+      : score >= SCORE_NEEDS_WORK
+      ? "Needs work"
+      : "Critical";
+  const tierColor =
+    score >= SCORE_EXCELLENT
+      ? "var(--sage)"
+      : score >= SCORE_GOOD
+      ? "var(--foreground)"
+      : score >= SCORE_NEEDS_WORK
+      ? "var(--accent)"
+      : "var(--destructive)";
   return (
-    <div className="p-4 bg-muted/30 rounded-lg">
+    <div className="bg-card border border-border" style={{ padding: "14px 16px" }}>
       <div className="flex items-center gap-2 mb-2">
         <IconComponent className={`w-4 h-4 ${color}`} />
-        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          {label}
+        </span>
       </div>
-      <div className="flex items-baseline gap-2 mb-1">
-        <span className={`text-2xl font-bold ${color}`}>{score.toFixed(1)}</span>
-        <span className="text-xs text-muted-foreground">/10</span>
+      <div className="flex items-baseline gap-1.5 mb-2">
+        <span
+          className="font-display font-medium tabular-nums"
+          style={{ fontSize: 24, letterSpacing: "-0.5px", color: tierColor }}
+        >
+          {score.toFixed(1)}
+        </span>
+        <span
+          className="font-mono text-muted-foreground"
+          style={{ fontSize: 11 }}
+        >
+          / 10
+        </span>
       </div>
-      <div className="w-full h-2 bg-muted-foreground/20 rounded-full overflow-hidden mb-1">
-        <div className={`h-full rounded-full bg-gradient-to-r ${barColor}`} style={{ width: `${score * 10}%` }} />
+      <div
+        className="w-full overflow-hidden"
+        style={{ height: 3, background: "var(--secondary)", borderRadius: 2 }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${Math.min(100, Math.max(0, score * 10))}%`,
+            background: tierColor,
+          }}
+        />
       </div>
-      <p className={`text-xs ${levelColor}`}>{level}</p>
+      <p
+        className="font-mono uppercase mt-1.5"
+        style={{ fontSize: 9, letterSpacing: "0.1em", color: tierColor }}
+      >
+        {level}
+      </p>
     </div>
   );
 }
