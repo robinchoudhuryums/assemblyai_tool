@@ -784,46 +784,82 @@ export default function ReportsPage() {
 
         {/* Agent Profile Section (employee reports only) */}
         {reportType === "employee" && selectedEmployee && agentProfile && (
-          <div className="bg-card rounded-lg border border-border p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-1 flex items-center">
-              <User className="w-5 h-5 mr-2" />
-              Agent Profile: {agentProfile.employee.name}
+          <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
+            <SectionHeader icon={User} label="Agent profile" />
+            <h3
+              className="font-display font-medium text-foreground mt-2"
+              style={{ fontSize: 22, letterSpacing: "-0.4px" }}
+            >
+              {agentProfile.employee.name}
             </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Aggregated feedback from {agentProfile.totalCalls} analyzed calls
-              {agentProfile.employee.role && ` — ${agentProfile.employee.role}`}
+            <p
+              className="text-muted-foreground mt-1 mb-5"
+              style={{ fontSize: 12 }}
+            >
+              Aggregated feedback from {agentProfile.totalCalls} analyzed {agentProfile.totalCalls === 1 ? "call" : "calls"}
+              {agentProfile.employee.role && <> · {agentProfile.employee.role}</>}
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Avg Score</p>
-                <p className="text-2xl font-bold text-green-500">{agentProfile.avgPerformanceScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Best Score</p>
-                <p className="text-2xl font-bold">{agentProfile.highScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Lowest Score</p>
-                <p className="text-2xl font-bold">{agentProfile.lowScore?.toFixed(1) ?? "N/A"}</p>
-              </div>
-              <div className="text-center p-3 bg-muted/30 rounded-lg">
-                <p className="text-xs text-muted-foreground">Total Calls</p>
-                <p className="text-2xl font-bold">{agentProfile.totalCalls}</p>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              {[
+                {
+                  label: "Avg score",
+                  value: agentProfile.avgPerformanceScore?.toFixed(1) ?? "—",
+                  color: scoreTierColor(agentProfile.avgPerformanceScore),
+                },
+                {
+                  label: "Best score",
+                  value: agentProfile.highScore?.toFixed(1) ?? "—",
+                  color: "var(--sage)",
+                },
+                {
+                  label: "Lowest score",
+                  value: agentProfile.lowScore?.toFixed(1) ?? "—",
+                  color: "var(--destructive)",
+                },
+                {
+                  label: "Total calls",
+                  value: String(agentProfile.totalCalls),
+                  color: "var(--foreground)",
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="bg-secondary"
+                  style={{ padding: "12px 14px", border: "1px solid var(--border)" }}
+                >
+                  <div
+                    className="font-mono uppercase text-muted-foreground"
+                    style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                  >
+                    {stat.label}
+                  </div>
+                  <div
+                    className="font-display font-medium tabular-nums mt-1"
+                    style={{ fontSize: 24, letterSpacing: "-0.5px", color: stat.color }}
+                  >
+                    {stat.value}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Agent score trend */}
             {agentProfile.scoreTrend.length > 1 && (
               <div className="mb-6">
-                <h4 className="text-sm font-semibold text-foreground mb-2">Score Trend Over Time</h4>
-                <ResponsiveContainer width="100%" height={200}>
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Score trend over time
+                </div>
+                <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={agentProfile.scoreTrend.map(t => ({ ...t, monthLabel: formatMonth(t.month) }))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
-                    <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" />
-                    <Tooltip contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)" }} />
-                    <Line type="monotone" dataKey="avgScore" name="Avg Score" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
+                    <CartesianGrid strokeDasharray="2 3" stroke="var(--border)" />
+                    <XAxis dataKey="monthLabel" tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                    <YAxis domain={[0, 10]} tick={CHART_TICK} stroke="var(--border)" axisLine={{ stroke: "var(--border)" }} />
+                    <Tooltip contentStyle={CHART_TOOLTIP} labelStyle={{ fontFamily: "var(--font-mono)", fontSize: 11 }} />
+                    <Line type="monotone" dataKey="avgScore" name="Avg score" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} activeDot={{ r: 5 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -832,50 +868,79 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Strengths */}
               <div>
-                <h4 className="text-sm font-semibold text-foreground mb-2 text-green-600">Recurring Strengths</h4>
+                <div
+                  className="font-mono uppercase mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em", color: "var(--sage)" }}
+                >
+                  Recurring strengths
+                </div>
                 {agentProfile.topStrengths.length > 0 ? (
-                  <ul className="space-y-1.5">
+                  <ul className="flex flex-col gap-1.5">
                     {agentProfile.topStrengths.map((s, i) => (
-                      <li key={i} className="text-sm flex items-start gap-2">
-                        <span className="text-green-500 mt-0.5 shrink-0">+</span>
-                        <span className="capitalize">{s.text}</span>
-                        {s.count > 1 && <span className="text-xs text-muted-foreground shrink-0">x{s.count}</span>}
+                      <li key={i} className="flex items-start gap-2" style={{ fontSize: 13 }}>
+                        <span style={{ color: "var(--sage)", marginTop: 1, flexShrink: 0 }}>+</span>
+                        <span className="capitalize text-foreground">{s.text}</span>
+                        {s.count > 1 && (
+                          <span className="font-mono text-muted-foreground flex-shrink-0" style={{ fontSize: 10 }}>
+                            ×{s.count}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No data yet.</p>
+                  <p className="text-muted-foreground" style={{ fontSize: 12 }}>No data yet.</p>
                 )}
               </div>
 
               {/* Suggestions */}
               <div>
-                <h4 className="text-sm font-semibold text-foreground mb-2 text-amber-600">Recurring Suggestions</h4>
+                <div
+                  className="font-mono uppercase mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em", color: "var(--accent)" }}
+                >
+                  Recurring suggestions
+                </div>
                 {agentProfile.topSuggestions.length > 0 ? (
-                  <ul className="space-y-1.5">
+                  <ul className="flex flex-col gap-1.5">
                     {agentProfile.topSuggestions.map((s, i) => (
-                      <li key={i} className="text-sm flex items-start gap-2">
-                        <span className="text-amber-500 mt-0.5 shrink-0">!</span>
-                        <span className="capitalize">{s.text}</span>
-                        {s.count > 1 && <span className="text-xs text-muted-foreground shrink-0">x{s.count}</span>}
+                      <li key={i} className="flex items-start gap-2" style={{ fontSize: 13 }}>
+                        <span style={{ color: "var(--accent)", marginTop: 1, flexShrink: 0 }}>!</span>
+                        <span className="capitalize text-foreground">{s.text}</span>
+                        {s.count > 1 && (
+                          <span className="font-mono text-muted-foreground flex-shrink-0" style={{ fontSize: 10 }}>
+                            ×{s.count}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No data yet.</p>
+                  <p className="text-muted-foreground" style={{ fontSize: 12 }}>No data yet.</p>
                 )}
               </div>
             </div>
 
             {/* Common topics */}
             {agentProfile.commonTopics.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <h4 className="text-sm font-semibold text-foreground mb-2">Common Call Topics</h4>
-                <div className="flex flex-wrap gap-2">
+              <div className="mt-5 pt-5 border-t border-border">
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-2"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Common call topics
+                </div>
+                <div className="flex flex-wrap gap-1.5">
                   {agentProfile.commonTopics.map((t, i) => (
-                    <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-primary/10 text-primary font-medium capitalize">
-                      {t.text}
-                      {t.count > 1 && <span className="ml-1 text-muted-foreground">({t.count})</span>}
+                    <span
+                      key={i}
+                      className="font-mono uppercase inline-flex items-center gap-1 bg-secondary border border-border text-foreground"
+                      style={{ fontSize: 10, padding: "3px 8px", letterSpacing: "0.05em" }}
+                    >
+                      <span className="capitalize">{t.text}</span>
+                      {t.count > 1 && (
+                        <span className="text-muted-foreground tabular-nums">({t.count})</span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -884,9 +949,14 @@ export default function ReportsPage() {
 
             {/* Flagged Calls */}
             {agentProfile.flaggedCalls && agentProfile.flaggedCalls.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <h4 className="text-sm font-semibold text-foreground mb-3">Flagged Calls</h4>
-                <div className="space-y-2">
+              <div className="mt-5 pt-5 border-t border-border">
+                <div
+                  className="font-mono uppercase text-muted-foreground mb-3"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  Flagged calls
+                </div>
+                <div className="flex flex-col gap-2">
                   {agentProfile.flaggedCalls.map(fc => (
                     <FlaggedCallCard key={fc.id} call={fc} />
                   ))}
@@ -895,43 +965,70 @@ export default function ReportsPage() {
             )}
 
             {/* AI Summary */}
-            <div className="mt-4 pt-4 border-t border-border">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                  <Sparkle className="w-4 h-4" /> AI Performance Summary
-                </h4>
-                <Button
-                  size="sm"
-                  variant={aiSummary ? "outline" : "default"}
+            <div className="mt-5 pt-5 border-t border-border">
+              <div className="flex items-center justify-between mb-3">
+                <div
+                  className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+                  style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                >
+                  <Sparkle style={{ width: 12, height: 12 }} /> AI performance summary
+                </div>
+                <button
+                  type="button"
                   onClick={() => summaryMutation.mutate()}
                   disabled={summaryMutation.isPending}
+                  className={`font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    aiSummary
+                      ? "bg-card border border-border text-foreground hover:bg-secondary"
+                      : "bg-primary text-[var(--paper)] border border-primary hover:opacity-90"
+                  }`}
+                  style={{ fontSize: 10, letterSpacing: "0.1em" }}
                 >
-                  <Sparkle className="w-3.5 h-3.5 mr-1.5" />
-                  {summaryMutation.isPending ? "Generating..." : aiSummary ? "Regenerate" : "Generate AI Summary"}
-                </Button>
+                  <Sparkle style={{ width: 12, height: 12 }} />
+                  {summaryMutation.isPending ? "Generating…" : aiSummary ? "Regenerate" : "Generate AI summary"}
+                </button>
               </div>
               {summaryMutation.isError && (
-                <p className="text-sm text-red-500 mb-2">
-                  <Warning className="w-3.5 h-3.5 inline mr-1" />
-                  {summaryMutation.error?.message || "Failed to generate summary"}
-                </p>
+                <div className="mb-3">
+                  <ErrorBanner>
+                    {summaryMutation.error?.message || "Failed to generate summary"}
+                  </ErrorBanner>
+                </div>
               )}
               {aiSummary && (
-                <div className="bg-muted/50 rounded-lg p-4 text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                <div
+                  className="bg-secondary text-foreground whitespace-pre-wrap leading-relaxed"
+                  style={{ padding: "14px 16px", fontSize: 13, border: "1px solid var(--border)" }}
+                >
                   {toDisplayString(aiSummary)}
                 </div>
               )}
               {!aiSummary && !summaryMutation.isPending && (
-                <p className="text-sm text-muted-foreground">
-                  Click "Generate AI Summary" to create a narrative performance review based on aggregated call data.
+                <p className="text-muted-foreground" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                  Click "Generate AI summary" to create a narrative performance review based on
+                  aggregated call data.
                 </p>
               )}
             </div>
-          </div>
+          </section>
         )}
       </main>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier color derivation for score display. Mirrors the CallsTable +
+// CallsPreviewRail score palette (sage ≥ EXCELLENT, foreground ≥
+// GOOD, copper ≥ NEEDS_WORK, destructive below). Accepts null to
+// return a muted fallback.
+// ─────────────────────────────────────────────────────────────
+function scoreTierColor(score: number | null | undefined): string {
+  if (score == null) return "var(--muted-foreground)";
+  if (score >= 8) return "var(--sage)";
+  if (score >= 6) return "var(--foreground)";
+  if (score >= 4) return "var(--accent)";
+  return "var(--destructive)";
 }
 
 // ─────────────────────────────────────────────────────────────
