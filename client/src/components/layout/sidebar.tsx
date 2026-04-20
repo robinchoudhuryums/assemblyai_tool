@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, Eye, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning, Waveform, X } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { MfaSetupDialog } from "@/components/mfa-setup-dialog";
@@ -190,17 +190,27 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
         "fixed inset-y-0 left-0 transition-transform duration-200",
         isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
       )} data-testid="sidebar">
-      <div className="p-6 border-b border-sidebar-border">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <Waveform className="text-primary-foreground w-4 h-4" />
-          </div>
-          <div>
-            <h1 className="font-bold text-lg text-foreground">{appName}</h1>
-            <p className="text-xs text-muted-foreground">Pro Dashboard</p>
-          </div>
+      <div className="px-5 pt-5 pb-4 border-b border-sidebar-border">
+        <p
+          className="font-mono uppercase text-muted-foreground mb-1.5"
+          style={{ fontSize: 10, letterSpacing: "0.08em" }}
+        >
+          Pro Dashboard
+        </p>
+        <div className="flex items-center gap-2">
+          <span
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ background: "var(--accent)" }}
+            aria-hidden="true"
+          />
+          <h1
+            className="font-display font-semibold tracking-tight text-foreground truncate"
+            style={{ fontSize: 20, lineHeight: 1.1 }}
+          >
+            {appName}
+          </h1>
         </div>
-        <div className="flex items-center justify-end gap-1 mt-3">
+        <div className="flex items-center gap-1 mt-3 -ml-1.5">
           <LanguageSelector />
           <div className="relative" ref={notifRef}>
               <button
@@ -208,13 +218,21 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 onClick={() => setShowNotifications(!showNotifications)}
                 aria-expanded={showNotifications}
                 aria-haspopup="true"
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
+                className="p-1.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative"
                 title={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "No new notifications"}
                 aria-label={unreadCount > 0 ? `${unreadCount} new notification${unreadCount > 1 ? "s" : ""}` : "Notifications"}
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[9px] font-bold bg-primary text-primary-foreground">
+                  <span
+                    className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full font-mono tabular-nums"
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      background: "var(--warm-red)",
+                      color: "var(--destructive-foreground)",
+                    }}
+                  >
                     {unreadCount}
                   </span>
                 )}
@@ -222,21 +240,38 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
 
               {/* Notification Dropdown */}
               {showNotifications && (
-                <div className="absolute left-0 top-full mt-2 w-80 bg-card border border-border rounded-lg shadow-lg z-50">
+                <div className="absolute left-0 top-full mt-2 w-80 bg-card border border-border rounded-sm shadow-md z-50 overflow-hidden">
                   <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-                    <h4 className="text-sm font-semibold text-foreground">Notifications</h4>
-                    <div className="flex items-center gap-1">
+                    <h4
+                      className="font-mono uppercase text-foreground"
+                      style={{ fontSize: 11, letterSpacing: "0.08em" }}
+                    >
+                      Notifications
+                    </h4>
+                    <div className="flex items-center gap-2">
                       {unreadCount > 0 && (
-                        <button onClick={markAllRead} className="text-xs text-primary hover:underline">Mark all read</button>
+                        <button
+                          onClick={markAllRead}
+                          className="font-mono uppercase text-muted-foreground hover:text-foreground transition-colors"
+                          style={{ fontSize: 10, letterSpacing: "0.06em" }}
+                        >
+                          Mark read
+                        </button>
                       )}
                       {notifications.length > 0 && (
-                        <button onClick={clearNotifications} className="text-xs text-muted-foreground hover:text-foreground ml-2">Clear</button>
+                        <button
+                          onClick={clearNotifications}
+                          className="font-mono uppercase text-muted-foreground hover:text-foreground transition-colors"
+                          style={{ fontSize: 10, letterSpacing: "0.06em" }}
+                        >
+                          Clear
+                        </button>
                       )}
                     </div>
                   </div>
                   <div className="max-h-72 overflow-y-auto">
                     {notifications.length === 0 ? (
-                      <div className="text-center py-8 text-sm text-muted-foreground">
+                      <div className="text-center py-8 text-[12px] text-muted-foreground">
                         No notifications yet
                       </div>
                     ) : (
@@ -245,7 +280,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                           key={n.id}
                           className={cn(
                             "w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border last:border-0 flex items-start gap-2",
-                            !n.read && "bg-primary/5"
+                            !n.read && "bg-[var(--copper-soft)]/50"
                           )}
                           onClick={() => {
                             setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
@@ -281,7 +316,10 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                             </p>
                           </div>
                           {!n.read && (
-                            <span className="w-2 h-2 rounded-full bg-primary mt-1 shrink-0" />
+                            <span
+                              className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+                              style={{ background: "var(--accent)" }}
+                            />
                           )}
                         </button>
                       ))
@@ -292,7 +330,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             </div>
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="p-1.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
@@ -300,7 +338,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             </button>
             <Link
               href="/settings"
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="p-1.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title="Settings"
               aria-label="Settings"
             >
@@ -322,21 +360,26 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           return (
             <div key={item.nameKey}>
               {item.sectionKey && (
-                <div className="pt-3 pb-1 px-1">
-                  <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{t(item.sectionKey)}</p>
+                <div className="pt-4 pb-1.5 px-3">
+                  <p
+                    className="font-mono uppercase text-muted-foreground"
+                    style={{ fontSize: 10, letterSpacing: "0.08em" }}
+                  >
+                    {t(item.sectionKey)}
+                  </p>
                 </div>
               )}
               <Link
                 href={item.href}
                 className={cn(
-                  "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                  "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                   isActive
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
                 data-testid={`nav-link-${item.nameKey}`}
               >
-                <Icon className="w-5 h-5" />
+                <Icon className="w-4 h-4 shrink-0" />
                 <span>{name}</span>
                 {showBadge && (
                   <span
@@ -345,13 +388,9 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                       fontSize: 10,
                       letterSpacing: "0.04em",
                       fontWeight: 600,
-                      background: isActive ? "var(--paper)" : "var(--warm-red-soft)",
-                      color: isActive
-                        ? "var(--foreground)"
-                        : "var(--destructive)",
-                      border: isActive
-                        ? "none"
-                        : "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+                      background: "var(--warm-red-soft)",
+                      color: "var(--destructive)",
+                      border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
                     }}
                   >
                     {flaggedCount}
@@ -367,11 +406,16 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
           <>
             <button
               onClick={() => setAdminExpanded(prev => !prev)}
-              className="w-full flex items-center justify-between pt-2 pb-1 px-1 group"
+              className="w-full flex items-center justify-between pt-4 pb-1.5 px-3 group"
               aria-expanded={adminExpanded}
               aria-label="Toggle admin section"
             >
-              <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">{t("section.admin")}</p>
+              <p
+                className="font-mono uppercase text-muted-foreground group-hover:text-foreground transition-colors"
+                style={{ fontSize: 10, letterSpacing: "0.08em" }}
+              >
+                {t("section.admin")}
+              </p>
               <span className="text-muted-foreground group-hover:text-foreground transition-colors">
                 {adminExpanded ? <CaretUp className="w-3 h-3" /> : <CaretDown className="w-3 h-3" />}
               </span>
@@ -381,14 +425,14 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 <Link
                   href="/admin"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-admin"
                 >
-                  <Shield className="w-5 h-5" />
+                  <Shield className="w-4 h-4 shrink-0" />
                   <span>{t("nav.admin")}</span>
                   {pendingRequestCount > 0 && (
                     <span
@@ -397,13 +441,9 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                         fontSize: 10,
                         letterSpacing: "0.04em",
                         fontWeight: 600,
-                        background: location === "/admin" ? "var(--paper)" : "var(--amber-soft)",
-                        color: location === "/admin"
-                          ? "var(--foreground)"
-                          : "color-mix(in oklch, var(--amber), var(--ink) 30%)",
-                        border: location === "/admin"
-                          ? "none"
-                          : "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                        background: "var(--amber-soft)",
+                        color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+                        border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
                       }}
                     >
                       {pendingRequestCount}
@@ -413,92 +453,92 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 <Link
                   href="/admin/templates"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/templates"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-templates"
                 >
-                  <Sliders className="w-5 h-5" />
+                  <Sliders className="w-4 h-4 shrink-0" />
                   <span>{t("nav.promptTemplates")}</span>
                 </Link>
                 <Link
                   href="/admin/ab-testing"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/ab-testing"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-ab-testing"
                 >
-                  <Flask className="w-5 h-5" />
+                  <Flask className="w-4 h-4 shrink-0" />
                   <span>{t("nav.modelTesting")}</span>
                 </Link>
                 <Link
                   href="/admin/spend"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/spend"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-spend"
                 >
-                  <CurrencyDollar className="w-5 h-5" />
+                  <CurrencyDollar className="w-4 h-4 shrink-0" />
                   <span>{t("nav.spendTracking")}</span>
                 </Link>
                 <Link
                   href="/admin/security"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/security"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-security"
                 >
-                  <ShieldWarning className="w-5 h-5" />
+                  <ShieldWarning className="w-4 h-4 shrink-0" />
                   <span>{t("nav.security")}</span>
                 </Link>
                 <Link
                   href="/admin/health"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/health"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-health"
                 >
-                  <Heartbeat className="w-5 h-5" />
+                  <Heartbeat className="w-4 h-4 shrink-0" />
                   <span>{t("nav.systemHealth")}</span>
                 </Link>
                 <Link
                   href="/admin/batch"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/batch"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-batch"
                 >
-                  <CloudArrowUp className="w-5 h-5" />
+                  <CloudArrowUp className="w-4 h-4 shrink-0" />
                   <span>Batch Status</span>
                 </Link>
                 <Link
                   href="/admin/simulated-calls"
                   className={cn(
-                    "flex items-center space-x-3 px-3 py-2 rounded-md font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
                     location === "/admin/simulated-calls"
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                   data-testid="nav-link-simulated-calls"
                 >
-                  <Microphone className="w-5 h-5" />
+                  <Microphone className="w-4 h-4 shrink-0" />
                   <span>Simulated Calls</span>
                 </Link>
               </>
@@ -509,17 +549,30 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
 
       {/* Quick-switch Employee Selector */}
       {employees && employees.length > 0 && (
-        <div className="px-4 pb-3">
-          <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1.5 px-1">{t("misc.quickViewAgent")}</p>
+        <div className="px-4 pt-3 pb-3 border-t border-sidebar-border">
+          <p
+            className="font-mono uppercase text-muted-foreground mb-2 px-1"
+            style={{ fontSize: 10, letterSpacing: "0.08em" }}
+          >
+            {t("misc.quickViewAgent")}
+          </p>
           <Select onValueChange={handleQuickSwitch}>
-            <SelectTrigger className="h-8 text-xs">
+            <SelectTrigger
+              className="h-8 text-[12px] bg-transparent border-sidebar-border rounded-sm hover:bg-muted transition-colors"
+            >
               <SelectValue placeholder={t("misc.jumpToAgentProfile")} />
             </SelectTrigger>
             <SelectContent>
               {employees.filter(e => e.status === "Active").map(emp => (
                 <SelectItem key={emp.id} value={emp.id}>
                   <span className="flex items-center gap-1.5">
-                    <span className="w-4 h-4 rounded-full bg-primary/10 text-primary text-[8px] font-bold flex items-center justify-center shrink-0">
+                    <span
+                      className="w-4 h-4 rounded-full text-[8px] font-bold flex items-center justify-center shrink-0"
+                      style={{
+                        background: "var(--copper-soft)",
+                        color: "var(--accent)",
+                      }}
+                    >
                       {emp.initials || emp.name?.slice(0, 2).toUpperCase()}
                     </span>
                     {emp.name}
@@ -531,15 +584,38 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
         </div>
       )}
 
-      <div className="p-4 border-t border-sidebar-border mt-auto">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center">
-            <User className="text-muted-foreground w-4 h-4" />
+      <div className="px-4 py-3 border-t border-sidebar-border mt-auto">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 font-mono"
+            style={{
+              background: "var(--copper-soft)",
+              color: "var(--accent)",
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.04em",
+            }}
+            aria-hidden="true"
+          >
+            {user?.name
+              ? user.name
+                  .trim()
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((p) => p[0])
+                  .join("")
+                  .toUpperCase()
+              : <User className="w-4 h-4" />}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm text-foreground truncate">{user?.name || "User"}</p>
-            <div className="flex items-center gap-1.5">
-              <p className="text-xs text-muted-foreground capitalize">{user?.role || "viewer"}</p>
+            <p className="font-medium text-[13px] text-foreground truncate leading-tight">{user?.name || "User"}</p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <p
+                className="font-mono uppercase text-muted-foreground"
+                style={{ fontSize: 10, letterSpacing: "0.06em" }}
+              >
+                {user?.role || "viewer"}
+              </p>
               {wsState && (
                 <span
                   className={cn(
@@ -560,7 +636,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             </div>
           </div>
           <button
-            className="text-muted-foreground hover:text-foreground"
+            className="p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             onClick={() => setMfaDialogOpen(true)}
             title="Security settings (MFA)"
             aria-label="Security settings"
@@ -568,7 +644,7 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
             <Lock className="w-4 h-4" />
           </button>
           <button
-            className="text-muted-foreground hover:text-foreground"
+            className="p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             onClick={handleLogout}
             title="Sign out"
             aria-label="Sign out"

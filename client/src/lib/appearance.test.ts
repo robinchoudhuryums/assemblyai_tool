@@ -17,16 +17,18 @@ describe("appearance", () => {
       expect(prefs.theme).toBe("light");
       expect(prefs.background).toBe("none");
       expect(prefs.glass).toBe("strong");
+      expect(prefs.palette).toBe("copper");
     });
 
     it("loads saved preferences", () => {
       localStorage.setItem("appearance", JSON.stringify({
-        theme: "dark", background: "hexagons", glass: "medium",
+        theme: "dark", background: "hexagons", glass: "medium", palette: "medicalBlue",
       }));
       const prefs = loadAppearance();
       expect(prefs.theme).toBe("dark");
       expect(prefs.background).toBe("hexagons");
       expect(prefs.glass).toBe("medium");
+      expect(prefs.palette).toBe("medicalBlue");
     });
 
     it("migrates from legacy theme key", () => {
@@ -34,6 +36,7 @@ describe("appearance", () => {
       const prefs = loadAppearance();
       expect(prefs.theme).toBe("dark");
       expect(prefs.background).toBe("none"); // default
+      expect(prefs.palette).toBe("copper"); // default
     });
 
     it("validates background against whitelist", () => {
@@ -52,10 +55,27 @@ describe("appearance", () => {
       expect(prefs.glass).toBe("strong"); // falls back to default
     });
 
+    it("validates palette against whitelist", () => {
+      localStorage.setItem("appearance", JSON.stringify({
+        theme: "light", background: "none", glass: "strong", palette: "notAPalette",
+      }));
+      const prefs = loadAppearance();
+      expect(prefs.palette).toBe("copper"); // falls back to default
+    });
+
+    it("handles missing palette field on legacy saved prefs", () => {
+      localStorage.setItem("appearance", JSON.stringify({
+        theme: "dark", background: "hexagons", glass: "medium",
+      }));
+      const prefs = loadAppearance();
+      expect(prefs.palette).toBe("copper"); // missing → default
+      expect(prefs.theme).toBe("dark"); // other fields unaffected
+    });
+
     it("handles corrupted localStorage", () => {
       localStorage.setItem("appearance", "not json{{{");
       const prefs = loadAppearance();
-      expect(prefs).toEqual({ theme: "light", background: "none", glass: "strong" });
+      expect(prefs).toEqual({ theme: "light", background: "none", glass: "strong", palette: "copper" });
     });
 
     it("forces theme to light or dark only", () => {
@@ -67,7 +87,7 @@ describe("appearance", () => {
 
   describe("saveAppearance", () => {
     it("persists to localStorage", () => {
-      const prefs: AppearancePrefs = { theme: "dark", background: "softWaves", glass: "subtle" };
+      const prefs: AppearancePrefs = { theme: "dark", background: "softWaves", glass: "subtle", palette: "corporateBlue" };
       saveAppearance(prefs);
 
       const raw = localStorage.getItem("appearance");
@@ -75,18 +95,19 @@ describe("appearance", () => {
       const parsed = JSON.parse(raw!);
       expect(parsed.theme).toBe("dark");
       expect(parsed.background).toBe("softWaves");
+      expect(parsed.palette).toBe("corporateBlue");
     });
 
     it("does NOT write the legacy 'theme' key (A23)", () => {
       // The legacy key is read once for migration in loadAppearance and
       // then never touched again; saveAppearance must not keep mirroring it,
       // or the two keys can drift on partial writes.
-      saveAppearance({ theme: "dark", background: "none", glass: "strong" });
+      saveAppearance({ theme: "dark", background: "none", glass: "strong", palette: "copper" });
       expect(localStorage.getItem("theme")).toBeNull();
     });
 
     it("round-trips through load", () => {
-      const prefs: AppearancePrefs = { theme: "dark", background: "neonFlow", glass: "medium" };
+      const prefs: AppearancePrefs = { theme: "dark", background: "neonFlow", glass: "medium", palette: "skyBlue" };
       saveAppearance(prefs);
       expect(loadAppearance()).toEqual(prefs);
     });

@@ -2,6 +2,7 @@ import { Sun, Moon } from "@phosphor-icons/react";
 import { Link } from "wouter";
 import { useAppearance } from "@/components/appearance-provider";
 import type { Theme, BackgroundPattern, GlassEffect } from "@/lib/appearance";
+import { PALETTES, VALID_PALETTES, type PaletteDef, type PaletteId } from "@/lib/palettes";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────
@@ -212,6 +213,39 @@ function BgPreview({ bg }: { bg: BackgroundPattern }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// PalettePreview — three swatches (accent / accent-soft / dark-accent)
+// on a warm-paper backdrop. Intentionally uses the palette's raw token
+// values (not `var(--accent)`) so that the preview shows the option,
+// not the currently active palette.
+// ─────────────────────────────────────────────────────────────
+
+function PalettePreview({ palette }: { palette: PaletteDef }) {
+  const { tokens } = palette;
+  return (
+    <div
+      className="relative w-full h-full flex items-center justify-center gap-2"
+      style={{ background: "var(--paper-2)" }}
+    >
+      <span
+        className="w-8 h-8 rounded-full"
+        style={{ background: tokens.accent }}
+        aria-hidden="true"
+      />
+      <span
+        className="w-8 h-8 rounded-full border border-border"
+        style={{ background: tokens.accentSoft }}
+        aria-hidden="true"
+      />
+      <span
+        className="w-2 h-8 rounded-sm"
+        style={{ background: tokens.accentDark }}
+        aria-hidden="true"
+      />
+    </div>
+  );
+}
+
 const BG_OPTIONS: { value: BackgroundPattern; label: string; description: string }[] = [
   { value: "none", label: "None", description: "Clean background" },
   { value: "hexagons", label: "Hexagons", description: "Isometric cubes, blue to pink" },
@@ -283,7 +317,7 @@ function SelectionTile({
 // ─────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { theme, background, glass, setTheme, setBackground, setGlass } = useAppearance();
+  const { theme, background, glass, palette, setTheme, setBackground, setGlass, setPalette } = useAppearance();
 
   return (
     <div className="min-h-screen bg-background text-foreground" data-testid="settings-page">
@@ -335,6 +369,30 @@ export default function SettingsPage() {
               { value: "dark", label: "Dark", icon: <Moon style={{ width: 12, height: 12 }} /> },
             ]}
           />
+        </SettingsPanel>
+
+        {/* Accent palette */}
+        <SettingsPanel
+          kicker="Accent"
+          title="Color palette"
+          description="Changes the accent color across buttons, active navigation, score tiles, and chart primaries. The semantic signal colors (sage for positive, warm-red for negative, amber for warnings) stay fixed so scoring cues remain readable."
+        >
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {VALID_PALETTES.map((id: PaletteId) => {
+              const def = PALETTES[id];
+              return (
+                <SelectionTile
+                  key={id}
+                  active={palette === id}
+                  onClick={() => setPalette(id)}
+                  label={def.label}
+                  description={def.description}
+                >
+                  <PalettePreview palette={def} />
+                </SelectionTile>
+              );
+            })}
+          </div>
         </SettingsPanel>
 
         {/* Background */}
