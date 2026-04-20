@@ -1,12 +1,9 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Brain, CheckCircle, Clock, Eye, Gear, Key, Lock, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, XCircle } from "@phosphor-icons/react";
+import { Brain, CheckCircle, Clock, Key, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, Warning, X, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient as sharedQueryClient } from "@/lib/queryClient";
@@ -145,31 +142,6 @@ export default function AdminPage() {
     },
   });
 
-  // ── Shared helpers ──
-  const roleIcons: Record<string, React.ReactNode> = {
-    viewer: <Eye className="w-4 h-4 text-blue-500" />,
-    manager: <Gear className="w-4 h-4 text-amber-500" />,
-    admin: <Shield className="w-4 h-4 text-purple-500" />,
-  };
-
-  const statusBadge = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
-      case "approved":
-        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"><CheckCircle className="w-3 h-3 mr-1" />Approved</Badge>;
-      case "denied":
-        return <Badge className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"><XCircle className="w-3 h-3 mr-1" />Denied</Badge>;
-      default:
-        return <Badge variant="secondary">{status}</Badge>;
-    }
-  };
-
-  const roleBadge = (role: string) => {
-    const config = ROLE_CONFIG[role];
-    return <Badge className={config?.badgeClass || "bg-gray-100 text-gray-800"}>{config?.label || role}</Badge>;
-  };
-
   const startEdit = (user: DbUser) => {
     setEditingUser(user);
     setEditForm({ displayName: user.displayName, role: user.role, active: user.active });
@@ -250,70 +222,87 @@ export default function AdminPage() {
       <div className="px-7 py-6 space-y-6">
         {/* ════════════════ USERS TAB ════════════════ */}
         {tab === "users" && (
-          <div className="space-y-6">
-            {/* Create User */}
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                <div>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Users className="w-5 h-5 text-primary" />
-                    User Accounts
-                  </CardTitle>
-                  <CardDescription>Create and manage database-backed user accounts.</CardDescription>
-                </div>
-                <Button size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  {showCreateForm ? "Cancel" : "Create User"}
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {/* Create form */}
+          <div className="space-y-8">
+            {/* Create user inline panel */}
+            <AdminPanel>
+              <div className="p-6">
+                <AdminSectionHeader
+                  kicker="Directory"
+                  icon={Users}
+                  title="User accounts"
+                  description="Create and manage database-backed users. AUTH_USERS env var is a boot fallback only; prefer DB users for audit trail + password rotation."
+                  action={
+                    <Button size="sm" onClick={() => setShowCreateForm(!showCreateForm)} data-testid="toggle-create-user">
+                      {showCreateForm ? (
+                        <>
+                          <X className="w-4 h-4 mr-1.5" /> Cancel
+                        </>
+                      ) : (
+                        <>
+                          <UserPlus className="w-4 h-4 mr-1.5" /> New user
+                        </>
+                      )}
+                    </Button>
+                  }
+                />
+
                 {showCreateForm && (
                   <form
-                    className="mb-6 p-4 rounded-lg border border-border bg-muted/30 space-y-3"
-                    onSubmit={(e) => { e.preventDefault(); createUserMutation.mutate(createForm); }}
+                    className="mb-6 p-5 rounded-sm border border-border"
+                    style={{ background: "var(--paper-2)" }}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      createUserMutation.mutate(createForm);
+                    }}
                   >
-                    <h4 className="font-semibold text-sm text-foreground">New User</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div
+                      className="font-mono uppercase text-muted-foreground mb-4"
+                      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                    >
+                      New user
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Username</label>
-                        <input
+                        <AdminFieldLabel htmlFor="new-user-username">Username</AdminFieldLabel>
+                        <Input
+                          id="new-user-username"
                           type="text"
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
                           value={createForm.username}
-                          onChange={(e) => setCreateForm(f => ({ ...f, username: e.target.value }))}
+                          onChange={(e) => setCreateForm((f) => ({ ...f, username: e.target.value }))}
                           required
                           autoComplete="off"
+                          className="font-mono text-sm"
                         />
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Display Name</label>
-                        <input
+                        <AdminFieldLabel htmlFor="new-user-name">Display name</AdminFieldLabel>
+                        <Input
+                          id="new-user-name"
                           type="text"
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
                           value={createForm.displayName}
-                          onChange={(e) => setCreateForm(f => ({ ...f, displayName: e.target.value }))}
+                          onChange={(e) => setCreateForm((f) => ({ ...f, displayName: e.target.value }))}
                           required
                         />
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Password</label>
-                        <input
+                        <AdminFieldLabel htmlFor="new-user-password">Password</AdminFieldLabel>
+                        <Input
+                          id="new-user-password"
                           type="password"
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
                           value={createForm.password}
-                          onChange={(e) => setCreateForm(f => ({ ...f, password: e.target.value }))}
+                          onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
                           required
                           autoComplete="new-password"
-                          placeholder="Min 12 chars, upper/lower/digit/special"
+                          placeholder="12+ chars · upper · lower · digit · special"
                         />
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Role</label>
+                        <AdminFieldLabel htmlFor="new-user-role">Role</AdminFieldLabel>
                         <select
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          id="new-user-role"
+                          className="flex h-9 w-full rounded-sm border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           value={createForm.role}
-                          onChange={(e) => setCreateForm(f => ({ ...f, role: e.target.value }))}
+                          onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}
                         >
                           <option value="viewer">Viewer</option>
                           <option value="manager">Manager / QA</option>
@@ -321,10 +310,12 @@ export default function AdminPage() {
                         </select>
                       </div>
                     </div>
-                    <div className="flex justify-end gap-2 pt-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => setShowCreateForm(false)}>Cancel</Button>
+                    <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setShowCreateForm(false)}>
+                        Cancel
+                      </Button>
                       <Button type="submit" size="sm" disabled={createUserMutation.isPending}>
-                        {createUserMutation.isPending ? "Creating..." : "Create User"}
+                        {createUserMutation.isPending ? "Creating…" : "Create user"}
                       </Button>
                     </div>
                   </form>
@@ -332,117 +323,165 @@ export default function AdminPage() {
 
                 {/* User list */}
                 {usersError ? (
-                  <div className="text-center py-12 text-destructive">
-                    <Shield className="w-8 h-8 mx-auto mb-2" />
-                    <p className="font-semibold">Failed to load users</p>
-                    <p className="text-sm text-muted-foreground">{usersError.message}</p>
-                  </div>
+                  <AccessRequestsErrorState message={usersError.message} />
                 ) : usersLoading ? (
-                  <div className="space-y-3">
+                  <div className="space-y-3 pt-2">
                     {Array.from({ length: 3 }).map((_, i) => (
                       <div key={i} className="flex items-center gap-3 py-3">
                         <Skeleton className="h-10 w-10 rounded-full" />
-                        <div className="space-y-1.5 flex-1"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-48" /></div>
+                        <div className="space-y-1.5 flex-1">
+                          <Skeleton className="h-4 w-40" />
+                          <Skeleton className="h-3 w-24" />
+                        </div>
                       </div>
                     ))}
                   </div>
                 ) : !users || users.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Users className="w-10 h-10 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">No database users yet. Create one above or use AUTH_USERS env var for bootstrapping.</p>
+                  <div className="text-center py-14">
+                    <Users
+                      style={{ width: 32, height: 32, margin: "0 auto", color: "var(--muted-foreground)" }}
+                    />
+                    <div
+                      className="font-mono uppercase text-muted-foreground mt-3"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Empty directory
+                    </div>
+                    <p className="text-sm text-foreground mt-2">
+                      No database users yet. Create one above or bootstrap via <code className="font-mono text-xs">AUTH_USERS</code>.
+                    </p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="-mx-6 border-t border-border">
                     {users.map((user) => (
-                      <div key={user.id} className={`flex items-center gap-4 p-3 rounded-lg border border-border ${!user.active ? "opacity-50 bg-muted/20" : "bg-muted/30"}`}>
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10 shrink-0">
-                          {roleIcons[user.role] || <Users className="w-5 h-5 text-muted-foreground" />}
+                      <AdminListRow key={user.id} faded={!user.active}>
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                          style={{
+                            background: "var(--paper-2)",
+                            border: "1px solid var(--border)",
+                          }}
+                        >
+                          <Users style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold text-foreground text-sm">{user.displayName}</p>
-                            {roleBadge(user.role)}
-                            {!user.active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium text-foreground text-sm">{user.displayName}</p>
+                            <AdminRolePill role={user.role} />
+                            {!user.active && <AdminStatusPill kind="inactive">Inactive</AdminStatusPill>}
                           </div>
-                          <p className="text-xs text-muted-foreground">@{user.username}</p>
+                          <p
+                            className="font-mono text-muted-foreground mt-0.5"
+                            style={{ fontSize: 11, letterSpacing: "0.02em" }}
+                          >
+                            @{user.username}
+                          </p>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <Button variant="ghost" size="sm" onClick={() => startEdit(user)} title="Edit user">
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => startEdit(user)}
+                            title="Edit user"
+                            data-testid={`edit-user-${user.id}`}
+                          >
                             <PencilSimple className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => { setResetPasswordUser(user); setNewPassword(""); }} title="Reset password">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setResetPasswordUser(user);
+                              setNewPassword("");
+                            }}
+                            title="Reset password"
+                            data-testid={`reset-password-${user.id}`}
+                          >
                             <Key className="w-4 h-4" />
                           </Button>
-                          {user.active && (
+                          {user.active ? (
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="text-red-500 hover:text-red-600"
+                              style={{ color: "var(--destructive)" }}
                               onClick={() => {
                                 if (confirm(`Deactivate ${user.displayName}? They will no longer be able to log in.`)) {
                                   deactivateUserMutation.mutate(user.id);
                                 }
                               }}
                               title="Deactivate user"
+                              data-testid={`deactivate-user-${user.id}`}
                             >
                               <Trash className="w-4 h-4" />
                             </Button>
-                          )}
-                          {!user.active && (
+                          ) : (
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="text-green-600"
+                              style={{ color: "var(--sage)" }}
                               onClick={() => updateUserMutation.mutate({ id: user.id, data: { active: true } })}
                               title="Reactivate user"
+                              data-testid={`reactivate-user-${user.id}`}
                             >
                               <CheckCircle className="w-4 h-4" />
                             </Button>
                           )}
                         </div>
-                      </div>
+                      </AdminListRow>
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </AdminPanel>
 
-            {/* Edit user dialog (inline) */}
+            {/* Edit user inline panel */}
             {editingUser && (
-              <Card className="border-primary/50">
-                <CardHeader>
-                  <CardTitle className="text-lg">Edit User: {editingUser.displayName}</CardTitle>
-                </CardHeader>
-                <CardContent>
+              <AdminPanel tone="accent">
+                <div className="p-6">
+                  <AdminSectionHeader
+                    kicker="Edit"
+                    icon={PencilSimple}
+                    title={editingUser.displayName}
+                    description={`Update role, status, or display name for @${editingUser.username}. Changes audit-logged.`}
+                    action={
+                      <Button variant="ghost" size="sm" onClick={() => setEditingUser(null)} title="Close">
+                        <X className="w-4 h-4" />
+                      </Button>
+                    }
+                  />
                   <form
-                    className="space-y-3"
+                    className="space-y-4"
                     onSubmit={(e) => {
                       e.preventDefault();
                       const data: Record<string, unknown> = {};
                       if (editForm.displayName !== editingUser.displayName) data.displayName = editForm.displayName;
                       if (editForm.role !== editingUser.role) data.role = editForm.role;
                       if (editForm.active !== editingUser.active) data.active = editForm.active;
-                      if (Object.keys(data).length === 0) { setEditingUser(null); return; }
+                      if (Object.keys(data).length === 0) {
+                        setEditingUser(null);
+                        return;
+                      }
                       updateUserMutation.mutate({ id: editingUser.id, data });
                     }}
                   >
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Display Name</label>
-                        <input
+                        <AdminFieldLabel htmlFor="edit-user-name">Display name</AdminFieldLabel>
+                        <Input
+                          id="edit-user-name"
                           type="text"
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
                           value={editForm.displayName}
-                          onChange={(e) => setEditForm(f => ({ ...f, displayName: e.target.value }))}
+                          onChange={(e) => setEditForm((f) => ({ ...f, displayName: e.target.value }))}
                           required
                         />
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Role</label>
+                        <AdminFieldLabel htmlFor="edit-user-role">Role</AdminFieldLabel>
                         <select
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          id="edit-user-role"
+                          className="flex h-9 w-full rounded-sm border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           value={editForm.role}
-                          onChange={(e) => setEditForm(f => ({ ...f, role: e.target.value }))}
+                          onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
                         >
                           <option value="viewer">Viewer</option>
                           <option value="manager">Manager / QA</option>
@@ -450,228 +489,270 @@ export default function AdminPage() {
                         </select>
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Status</label>
+                        <AdminFieldLabel htmlFor="edit-user-status">Status</AdminFieldLabel>
                         <select
-                          className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
+                          id="edit-user-status"
+                          className="flex h-9 w-full rounded-sm border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           value={editForm.active ? "active" : "inactive"}
-                          onChange={(e) => setEditForm(f => ({ ...f, active: e.target.value === "active" }))}
+                          onChange={(e) => setEditForm((f) => ({ ...f, active: e.target.value === "active" }))}
                         >
                           <option value="active">Active</option>
                           <option value="inactive">Inactive</option>
                         </select>
                       </div>
                     </div>
-                    <div className="flex justify-end gap-2 pt-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => setEditingUser(null)}>Cancel</Button>
+                    <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setEditingUser(null)}>
+                        Cancel
+                      </Button>
                       <Button type="submit" size="sm" disabled={updateUserMutation.isPending}>
-                        {updateUserMutation.isPending ? "Saving..." : "Save Changes"}
+                        {updateUserMutation.isPending ? "Saving…" : "Save changes"}
                       </Button>
                     </div>
                   </form>
-                </CardContent>
-              </Card>
+                </div>
+              </AdminPanel>
             )}
 
-            {/* Reset password dialog (inline) */}
+            {/* Reset password inline panel */}
             {resetPasswordUser && (
-              <Card className="border-primary/50">
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Key className="w-5 h-5" />
-                    Reset Password: {resetPasswordUser.displayName}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
+              <AdminPanel tone="accent">
+                <div className="p-6">
+                  <AdminSectionHeader
+                    kicker="Credentials"
+                    icon={Key}
+                    title={`Reset password · ${resetPasswordUser.displayName}`}
+                    description="The new password will be validated against the complexity policy and password-history window (last 5 passwords cannot be reused)."
+                    action={
+                      <Button variant="ghost" size="sm" onClick={() => setResetPasswordUser(null)} title="Close">
+                        <X className="w-4 h-4" />
+                      </Button>
+                    }
+                  />
                   <form
-                    className="space-y-3"
-                    onSubmit={(e) => { e.preventDefault(); resetPasswordMutation.mutate({ id: resetPasswordUser.id, newPassword }); }}
+                    className="space-y-4"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      resetPasswordMutation.mutate({ id: resetPasswordUser.id, newPassword });
+                    }}
                   >
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">New Password</label>
-                      <input
+                    <div style={{ maxWidth: 420 }}>
+                      <AdminFieldLabel htmlFor="reset-new-password">New password</AdminFieldLabel>
+                      <Input
+                        id="reset-new-password"
                         type="password"
-                        className="w-full mt-1 px-3 py-2 rounded-md border border-input bg-background text-sm"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         required
                         autoComplete="new-password"
-                        placeholder="Min 12 chars, upper/lower/digit/special"
+                        placeholder="12+ chars · upper · lower · digit · special"
                       />
                     </div>
-                    <div className="flex justify-end gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => setResetPasswordUser(null)}>Cancel</Button>
+                    <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setResetPasswordUser(null)}>
+                        Cancel
+                      </Button>
                       <Button type="submit" size="sm" disabled={resetPasswordMutation.isPending}>
-                        {resetPasswordMutation.isPending ? "Resetting..." : "Reset Password"}
+                        {resetPasswordMutation.isPending ? "Resetting…" : "Reset password"}
                       </Button>
                     </div>
                   </form>
-                </CardContent>
-              </Card>
+                </div>
+              </AdminPanel>
             )}
           </div>
         )}
 
         {/* ════════════════ ACCESS REQUESTS TAB ════════════════ */}
         {tab === "requests" && (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Clock className="w-5 h-5 text-yellow-500" />
-                  Pending Requests ({pendingRequests.length})
-                </CardTitle>
-                <CardDescription>
-                  Review and approve or deny access requests. After approving, create the user account in the Users tab with their assigned role.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
+          <div className="space-y-8">
+            <AdminPanel>
+              <div className="p-6">
+                <AdminSectionHeader
+                  kicker="Pending"
+                  icon={Clock}
+                  title={`Pending requests · ${pendingRequests.length}`}
+                  description="Review and approve or deny access requests. After approving, create the user account in the Users tab with the assigned role."
+                />
+
                 {requestsError ? (
-                  <div className="text-center py-12 text-destructive">
-                    <Shield className="w-8 h-8 mx-auto mb-2" />
-                    <p className="font-semibold">Failed to load access requests</p>
-                    <p className="text-sm text-muted-foreground">{requestsError.message}</p>
-                  </div>
+                  <AccessRequestsErrorState message={requestsError.message} />
                 ) : requestsLoading ? (
-                  <div className="space-y-3">
+                  <div className="space-y-3 pt-2">
                     {Array.from({ length: 3 }).map((_, i) => (
                       <div key={i} className="flex items-center gap-3 py-3">
                         <Skeleton className="h-10 w-10 rounded-full" />
-                        <div className="space-y-1.5 flex-1"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-48" /></div>
-                        <Skeleton className="h-8 w-20" /><Skeleton className="h-8 w-20" />
+                        <div className="space-y-1.5 flex-1">
+                          <Skeleton className="h-4 w-32" />
+                          <Skeleton className="h-3 w-48" />
+                        </div>
+                        <Skeleton className="h-8 w-20" />
+                        <Skeleton className="h-8 w-20" />
                       </div>
                     ))}
                   </div>
                 ) : pendingRequests.length === 0 ? (
-                  <div className="text-center py-12">
-                    <div className="mx-auto w-14 h-14 bg-gradient-to-br from-green-100 to-green-50 dark:from-green-900/30 dark:to-green-900/10 rounded-full flex items-center justify-center mb-3">
-                      <CheckCircle className="w-7 h-7 text-green-500" />
+                  <div className="text-center py-14">
+                    <div
+                      className="mx-auto mb-4 rounded-full flex items-center justify-center"
+                      style={{
+                        width: 56,
+                        height: 56,
+                        background: "var(--sage-soft)",
+                        border: "1px solid color-mix(in oklch, var(--sage), transparent 55%)",
+                      }}
+                    >
+                      <CheckCircle style={{ width: 24, height: 24, color: "var(--sage)" }} />
                     </div>
-                    <p className="text-sm text-muted-foreground">No pending access requests</p>
+                    <div
+                      className="font-mono uppercase text-muted-foreground"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Inbox zero
+                    </div>
+                    <p className="text-sm text-foreground mt-2">No pending access requests.</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="-mx-6 border-t border-border">
                     {pendingRequests.map((req) => (
-                      <div key={req.id} className="flex items-center gap-4 p-4 rounded-lg border border-border bg-muted/30">
-                        <div className="w-10 h-10 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center shrink-0">
-                          <Users className="w-5 h-5 text-primary" />
+                      <AdminListRow key={req.id}>
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                          style={{
+                            background: "var(--copper-soft)",
+                            border: "1px solid color-mix(in oklch, var(--accent), transparent 65%)",
+                          }}
+                        >
+                          <Users style={{ width: 18, height: 18, color: "var(--accent)" }} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <p className="font-semibold text-foreground">{req.name}</p>
-                            {roleBadge(req.requestedRole)}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium text-foreground">{req.name}</p>
+                            <AdminRolePill role={req.requestedRole} />
                           </div>
-                          <p className="text-sm text-muted-foreground">{req.email}</p>
-                          {req.reason && <p className="text-xs text-muted-foreground mt-1">"{req.reason}"</p>}
-                          <p className="text-xs text-muted-foreground mt-1">
+                          <p
+                            className="text-xs text-muted-foreground font-mono mt-0.5"
+                            style={{ letterSpacing: "0.02em" }}
+                          >
+                            {req.email}
+                          </p>
+                          {req.reason && (
+                            <p
+                              className="text-sm italic mt-2 pl-3 text-foreground/85"
+                              style={{ borderLeft: "2px solid var(--border)" }}
+                            >
+                              &ldquo;{req.reason}&rdquo;
+                            </p>
+                          )}
+                          <p
+                            className="font-mono uppercase text-muted-foreground mt-2"
+                            style={{ fontSize: 9, letterSpacing: "0.1em" }}
+                          >
                             Requested {req.createdAt ? new Date(req.createdAt).toLocaleDateString() : "recently"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <Button size="sm" onClick={() => reviewMutation.mutate({ id: req.id, status: "approved" })} disabled={reviewMutation.isPending}>
-                            <CheckCircle className="w-4 h-4 mr-1" />Approve
+                          <Button
+                            size="sm"
+                            onClick={() => reviewMutation.mutate({ id: req.id, status: "approved" })}
+                            disabled={reviewMutation.isPending}
+                            data-testid={`approve-request-${req.id}`}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-1.5" />
+                            Approve
                           </Button>
                           <Button
-                            size="sm" variant="outline"
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                            size="sm"
+                            variant="outline"
                             onClick={() => reviewMutation.mutate({ id: req.id, status: "denied" })}
                             disabled={reviewMutation.isPending}
+                            style={{
+                              color: "var(--destructive)",
+                              borderColor: "color-mix(in oklch, var(--destructive), transparent 60%)",
+                            }}
+                            data-testid={`deny-request-${req.id}`}
                           >
-                            <XCircle className="w-4 h-4 mr-1" />Deny
+                            <XCircle className="w-4 h-4 mr-1.5" />
+                            Deny
                           </Button>
                         </div>
-                      </div>
+                      </AdminListRow>
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </AdminPanel>
 
             {reviewedRequests.length > 0 && (
-              <Card>
-                <CardHeader><CardTitle className="text-lg">Review History</CardTitle></CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
+              <AdminPanel>
+                <div className="p-6">
+                  <AdminSectionHeader
+                    kicker="Archive"
+                    title="Review history"
+                    description="Requests that have already been actioned. Ordered newest first."
+                  />
+                  <div className="-mx-6 border-t border-border">
                     {reviewedRequests.map((req) => (
-                      <div key={req.id} className="flex items-center gap-3 py-2 px-3 rounded-md hover:bg-muted/50">
+                      <AdminListRow key={req.id} faded={req.status === "denied"}>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-sm font-medium text-foreground">{req.name}</p>
-                            <span className="text-xs text-muted-foreground">({req.email})</span>
+                            <span
+                              className="text-xs text-muted-foreground font-mono"
+                              style={{ letterSpacing: "0.02em" }}
+                            >
+                              {req.email}
+                            </span>
                           </div>
                         </div>
-                        {roleBadge(req.requestedRole)}
-                        {statusBadge(req.status)}
-                        {req.reviewedAt && <span className="text-xs text-muted-foreground">{new Date(req.reviewedAt).toLocaleDateString()}</span>}
-                        {req.reviewedBy && <span className="text-xs text-muted-foreground">by {req.reviewedBy}</span>}
-                      </div>
+                        <AdminRolePill role={req.requestedRole} />
+                        {req.status === "approved" ? (
+                          <AdminStatusPill kind="approved" icon={CheckCircle}>
+                            Approved
+                          </AdminStatusPill>
+                        ) : req.status === "denied" ? (
+                          <AdminStatusPill kind="denied" icon={XCircle}>
+                            Denied
+                          </AdminStatusPill>
+                        ) : (
+                          <AdminStatusPill kind="pending" icon={Clock}>
+                            {req.status}
+                          </AdminStatusPill>
+                        )}
+                        <span
+                          className="font-mono uppercase text-muted-foreground tabular-nums shrink-0"
+                          style={{ fontSize: 9, letterSpacing: "0.1em" }}
+                        >
+                          {req.reviewedAt ? new Date(req.reviewedAt).toLocaleDateString() : "—"}
+                          {req.reviewedBy ? ` · ${req.reviewedBy}` : ""}
+                        </span>
+                      </AdminListRow>
                     ))}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </AdminPanel>
             )}
           </div>
         )}
 
         {/* ════════════════ ROLE DEFINITIONS TAB ════════════════ */}
         {tab === "roles" && (
-          <div className="space-y-4">
-            {USER_ROLES.map((role) => (
-              <Card key={role.value}>
-                <CardContent className="pt-6">
-                  <div className="flex items-start gap-4">
-                    <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-muted shrink-0">
-                      {roleIcons[role.value]}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold text-foreground">{role.label}</h3>
-                        {roleBadge(role.value)}
-                      </div>
-                      <p className="text-sm text-muted-foreground mb-3">{role.description}</p>
-
-                      {role.value === "viewer" && (
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View dashboard & metrics</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View call transcripts</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View reports & charts</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> View employee profiles</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Search calls</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Play audio recordings</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Upload calls</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Edit analysis</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Delete calls</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Manage employees</div>
-                        </div>
-                      )}
-                      {role.value === "manager" && (
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> All Viewer permissions</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Upload call recordings</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Assign calls to employees</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Edit call analysis</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Manage employees</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Export reports</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Delete calls</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Manage users</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Approve access requests</div>
-                          <div className="flex items-center gap-1.5 text-red-400"><XCircle className="w-3 h-3" /> Bulk import</div>
-                        </div>
-                      )}
-                      {role.value === "admin" && (
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> All Manager permissions</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Manage users & roles</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Approve/deny access requests</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Bulk CSV import</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> System configuration</div>
-                          <div className="flex items-center gap-1.5 text-green-600"><CheckCircle className="w-3 h-3" /> Full API access</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+          <div className="space-y-6">
+            <AdminPanel>
+              <div className="p-6">
+                <AdminSectionHeader
+                  kicker="Reference"
+                  icon={Shield}
+                  title="Role definitions"
+                  description="Capability matrix for each role tier. Enforced server-side via requireRole() middleware — UI gates mirror backend authorization."
+                />
+              </div>
+              <div className="border-t border-border">
+                {USER_ROLES.map((role) => (
+                  <RoleDefinitionRow key={role.value} role={role} />
+                ))}
+              </div>
+            </AdminPanel>
           </div>
         )}
 
@@ -778,104 +859,175 @@ function PipelineSettingsCard() {
     return <Skeleton className="h-64" />;
   }
 
-  const sourceBadge = (src: "default" | "env" | "override") => {
-    const color = src === "override" ? "bg-purple-200 text-purple-900" : src === "env" ? "bg-blue-200 text-blue-900" : "bg-gray-200 text-gray-900";
-    const label = src === "override" ? "Override" : src === "env" ? "Env var" : "Default";
-    return <Badge className={`${color} text-[10px]`}>{label}</Badge>;
-  };
-
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Sliders className="w-5 h-5" />
-          Pipeline Quality Gates
-        </CardTitle>
-        <CardDescription>
-          Thresholds that control when the audio-processing pipeline skips Bedrock analysis. Lower values process more calls (more AI spend); higher values skip more borderline recordings.
-          Changes apply to the next call processed and survive server restarts (persisted to S3).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <Label>Minimum call duration (seconds): <strong>{data.minCallDurationSec}</strong></Label>
-            <div className="flex items-center gap-2">
-              {sourceBadge(data.source.minCallDurationSec)}
-              {data.source.minCallDurationSec === "override" && (
-                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minCallDurationSec")} disabled={saveMut.isPending}>Reset</button>
+    <AdminPanel>
+      <div className="p-6">
+        <AdminSectionHeader
+          kicker="Runtime tuning"
+          icon={Sliders}
+          title="Pipeline quality gates"
+          description="Thresholds that control when the audio-processing pipeline skips Bedrock analysis. Lower values process more calls (more AI spend); higher values skip more borderline recordings. Changes apply to the next call processed and survive restarts (persisted to S3)."
+        />
+        <div className="space-y-6 pt-2">
+          <PipelineField
+            label="Minimum call duration"
+            unit="seconds"
+            value={data.minCallDurationSec.toString()}
+            source={data.source.minCallDurationSec}
+            onReset={() => resetField("minCallDurationSec")}
+            resetDisabled={saveMut.isPending}
+            hint="Calls shorter than this skip AI analysis. Typical: 15s. Lower for short-form scripts."
+          >
+            <Input
+              type="number"
+              min={0}
+              max={600}
+              step={1}
+              value={draft.minCallDurationSec}
+              onChange={(e) => setDraft({ ...draft, minCallDurationSec: e.target.value })}
+              className="font-mono tabular-nums"
+            />
+          </PipelineField>
+
+          <PipelineField
+            label="Minimum transcript length"
+            unit="characters"
+            value={data.minTranscriptLength.toString()}
+            source={data.source.minTranscriptLength}
+            onReset={() => resetField("minTranscriptLength")}
+            resetDisabled={saveMut.isPending}
+            hint="Transcripts shorter than this skip AI. Typical: 10 chars. Prevents AI spend on garbled / empty recordings."
+          >
+            <Input
+              type="number"
+              min={0}
+              max={10_000}
+              step={1}
+              value={draft.minTranscriptLength}
+              onChange={(e) => setDraft({ ...draft, minTranscriptLength: e.target.value })}
+              className="font-mono tabular-nums"
+            />
+          </PipelineField>
+
+          <PipelineField
+            label="Minimum transcript confidence"
+            unit={`${Math.round(data.minTranscriptConfidence * 100)}%`}
+            value={data.minTranscriptConfidence.toFixed(2)}
+            source={data.source.minTranscriptConfidence}
+            onReset={() => resetField("minTranscriptConfidence")}
+            resetDisabled={saveMut.isPending}
+            hint="AssemblyAI per-word confidence average below this skips AI. Typical: 0.60. Lower to 0.40–0.50 if poor-tier synthetic calls aren't clearing the gate."
+          >
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={draft.minTranscriptConfidence}
+              onChange={(e) => setDraft({ ...draft, minTranscriptConfidence: e.target.value })}
+              className="font-mono tabular-nums"
+            />
+          </PipelineField>
+
+          <div className="flex items-center justify-between pt-4 border-t border-border">
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              {data.updatedAt ? (
+                <>
+                  Last changed {new Date(data.updatedAt).toLocaleString()}
+                  {data.updatedBy ? ` · ${data.updatedBy}` : ""}
+                </>
+              ) : (
+                <>Using env / default baseline</>
               )}
             </div>
+            <Button onClick={handleSave} disabled={saveMut.isPending} data-testid="save-pipeline-settings">
+              {saveMut.isPending ? "Saving…" : "Save changes"}
+            </Button>
           </div>
-          <Input
-            type="number"
-            min={0}
-            max={600}
-            step={1}
-            value={draft.minCallDurationSec}
-            onChange={(e) => setDraft({ ...draft, minCallDurationSec: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground mt-1">Calls shorter than this skip AI analysis. Typical: 15s. Lower for short-form scripts.</p>
         </div>
+      </div>
+    </AdminPanel>
+  );
+}
 
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <Label>Minimum transcript length (characters): <strong>{data.minTranscriptLength}</strong></Label>
-            <div className="flex items-center gap-2">
-              {sourceBadge(data.source.minTranscriptLength)}
-              {data.source.minTranscriptLength === "override" && (
-                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minTranscriptLength")} disabled={saveMut.isPending}>Reset</button>
-              )}
-            </div>
-          </div>
-          <Input
-            type="number"
-            min={0}
-            max={10_000}
-            step={1}
-            value={draft.minTranscriptLength}
-            onChange={(e) => setDraft({ ...draft, minTranscriptLength: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground mt-1">Transcripts shorter than this skip AI. Typical: 10 chars. Prevents AI spend on garbled / empty recordings.</p>
-        </div>
+/** Warm-paper source pill — renders "Default" / "Env var" / "Override" in mono. */
+function AdminSourcePill({ src }: { src: "default" | "env" | "override" | "legacy-env" }) {
+  if (src === "override")
+    return <AdminStatusPill kind="approved">Override</AdminStatusPill>;
+  if (src === "env") return <AdminStatusPill kind="neutral">Env var</AdminStatusPill>;
+  if (src === "legacy-env") return <AdminStatusPill kind="neutral">Legacy env</AdminStatusPill>;
+  return <AdminStatusPill kind="inactive">Default</AdminStatusPill>;
+}
 
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <Label>Minimum transcript confidence: <strong>{data.minTranscriptConfidence.toFixed(2)}</strong> ({Math.round(data.minTranscriptConfidence * 100)}%)</Label>
-            <div className="flex items-center gap-2">
-              {sourceBadge(data.source.minTranscriptConfidence)}
-              {data.source.minTranscriptConfidence === "override" && (
-                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => resetField("minTranscriptConfidence")} disabled={saveMut.isPending}>Reset</button>
-              )}
-            </div>
+/** Warm-paper pipeline-setting field — label + current effective value +
+ *  source pill + optional Reset link, followed by the numeric input. */
+function PipelineField({
+  label,
+  unit,
+  value,
+  source,
+  onReset,
+  resetDisabled,
+  hint,
+  children,
+}: {
+  label: string;
+  unit: string;
+  value: string;
+  source: "default" | "env" | "override";
+  onReset: () => void;
+  resetDisabled: boolean;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2 gap-3">
+        <div className="min-w-0">
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.12em" }}
+          >
+            {label}
           </div>
-          <Input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.minTranscriptConfidence}
-            onChange={(e) => setDraft({ ...draft, minTranscriptConfidence: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground mt-1">
-            AssemblyAI per-word confidence average below this skips AI. Typical: 0.60. Lower to 0.40–0.50 if poor-tier synthetic calls (disfluency-heavy) aren't clearing the gate.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between pt-4 border-t">
-          <div className="text-xs text-muted-foreground">
-            {data.updatedAt ? (
-              <>Last changed {new Date(data.updatedAt).toLocaleString()}{data.updatedBy ? ` by ${data.updatedBy}` : ""}.</>
-            ) : (
-              <>Using env / default baseline (no admin overrides).</>
-            )}
+          <div className="flex items-baseline gap-2 mt-0.5">
+            <span
+              className="font-display font-medium tabular-nums text-foreground"
+              style={{ fontSize: 20 }}
+            >
+              {value}
+            </span>
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.08em" }}
+            >
+              {unit}
+            </span>
           </div>
-          <Button onClick={handleSave} disabled={saveMut.isPending}>
-            {saveMut.isPending ? "Saving…" : "Save changes"}
-          </Button>
         </div>
-      </CardContent>
-    </Card>
+        <div className="flex items-center gap-2 shrink-0">
+          <AdminSourcePill src={source} />
+          {source === "override" && (
+            <button
+              type="button"
+              className="font-mono uppercase text-muted-foreground hover:text-foreground disabled:opacity-50"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+              onClick={onReset}
+              disabled={resetDisabled}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+      {children}
+      <p className="text-xs text-muted-foreground mt-2" style={{ lineHeight: 1.5 }}>
+        {hint}
+      </p>
+    </div>
   );
 }
 
@@ -965,131 +1117,474 @@ function ModelTiersCard() {
     return <Skeleton className="h-96" />;
   }
 
-  const sourceBadge = (src: TierSnapshot["source"]) => {
-    const map: Record<TierSnapshot["source"], { color: string; label: string }> = {
-      override:    { color: "bg-purple-200 text-purple-900", label: "Admin override" },
-      env:         { color: "bg-blue-200 text-blue-900",     label: "Env var" },
-      "legacy-env":{ color: "bg-cyan-200 text-cyan-900",     label: "Legacy env var" },
-      default:     { color: "bg-gray-200 text-gray-900",     label: "Baked-in default" },
-    };
-    const { color, label } = map[src];
-    return <Badge className={`${color} text-[10px]`}>{label}</Badge>;
-  };
-
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="w-5 h-5" />
-            AI Model Tiers
-          </CardTitle>
-          <CardDescription>
-            All Anthropic model IDs used across the app resolve through these three tiers. Set an override when
-            Anthropic ships a new model, AWS renames an inference profile, or you want to switch a specific tier
-            for cost/quality reasons. Changes apply to the next Bedrock call and survive restarts (persisted to S3).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {data.tiers.map((snap) => {
-            const meta = TIER_META[snap.tier];
-            const isOverride = snap.source === "override";
-            return (
-              <div key={snap.tier} className="space-y-2 pb-6 border-b last:border-b-0 last:pb-0">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Label className="text-base font-semibold">{meta.label}</Label>
-                      {sourceBadge(snap.source)}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">{meta.purpose}</p>
-                    <p className="text-[11px] text-muted-foreground mt-1"><strong>Used by:</strong> {meta.usedBy}</p>
-                  </div>
-                  {isOverride && (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground hover:text-foreground shrink-0"
-                      onClick={() => saveMut.mutate({ tier: snap.tier, model: null })}
-                      disabled={saveMut.isPending}
-                    >
-                      Reset to default
-                    </button>
-                  )}
-                </div>
+      <AdminPanel>
+        <div className="p-6">
+          <AdminSectionHeader
+            kicker="Anthropic routing"
+            icon={Brain}
+            title="AI model tiers"
+            description="All Anthropic model IDs used across the app resolve through these three tiers. Override a tier when Anthropic ships a new model, AWS renames an inference profile, or you want to switch for cost/quality reasons. Changes apply to the next Bedrock call and survive restarts (persisted to S3)."
+          />
+        </div>
+        <div className="border-t border-border">
+          {data.tiers.map((snap) => (
+            <ModelTierRow
+              key={snap.tier}
+              snap={snap}
+              draft={drafts[snap.tier]}
+              onChange={(v) => setDrafts({ ...drafts, [snap.tier]: v })}
+              onSave={() =>
+                saveMut.mutate({
+                  tier: snap.tier,
+                  model: drafts[snap.tier].trim(),
+                  reason: "admin-ui",
+                })
+              }
+              onReset={() => saveMut.mutate({ tier: snap.tier, model: null })}
+              busy={saveMut.isPending}
+            />
+          ))}
+        </div>
+      </AdminPanel>
 
-                <div className="grid grid-cols-1 gap-2">
-                  <Label className="text-xs text-muted-foreground">
-                    Effective model ID
-                  </Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={drafts[snap.tier]}
-                      onChange={(e) => setDrafts({ ...drafts, [snap.tier]: e.target.value })}
-                      placeholder={snap.defaultValue}
-                      className="font-mono text-xs"
-                    />
-                    <Button
-                      size="sm"
-                      disabled={saveMut.isPending || drafts[snap.tier] === snap.effectiveModel || !drafts[snap.tier].trim()}
-                      onClick={() => saveMut.mutate({
-                        tier: snap.tier,
-                        model: drafts[snap.tier].trim(),
-                        reason: "admin-ui",
-                      })}
-                    >
-                      Save
-                    </Button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-muted-foreground">
-                    <div>
-                      <div className="font-medium text-foreground mb-0.5">Default</div>
-                      <div className="font-mono break-all">{snap.defaultValue}</div>
-                    </div>
-                    <div>
-                      <div className="font-medium text-foreground mb-0.5">Env var</div>
-                      <div className="font-mono break-all">{snap.envValue ?? "— (unset)"}</div>
-                    </div>
-                    <div>
-                      <div className="font-medium text-foreground mb-0.5">Override</div>
-                      <div className="font-mono break-all">{snap.override?.model ?? "— (none)"}</div>
-                    </div>
-                  </div>
-
-                  {snap.override && (
-                    <p className="text-[10px] text-muted-foreground">
-                      Set by {snap.override.updatedBy} on {new Date(snap.override.updatedAt).toLocaleString()}
-                      {snap.override.reason ? ` — ${snap.override.reason}` : ""}
-                    </p>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      <Card className="border-blue-500/30 bg-blue-500/5">
-        <CardContent className="pt-4 text-xs space-y-2">
-          <p className="font-medium">Tips</p>
-          <ul className="list-disc pl-5 space-y-1">
-            <li>
-              Use model IDs exactly as AWS Bedrock expects them (e.g. <code className="font-mono">us.anthropic.claude-sonnet-4-6</code> or
-              {" "}<code className="font-mono">anthropic.claude-3-5-haiku-20241022-v1:0</code>). AWS rejects unknown strings with 400.
+      <AdminPanel>
+        <div className="p-6 space-y-2">
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            Tips
+          </div>
+          <ul className="space-y-1.5 text-xs text-foreground" style={{ lineHeight: 1.55 }}>
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>
+                Use model IDs exactly as AWS Bedrock expects them (e.g.{" "}
+                <code className="font-mono text-xs">us.anthropic.claude-sonnet-4-6</code> or{" "}
+                <code className="font-mono text-xs">anthropic.claude-3-5-haiku-20241022-v1:0</code>). AWS rejects unknown strings with 400.
+              </span>
             </li>
-            <li>
-              Find valid IDs for your account + region via <code className="font-mono">aws bedrock list-foundation-models</code> or
-              {" "}<code className="font-mono">aws bedrock list-inference-profiles</code> (requires the matching IAM action).
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>
+                Find valid IDs for your account + region via{" "}
+                <code className="font-mono text-xs">aws bedrock list-foundation-models</code> or{" "}
+                <code className="font-mono text-xs">aws bedrock list-inference-profiles</code> (requires the matching IAM action).
+              </span>
             </li>
-            <li>
-              Overriding "strong" also updates the batch-inference path — both on-demand and batch calls use the new model after save.
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>Overriding "strong" also updates the batch-inference path — both on-demand and batch calls use the new model after save.</span>
             </li>
-            <li>
-              If a tier's model ID is invalid, fallback logic in the script generator and short-call pipeline silently retries on the "strong" tier. You'll see a toast or pm2 warn when this happens.
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>
+                If a tier's model ID is invalid, fallback logic in the script generator and short-call pipeline silently retries on the "strong" tier. You'll see a toast or pm2 warn when this happens.
+              </span>
             </li>
           </ul>
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanel>
+    </div>
+  );
+}
+
+/** Warm-paper model-tier row — meta + controlled input + save/reset + variant metadata. */
+function ModelTierRow({
+  snap,
+  draft,
+  onChange,
+  onSave,
+  onReset,
+  busy,
+}: {
+  snap: TierSnapshot;
+  draft: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  onReset: () => void;
+  busy: boolean;
+}) {
+  const meta = TIER_META[snap.tier];
+  const isOverride = snap.source === "override";
+  const canSave = !busy && draft !== snap.effectiveModel && !!draft.trim();
+  return (
+    <div className="p-6 border-b border-border last:border-b-0 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              {snap.tier}
+            </div>
+            <AdminSourcePill src={snap.source} />
+          </div>
+          <div
+            className="font-display font-medium text-foreground mt-1"
+            style={{ fontSize: 16, letterSpacing: "-0.1px", lineHeight: 1.2 }}
+          >
+            {meta.label}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1" style={{ lineHeight: 1.5, maxWidth: 560 }}>
+            {meta.purpose}
+          </p>
+          <p className="text-[11px] text-muted-foreground mt-1" style={{ lineHeight: 1.5, maxWidth: 560 }}>
+            <span
+              className="font-mono uppercase"
+              style={{ fontSize: 9, letterSpacing: "0.12em" }}
+            >
+              Used by
+            </span>{" "}
+            {meta.usedBy}
+          </p>
+        </div>
+        {isOverride && (
+          <button
+            type="button"
+            className="font-mono uppercase text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-50"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            onClick={onReset}
+            disabled={busy}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      <div>
+        <AdminFieldLabel>Effective model ID</AdminFieldLabel>
+        <div className="flex gap-2">
+          <Input
+            value={draft}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={snap.defaultValue}
+            className="font-mono text-xs"
+          />
+          <Button size="sm" disabled={!canSave} onClick={onSave}>
+            Save
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-border">
+        <ModelTierMeta label="Default" value={snap.defaultValue} />
+        <ModelTierMeta label="Env var" value={snap.envValue ?? "— (unset)"} />
+        <ModelTierMeta label="Override" value={snap.override?.model ?? "— (none)"} />
+      </div>
+
+      {snap.override && (
+        <p
+          className="font-mono text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.04em" }}
+        >
+          Set by {snap.override.updatedBy} on {new Date(snap.override.updatedAt).toLocaleString()}
+          {snap.override.reason ? ` — ${snap.override.reason}` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ModelTierMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 9, letterSpacing: "0.12em" }}
+      >
+        {label}
+      </div>
+      <div className="font-mono text-xs text-foreground break-all mt-1">{value}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper admin primitives — shared visual vocabulary across the
+// tab bodies. Mirrors the Reports SectionHeader/FilterLabel pattern
+// so the app feels like one document, not five unrelated dashboards.
+// ─────────────────────────────────────────────────────────────
+
+/** Mono uppercase kicker + display-font title — opens every panel. */
+function AdminSectionHeader({
+  kicker,
+  title,
+  description,
+  icon: Icon,
+  action,
+}: {
+  kicker: string;
+  title: string;
+  description?: string;
+  icon?: React.ComponentType<{ style?: React.CSSProperties }>;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 mb-4">
+      <div className="min-w-0">
+        <div
+          className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+          style={{ fontSize: 10, letterSpacing: "0.14em" }}
+        >
+          {Icon && <Icon style={{ width: 12, height: 12 }} />}
+          {kicker}
+        </div>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+        >
+          {title}
+        </div>
+        {description && (
+          <p className="text-sm text-muted-foreground mt-1.5" style={{ maxWidth: 640 }}>
+            {description}
+          </p>
+        )}
+      </div>
+      {action && <div className="shrink-0">{action}</div>}
+    </div>
+  );
+}
+
+/** Mono uppercase label — sits over inputs in admin forms. */
+function AdminFieldLabel({
+  children,
+  htmlFor,
+}: {
+  children: React.ReactNode;
+  htmlFor?: string;
+}) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      className="font-mono uppercase text-muted-foreground block mb-1.5"
+      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+    >
+      {children}
+    </label>
+  );
+}
+
+/** Warm-paper pill — request/status indicator, replaces colored badges. */
+function AdminStatusPill({
+  kind,
+  children,
+  icon: Icon,
+}: {
+  kind: "pending" | "approved" | "denied" | "inactive" | "neutral";
+  children: React.ReactNode;
+  icon?: React.ComponentType<{ style?: React.CSSProperties }>;
+}) {
+  const palette: Record<typeof kind, { bg: string; border: string; color: string }> = {
+    pending: {
+      bg: "var(--amber-soft)",
+      border: "color-mix(in oklch, var(--amber), transparent 50%)",
+      color: "color-mix(in oklch, var(--amber), var(--ink) 35%)",
+    },
+    approved: {
+      bg: "var(--sage-soft)",
+      border: "color-mix(in oklch, var(--sage), transparent 55%)",
+      color: "color-mix(in oklch, var(--sage), var(--ink) 25%)",
+    },
+    denied: {
+      bg: "var(--warm-red-soft)",
+      border: "color-mix(in oklch, var(--destructive), transparent 55%)",
+      color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+    },
+    inactive: {
+      bg: "var(--paper-2)",
+      border: "var(--border)",
+      color: "var(--muted-foreground)",
+    },
+    neutral: {
+      bg: "var(--card)",
+      border: "var(--border)",
+      color: "var(--foreground)",
+    },
+  };
+  const p = palette[kind];
+  return (
+    <span
+      className="font-mono uppercase inline-flex items-center gap-1 rounded-sm px-2 py-1"
+      style={{
+        fontSize: 9,
+        letterSpacing: "0.1em",
+        background: p.bg,
+        border: `1px solid ${p.border}`,
+        color: p.color,
+      }}
+    >
+      {Icon && <Icon style={{ width: 10, height: 10 }} />}
+      {children}
+    </span>
+  );
+}
+
+/** Warm-paper role indicator — replaces the colored shadcn Badge. */
+function AdminRolePill({ role }: { role: string }) {
+  const label = ROLE_CONFIG[role]?.label || role;
+  return <AdminStatusPill kind="neutral">{label}</AdminStatusPill>;
+}
+
+/** Hairline-separated row — document-like layout used for user/request lists. */
+function AdminListRow({
+  children,
+  faded = false,
+}: {
+  children: React.ReactNode;
+  faded?: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center gap-4 px-4 py-3 border-b border-border last:border-b-0"
+      style={{ opacity: faded ? 0.55 : 1 }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Role-definition row — two-column grid with per-role capability
+// matrix. Uses ✓/✕ glyphs with sage/muted coloring instead of the
+// prior colored pills so the overall page stays document-like.
+// ─────────────────────────────────────────────────────────────
+const ROLE_CAPABILITIES: Record<string, Array<[boolean, string]>> = {
+  viewer: [
+    [true, "View dashboard & metrics"],
+    [true, "View call transcripts"],
+    [true, "View reports & charts"],
+    [true, "View employee profiles"],
+    [true, "Search calls"],
+    [true, "Play audio recordings"],
+    [false, "Upload calls"],
+    [false, "Edit analysis"],
+    [false, "Delete calls"],
+    [false, "Manage employees"],
+  ],
+  manager: [
+    [true, "All Viewer permissions"],
+    [true, "Upload call recordings"],
+    [true, "Assign calls to employees"],
+    [true, "Edit call analysis"],
+    [true, "Manage employees"],
+    [true, "Export reports"],
+    [true, "Delete calls"],
+    [false, "Manage users"],
+    [false, "Approve access requests"],
+    [false, "Bulk import"],
+  ],
+  admin: [
+    [true, "All Manager permissions"],
+    [true, "Manage users & roles"],
+    [true, "Approve/deny access requests"],
+    [true, "Bulk CSV import"],
+    [true, "System configuration"],
+    [true, "Full API access"],
+  ],
+};
+
+function RoleDefinitionRow({
+  role,
+}: {
+  role: { value: string; label: string; description: string };
+}) {
+  const caps = ROLE_CAPABILITIES[role.value] || [];
+  return (
+    <div className="flex gap-6 p-6 border-b border-border last:border-b-0">
+      <div className="shrink-0" style={{ width: 200 }}>
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.14em" }}
+        >
+          {role.value}
+        </div>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+        >
+          {role.label}
+        </div>
+        <p className="text-xs text-muted-foreground mt-2" style={{ lineHeight: 1.5 }}>
+          {role.description}
+        </p>
+      </div>
+      <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+        {caps.map(([allowed, label], i) => (
+          <div
+            key={i}
+            className="flex items-center gap-2 text-sm"
+            style={{ color: allowed ? "var(--foreground)" : "var(--muted-foreground)" }}
+          >
+            {allowed ? (
+              <CheckCircle
+                style={{ width: 13, height: 13, color: "var(--sage)", flexShrink: 0 }}
+                weight="bold"
+              />
+            ) : (
+              <XCircle
+                style={{ width: 13, height: 13, color: "var(--muted-foreground)", flexShrink: 0, opacity: 0.5 }}
+              />
+            )}
+            <span style={{ textDecoration: allowed ? "none" : "line-through", textDecorationColor: "color-mix(in oklch, var(--muted-foreground), transparent 60%)" }}>
+              {label}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Warm-paper error state used by tab bodies when a query fails. */
+function AccessRequestsErrorState({ message }: { message: string }) {
+  return (
+    <div
+      className="flex items-start gap-3 rounded-sm"
+      style={{
+        background: "var(--warm-red-soft)",
+        border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+        borderLeft: "3px solid var(--destructive)",
+        padding: "14px 18px",
+      }}
+    >
+      <Warning style={{ width: 16, height: 16, color: "var(--destructive)", marginTop: 1, flexShrink: 0 }} />
+      <div>
+        <div
+          className="font-mono uppercase"
+          style={{ fontSize: 10, letterSpacing: "0.12em", color: "var(--destructive)" }}
+        >
+          Load failed
+        </div>
+        <p className="text-sm text-foreground mt-1">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+/** Warm-paper inline panel (create/edit forms) — bordered paper-card shell. */
+function AdminPanel({
+  children,
+  tone = "default",
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "accent";
+}) {
+  return (
+    <div
+      className="rounded-sm border bg-card"
+      style={{
+        borderColor:
+          tone === "accent"
+            ? "color-mix(in oklch, var(--accent), transparent 60%)"
+            : "var(--border)",
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -1115,6 +1610,7 @@ function AdminTab({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={`font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors ${
         active
           ? "bg-foreground text-background border border-foreground"

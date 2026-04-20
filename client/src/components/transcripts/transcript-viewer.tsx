@@ -337,14 +337,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const getSentimentColor = (sentiment?: string) => {
-    switch (sentiment) {
-      case 'positive': return 'sentiment-positive';
-      case 'negative': return 'sentiment-negative';
-      default: return 'sentiment-neutral';
-    }
-  };
-
   interface TranscriptSegment {
     start: number;
     end: number;
@@ -587,7 +579,25 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           ? findGlobalMatchIndex(searchMatches, segmentIndex, partStart)
           : -1;
         const isActive = globalIdx !== -1 && globalIdx === searchMatchIdx;
-        return <mark key={i} className={`rounded px-0.5 ${isActive ? "bg-yellow-400 text-black" : "bg-yellow-200 dark:bg-yellow-700 text-foreground"}`}>{part}</mark>;
+        return (
+          <mark
+            key={i}
+            className="rounded-sm px-0.5"
+            style={
+              isActive
+                ? {
+                    background: "var(--amber)",
+                    color: "color-mix(in oklch, var(--amber), var(--ink) 75%)",
+                  }
+                : {
+                    background: "var(--amber-soft)",
+                    color: "var(--foreground)",
+                  }
+            }
+          >
+            {part}
+          </mark>
+        );
       }
       if (isTopicMatch) {
         return <mark key={i} className="bg-primary/15 text-primary rounded px-0.5">{part}</mark>;
@@ -840,8 +850,18 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
         <div className="space-y-4">
           {/* Manual Edit Indicator */}
           {call.analysis?.manualEdits && Array.isArray(call.analysis.manualEdits) && (call.analysis.manualEdits as unknown[]).length > 0 && (
-            <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 border border-amber-200 dark:border-amber-900">
-              <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 text-xs font-medium mb-1">
+            <div
+              className="rounded-sm p-3"
+              style={{
+                background: "var(--amber-soft)",
+                border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                borderLeft: "3px solid var(--amber)",
+              }}
+            >
+              <div
+                className="flex items-center gap-1.5 text-xs font-medium mb-1"
+                style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+              >
                 <ClockCounterClockwise className="w-3.5 h-3.5" />
                 Manually Edited ({(call.analysis.manualEdits as unknown[]).length} edit{(call.analysis.manualEdits as unknown[]).length > 1 ? "s" : ""})
               </div>
@@ -892,15 +912,33 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               ? "the transcript was empty or under 10 characters"
               : "the transcript confidence was below 60%";
             return (
-              <div role="alert" className="rounded-lg p-4 border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900">
-                <h4 className="font-semibold mb-1 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
-                  <Warning className="w-4 h-4" /> AI analysis skipped
+              <div
+                role="alert"
+                className="rounded-sm p-4"
+                style={{
+                  background: "var(--amber-soft)",
+                  border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                  borderLeft: "3px solid var(--amber)",
+                  color: "color-mix(in oklch, var(--amber), var(--ink) 25%)",
+                }}
+              >
+                <h4
+                  className="font-semibold mb-1 flex items-center gap-1.5"
+                  style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+                >
+                  <Warning className="w-4 h-4" weight="fill" /> AI analysis skipped
                 </h4>
-                <p className="text-sm text-amber-900 dark:text-amber-200">
-                  The AI scoring step was not run on this call because {reason}. Any score, summary, or feedback shown below is a placeholder — treat them as unavailable rather than as AI-generated insights.
+                <p className="text-sm">
+                  The AI scoring step was not run on this call because {reason}. Any score,
+                  summary, or feedback shown below is a placeholder — treat them as unavailable
+                  rather than as AI-generated insights.
                 </p>
-                <p className="text-xs text-amber-800 dark:text-amber-300 mt-2">
-                  Re-analysis won't help: it re-transcribes the same audio and will hit the same gate. Re-upload higher-quality audio instead.
+                <p
+                  className="text-xs mt-2"
+                  style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 35%)" }}
+                >
+                  Re-analysis won't help: it re-transcribes the same audio and will hit the same
+                  gate. Re-upload higher-quality audio instead.
                 </p>
               </div>
             );
@@ -911,17 +949,28 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             const flags = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
             const hasExceptional = flags.includes("exceptional_call");
             const hasBad = flags.some(f => f === "low_score" || f.startsWith("agent_misconduct"));
-            const bgClass = hasExceptional && !hasBad
-              ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900"
-              : "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900";
-            const headerClass = hasExceptional && !hasBad
-              ? "text-emerald-700 dark:text-emerald-400"
-              : "text-red-700 dark:text-red-400";
-            const HeaderIcon = hasExceptional && !hasBad ? Trophy : Warning;
+            const positive = hasExceptional && !hasBad;
+            const stripeColor = positive ? "var(--sage)" : "var(--destructive)";
+            const bgColor = positive ? "var(--sage-soft)" : "var(--warm-red-soft)";
+            const headerColor = positive
+              ? "color-mix(in oklch, var(--sage), var(--ink) 20%)"
+              : "color-mix(in oklch, var(--destructive), var(--ink) 20%)";
+            const HeaderIcon = positive ? Trophy : Warning;
             return (
-              <div role="alert" className={`rounded-lg p-4 border ${bgClass}`}>
-                <h4 className={`font-semibold mb-2 flex items-center gap-1.5 ${headerClass}`}>
-                  <HeaderIcon className="w-4 h-4" /> Flags
+              <div
+                role="alert"
+                className="rounded-sm p-4"
+                style={{
+                  background: bgColor,
+                  border: `1px solid color-mix(in oklch, ${stripeColor}, transparent 55%)`,
+                  borderLeft: `3px solid ${stripeColor}`,
+                }}
+              >
+                <h4
+                  className="font-semibold mb-2 flex items-center gap-1.5"
+                  style={{ color: headerColor }}
+                >
+                  <HeaderIcon className="w-4 h-4" weight="fill" /> Flags
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
                   {flags.map((flag: string, i: number) => {
@@ -929,13 +978,41 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     const isMedicare = flag === "medicare_call";
                     const isMisconduct = flag.startsWith("agent_misconduct");
                     const isLow = flag === "low_score";
-                    const label = isExceptional ? "Exceptional Call" : isMedicare ? "Medicare Call" : isMisconduct ? flag.replace("agent_misconduct:", "Misconduct: ") : isLow ? "Low Score" : flag;
-                    const color = isExceptional ? "bg-emerald-200 text-emerald-900" : isMisconduct ? "bg-red-200 text-red-900" : isMedicare ? "bg-blue-200 text-blue-900" : "bg-amber-200 text-amber-900";
+                    const label = isExceptional
+                      ? "Exceptional Call"
+                      : isMedicare
+                      ? "Medicare Call"
+                      : isMisconduct
+                      ? flag.replace("agent_misconduct:", "Misconduct: ")
+                      : isLow
+                      ? "Low Score"
+                      : flag;
+                    const tone = isExceptional
+                      ? { bg: "var(--sage-soft)", border: "color-mix(in oklch, var(--sage), transparent 55%)", color: "var(--sage)" }
+                      : isMisconduct
+                      ? { bg: "var(--warm-red-soft)", border: "color-mix(in oklch, var(--destructive), transparent 55%)", color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)" }
+                      : isMedicare
+                      ? { bg: "var(--copper-soft)", border: "color-mix(in oklch, var(--accent), transparent 55%)", color: "var(--accent)" }
+                      : { bg: "var(--amber-soft)", border: "color-mix(in oklch, var(--amber), transparent 50%)", color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" };
                     return (
-                      <Badge key={i} className={`${color} text-xs`}>
-                        {isExceptional && <Trophy className="w-3 h-3 mr-1 inline" />}
+                      <span
+                        key={i}
+                        className="font-mono uppercase inline-flex items-center rounded-sm"
+                        style={{
+                          fontSize: 10,
+                          letterSpacing: "0.1em",
+                          padding: "2px 8px",
+                          background: tone.bg,
+                          border: `1px solid ${tone.border}`,
+                          color: tone.color,
+                          fontWeight: 500,
+                        }}
+                      >
+                        {isExceptional && (
+                          <Trophy className="w-3 h-3 mr-1 inline" weight="fill" />
+                        )}
                         {label}
-                      </Badge>
+                      </span>
                     );
                   })}
                 </div>
@@ -967,25 +1044,72 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             const confidence = parseFloat(typeof raw === "string" ? raw : String(raw));
             if (isNaN(confidence)) return null;
             const isLow = confidence < 0.7;
+            const isHigh = confidence >= 0.85;
             const pct = (confidence * 100).toFixed(0);
             const factors = (call.analysis.confidenceFactors && typeof call.analysis.confidenceFactors === "object")
               ? call.analysis.confidenceFactors as { transcriptConfidence?: number; wordCount?: number; callDurationSeconds?: number; callDuration?: number } : undefined;
-            const barColor = isLow ? "from-yellow-500 to-amber-400" : confidence >= 0.85 ? "from-green-500 to-emerald-400" : "from-blue-500 to-cyan-400";
-            const bgClass = isLow
-              ? "bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-900"
-              : "bg-muted";
+            const barColor = isLow
+              ? "var(--amber)"
+              : isHigh
+              ? "var(--sage)"
+              : "var(--accent)";
+            const panelStyle = isLow
+              ? {
+                  background: "var(--amber-soft)",
+                  border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                  borderLeft: "3px solid var(--amber)",
+                }
+              : { background: "var(--paper-2)" };
+            const headerColor = isLow
+              ? "color-mix(in oklch, var(--amber), var(--ink) 30%)"
+              : "var(--foreground)";
             return (
-              <div className={`rounded-lg p-4 ${bgClass}`}>
-                <h4 className={`font-semibold mb-2 flex items-center gap-1.5 ${isLow ? "text-yellow-700 dark:text-yellow-400" : "text-foreground"}`}>
+              <div className="rounded-sm p-4" style={panelStyle}>
+                <h4
+                  className="font-semibold mb-2 flex items-center gap-1.5"
+                  style={{ color: headerColor }}
+                >
                   <ShieldStar className="w-4 h-4" /> AI Confidence
                 </h4>
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <span className={`text-lg font-bold ${isLow ? "text-yellow-600 dark:text-yellow-400" : "text-foreground"}`}>{pct}%</span>
-                    {isLow && <Badge className="bg-yellow-200 text-yellow-900 dark:bg-yellow-900 dark:text-yellow-300 text-xs">Needs Review</Badge>}
+                    <span
+                      className="font-display font-medium tabular-nums"
+                      style={{
+                        fontSize: 20,
+                        lineHeight: 1,
+                        color: barColor,
+                        letterSpacing: "-0.2px",
+                      }}
+                    >
+                      {pct}%
+                    </span>
+                    {isLow && (
+                      <span
+                        className="font-mono uppercase inline-flex items-center rounded-sm"
+                        style={{
+                          fontSize: 10,
+                          letterSpacing: "0.1em",
+                          padding: "2px 8px",
+                          background: "color-mix(in oklch, var(--amber), var(--paper) 50%)",
+                          border:
+                            "1px solid color-mix(in oklch, var(--amber), transparent 45%)",
+                          color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+                          fontWeight: 500,
+                        }}
+                      >
+                        Needs review
+                      </span>
+                    )}
                   </div>
-                  <div className="w-full h-2 bg-muted-foreground/20 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full bg-gradient-to-r ${barColor}`} style={{ width: `${pct}%` }} />
+                  <div
+                    className="w-full h-2 rounded-sm overflow-hidden"
+                    style={{ background: "var(--paper-2)" }}
+                  >
+                    <div
+                      className="h-full rounded-sm"
+                      style={{ width: `${pct}%`, background: barColor }}
+                    />
                   </div>
                   {factors && (
                     <div className="text-xs text-muted-foreground space-y-0.5 mt-2">
@@ -1001,7 +1125,10 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                     </div>
                   )}
                   {isLow && (
-                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                    <p
+                      className="text-xs mt-1"
+                      style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+                    >
                       This analysis may be less reliable. Consider manual review.
                     </p>
                   )}
@@ -1066,10 +1193,41 @@ function ScoreBreakdown({ call }: { call: CallWithDetails }) {
     ? ((analysis.confidenceFactors as Record<string, unknown>).ragSources as Array<{ title?: string; source?: string }> | undefined)
     : undefined;
 
-  const flagLabels: Record<string, { label: string; color: string }> = {
-    low_confidence: { label: "Low transcript confidence", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400" },
-    prompt_injection_detected: { label: "Possible prompt injection in transcript", color: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" },
-    awaiting_batch_analysis: { label: "Awaiting batch analysis", color: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400" },
+  // Warm-paper pill tone per flag: amber for ambiguous quality (low
+  // confidence), destructive for safety (prompt injection), accent for
+  // deferred/in-progress states (awaiting batch).
+  type PillTone = { bg: string; border: string; color: string };
+  const pillTone: Record<"amber" | "destructive" | "accent" | "orange" | "neutral", PillTone> = {
+    amber: {
+      bg: "var(--amber-soft)",
+      border: "color-mix(in oklch, var(--amber), transparent 50%)",
+      color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+    },
+    destructive: {
+      bg: "var(--warm-red-soft)",
+      border: "color-mix(in oklch, var(--destructive), transparent 55%)",
+      color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+    },
+    accent: {
+      bg: "var(--copper-soft)",
+      border: "color-mix(in oklch, var(--accent), transparent 55%)",
+      color: "var(--accent)",
+    },
+    orange: {
+      bg: "var(--amber-soft)",
+      border: "color-mix(in oklch, var(--amber), transparent 45%)",
+      color: "color-mix(in oklch, var(--amber), var(--warm-red) 40%)",
+    },
+    neutral: {
+      bg: "var(--paper-2)",
+      border: "var(--border)",
+      color: "var(--muted-foreground)",
+    },
+  };
+  const flagLabels: Record<string, { label: string; tone: keyof typeof pillTone }> = {
+    low_confidence: { label: "Low transcript confidence", tone: "amber" },
+    prompt_injection_detected: { label: "Possible prompt injection in transcript", tone: "destructive" },
+    awaiting_batch_analysis: { label: "Awaiting batch analysis", tone: "accent" },
   };
 
   const hasAnything = flags.length > 0 || (ragSources && ragSources.length > 0) || analysis.subScores;
@@ -1098,15 +1256,27 @@ function ScoreBreakdown({ call }: { call: CallWithDetails }) {
                   const known = flagLabels[flag];
                   // output_anomaly:* flags carry a suffix like "invalid_feedback_timestamps:3"
                   const isOutputAnomaly = flag.startsWith("output_anomaly:");
+                  const tone = known
+                    ? pillTone[known.tone]
+                    : isOutputAnomaly
+                    ? pillTone.orange
+                    : pillTone.neutral;
                   return (
-                    <Badge
+                    <span
                       key={`${flag}-${i}`}
-                      className={known?.color ?? (isOutputAnomaly
-                        ? "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400"
-                        : "bg-muted-foreground/10 text-foreground")}
+                      className="font-mono uppercase inline-flex items-center rounded-sm"
+                      style={{
+                        fontSize: 10,
+                        letterSpacing: "0.1em",
+                        padding: "2px 8px",
+                        background: tone.bg,
+                        border: `1px solid ${tone.border}`,
+                        color: tone.color,
+                        fontWeight: 500,
+                      }}
                     >
                       {known?.label ?? flag}
-                    </Badge>
+                    </span>
                   );
                 })}
               </div>

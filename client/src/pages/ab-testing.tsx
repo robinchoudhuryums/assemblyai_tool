@@ -1,18 +1,26 @@
 import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { queryClient, getCsrfToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CheckCircle, FileAudio, Flask, SpinnerGap, Trash, UploadSimple, WarningCircle } from "@phosphor-icons/react";
+import {
+  CheckCircle,
+  FileAudio,
+  Flask,
+  SpinnerGap,
+  Trash,
+  UploadSimple,
+  Warning,
+  WarningCircle,
+  type Icon,
+} from "@phosphor-icons/react";
 import { BEDROCK_MODEL_PRESETS, CALL_CATEGORIES, type ABTest } from "@shared/schema";
 import { TestResultView } from "@/components/ab-testing/ab-test-components";
+
+type ABTabView = "new" | "results" | "aggregate";
 
 export default function ABTestingPage() {
   const { toast } = useToast();
@@ -23,6 +31,7 @@ export default function ABTestingPage() {
   const [callCategory, setCallCategory] = useState("");
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [tab, setTab] = useState<ABTabView>("new");
 
   const { data: tests = [], isLoading, error: testsError } = useQuery<ABTest[]>({
     queryKey: ["/api/ab-tests"],
@@ -107,39 +116,85 @@ export default function ABTestingPage() {
   )?.label || "Claude Sonnet 4.6";
 
   return (
-    <div className="min-h-screen" data-testid="ab-testing-page">
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center gap-3">
-          <Flask className="w-6 h-6 text-primary" />
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Model A/B Testing</h2>
-            <p className="text-muted-foreground">Compare Bedrock model analysis quality and cost — test calls are excluded from all metrics</p>
-          </div>
+    <div className="min-h-screen bg-background text-foreground" data-testid="ab-testing-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">A/B testing</span>
+        </nav>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          <Flask style={{ width: 12, height: 12, color: "var(--accent)" }} />
+          Configuration
         </div>
-      </header>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{
+            fontSize: "clamp(24px, 3vw, 30px)",
+            letterSpacing: "-0.6px",
+            lineHeight: 1.15,
+          }}
+        >
+          Model A/B testing
+        </div>
+        <p className="text-muted-foreground mt-2" style={{ fontSize: 14, maxWidth: 620 }}>
+          Compare Bedrock model analysis quality and cost. Test calls are excluded from all
+          employee, department, and dashboard metrics (INV-34/INV-35).
+        </p>
+      </div>
 
-      <div className="p-6">
-        <Tabs defaultValue="new" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="new">New Test</TabsTrigger>
-            <TabsTrigger value="results">
-              Past Tests {tests.length > 0 && <Badge variant="secondary" className="ml-1.5 text-xs">{tests.length}</Badge>}
-            </TabsTrigger>
-            <TabsTrigger value="aggregate">Promote Winner</TabsTrigger>
-          </TabsList>
+      {/* Tab bar */}
+      <div className="flex gap-2 px-7 py-3 bg-background border-b border-border flex-wrap">
+        <ABTab active={tab === "new"} onClick={() => setTab("new")} label="New test" />
+        <ABTab
+          active={tab === "results"}
+          onClick={() => setTab("results")}
+          label="Past tests"
+          badge={tests.length || undefined}
+        />
+        <ABTab
+          active={tab === "aggregate"}
+          onClick={() => setTab("aggregate")}
+          label="Promote winner"
+        />
+      </div>
 
-          <TabsContent value="new" className="space-y-4">
+      <main className="px-7 py-6 space-y-6">
+        {tab === "new" && (
+          <div className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* UploadSimple card */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>UploadSimple Test Call</CardTitle>
-                  <CardDescription>This call will NOT be counted in employee or department metrics</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+              {/* Upload panel */}
+              <ABPanel
+                kicker="Step 1"
+                icon={UploadSimple}
+                title="Upload test call"
+                description="This call will NOT be counted in employee, department, or dashboard metrics."
+              >
+                <div className="space-y-4">
                   {/* File drop zone */}
                   <div
-                    className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                    className="rounded-sm p-6 text-center cursor-pointer transition-colors"
+                    style={{
+                      border: "2px dashed var(--border)",
+                      background: selectedFile ? "var(--copper-soft)" : "transparent",
+                    }}
                     onClick={() => fileInputRef.current?.click()}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={handleFileDrop}
@@ -153,165 +208,240 @@ export default function ABTestingPage() {
                     />
                     {selectedFile ? (
                       <div className="flex items-center justify-center gap-2">
-                        <FileAudio className="w-5 h-5 text-primary" />
-                        <span className="text-sm font-medium">{selectedFile.name}</span>
-                        <span className="text-xs text-muted-foreground">({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)</span>
+                        <FileAudio
+                          style={{ width: 18, height: 18, color: "var(--accent)" }}
+                        />
+                        <span className="text-sm font-medium text-foreground">
+                          {selectedFile.name}
+                        </span>
+                        <span
+                          className="font-mono text-muted-foreground"
+                          style={{ fontSize: 11, letterSpacing: "0.02em" }}
+                        >
+                          ({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)
+                        </span>
                       </div>
                     ) : (
                       <div>
-                        <UploadSimple className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                        <p className="text-sm text-muted-foreground">Click or drag audio file here</p>
-                        <p className="text-xs text-muted-foreground mt-1">MP3, WAV, M4A, MP4, FLAC, OGG</p>
+                        <UploadSimple
+                          style={{
+                            width: 32,
+                            height: 32,
+                            margin: "0 auto",
+                            color: "var(--muted-foreground)",
+                          }}
+                        />
+                        <p className="text-sm text-foreground mt-2">
+                          Click or drag audio file here
+                        </p>
+                        <p
+                          className="font-mono uppercase text-muted-foreground mt-1"
+                          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+                        >
+                          MP3 · WAV · M4A · MP4 · FLAC · OGG
+                        </p>
                       </div>
                     )}
                   </div>
 
                   {/* Call category */}
                   <div>
-                    <Label className="text-sm">Call Category (optional)</Label>
+                    <ABFieldLabel>Call category (optional)</ABFieldLabel>
                     <Select value={callCategory} onValueChange={setCallCategory}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Select category..." />
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="Select category…" />
                       </SelectTrigger>
                       <SelectContent>
                         {CALL_CATEGORIES.map((cat) => (
-                          <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                          <SelectItem key={cat.value} value={cat.value}>
+                            {cat.label}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </ABPanel>
 
-              {/* Model selection card */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Model Selection</CardTitle>
-                  <CardDescription>Baseline: <span className="font-mono text-xs">{currentModel}</span> (your current production model)</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
+              {/* Model selection panel */}
+              <ABPanel
+                kicker="Step 2"
+                icon={Flask}
+                title="Model selection"
+                description={
+                  <>
+                    Baseline:{" "}
+                    <span
+                      className="font-mono rounded-sm"
+                      style={{
+                        fontSize: 11,
+                        letterSpacing: "0.02em",
+                        padding: "2px 6px",
+                        background: "var(--paper-2)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {currentModel}
+                    </span>{" "}
+                    (your current production model)
+                  </>
+                }
+              >
+                <div className="space-y-4">
                   <div>
-                    <Label className="text-sm">Test Model</Label>
+                    <ABFieldLabel>Test model</ABFieldLabel>
                     <Select value={testModel} onValueChange={setTestModel}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Choose a model to compare..." />
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="Choose a model to compare…" />
                       </SelectTrigger>
                       <SelectContent>
                         {BEDROCK_MODEL_PRESETS.map((model) => (
                           <SelectItem key={model.value} value={model.value}>
                             <div className="flex items-center gap-2">
                               <span>{model.label}</span>
-                              <span className="text-xs text-muted-foreground">{model.cost}</span>
+                              <span
+                                className="font-mono text-muted-foreground"
+                                style={{ fontSize: 10, letterSpacing: "0.02em" }}
+                              >
+                                {model.cost}
+                              </span>
                             </div>
                           </SelectItem>
                         ))}
-                        <SelectItem value="custom">Custom Model ID...</SelectItem>
+                        <SelectItem value="custom">Custom model ID…</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
 
                   {testModel === "custom" && (
                     <div>
-                      <Label className="text-sm">Custom Bedrock Model ID</Label>
+                      <ABFieldLabel>Custom Bedrock model ID</ABFieldLabel>
                       <Input
-                        className="mt-1 font-mono text-sm"
-                        placeholder="e.g., anthropic.claude-3-haiku-20240307"
+                        className="font-mono text-sm"
+                        placeholder="e.g. anthropic.claude-3-haiku-20240307"
                         value={customModel}
                         onChange={(e) => setCustomModel(e.target.value)}
                       />
                     </div>
                   )}
 
-                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg">
-                    <p className="text-xs text-amber-800 dark:text-amber-300">
-                      <strong>Cost note:</strong> Each test uses 1 AssemblyAI transcription + 2 Bedrock API calls (one per model).
-                      Haiku models are significantly cheaper than Sonnet.
-                    </p>
+                  {/* Cost note — amber-stripe banner */}
+                  <div
+                    className="rounded-sm flex items-start gap-2"
+                    style={{
+                      background: "var(--amber-soft)",
+                      border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                      borderLeft: "3px solid var(--amber)",
+                      padding: "10px 12px",
+                      fontSize: 12,
+                      lineHeight: 1.55,
+                      color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+                    }}
+                  >
+                    <Warning
+                      style={{ width: 14, height: 14, marginTop: 1, flexShrink: 0 }}
+                    />
+                    <span>
+                      <span
+                        className="font-mono uppercase"
+                        style={{ fontSize: 10, letterSpacing: "0.1em" }}
+                      >
+                        Cost note
+                      </span>
+                      <br />
+                      Each test uses 1 AssemblyAI transcription + 2 Bedrock API calls (one per
+                      model). Haiku models are significantly cheaper than Sonnet.
+                    </span>
                   </div>
 
                   <Button
                     className="w-full"
-                    disabled={!selectedFile || !testModel || (testModel === "custom" && !customModel) || uploadMutation.isPending}
+                    disabled={
+                      !selectedFile ||
+                      !testModel ||
+                      (testModel === "custom" && !customModel) ||
+                      uploadMutation.isPending
+                    }
                     onClick={() => uploadMutation.mutate()}
                   >
                     {uploadMutation.isPending ? (
                       <>
                         <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
-                        Uploading...
+                        Uploading…
                       </>
                     ) : (
                       <>
                         <Flask className="w-4 h-4 mr-2" />
-                        Start A/B Test
+                        Start A/B test
                       </>
                     )}
                   </Button>
-                </CardContent>
-              </Card>
+                </div>
+              </ABPanel>
             </div>
-          </TabsContent>
+          </div>
+        )}
 
-          <TabsContent value="results" className="space-y-4">
+        {tab === "results" && (
+          <div className="space-y-4">
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
-                <SpinnerGap className="w-6 h-6 animate-spin text-muted-foreground" />
+                <SpinnerGap
+                  className="animate-spin"
+                  style={{ width: 22, height: 22, color: "var(--muted-foreground)" }}
+                />
               </div>
             ) : testsError ? (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground">
-                  <p className="font-medium">Failed to load A/B tests</p>
-                  <p className="text-sm">{testsError.message}</p>
-                </CardContent>
-              </Card>
+              <ABErrorBanner message={testsError.message} />
             ) : tests.length === 0 ? (
-              <Card>
-                <CardContent className="py-12 text-center">
-                  <Flask className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                  <p className="text-muted-foreground">No A/B tests yet. UploadSimple a call to get started.</p>
-                </CardContent>
-              </Card>
+              <ABPanel kicker="Empty" icon={Flask}>
+                <div className="text-center py-10">
+                  <Flask
+                    style={{
+                      width: 36,
+                      height: 36,
+                      margin: "0 auto",
+                      color: "var(--muted-foreground)",
+                    }}
+                  />
+                  <p
+                    className="font-mono uppercase text-muted-foreground mt-3"
+                    style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                  >
+                    No A/B tests yet
+                  </p>
+                  <p className="text-sm text-foreground mt-2">
+                    Upload a call from the New test tab to get started.
+                  </p>
+                </div>
+              </ABPanel>
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {/* Test list */}
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium text-muted-foreground px-1">All Tests</h3>
-                  {tests.map((test) => {
-                    const testModelLabel = BEDROCK_MODEL_PRESETS.find(m => m.value === test.testModel)?.label || test.testModel;
-                    const isSelected = selectedTestId === test.id;
-                    return (
-                      <Card
-                        key={test.id}
-                        className={`cursor-pointer transition-colors hover:border-primary/50 ${isSelected ? "border-primary bg-primary/5" : ""}`}
-                        onClick={() => setSelectedTestId(test.id)}
-                      >
-                        <CardContent className="p-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm font-medium truncate flex-1">{test.fileName}</span>
-                            <div className="flex items-center gap-1">
-                              {test.status === "processing" || test.status === "analyzing" ? (
-                                <SpinnerGap className="w-3.5 h-3.5 animate-spin text-blue-500" />
-                              ) : test.status === "completed" ? (
-                                <CheckCircle className="w-3.5 h-3.5 text-green-500" />
-                              ) : (
-                                <WarningCircle className="w-3.5 h-3.5 text-red-500" />
-                              )}
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground truncate">vs {testModelLabel}</p>
-                          <div className="flex items-center justify-between mt-1">
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(test.createdAt || "").toLocaleDateString()}
-                            </span>
-                            {test.status === "completed" && test.baselineAnalysis && test.testAnalysis && !test.baselineAnalysis.error && !test.testAnalysis.error && (
-                              <span className="text-xs font-medium">
-                                {(test.baselineAnalysis.performance_score as number | undefined)?.toFixed(1)} vs {(test.testAnalysis.performance_score as number | undefined)?.toFixed(1)}
-                              </span>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
+                <div>
+                  <div
+                    className="font-mono uppercase text-muted-foreground px-1 mb-2"
+                    style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                  >
+                    All tests · {tests.length}
+                  </div>
+                  <div className="space-y-2">
+                    {tests.map((test) => {
+                      const testModelLabel =
+                        BEDROCK_MODEL_PRESETS.find((m) => m.value === test.testModel)?.label ||
+                        test.testModel;
+                      const isSelected = selectedTestId === test.id;
+                      return (
+                        <ABTestRow
+                          key={test.id}
+                          test={test}
+                          testModelLabel={testModelLabel}
+                          selected={isSelected}
+                          onSelect={() => setSelectedTestId(test.id)}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Detail view */}
@@ -321,16 +451,36 @@ export default function ABTestingPage() {
                       <div className="flex justify-end">
                         {deleteConfirmId === selectedTest.id ? (
                           <div className="flex items-center gap-2">
-                            <span className="text-xs text-red-600">Delete this test?</span>
+                            <span
+                              className="font-mono uppercase"
+                              style={{
+                                fontSize: 10,
+                                letterSpacing: "0.12em",
+                                color: "var(--destructive)",
+                              }}
+                            >
+                              Delete this test?
+                            </span>
                             <Button
-                              variant="destructive"
+                              variant="default"
                               size="sm"
-                              onClick={() => { deleteMutation.mutate(selectedTest.id); setDeleteConfirmId(null); }}
+                              onClick={() => {
+                                deleteMutation.mutate(selectedTest.id);
+                                setDeleteConfirmId(null);
+                              }}
                               disabled={deleteMutation.isPending}
+                              style={{
+                                background: "var(--destructive)",
+                                color: "var(--paper)",
+                              }}
                             >
                               Confirm
                             </Button>
-                            <Button variant="outline" size="sm" onClick={() => setDeleteConfirmId(null)}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeleteConfirmId(null)}
+                            >
                               Cancel
                             </Button>
                           </div>
@@ -338,46 +488,66 @@ export default function ABTestingPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="text-red-600 hover:text-red-700"
                             onClick={() => setDeleteConfirmId(selectedTest.id)}
                             disabled={deleteMutation.isPending}
+                            style={{
+                              color: "var(--destructive)",
+                              borderColor:
+                                "color-mix(in oklch, var(--destructive), transparent 60%)",
+                            }}
                           >
-                            <Trash className="w-3.5 h-3.5 mr-1" />
-                            Delete Test
+                            <Trash className="w-3.5 h-3.5 mr-1" /> Delete test
                           </Button>
                         )}
                       </div>
-                      {selectedTest.status === "processing" || selectedTest.status === "analyzing" ? (
-                        <Card>
-                          <CardContent className="py-12 text-center">
-                            <SpinnerGap className="w-8 h-8 animate-spin text-primary mx-auto mb-3" />
-                            <p className="text-muted-foreground">
-                              {selectedTest.status === "processing" ? "Transcribing audio..." : "Running analysis with both models..."}
+                      {selectedTest.status === "processing" ||
+                      selectedTest.status === "analyzing" ? (
+                        <ABPanel kicker="In progress" icon={SpinnerGap}>
+                          <div className="text-center py-10">
+                            <SpinnerGap
+                              className="animate-spin"
+                              style={{
+                                width: 32,
+                                height: 32,
+                                margin: "0 auto",
+                                color: "var(--accent)",
+                              }}
+                            />
+                            <p
+                              className="font-mono uppercase text-muted-foreground mt-3"
+                              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                            >
+                              {selectedTest.status === "processing"
+                                ? "Transcribing audio…"
+                                : "Running both models…"}
                             </p>
-                            <p className="text-xs text-muted-foreground mt-1">This typically takes 2-4 minutes</p>
-                          </CardContent>
-                        </Card>
+                            <p className="text-sm text-foreground mt-2">
+                              This typically takes 2–4 minutes.
+                            </p>
+                          </div>
+                        </ABPanel>
                       ) : (
                         <TestResultView test={selectedTest} />
                       )}
                     </div>
                   ) : (
-                    <Card>
-                      <CardContent className="py-12 text-center">
-                        <p className="text-muted-foreground">Select a test from the list to view results</p>
-                      </CardContent>
-                    </Card>
+                    <ABPanel kicker="Inspect">
+                      <p
+                        className="font-mono uppercase text-muted-foreground text-center py-10"
+                        style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                      >
+                        Select a test from the list to view results
+                      </p>
+                    </ABPanel>
                   )}
                 </div>
               </div>
             )}
-          </TabsContent>
+          </div>
+        )}
 
-          <TabsContent value="aggregate" className="space-y-4">
-            <AggregateResultsPanel />
-          </TabsContent>
-        </Tabs>
-      </div>
+        {tab === "aggregate" && <AggregateResultsPanel />}
+      </main>
     </div>
   );
 }
@@ -448,152 +618,581 @@ function AggregateResultsPanel() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <SpinnerGap className="w-6 h-6 animate-spin text-muted-foreground mx-auto" />
-        </CardContent>
-      </Card>
+      <ABPanel kicker="Loading">
+        <div className="text-center py-10">
+          <SpinnerGap
+            className="animate-spin"
+            style={{
+              width: 22,
+              height: 22,
+              margin: "0 auto",
+              color: "var(--muted-foreground)",
+            }}
+          />
+        </div>
+      </ABPanel>
     );
   }
 
   if (error || !data) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          <p className="font-medium">Failed to load aggregate results</p>
-          <p className="text-sm">{error ? error.message : "No data"}</p>
-        </CardContent>
-      </Card>
-    );
+    return <ABErrorBanner message={error ? error.message : "No data"} />;
   }
 
   return (
     <div className="space-y-4">
       {data.currentActiveModel && (
-        <Card>
-          <CardContent className="py-3">
-            <p className="text-sm">
-              Currently active production model:{" "}
-              <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{data.currentActiveModel}</span>
-            </p>
-          </CardContent>
-        </Card>
+        <div
+          className="rounded-sm flex items-center gap-3"
+          style={{
+            background: "var(--copper-soft)",
+            border: "1px solid color-mix(in oklch, var(--accent), transparent 60%)",
+            borderLeft: "3px solid var(--accent)",
+            padding: "12px 16px",
+          }}
+        >
+          <CheckCircle
+            style={{ width: 14, height: 14, color: "var(--accent)" }}
+            weight="fill"
+          />
+          <span className="text-sm text-foreground">
+            <span
+              className="font-mono uppercase mr-2"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.12em",
+                color: "var(--accent)",
+              }}
+            >
+              Active production
+            </span>
+            <span
+              className="font-mono rounded-sm"
+              style={{
+                fontSize: 11,
+                letterSpacing: "0.02em",
+                padding: "2px 8px",
+                background: "var(--card)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              {data.currentActiveModel}
+            </span>
+          </span>
+        </div>
       )}
 
       {data.aggregates.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <Flask className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-            <p className="text-muted-foreground">No completed A/B tests yet.</p>
-            <p className="text-xs text-muted-foreground mt-1">Run at least 3 tests with the same model pair to see a recommendation.</p>
-          </CardContent>
-        </Card>
+        <ABPanel kicker="Empty">
+          <div className="text-center py-10">
+            <Flask
+              style={{
+                width: 36,
+                height: 36,
+                margin: "0 auto",
+                color: "var(--muted-foreground)",
+              }}
+            />
+            <p
+              className="font-mono uppercase text-muted-foreground mt-3"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              No comparisons yet
+            </p>
+            <p className="text-sm text-foreground mt-2">
+              Run at least 3 tests with the same model pair to see a recommendation.
+            </p>
+          </div>
+        </ABPanel>
       ) : (
         <div className="space-y-3">
-          {data.aggregates.map((row) => {
-            const key = `${row.baselineModel}||${row.testModel}`;
-            const baselineLabel = BEDROCK_MODEL_PRESETS.find(m => m.value === row.baselineModel)?.label || row.baselineModel;
-            const testLabel = BEDROCK_MODEL_PRESETS.find(m => m.value === row.testModel)?.label || row.testModel;
-            const isActive = data.currentActiveModel === row.testModel;
-            const canPromote = row.recommendation === "promote_test" && !isActive;
-
-            const recBadge = {
-              promote_test: { label: "Promote test", className: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" },
-              keep_baseline: { label: "Keep baseline", className: "bg-muted text-muted-foreground" },
-              inconclusive: { label: "Inconclusive", className: "bg-muted text-muted-foreground" },
-              insufficient_data: { label: "Need more samples", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
-            }[row.recommendation];
-
-            return (
-              <Card key={key}>
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-3 gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm">
-                        <span className="font-semibold truncate">{testLabel}</span>
-                        <span className="text-muted-foreground mx-2">vs</span>
-                        <span className="font-semibold truncate">{baselineLabel}</span>
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {row.sampleSize} test{row.sampleSize === 1 ? "" : "s"} · {row.testWins} test wins · {row.baselineWins} baseline wins · {row.ties} ties
-                      </p>
-                    </div>
-                    <Badge className={`text-[10px] ${recBadge.className}`}>{recBadge.label}</Badge>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 mb-3">
-                    <div className="p-2 bg-muted/40 rounded text-xs">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Baseline avg</p>
-                      <p className="text-base font-bold">{row.avgBaselineScore ?? "—"}</p>
-                    </div>
-                    <div className="p-2 bg-muted/40 rounded text-xs">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Test avg</p>
-                      <p className="text-base font-bold">{row.avgTestScore ?? "—"}</p>
-                    </div>
-                    <div className="p-2 bg-muted/40 rounded text-xs">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Score delta</p>
-                      <p className={`text-base font-bold ${
-                        row.avgScoreDelta !== null && row.avgScoreDelta > 0 ? "text-green-600 dark:text-green-400" :
-                        row.avgScoreDelta !== null && row.avgScoreDelta < 0 ? "text-amber-600 dark:text-amber-400" :
-                        ""
-                      }`}>
-                        {row.avgScoreDelta !== null
-                          ? (row.avgScoreDelta > 0 ? "+" : "") + row.avgScoreDelta
-                          : "—"}
-                      </p>
-                    </div>
-                  </div>
-
-                  {row.avgBaselineLatencyMs !== null && row.avgTestLatencyMs !== null && (
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Latency: {row.avgBaselineLatencyMs}ms baseline / {row.avgTestLatencyMs}ms test
-                      {row.avgLatencyDeltaMs !== null && (
-                        <span className={row.avgLatencyDeltaMs > 0 ? " text-amber-600 dark:text-amber-400" : " text-green-600 dark:text-green-400"}>
-                          {" "}({row.avgLatencyDeltaMs > 0 ? "+" : ""}{row.avgLatencyDeltaMs}ms)
-                        </span>
-                      )}
-                    </p>
-                  )}
-
-                  <div className="flex justify-end">
-                    {isActive ? (
-                      <Badge variant="outline" className="text-[10px]">
-                        <CheckCircle className="w-3 h-3 mr-1 text-green-600 dark:text-green-400" />
-                        Currently active
-                      </Badge>
-                    ) : promoteConfirmRow?.testModel === row.testModel && promoteConfirmRow.baselineModel === row.baselineModel ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Promote {testLabel}?</span>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          disabled={promoteMutation.isPending}
-                          onClick={() => promoteMutation.mutate(row)}
-                        >
-                          {promoteMutation.isPending ? <SpinnerGap className="w-3 h-3 animate-spin" /> : "Confirm"}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setPromoteConfirmRow(null)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant={canPromote ? "default" : "outline"}
-                        onClick={() => setPromoteConfirmRow(row)}
-                        disabled={row.recommendation === "insufficient_data"}
-                        title={row.recommendation === "insufficient_data" ? "Need at least 3 samples" : "Promote the test model to production"}
-                      >
-                        Promote test model
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {data.aggregates.map((row) => (
+            <AggregateRowCard
+              key={`${row.baselineModel}||${row.testModel}`}
+              row={row}
+              isActive={data.currentActiveModel === row.testModel}
+              promoteConfirmRow={promoteConfirmRow}
+              onConfirm={(r) => setPromoteConfirmRow(r)}
+              onCancel={() => setPromoteConfirmRow(null)}
+              onPromote={(r) => promoteMutation.mutate(r)}
+              isPending={promoteMutation.isPending}
+            />
+          ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Aggregate-row card
+// ─────────────────────────────────────────────────────────────
+function AggregateRowCard({
+  row,
+  isActive,
+  promoteConfirmRow,
+  onConfirm,
+  onCancel,
+  onPromote,
+  isPending,
+}: {
+  row: AggregateRow;
+  isActive: boolean;
+  promoteConfirmRow: AggregateRow | null;
+  onConfirm: (row: AggregateRow) => void;
+  onCancel: () => void;
+  onPromote: (row: AggregateRow) => void;
+  isPending: boolean;
+}) {
+  const baselineLabel =
+    BEDROCK_MODEL_PRESETS.find((m) => m.value === row.baselineModel)?.label ||
+    row.baselineModel;
+  const testLabel =
+    BEDROCK_MODEL_PRESETS.find((m) => m.value === row.testModel)?.label || row.testModel;
+  const canPromote = row.recommendation === "promote_test" && !isActive;
+
+  const recMeta: Record<
+    AggregateRow["recommendation"],
+    { label: string; tone: "sage" | "amber" | "neutral"; stripe: string }
+  > = {
+    promote_test: {
+      label: "Promote test",
+      tone: "sage",
+      stripe: "var(--sage)",
+    },
+    keep_baseline: { label: "Keep baseline", tone: "neutral", stripe: "var(--border)" },
+    inconclusive: { label: "Inconclusive", tone: "neutral", stripe: "var(--border)" },
+    insufficient_data: {
+      label: "Need more samples",
+      tone: "amber",
+      stripe: "var(--amber)",
+    },
+  };
+  const rec = recMeta[row.recommendation];
+  const isConfirming =
+    promoteConfirmRow?.testModel === row.testModel &&
+    promoteConfirmRow.baselineModel === row.baselineModel;
+
+  return (
+    <div
+      className="rounded-sm border bg-card px-5 py-4"
+      style={{
+        borderColor: "var(--border)",
+        borderLeft: `3px solid ${rec.stripe}`,
+      }}
+    >
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className="font-display font-medium text-foreground truncate"
+              style={{ fontSize: 15, letterSpacing: "-0.1px" }}
+            >
+              {testLabel}
+            </span>
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              vs
+            </span>
+            <span
+              className="font-display font-medium text-foreground truncate"
+              style={{ fontSize: 15, letterSpacing: "-0.1px" }}
+            >
+              {baselineLabel}
+            </span>
+          </div>
+          <p
+            className="font-mono text-muted-foreground tabular-nums mt-1"
+            style={{ fontSize: 11, letterSpacing: "0.02em" }}
+          >
+            {row.sampleSize} test{row.sampleSize === 1 ? "" : "s"} · {row.testWins} test wins ·{" "}
+            {row.baselineWins} baseline wins · {row.ties} ties
+          </p>
+        </div>
+        <ABStatusPill tone={rec.tone}>{rec.label}</ABStatusPill>
+      </div>
+
+      <div
+        className="grid grid-cols-3 gap-3 rounded-sm p-3 mb-3"
+        style={{ background: "var(--paper-2)" }}
+      >
+        <ABStat label="Baseline avg" value={row.avgBaselineScore} />
+        <ABStat label="Test avg" value={row.avgTestScore} />
+        <ABStat
+          label="Score delta"
+          value={
+            row.avgScoreDelta !== null
+              ? (row.avgScoreDelta > 0 ? "+" : "") + row.avgScoreDelta
+              : null
+          }
+          color={
+            row.avgScoreDelta !== null && row.avgScoreDelta > 0
+              ? "var(--sage)"
+              : row.avgScoreDelta !== null && row.avgScoreDelta < 0
+              ? "var(--amber)"
+              : undefined
+          }
+        />
+      </div>
+
+      {row.avgBaselineLatencyMs !== null && row.avgTestLatencyMs !== null && (
+        <p
+          className="font-mono text-muted-foreground tabular-nums mb-3"
+          style={{ fontSize: 11, letterSpacing: "0.02em", lineHeight: 1.5 }}
+        >
+          <span
+            className="uppercase mr-1.5"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          >
+            Latency
+          </span>
+          {row.avgBaselineLatencyMs}ms baseline / {row.avgTestLatencyMs}ms test
+          {row.avgLatencyDeltaMs !== null && (
+            <span
+              style={{
+                marginLeft: 6,
+                color:
+                  row.avgLatencyDeltaMs > 0 ? "var(--amber)" : "var(--sage)",
+              }}
+            >
+              ({row.avgLatencyDeltaMs > 0 ? "+" : ""}
+              {row.avgLatencyDeltaMs}ms)
+            </span>
+          )}
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        {isActive ? (
+          <span
+            className="font-mono uppercase inline-flex items-center gap-1.5 rounded-sm"
+            style={{
+              fontSize: 10,
+              letterSpacing: "0.1em",
+              padding: "4px 8px",
+              background: "var(--sage-soft)",
+              border: "1px solid color-mix(in oklch, var(--sage), transparent 55%)",
+              color: "var(--sage)",
+              fontWeight: 500,
+            }}
+          >
+            <CheckCircle style={{ width: 11, height: 11 }} weight="fill" />
+            Currently active
+          </span>
+        ) : isConfirming ? (
+          <div className="flex items-center gap-2">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.12em" }}
+            >
+              Promote {testLabel}?
+            </span>
+            <Button
+              size="sm"
+              variant="default"
+              disabled={isPending}
+              onClick={() => onPromote(row)}
+            >
+              {isPending ? <SpinnerGap className="w-3 h-3 animate-spin" /> : "Confirm"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant={canPromote ? "default" : "outline"}
+            onClick={() => onConfirm(row)}
+            disabled={row.recommendation === "insufficient_data"}
+            title={
+              row.recommendation === "insufficient_data"
+                ? "Need at least 3 samples"
+                : "Promote the test model to production"
+            }
+          >
+            Promote test model
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Inline helpers
+// ─────────────────────────────────────────────────────────────
+function ABTab({
+  active,
+  onClick,
+  label,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  badge?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors ${
+        active
+          ? "bg-foreground text-background border border-foreground"
+          : "bg-card border border-border text-foreground hover:bg-secondary"
+      }`}
+      style={{ fontSize: 10, letterSpacing: "0.1em" }}
+    >
+      {label}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className="inline-flex items-center justify-center rounded-full tabular-nums"
+          style={{
+            width: 16,
+            height: 16,
+            fontSize: 9,
+            background: active ? "var(--background)" : "var(--accent)",
+            color: active ? "var(--foreground)" : "var(--paper)",
+            marginLeft: 2,
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function ABPanel({
+  kicker,
+  title,
+  description,
+  icon: IconComp,
+  children,
+}: {
+  kicker: string;
+  title?: string;
+  description?: React.ReactNode;
+  icon?: Icon;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-sm border bg-card" style={{ borderColor: "var(--border)" }}>
+      <div className="px-6 pt-5 pb-3">
+        <div
+          className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+          style={{ fontSize: 10, letterSpacing: "0.14em" }}
+        >
+          {IconComp && <IconComp style={{ width: 12, height: 12 }} />}
+          {kicker}
+        </div>
+        {title && (
+          <div
+            className="font-display font-medium text-foreground mt-1"
+            style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+          >
+            {title}
+          </div>
+        )}
+        {description && (
+          <p
+            className="text-muted-foreground mt-1.5"
+            style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 540 }}
+          >
+            {description}
+          </p>
+        )}
+      </div>
+      <div className="px-6 pb-5">{children}</div>
+    </div>
+  );
+}
+
+function ABFieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label
+      className="font-mono uppercase text-muted-foreground block mb-1.5"
+      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+    >
+      {children}
+    </label>
+  );
+}
+
+function ABTestRow({
+  test,
+  testModelLabel,
+  selected,
+  onSelect,
+}: {
+  test: ABTest;
+  testModelLabel: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const isProcessing = test.status === "processing" || test.status === "analyzing";
+  const isCompleted = test.status === "completed";
+  const StatusIcon = isProcessing ? SpinnerGap : isCompleted ? CheckCircle : WarningCircle;
+  const statusColor = isProcessing
+    ? "var(--accent)"
+    : isCompleted
+    ? "var(--sage)"
+    : "var(--destructive)";
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full rounded-sm border bg-card transition-colors text-left p-3 hover:border-foreground/30"
+      style={{
+        borderColor: selected ? "var(--accent)" : "var(--border)",
+        background: selected ? "var(--copper-soft)" : "var(--card)",
+        borderLeft: selected ? "3px solid var(--accent)" : "1px solid var(--border)",
+      }}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-sm font-medium text-foreground truncate flex-1">
+          {test.fileName}
+        </span>
+        <StatusIcon
+          className={isProcessing ? "animate-spin" : ""}
+          style={{ width: 13, height: 13, color: statusColor }}
+          {...(isCompleted ? { weight: "fill" } : {})}
+        />
+      </div>
+      <p
+        className="font-mono uppercase text-muted-foreground truncate"
+        style={{ fontSize: 10, letterSpacing: "0.1em" }}
+      >
+        vs {testModelLabel}
+      </p>
+      <div className="flex items-center justify-between mt-1.5">
+        <span
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 9, letterSpacing: "0.1em" }}
+        >
+          {new Date(test.createdAt || "").toLocaleDateString()}
+        </span>
+        {isCompleted &&
+          test.baselineAnalysis &&
+          test.testAnalysis &&
+          !test.baselineAnalysis.error &&
+          !test.testAnalysis.error && (
+            <span
+              className="font-mono tabular-nums text-foreground"
+              style={{ fontSize: 11, letterSpacing: "0.02em" }}
+            >
+              {(test.baselineAnalysis.performance_score as number | undefined)?.toFixed(1)}{" "}
+              <span className="text-muted-foreground">vs</span>{" "}
+              {(test.testAnalysis.performance_score as number | undefined)?.toFixed(1)}
+            </span>
+          )}
+      </div>
+    </button>
+  );
+}
+
+function ABStatusPill({
+  tone,
+  children,
+}: {
+  tone: "sage" | "amber" | "neutral";
+  children: React.ReactNode;
+}) {
+  const palette = {
+    sage: {
+      bg: "var(--sage-soft)",
+      border: "color-mix(in oklch, var(--sage), transparent 55%)",
+      color: "var(--sage)",
+    },
+    amber: {
+      bg: "var(--amber-soft)",
+      border: "color-mix(in oklch, var(--amber), transparent 50%)",
+      color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+    },
+    neutral: {
+      bg: "var(--paper-2)",
+      border: "var(--border)",
+      color: "var(--muted-foreground)",
+    },
+  }[tone];
+  return (
+    <span
+      className="font-mono uppercase inline-flex items-center rounded-sm shrink-0"
+      style={{
+        fontSize: 10,
+        letterSpacing: "0.1em",
+        padding: "3px 8px",
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        color: palette.color,
+        fontWeight: 500,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ABStat({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number | string | null;
+  color?: string;
+}) {
+  return (
+    <div>
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 9, letterSpacing: "0.12em" }}
+      >
+        {label}
+      </div>
+      <div
+        className="font-display font-medium tabular-nums mt-0.5"
+        style={{
+          fontSize: 18,
+          lineHeight: 1,
+          color: color || "var(--foreground)",
+          letterSpacing: "-0.3px",
+        }}
+      >
+        {value ?? "—"}
+      </div>
+    </div>
+  );
+}
+
+function ABErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-sm"
+      style={{
+        background: "var(--warm-red-soft)",
+        border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+        borderLeft: "3px solid var(--destructive)",
+        padding: "12px 16px",
+        fontSize: 13,
+        color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+      }}
+    >
+      <Warning style={{ width: 16, height: 16, marginTop: 2, flexShrink: 0 }} />
+      <div>
+        <div
+          className="font-mono uppercase"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          Load failed
+        </div>
+        <p className="mt-1">{message}</p>
+      </div>
     </div>
   );
 }

@@ -8,7 +8,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { ArrowUp, ArrowDown, TrendUp, Warning, Star } from "@phosphor-icons/react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -94,13 +93,12 @@ export default function WeeklyChangesWidget() {
     );
   }
 
-  const scoreDeltaClass = data.scoreDelta === null
-    ? "text-muted-foreground"
-    : Math.abs(data.scoreDelta) < 0.1
-      ? "text-muted-foreground"
+  const scoreDeltaColor =
+    data.scoreDelta === null || Math.abs(data.scoreDelta) < 0.1
+      ? "var(--muted-foreground)"
       : data.scoreDelta > 0
-        ? "text-green-600 dark:text-green-400"
-        : "text-amber-600 dark:text-amber-400";
+        ? "var(--sage)"
+        : "var(--amber)";
 
   const flagDelta = (pair: FlagPair): string => {
     const delta = pair.current - pair.previous;
@@ -122,7 +120,10 @@ export default function WeeklyChangesWidget() {
             </CardDescription>
           </div>
           {data.scoreDelta !== null && Math.abs(data.scoreDelta) >= 0.1 && (
-            <div className={`flex items-center gap-1 text-sm font-semibold ${scoreDeltaClass}`}>
+            <div
+              className="flex items-center gap-1 text-sm font-semibold"
+              style={{ color: scoreDeltaColor }}
+            >
               {data.scoreDelta > 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
               {Math.abs(data.scoreDelta)}
             </div>
@@ -139,7 +140,7 @@ export default function WeeklyChangesWidget() {
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg score</p>
             <p className="text-lg font-bold">{data.currentWeek.avgScore ?? "—"}</p>
             {data.scoreDelta !== null && (
-              <p className={`text-[10px] ${scoreDeltaClass}`}>
+              <p className="text-[10px]" style={{ color: scoreDeltaColor }}>
                 {data.scoreDelta > 0 ? "+" : ""}{data.scoreDelta} vs last week
               </p>
             )}
@@ -148,7 +149,17 @@ export default function WeeklyChangesWidget() {
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Positive %</p>
             <p className="text-lg font-bold">{data.currentWeek.positivePct !== null ? `${data.currentWeek.positivePct}%` : "—"}</p>
             {data.positiveDelta !== null && (
-              <p className={`text-[10px] ${data.positiveDelta > 0 ? "text-green-600 dark:text-green-400" : data.positiveDelta < 0 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+              <p
+                className="text-[10px]"
+                style={{
+                  color:
+                    data.positiveDelta > 0
+                      ? "var(--sage)"
+                      : data.positiveDelta < 0
+                        ? "var(--amber)"
+                        : "var(--muted-foreground)",
+                }}
+              >
                 {data.positiveDelta > 0 ? "+" : ""}{data.positiveDelta} pts
               </p>
             )}
@@ -156,7 +167,15 @@ export default function WeeklyChangesWidget() {
           <div className="p-2 bg-muted/40 rounded">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Low scores</p>
             <p className="text-lg font-bold">{data.flags.lowScore.current}</p>
-            <p className={`text-[10px] ${data.flags.lowScore.current > data.flags.lowScore.previous ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+            <p
+              className="text-[10px]"
+              style={{
+                color:
+                  data.flags.lowScore.current > data.flags.lowScore.previous
+                    ? "var(--amber)"
+                    : "var(--muted-foreground)",
+              }}
+            >
               {flagDelta(data.flags.lowScore)} vs last week
             </p>
           </div>
@@ -168,16 +187,26 @@ export default function WeeklyChangesWidget() {
             {data.topImprovers.length > 0 && (
               <div>
                 <p className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1">
-                  <ArrowUp className="w-3 h-3 text-green-600 dark:text-green-400" />
+                  <ArrowUp className="w-3 h-3" style={{ color: "var(--sage)" }} />
                   Top improvers
                 </p>
                 <ul className="space-y-1 text-xs">
-                  {data.topImprovers.map(a => (
+                  {data.topImprovers.map((a) => (
                     <li key={a.employeeId} className="flex items-center justify-between gap-2">
                       <span className="truncate">{a.employeeName}</span>
-                      <Badge className="text-[10px] bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                      <span
+                        className="font-mono tabular-nums rounded-sm"
+                        style={{
+                          fontSize: 10,
+                          letterSpacing: "0.02em",
+                          padding: "1px 6px",
+                          background: "var(--sage-soft)",
+                          border: "1px solid color-mix(in oklch, var(--sage), transparent 55%)",
+                          color: "var(--sage)",
+                        }}
+                      >
                         +{a.delta}
-                      </Badge>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -186,16 +215,26 @@ export default function WeeklyChangesWidget() {
             {data.topRegressions.length > 0 && (
               <div>
                 <p className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1">
-                  <ArrowDown className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                  <ArrowDown className="w-3 h-3" style={{ color: "var(--amber)" }} />
                   Needs attention
                 </p>
                 <ul className="space-y-1 text-xs">
-                  {data.topRegressions.map(a => (
+                  {data.topRegressions.map((a) => (
                     <li key={a.employeeId} className="flex items-center justify-between gap-2">
                       <span className="truncate">{a.employeeName}</span>
-                      <Badge className="text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                      <span
+                        className="font-mono tabular-nums rounded-sm"
+                        style={{
+                          fontSize: 10,
+                          letterSpacing: "0.02em",
+                          padding: "1px 6px",
+                          background: "var(--amber-soft)",
+                          border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                          color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+                        }}
+                      >
                         {a.delta}
-                      </Badge>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -212,11 +251,18 @@ export default function WeeklyChangesWidget() {
               {data.noteworthy.map(n => (
                 <li key={n.callId} className="flex items-center gap-2">
                   {n.kind === "exceptional" ? (
-                    <Star className="w-3 h-3 text-green-600 dark:text-green-400 shrink-0" />
+                    <Star
+                      className="w-3 h-3 shrink-0"
+                      style={{ color: "var(--sage)" }}
+                      weight="fill"
+                    />
                   ) : n.kind === "regression" ? (
-                    <ArrowDown className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <ArrowDown className="w-3 h-3 shrink-0" style={{ color: "var(--amber)" }} />
                   ) : (
-                    <Warning className="w-3 h-3 text-red-600 dark:text-red-400 shrink-0" />
+                    <Warning
+                      className="w-3 h-3 shrink-0"
+                      style={{ color: "var(--destructive)" }}
+                    />
                   )}
                   <Link href={`/transcripts/${n.callId}`} className="truncate hover:underline">
                     {n.fileName || n.callId}

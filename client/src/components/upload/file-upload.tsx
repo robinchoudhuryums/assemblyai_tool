@@ -264,8 +264,22 @@ export default function FileUpload() {
 
           {/* Batch controls: Apply employee/category to all pending files at once */}
           {uploadFiles.filter(f => f.status === 'pending').length > 1 && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
-              <p className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">Apply to all pending files:</p>
+            <div
+              className="p-3 rounded-sm"
+              style={{
+                background: "var(--copper-soft)",
+                border: "1px solid color-mix(in oklch, var(--accent), transparent 60%)",
+                borderLeft: "3px solid var(--accent)",
+              }}
+            >
+              <p
+                className="text-xs font-medium mb-2"
+                style={{
+                  color: "var(--accent)",
+                }}
+              >
+                Apply to all pending files:
+              </p>
               <div className="flex items-center gap-3 flex-wrap">
                 <Select onValueChange={(value) => {
                   const cat = value;
@@ -354,16 +368,22 @@ export default function FileUpload() {
                 )}
 
                 {fileData.status === 'completed' && (
-                  <div className="flex items-center gap-2 text-green-600">
-                    <CheckCircle className="w-5 h-5" />
+                  <div
+                    className="flex items-center gap-2"
+                    style={{ color: "var(--sage)" }}
+                  >
+                    <CheckCircle className="w-5 h-5" weight="fill" />
                     <span className="text-sm font-medium">Complete</span>
                     <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>
                 )}
 
                 {fileData.status === 'error' && (
-                  <div className="flex items-center gap-2 text-red-600">
-                    <XCircle className="w-5 h-5" />
+                  <div
+                    className="flex items-center gap-2"
+                    style={{ color: "var(--destructive)" }}
+                  >
+                    <XCircle className="w-5 h-5" weight="fill" />
                     <span className="text-sm">{fileData.error}</span>
                     <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>

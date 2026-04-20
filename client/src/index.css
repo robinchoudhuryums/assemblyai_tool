@@ -192,6 +192,23 @@
     font-family: var(--font-sans);
   }
 
+  /* Accessibility: respect prefers-reduced-motion. Users who've opted in to
+     the OS-level "reduce motion" setting (motion sensitivity, vestibular
+     disorders) get near-instant transitions instead of the app's pulses,
+     spins, transitions, and animated gradients. A small non-zero duration
+     (0.01ms) is used rather than `none` so one-shot animation callbacks
+     still fire reliably across browsers. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   /* Accessibility: visible focus indicators for keyboard navigation.
      Uses :focus-visible so outlines only appear on keyboard focus, not mouse clicks. */
   *:focus-visible {
@@ -231,43 +248,17 @@
 }
 
 @layer utilities {
-  .gradient-border {
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
-    border-radius: 0.75rem;
-    padding: 2px;
-  }
-
-  .gradient-border-inner {
-    background: rgba(255, 255, 255, 0.5);
-    backdrop-filter: blur(16px) saturate(1.4);
-    -webkit-backdrop-filter: blur(16px) saturate(1.4);
-    border-radius: 0.625rem;
-  }
-
-  .dark .gradient-border-inner {
-    background: rgba(15, 23, 42, 0.8);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-  }
-
-  /* `.drop-zone-active` utility was deleted in installment 6 phase 5 —
-     it was never referenced by any component (grep confirmed) and was
-     one of the last holdouts of the pre-warm-paper hardcoded-HSL
-     palette. Dropzone active-state styling now lives inline in
-     file-upload.tsx using warm-paper tokens. */
-
-  .chart-container {
-    position: relative;
-    height: 300px;
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(139, 92, 246, 0.06));
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-radius: 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-  }
+  /* Legacy utilities removed during the design sweep:
+     - .gradient-border / .gradient-border-inner — used by the old
+       pre-warm-paper hero banners (installment 2 superseded them)
+     - .drop-zone-active — removed in installment 6; dropzone styling
+       now inline in file-upload.tsx using warm-paper tokens
+     - .chart-container — pre-redesign SVG wrapper; Recharts panels
+       are now bordered paper-cards (installment 9 chart-primitives)
+     - .sentiment-positive / .sentiment-neutral / .sentiment-negative —
+       used SENTIMENT_COLOR tokens from chart-primitives.ts instead
+     - .metric-card — replaced by inline warm-paper panels across the
+       redesigned pages (installments 10-15) */
 
   .transcript-line {
     transition: background-color 0.2s ease;
@@ -275,57 +266,6 @@
 
   .transcript-line:hover {
     background-color: var(--muted);
-  }
-
-  .sentiment-positive {
-    color: hsl(158, 64%, 52%);
-    background-color: hsl(158, 64%, 95%);
-  }
-
-  .sentiment-negative {
-    color: hsl(0, 84%, 60%);
-    background-color: hsl(0, 84%, 95%);
-  }
-
-  .sentiment-neutral {
-    color: hsl(45, 93%, 58%);
-    background-color: hsl(45, 93%, 95%);
-  }
-
-  .dark .sentiment-positive {
-    background-color: hsl(158, 64%, 15%);
-  }
-
-  .dark .sentiment-negative {
-    background-color: hsl(0, 84%, 15%);
-  }
-
-  .dark .sentiment-neutral {
-    background-color: hsl(45, 93%, 15%);
-  }
-
-  .metric-card {
-    background: linear-gradient(135deg, rgba(255, 255, 255, var(--glass-card-alpha)), rgba(220, 230, 245, calc(var(--glass-card-alpha) - 0.1)));
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-    border: 1px solid rgba(255, 255, 255, var(--glass-border-alpha));
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, var(--glass-inset-alpha));
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-  }
-
-  .metric-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  }
-
-  .dark .metric-card {
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(30, 41, 59, 0.45));
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  }
-
-  .dark .metric-card:hover {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
   /* Interactive card hover lift (for bordered cards across the app) */

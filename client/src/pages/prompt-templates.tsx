@@ -1,13 +1,25 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Chat, FileText, Flask, FloppyDisk, PencilSimple, Plus, Scales, ShieldCheck, Trash, X } from "@phosphor-icons/react";
+import { Link } from "wouter";
+import {
+  Chat,
+  FileText,
+  Flask,
+  FloppyDisk,
+  PencilSimple,
+  Plus,
+  Scales,
+  ShieldCheck,
+  Trash,
+  Warning,
+  X,
+  type Icon,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ConfirmDialog } from "@/components/lib/confirm-dialog";
@@ -140,40 +152,102 @@ export default function PromptTemplatesPage() {
   const usedCategories = new Set((templates || []).map(t => t.callCategory));
 
   return (
-    <div className="min-h-screen" data-testid="prompt-templates-page">
+    <div
+      className="min-h-screen bg-background text-foreground"
+      data-testid="prompt-templates-page"
+    >
       <ConfirmDialog
         open={deleteConfirmId !== null}
-        onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmId(null);
+        }}
         title="Delete prompt template?"
         description="This will permanently remove this prompt template. New calls with this category will use the default evaluation criteria."
         confirmLabel="Delete"
         variant="destructive"
-        onConfirm={() => { if (deleteConfirmId) deleteMutation.mutate(deleteConfirmId); setDeleteConfirmId(null); }}
+        onConfirm={() => {
+          if (deleteConfirmId) deleteMutation.mutate(deleteConfirmId);
+          setDeleteConfirmId(null);
+        }}
       />
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Prompt Templates & Scoring Rubrics</h2>
-            <p className="text-muted-foreground">Configure AI analysis criteria per call category for tailored evaluation</p>
-          </div>
-          <Button onClick={() => setShowNewForm(true)} disabled={showNewForm}>
-            <Plus className="w-4 h-4 mr-2" />
-            New Template
-          </Button>
-        </div>
-      </header>
 
-      <div className="p-6 space-y-6">
-        {/* Info card */}
-        <Card className="border-dashed bg-muted/30">
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">
-              Templates customize how the AI evaluates calls for each category. Set weighted scoring criteria,
-              required disclaimers/phrases that agents must say, and additional evaluation instructions.
-              Templates apply automatically to new calls matching the configured category.
-            </p>
-          </CardContent>
-        </Card>
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Prompt templates</span>
+        </nav>
+        <div className="flex-1" />
+        <Button onClick={() => setShowNewForm(true)} disabled={showNewForm} size="sm">
+          <Plus className="w-4 h-4 mr-1.5" /> New template
+        </Button>
+      </div>
+
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
+          style={{ fontSize: 10, letterSpacing: "0.18em" }}
+        >
+          <FileText style={{ width: 12, height: 12 }} />
+          Configuration
+        </div>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{
+            fontSize: "clamp(24px, 3vw, 30px)",
+            letterSpacing: "-0.6px",
+            lineHeight: 1.15,
+          }}
+        >
+          Prompt templates &amp; scoring rubrics
+        </div>
+        <p className="text-muted-foreground mt-2" style={{ fontSize: 14, maxWidth: 620 }}>
+          Configure AI analysis criteria per call category for tailored evaluation. Templates
+          apply automatically to new calls matching the configured category.
+        </p>
+      </div>
+
+      <main className="px-7 py-6 space-y-6">
+        {/* Info banner — paper-2 with em-dash bullets explaining what templates do */}
+        <div
+          className="rounded-sm p-5"
+          style={{
+            background: "var(--paper-2)",
+            border: "1px dashed var(--border)",
+          }}
+        >
+          <div
+            className="font-mono uppercase text-muted-foreground mb-2"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            How templates work
+          </div>
+          <ul className="space-y-1.5 text-sm text-foreground" style={{ lineHeight: 1.55 }}>
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>Set weighted scoring criteria per call category.</span>
+            </li>
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>Add required disclaimers / phrases that agents must say; missing required phrases are flagged on the call.</span>
+            </li>
+            <li className="flex gap-2">
+              <span className="text-muted-foreground" style={{ marginTop: 2 }}>—</span>
+              <span>Back-test a candidate template against the last 5 completed calls before promoting.</span>
+            </li>
+          </ul>
+        </div>
 
         {/* New template form */}
         {showNewForm && (
@@ -187,19 +261,22 @@ export default function PromptTemplatesPage() {
 
         {/* Existing templates */}
         {templatesError ? (
-          <Card><CardContent className="pt-6 text-center text-muted-foreground">
-            <p className="font-medium">Failed to load templates</p>
-            <p className="text-sm">{templatesError.message}</p>
-          </CardContent></Card>
+          <ErrorBanner message={templatesError.message} />
         ) : isLoading ? (
           <div className="space-y-4">
             {Array.from({ length: 2 }).map((_, i) => (
-              <Card key={i}><CardContent className="pt-6"><Skeleton className="h-32 w-full" /></CardContent></Card>
+              <div
+                key={i}
+                className="rounded-sm border bg-card p-6"
+                style={{ borderColor: "var(--border)" }}
+              >
+                <Skeleton className="h-32 w-full" />
+              </div>
             ))}
           </div>
         ) : templates && templates.length > 0 ? (
           <div className="space-y-4">
-            {templates.map((tmpl) => (
+            {templates.map((tmpl) =>
               editingId === tmpl.id ? (
                 <TemplateForm
                   key={tmpl.id}
@@ -218,100 +295,171 @@ export default function PromptTemplatesPage() {
                   onTest={() => testMutation.mutate(tmpl.id)}
                   isTesting={testMutation.isPending && testMutation.variables === tmpl.id}
                 />
-              )
-            ))}
+              ),
+            )}
           </div>
         ) : !showNewForm ? (
-          <div className="text-center py-16">
-            <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/20 to-primary/5 rounded-full flex items-center justify-center mb-4">
-              <FileText className="w-8 h-8 text-primary/60" />
+          <div
+            className="rounded-sm border bg-card text-center py-14 px-6"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <div
+              className="mx-auto mb-4 rounded-full flex items-center justify-center"
+              style={{
+                width: 56,
+                height: 56,
+                background: "var(--copper-soft)",
+                border: "1px solid color-mix(in oklch, var(--accent), transparent 60%)",
+              }}
+            >
+              <FileText style={{ width: 26, height: 26, color: "var(--accent)" }} />
             </div>
-            <h4 className="font-semibold text-foreground mb-1">No prompt templates configured</h4>
-            <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
-              Create templates to customize how the AI evaluates calls for each category.
-              Without templates, the default evaluation criteria will be used.
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              Empty
+            </div>
+            <p className="text-sm text-foreground mt-2" style={{ maxWidth: 420, margin: "8px auto 16px" }}>
+              No prompt templates configured. Without templates, the default evaluation criteria
+              will be used for every call.
             </p>
-            <Button onClick={() => setShowNewForm(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Your First Template
+            <Button onClick={() => setShowNewForm(true)} size="sm">
+              <Plus className="w-4 h-4 mr-1.5" /> Create your first template
             </Button>
           </div>
         ) : null}
-      </div>
+      </main>
 
       {/* Back-test results dialog */}
-      <Dialog open={testResults !== null} onOpenChange={(open) => { if (!open) setTestResults(null); }}>
+      <Dialog
+        open={testResults !== null}
+        onOpenChange={(open) => {
+          if (!open) setTestResults(null);
+        }}
+      >
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Back-test results: {testResults?.templateName}</DialogTitle>
-            <DialogDescription>
-              Candidate template run against {testResults?.sampleSize ?? 0} recent completed calls in the
-              <span className="mx-1 font-mono">{testResults?.callCategory}</span>
-              category. These results are not persisted and did not affect stored analyses.
-            </DialogDescription>
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              Back-test
+            </div>
+            <DialogTitle>
+              <span
+                className="font-display font-medium"
+                style={{ fontSize: 20, letterSpacing: "-0.3px" }}
+              >
+                {testResults?.templateName}
+              </span>
+            </DialogTitle>
+            <p
+              className="text-muted-foreground"
+              style={{ fontSize: 13, lineHeight: 1.5, maxWidth: 620 }}
+            >
+              Candidate template run against {testResults?.sampleSize ?? 0} recent completed calls
+              in the
+              <span
+                className="mx-1 font-mono rounded-sm"
+                style={{
+                  fontSize: 11,
+                  letterSpacing: "0.02em",
+                  padding: "2px 6px",
+                  background: "var(--paper-2)",
+                  border: "1px solid var(--border)",
+                }}
+              >
+                {testResults?.callCategory}
+              </span>
+              category. Results are not persisted and did not affect stored analyses.
+            </p>
           </DialogHeader>
 
           {testResults && testResults.sampleSize === 0 ? (
-            <div className="py-8 text-center text-muted-foreground">
-              <p>{testResults.message || "No calls available for testing."}</p>
+            <div className="py-10 text-center">
+              <p
+                className="font-mono uppercase text-muted-foreground"
+                style={{ fontSize: 10, letterSpacing: "0.14em" }}
+              >
+                {testResults.message || "No calls available for testing"}
+              </p>
             </div>
           ) : testResults ? (
             <div className="space-y-4">
-              {/* Summary */}
-              <div className="grid grid-cols-4 gap-3 p-3 bg-muted/40 rounded-md">
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Current avg</p>
-                  <p className="text-lg font-bold">{testResults.summary.avgCurrentScore ?? "—"}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Candidate avg</p>
-                  <p className="text-lg font-bold">{testResults.summary.avgTestScore ?? "—"}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg delta</p>
-                  <p className={`text-lg font-bold ${
-                    testResults.summary.scoreDirection === "higher" ? "text-green-600 dark:text-green-400" :
-                    testResults.summary.scoreDirection === "lower" ? "text-amber-600 dark:text-amber-400" :
-                    "text-muted-foreground"
-                  }`}>
-                    {testResults.summary.avgDelta !== null
-                      ? (testResults.summary.avgDelta > 0 ? "+" : "") + testResults.summary.avgDelta
-                      : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Successful runs</p>
-                  <p className="text-lg font-bold">{testResults.summary.successfulRuns} / {testResults.sampleSize}</p>
-                </div>
+              {/* Summary tiles */}
+              <div
+                className="grid grid-cols-4 gap-3 rounded-sm p-4"
+                style={{ background: "var(--paper-2)" }}
+              >
+                <BackTestStat label="Current avg" value={testResults.summary.avgCurrentScore} />
+                <BackTestStat label="Candidate avg" value={testResults.summary.avgTestScore} />
+                <BackTestStat
+                  label="Avg delta"
+                  value={
+                    testResults.summary.avgDelta !== null
+                      ? (testResults.summary.avgDelta > 0 ? "+" : "") +
+                        testResults.summary.avgDelta
+                      : null
+                  }
+                  color={
+                    testResults.summary.scoreDirection === "higher"
+                      ? "var(--sage)"
+                      : testResults.summary.scoreDirection === "lower"
+                      ? "var(--amber)"
+                      : "var(--muted-foreground)"
+                  }
+                />
+                <BackTestStat
+                  label="Successful runs"
+                  value={`${testResults.summary.successfulRuns} / ${testResults.sampleSize}`}
+                  isText
+                />
               </div>
 
               {/* Per-call results */}
               <div className="space-y-2">
                 {testResults.results.map((r) => (
-                  <div key={r.callId} className="p-3 border border-border rounded-md text-sm">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-xs text-muted-foreground truncate max-w-[60%]" title={r.fileName || r.callId}>
+                  <div
+                    key={r.callId}
+                    className="rounded-sm border bg-card p-3"
+                    style={{ borderColor: "var(--border)" }}
+                  >
+                    <div className="flex items-center justify-between mb-1.5 gap-3">
+                      <span
+                        className="font-mono text-muted-foreground truncate max-w-[60%]"
+                        style={{ fontSize: 11, letterSpacing: "0.02em" }}
+                        title={r.fileName || r.callId}
+                      >
                         {r.fileName || r.callId}
                       </span>
                       {r.error ? (
-                        <Badge variant="secondary" className="text-[10px]">Error</Badge>
+                        <DeltaPill tone="neutral">Error</DeltaPill>
                       ) : r.delta !== null ? (
-                        <Badge className={`text-[10px] ${
-                          r.delta > 0.1 ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
-                          r.delta < -0.1 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" :
-                          "bg-muted text-muted-foreground"
-                        }`}>
-                          {r.delta > 0 ? "+" : ""}{r.delta}
-                        </Badge>
+                        <DeltaPill
+                          tone={r.delta > 0.1 ? "sage" : r.delta < -0.1 ? "amber" : "neutral"}
+                        >
+                          {r.delta > 0 ? "+" : ""}
+                          {r.delta}
+                        </DeltaPill>
                       ) : null}
                     </div>
                     {r.error ? (
                       <p className="text-xs text-muted-foreground">{r.error}</p>
                     ) : (
-                      <div className="flex gap-4 text-xs">
-                        <span>Current: <span className="font-semibold">{r.currentScore ?? "—"}</span></span>
-                        <span className="text-muted-foreground">→</span>
-                        <span>Candidate: <span className="font-semibold">{r.testScore ?? "—"}</span></span>
+                      <div
+                        className="flex items-center gap-3 font-mono tabular-nums text-foreground"
+                        style={{ fontSize: 12, letterSpacing: "0.02em" }}
+                      >
+                        <span>
+                          <span className="text-muted-foreground">Current</span>{" "}
+                          {r.currentScore ?? "—"}
+                        </span>
+                        <span className="text-muted-foreground/60">→</span>
+                        <span>
+                          <span className="text-muted-foreground">Candidate</span>{" "}
+                          {r.testScore ?? "—"}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -321,7 +469,9 @@ export default function PromptTemplatesPage() {
           ) : null}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTestResults(null)}>Close</Button>
+            <Button variant="outline" onClick={() => setTestResults(null)}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -329,108 +479,160 @@ export default function PromptTemplatesPage() {
   );
 }
 
-function TemplateCard({ template, onEdit, onDelete, onTest, isTesting }: {
+function TemplateCard({
+  template,
+  onEdit,
+  onDelete,
+  onTest,
+  isTesting,
+}: {
   template: PromptTemplate;
   onEdit: () => void;
   onDelete: () => void;
   onTest: () => void;
   isTesting: boolean;
 }) {
-  const category = CALL_CATEGORIES.find(c => c.value === template.callCategory);
+  const category = CALL_CATEGORIES.find((c) => c.value === template.callCategory);
   const weights = template.scoringWeights;
   const phrases = (template.requiredPhrases as PhraseEntry[]) || [];
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <CardTitle className="text-lg">{template.name}</CardTitle>
-            <Badge variant="outline">{category?.label || template.callCategory}</Badge>
+    <div className="rounded-sm border bg-card" style={{ borderColor: "var(--border)" }}>
+      {/* Header row */}
+      <div className="px-6 pt-5 pb-4 flex items-start justify-between gap-3 border-b border-border">
+        <div className="min-w-0">
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            {category?.label || template.callCategory}
+          </div>
+          <div
+            className="font-display font-medium text-foreground mt-1 flex items-center gap-2 flex-wrap"
+            style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+          >
+            {template.name}
             {template.isActive ? (
-              <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">Active</Badge>
+              <PromptStatusPill tone="sage">Active</PromptStatusPill>
             ) : (
-              <Badge variant="secondary">Inactive</Badge>
+              <PromptStatusPill tone="neutral">Inactive</PromptStatusPill>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={onTest} disabled={isTesting} title="Back-test this template against the last 5 completed calls in its category">
-              <Flask className="w-3 h-3 mr-1" /> {isTesting ? "Testing…" : "Test"}
-            </Button>
-            <Button size="sm" variant="outline" onClick={onEdit}>
-              <PencilSimple className="w-3 h-3 mr-1" /> Edit
-            </Button>
-            <Button size="sm" variant="outline" className="text-red-600" onClick={onDelete}>
-              <Trash className="w-3 h-3" />
-            </Button>
-          </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Evaluation Criteria */}
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Scales className="w-4 h-4 text-muted-foreground" />
-            <p className="text-sm font-medium">Evaluation Criteria</p>
-          </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{template.evaluationCriteria}</p>
+        <div className="flex gap-2 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onTest}
+            disabled={isTesting}
+            title="Back-test this template against the last 5 completed calls in its category"
+          >
+            <Flask className="w-3.5 h-3.5 mr-1" /> {isTesting ? "Testing…" : "Test"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onEdit}>
+            <PencilSimple className="w-3.5 h-3.5 mr-1" /> Edit
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onDelete}
+            style={{
+              color: "var(--destructive)",
+              borderColor: "color-mix(in oklch, var(--destructive), transparent 60%)",
+            }}
+          >
+            <Trash className="w-3.5 h-3.5" />
+          </Button>
         </div>
+      </div>
 
-        {/* Scoring Weights */}
+      <div className="px-6 py-5 space-y-5">
+        {/* Evaluation criteria */}
+        <PromptSection icon={Scales} label="Evaluation criteria">
+          <p
+            className="text-foreground whitespace-pre-wrap"
+            style={{ fontSize: 13, lineHeight: 1.6 }}
+          >
+            {template.evaluationCriteria}
+          </p>
+        </PromptSection>
+
+        {/* Scoring weights */}
         {weights && (
-          <div>
-            <p className="text-sm font-medium mb-2">Scoring Weights</p>
-            <div className="grid grid-cols-4 gap-2">
+          <PromptSection label="Scoring weights">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {Object.entries(weights).map(([key, val]) => (
-                <div key={key} className="text-center p-2 bg-muted rounded-md">
-                  <p className="text-lg font-bold text-foreground">{val as number}%</p>
-                  <p className="text-[10px] text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</p>
+                <div
+                  key={key}
+                  className="rounded-sm px-3 py-2.5"
+                  style={{ background: "var(--paper-2)", border: "1px solid var(--border)" }}
+                >
+                  <div
+                    className="font-mono uppercase text-muted-foreground"
+                    style={{ fontSize: 9, letterSpacing: "0.12em" }}
+                  >
+                    {key.replace(/([A-Z])/g, " $1").trim()}
+                  </div>
+                  <div
+                    className="font-display font-medium tabular-nums text-foreground mt-0.5"
+                    style={{ fontSize: 20, lineHeight: 1, letterSpacing: "-0.3px" }}
+                  >
+                    {val as number}
+                    <span
+                      className="font-mono text-muted-foreground ml-0.5"
+                      style={{ fontSize: 11, letterSpacing: "0.02em" }}
+                    >
+                      %
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
-          </div>
+          </PromptSection>
         )}
 
-        {/* Required Phrases */}
+        {/* Required phrases */}
         {phrases.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <ShieldCheck className="w-4 h-4 text-muted-foreground" />
-              <p className="text-sm font-medium">Required/Recommended Phrases ({phrases.length})</p>
-            </div>
-            <div className="space-y-1">
+          <PromptSection icon={ShieldCheck} label={`Required / recommended phrases · ${phrases.length}`}>
+            <ul className="space-y-1.5">
               {phrases.map((p, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm">
-                  <Badge variant={p.severity === "required" ? "default" : "secondary"} className="text-[10px]">
+                <li key={i} className="flex items-start gap-2 text-sm" style={{ lineHeight: 1.5 }}>
+                  <PromptStatusPill tone={p.severity === "required" ? "accent" : "neutral"}>
                     {p.severity}
-                  </Badge>
-                  <span className="text-muted-foreground">"{p.phrase}"</span>
-                  <span className="text-xs text-muted-foreground">— {p.label}</span>
-                </div>
+                  </PromptStatusPill>
+                  <span className="text-foreground italic">&ldquo;{p.phrase}&rdquo;</span>
+                  <span className="text-muted-foreground" style={{ fontSize: 12 }}>
+                    — {p.label}
+                  </span>
+                </li>
               ))}
-            </div>
-          </div>
+            </ul>
+          </PromptSection>
         )}
 
-        {/* Additional Instructions */}
+        {/* Additional instructions */}
         {template.additionalInstructions && (
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Chat className="w-4 h-4 text-muted-foreground" />
-              <p className="text-sm font-medium">Additional Instructions</p>
-            </div>
-            <p className="text-sm text-muted-foreground">{template.additionalInstructions}</p>
-          </div>
+          <PromptSection icon={Chat} label="Additional instructions">
+            <p
+              className="text-foreground whitespace-pre-wrap"
+              style={{ fontSize: 13, lineHeight: 1.6 }}
+            >
+              {template.additionalInstructions}
+            </p>
+          </PromptSection>
         )}
 
         {template.updatedAt && (
-          <p className="text-xs text-muted-foreground pt-2 border-t border-border">
+          <p
+            className="font-mono uppercase text-muted-foreground pt-3 border-t border-border"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          >
             Last updated {new Date(template.updatedAt).toLocaleDateString()}
-            {template.updatedBy ? ` by ${template.updatedBy}` : ""}
+            {template.updatedBy ? ` · ${template.updatedBy}` : ""}
           </p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -491,142 +693,422 @@ function TemplateForm({
   };
 
   return (
-    <Card className="border-primary/30">
-      <CardHeader>
-        <CardTitle className="text-lg">{initial ? "Edit Template" : "New Prompt Template"}</CardTitle>
-        <CardDescription>Configure how the AI evaluates calls for this category</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium">Template Name</label>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Medicare Compliance Rubric" required />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Call Category</label>
-              <Select value={callCategory} onValueChange={setCallCategory} required>
-                <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
-                <SelectContent>
-                  {CALL_CATEGORIES.map(cat => (
-                    <SelectItem
-                      key={cat.value}
-                      value={cat.value}
-                      disabled={usedCategories.has(cat.value) && initial?.callCategory !== cat.value}
-                    >
-                      {cat.label} {usedCategories.has(cat.value) && initial?.callCategory !== cat.value ? "(has template)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
+    <div
+      className="rounded-sm border bg-card"
+      style={{
+        borderColor: "color-mix(in oklch, var(--accent), transparent 60%)",
+      }}
+    >
+      <div className="px-6 pt-5 pb-3 border-b border-border">
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.14em" }}
+        >
+          {initial ? "Edit" : "New"}
+        </div>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+        >
+          {initial ? "Edit template" : "New prompt template"}
+        </div>
+        <p className="text-muted-foreground mt-1.5" style={{ fontSize: 12, lineHeight: 1.5 }}>
+          Configure how the AI evaluates calls for this category.
+        </p>
+      </div>
+      <form onSubmit={handleSubmit} className="px-6 py-5 space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="text-sm font-medium">Evaluation Criteria</label>
-            <p className="text-xs text-muted-foreground mb-1">What should the AI evaluate the agent on? Be specific about your company's standards.</p>
-            <textarea
-              className="w-full border border-border rounded-md p-3 text-sm bg-background min-h-[120px] resize-y"
-              value={evaluationCriteria}
-              onChange={e => setEvaluationCriteria(e.target.value)}
-              placeholder={`Example:\n- Compliance with Medicare regulations and required disclosures (40%)\n- Customer empathy and satisfaction (25%)\n- Accuracy of information provided (20%)\n- Call efficiency and resolution (15%)\n- De-escalation effectiveness when customer is frustrated`}
+            <PromptFieldLabel htmlFor="tmpl-name">Template name</PromptFieldLabel>
+            <Input
+              id="tmpl-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Medicare Compliance Rubric"
               required
             />
           </div>
-
-          {/* Scoring Weights */}
           <div>
-            <label className="text-sm font-medium">Scoring Weights</label>
-            <p className="text-xs text-muted-foreground mb-2">
-              How much each area contributes to the overall score. Total: {totalWeight}%
-              {totalWeight !== 100 && <span className="text-red-500 ml-1">(should be 100%)</span>}
-            </p>
-            <div className="grid grid-cols-4 gap-3">
-              {(Object.keys(weights) as Array<keyof ScoringWeights>).map(key => (
-                <div key={key}>
-                  <label className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</label>
+            <PromptFieldLabel htmlFor="tmpl-cat">Call category</PromptFieldLabel>
+            <Select value={callCategory} onValueChange={setCallCategory} required>
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Select category" />
+              </SelectTrigger>
+              <SelectContent>
+                {CALL_CATEGORIES.map((cat) => (
+                  <SelectItem
+                    key={cat.value}
+                    value={cat.value}
+                    disabled={
+                      usedCategories.has(cat.value) && initial?.callCategory !== cat.value
+                    }
+                  >
+                    {cat.label}
+                    {usedCategories.has(cat.value) && initial?.callCategory !== cat.value
+                      ? " (has template)"
+                      : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div>
+          <PromptFieldLabel htmlFor="tmpl-criteria">Evaluation criteria</PromptFieldLabel>
+          <p
+            className="text-muted-foreground mb-1.5"
+            style={{ fontSize: 11, lineHeight: 1.5 }}
+          >
+            What should the AI evaluate the agent on? Be specific about your company's standards.
+          </p>
+          <textarea
+            id="tmpl-criteria"
+            className="w-full border border-input rounded-sm p-3 text-sm bg-background min-h-[140px] resize-y focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={evaluationCriteria}
+            onChange={(e) => setEvaluationCriteria(e.target.value)}
+            placeholder={`Example:\n- Compliance with Medicare regulations and required disclosures (40%)\n- Customer empathy and satisfaction (25%)\n- Accuracy of information provided (20%)\n- Call efficiency and resolution (15%)\n- De-escalation effectiveness when customer is frustrated`}
+            required
+          />
+        </div>
+
+        {/* Scoring weights */}
+        <div>
+          <div className="flex items-baseline justify-between mb-1.5">
+            <PromptFieldLabel>Scoring weights</PromptFieldLabel>
+            <div
+              className="font-mono uppercase tabular-nums"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.1em",
+                color:
+                  totalWeight === 100 ? "var(--sage)" : "var(--destructive)",
+              }}
+            >
+              Total {totalWeight}%
+              {totalWeight !== 100 ? " · should be 100%" : ""}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {(Object.keys(weights) as Array<keyof ScoringWeights>).map((key) => (
+              <div key={key}>
+                <label
+                  className="font-mono uppercase text-muted-foreground block mb-1"
+                  style={{ fontSize: 9, letterSpacing: "0.12em" }}
+                >
+                  {key.replace(/([A-Z])/g, " $1").trim()}
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={weights[key]}
+                  onChange={(e) => updateWeight(key, parseInt(e.target.value) || 0)}
+                  className="h-9 text-sm tabular-nums font-mono"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Required phrases */}
+        <div>
+          <div className="flex items-end justify-between mb-2 gap-3">
+            <div>
+              <PromptFieldLabel>Required / recommended phrases</PromptFieldLabel>
+              <p
+                className="text-muted-foreground"
+                style={{ fontSize: 11, lineHeight: 1.5 }}
+              >
+                Phrases agents must say. AI flags calls missing required phrases.
+              </p>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={addPhrase}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add phrase
+            </Button>
+          </div>
+          {phrases.length > 0 && (
+            <div className="space-y-2">
+              {phrases.map((p, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Select
+                    value={p.severity}
+                    onValueChange={(v) =>
+                      updatePhrase(i, { severity: v as "required" | "recommended" })
+                    }
+                  >
+                    <SelectTrigger className="w-36 h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="required">Required</SelectItem>
+                      <SelectItem value="recommended">Recommended</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={weights[key]}
-                    onChange={e => updateWeight(key, parseInt(e.target.value) || 0)}
-                    className="h-8 text-sm"
+                    placeholder="Phrase (e.g. 'calling on a recorded line')"
+                    value={p.phrase}
+                    onChange={(e) => updatePhrase(i, { phrase: e.target.value })}
+                    className="flex-1 h-9 text-sm"
                   />
+                  <Input
+                    placeholder="Label"
+                    value={p.label}
+                    onChange={(e) => updatePhrase(i, { label: e.target.value })}
+                    className="w-44 h-9 text-sm"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removePhrase(i)}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
                 </div>
               ))}
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* Required Phrases */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <label className="text-sm font-medium">Required / Recommended Phrases</label>
-                <p className="text-xs text-muted-foreground">Phrases agents must say. AI flags calls missing required phrases.</p>
-              </div>
-              <Button type="button" size="sm" variant="outline" onClick={addPhrase}>
-                <Plus className="w-3 h-3 mr-1" /> Add Phrase
-              </Button>
-            </div>
-            {phrases.length > 0 && (
-              <div className="space-y-2">
-                {phrases.map((p, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <Select value={p.severity} onValueChange={v => updatePhrase(i, { severity: v as "required" | "recommended" })}>
-                      <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="required">Required</SelectItem>
-                        <SelectItem value="recommended">Recommended</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      placeholder="Phrase (e.g. 'calling on a recorded line')"
-                      value={p.phrase}
-                      onChange={e => updatePhrase(i, { phrase: e.target.value })}
-                      className="flex-1 h-8 text-sm"
-                    />
-                    <Input
-                      placeholder="Label"
-                      value={p.label}
-                      onChange={e => updatePhrase(i, { label: e.target.value })}
-                      className="w-40 h-8 text-sm"
-                    />
-                    <Button type="button" size="sm" variant="ghost" onClick={() => removePhrase(i)}>
-                      <X className="w-3 h-3" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+        {/* Additional instructions */}
+        <div>
+          <PromptFieldLabel htmlFor="tmpl-extra">Additional instructions</PromptFieldLabel>
+          <p
+            className="text-muted-foreground mb-1.5"
+            style={{ fontSize: 11, lineHeight: 1.5 }}
+          >
+            Optional. Any other instructions for the AI when analyzing this type of call.
+          </p>
+          <textarea
+            id="tmpl-extra"
+            className="w-full border border-input rounded-sm p-3 text-sm bg-background min-h-[80px] resize-y focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={additionalInstructions}
+            onChange={(e) => setAdditionalInstructions(e.target.value)}
+            placeholder="Any other instructions for the AI when analyzing this type of call..."
+          />
+        </div>
 
-          {/* Additional Instructions */}
-          <div>
-            <label className="text-sm font-medium">Additional Instructions (optional)</label>
-            <textarea
-              className="w-full border border-border rounded-md p-3 text-sm bg-background min-h-[80px] resize-y"
-              value={additionalInstructions}
-              onChange={e => setAdditionalInstructions(e.target.value)}
-              placeholder="Any other instructions for the AI when analyzing this type of call..."
+        <div className="flex items-center justify-between pt-4 border-t border-border">
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              className="rounded-sm"
             />
+            <span>
+              Active{" "}
+              <span className="text-muted-foreground" style={{ fontSize: 12 }}>
+                (template applies to new calls)
+              </span>
+            </span>
+          </label>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isPending || !name || !callCategory || !evaluationCriteria}
+            >
+              <FloppyDisk className="w-4 h-4 mr-1.5" />
+              {initial ? "Update template" : "Create template"}
+            </Button>
           </div>
+        </div>
+      </form>
+    </div>
+  );
+}
 
-          <div className="flex items-center justify-between pt-2 border-t border-border">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} className="rounded" />
-              Active (template applies to new calls)
-            </label>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-              <Button type="submit" disabled={isPending || !name || !callCategory || !evaluationCriteria}>
-                <FloppyDisk className="w-4 h-4 mr-2" />
-                {initial ? "Update" : "Create"} Template
-              </Button>
-            </div>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+// ─────────────────────────────────────────────────────────────
+// Inline helpers
+// ─────────────────────────────────────────────────────────────
+function PromptFieldLabel({
+  children,
+  htmlFor,
+}: {
+  children: React.ReactNode;
+  htmlFor?: string;
+}) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      className="font-mono uppercase text-muted-foreground block mb-1.5"
+      style={{ fontSize: 10, letterSpacing: "0.12em" }}
+    >
+      {children}
+    </label>
+  );
+}
+
+function PromptStatusPill({
+  tone,
+  children,
+}: {
+  tone: "sage" | "accent" | "neutral";
+  children: React.ReactNode;
+}) {
+  const palette = {
+    sage: {
+      bg: "var(--sage-soft)",
+      border: "color-mix(in oklch, var(--sage), transparent 55%)",
+      color: "var(--sage)",
+    },
+    accent: {
+      bg: "var(--copper-soft)",
+      border: "color-mix(in oklch, var(--accent), transparent 55%)",
+      color: "var(--accent)",
+    },
+    neutral: {
+      bg: "var(--paper-2)",
+      border: "var(--border)",
+      color: "var(--muted-foreground)",
+    },
+  }[tone];
+  return (
+    <span
+      className="font-mono uppercase inline-flex items-center rounded-sm shrink-0"
+      style={{
+        fontSize: 9,
+        letterSpacing: "0.1em",
+        padding: "2px 7px",
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        color: palette.color,
+        fontWeight: 500,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function PromptSection({
+  icon: IconComp,
+  label,
+  children,
+}: {
+  icon?: Icon;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div
+        className="font-mono uppercase text-muted-foreground flex items-center gap-1.5 mb-2"
+        style={{ fontSize: 10, letterSpacing: "0.12em" }}
+      >
+        {IconComp && <IconComp style={{ width: 11, height: 11 }} />}
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function BackTestStat({
+  label,
+  value,
+  color,
+  isText,
+}: {
+  label: string;
+  value: number | string | null;
+  color?: string;
+  isText?: boolean;
+}) {
+  return (
+    <div>
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 9, letterSpacing: "0.12em" }}
+      >
+        {label}
+      </div>
+      <div
+        className={`font-display font-medium mt-0.5 ${isText ? "" : "tabular-nums"}`}
+        style={{
+          fontSize: 20,
+          lineHeight: 1,
+          color: color || "var(--foreground)",
+          letterSpacing: "-0.3px",
+        }}
+      >
+        {value ?? "—"}
+      </div>
+    </div>
+  );
+}
+
+function DeltaPill({
+  tone,
+  children,
+}: {
+  tone: "sage" | "amber" | "neutral";
+  children: React.ReactNode;
+}) {
+  const palette = {
+    sage: {
+      bg: "var(--sage-soft)",
+      border: "color-mix(in oklch, var(--sage), transparent 55%)",
+      color: "var(--sage)",
+    },
+    amber: {
+      bg: "var(--amber-soft)",
+      border: "color-mix(in oklch, var(--amber), transparent 50%)",
+      color: "color-mix(in oklch, var(--amber), var(--ink) 30%)",
+    },
+    neutral: {
+      bg: "var(--paper-2)",
+      border: "var(--border)",
+      color: "var(--muted-foreground)",
+    },
+  }[tone];
+  return (
+    <span
+      className="font-mono tabular-nums inline-flex items-center rounded-sm shrink-0"
+      style={{
+        fontSize: 11,
+        letterSpacing: "0.02em",
+        padding: "2px 8px",
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        color: palette.color,
+        fontWeight: 500,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-sm"
+      style={{
+        background: "var(--warm-red-soft)",
+        border: "1px solid color-mix(in oklch, var(--destructive), transparent 60%)",
+        borderLeft: "3px solid var(--destructive)",
+        padding: "12px 16px",
+        fontSize: 13,
+        color: "color-mix(in oklch, var(--destructive), var(--ink) 20%)",
+      }}
+    >
+      <Warning style={{ width: 16, height: 16, marginTop: 2, flexShrink: 0 }} />
+      <div>
+        <div
+          className="font-mono uppercase"
+          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+        >
+          Load failed
+        </div>
+        <p className="mt-1">{message}</p>
+      </div>
+    </div>
   );
 }

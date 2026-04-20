@@ -1,8 +1,62 @@
-import { Gear, Sun, Moon } from "@phosphor-icons/react";
+import { Sun, Moon } from "@phosphor-icons/react";
+import { Link } from "wouter";
 import { useAppearance } from "@/components/appearance-provider";
 import type { Theme, BackgroundPattern, GlassEffect } from "@/lib/appearance";
 import { cn } from "@/lib/utils";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper primitives — kept local to this page (matches the pattern
+// used in admin.tsx / employees.tsx) so each installment can move
+// independently. Batch B will consolidate into a shared module.
+// ─────────────────────────────────────────────────────────────
+
+function SectionKicker({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="font-mono uppercase text-muted-foreground"
+      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SettingsPanel({
+  kicker,
+  title,
+  description,
+  children,
+}: {
+  kicker: string;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-sm border border-border bg-card overflow-hidden">
+      <div className="p-6 border-b border-border">
+        <SectionKicker>{kicker}</SectionKicker>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: 18, letterSpacing: "-0.2px", lineHeight: 1.2 }}
+        >
+          {title}
+        </div>
+        {description && (
+          <p className="text-sm text-muted-foreground mt-1.5" style={{ maxWidth: 560 }}>
+            {description}
+          </p>
+        )}
+      </div>
+      <div className="p-6">{children}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Warm-paper segmented toggle (mono uppercase chips, inverted-ink when
+// selected). Mirrors the AdminTab pattern.
+// ─────────────────────────────────────────────────────────────
 
 function ToggleGroup<T extends string>({
   value,
@@ -14,45 +68,72 @@ function ToggleGroup<T extends string>({
   options: { value: T; label: string; icon?: React.ReactNode }[];
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 gap-0.5 flex-wrap">
-      {options.map((opt) => (
-        <button
-          key={opt.value}
-          onClick={() => onChange(opt.value)}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-            value === opt.value
-              ? "bg-primary text-primary-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted"
-          )}
-        >
-          {opt.icon}
-          {opt.label}
-        </button>
-      ))}
+    <div className="inline-flex gap-2 flex-wrap">
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={cn(
+              "font-mono uppercase inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 transition-colors",
+              active
+                ? "bg-foreground text-background border border-foreground"
+                : "bg-card border border-border text-foreground hover:bg-secondary",
+            )}
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          >
+            {opt.icon}
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// GlassPreview — intentionally retains its pre-warm-paper blue gradient
+// chrome; the preview is a "here's what each glass level does" sample,
+// not a canvas we style to match the surrounding page. Do NOT migrate
+// this SVG/gradient to warm-paper tokens.
+// ─────────────────────────────────────────────────────────────
+
 function GlassPreview({ level }: { level: GlassEffect }) {
   const blurMap = { subtle: "backdrop-blur-sm", medium: "backdrop-blur-md", strong: "backdrop-blur-xl" };
-  const alphaMap = { subtle: "bg-white/60 dark:bg-slate-800/60", medium: "bg-white/45 dark:bg-slate-800/50", strong: "bg-white/30 dark:bg-slate-800/35" };
+  const alphaMap = {
+    subtle: "bg-white/60 dark:bg-slate-800/60",
+    medium: "bg-white/45 dark:bg-slate-800/50",
+    strong: "bg-white/30 dark:bg-slate-800/35",
+  };
   return (
-    <div className="relative w-full h-20 rounded-lg overflow-hidden">
+    <div className="relative w-full h-20 overflow-hidden">
       <div className="absolute inset-0 bg-gradient-to-br from-blue-400 via-indigo-300 to-cyan-400 dark:from-blue-600 dark:via-indigo-500 dark:to-cyan-600" />
-      <div className={cn("absolute inset-2 rounded-md border border-white/40 dark:border-white/10 flex items-center justify-center", blurMap[level], alphaMap[level])}>
+      <div
+        className={cn(
+          "absolute inset-2 rounded-sm border border-white/40 dark:border-white/10 flex items-center justify-center",
+          blurMap[level],
+          alphaMap[level],
+        )}
+      >
         <span className="text-xs font-medium text-foreground/80">Card preview</span>
       </div>
     </div>
   );
 }
 
-/** Mini SVG thumbnails for each background option */
+// ─────────────────────────────────────────────────────────────
+// BgPreview — SVG thumbnails for each decorative background option.
+// These are intentionally NOT warm-paper styled: they show the user
+// what each non-default background looks like so they can pick one if
+// they prefer a different aesthetic over warm paper.
+// ─────────────────────────────────────────────────────────────
+
 function BgPreview({ bg }: { bg: BackgroundPattern }) {
   const base = "absolute inset-0";
   return (
-    <div className="relative w-full h-full overflow-hidden rounded-md">
-      {/* Base color */}
+    <div className="relative w-full h-full overflow-hidden">
       <div className={cn(base, "bg-slate-50 dark:bg-slate-900")} />
 
       {bg === "hexagons" && (
@@ -119,7 +200,12 @@ function BgPreview({ bg }: { bg: BackgroundPattern }) {
 
       {bg === "none" && (
         <div className={cn(base, "flex items-center justify-center")}>
-          <span className="text-[9px] text-muted-foreground">Plain</span>
+          <span
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 9, letterSpacing: "0.1em" }}
+          >
+            Plain
+          </span>
         </div>
       )}
     </div>
@@ -134,100 +220,175 @@ const BG_OPTIONS: { value: BackgroundPattern; label: string; description: string
   { value: "topoMesh", label: "Topo Mesh", description: "Organic contour lines" },
 ];
 
+// ─────────────────────────────────────────────────────────────
+// Selection tile — warm-paper card with a (possibly non-warm-paper)
+// preview inset, a mono-uppercase label, and a description. Copper
+// accent ring when the option is active.
+// ─────────────────────────────────────────────────────────────
+
+function SelectionTile({
+  active,
+  onClick,
+  label,
+  description,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-sm overflow-hidden text-left transition-colors bg-card border",
+        active ? "" : "hover:bg-secondary/40",
+      )}
+      style={{
+        borderColor: active
+          ? "var(--accent)"
+          : "var(--border)",
+        boxShadow: active
+          ? "inset 0 0 0 1px color-mix(in oklch, var(--accent), transparent 70%)"
+          : "none",
+      }}
+    >
+      <div className="h-20">{children}</div>
+      <div className="p-3 border-t border-border">
+        <div
+          className="font-mono uppercase"
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.1em",
+            color: active ? "var(--accent)" : "var(--foreground)",
+          }}
+        >
+          {label}
+        </div>
+        {description && (
+          <p className="text-xs text-muted-foreground mt-1" style={{ lineHeight: 1.4 }}>
+            {description}
+          </p>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
   const { theme, background, glass, setTheme, setBackground, setGlass } = useAppearance();
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6 relative z-10">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-          <Gear className="w-6 h-6" />
-          Settings
-        </h1>
-        <p className="text-muted-foreground mt-1">Customize the look and feel of your dashboard</p>
+    <div className="min-h-screen bg-background text-foreground" data-testid="settings-page">
+      {/* App bar */}
+      <div
+        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        style={{ fontSize: 12 }}
+      >
+        <nav
+          className="flex items-center gap-2 font-mono uppercase"
+          style={{ fontSize: 11, letterSpacing: "0.04em" }}
+          aria-label="Breadcrumb"
+        >
+          <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground/40">›</span>
+          <span className="text-foreground">Settings</span>
+        </nav>
       </div>
 
-      {/* Theme */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Theme</CardTitle>
-          <CardDescription>Switch between light and dark mode</CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Page header */}
+      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+        <SectionKicker>Appearance</SectionKicker>
+        <div
+          className="font-display font-medium text-foreground mt-1"
+          style={{ fontSize: "clamp(24px, 3vw, 30px)", letterSpacing: "-0.6px", lineHeight: 1.15 }}
+        >
+          Settings
+        </div>
+        <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
+          Tune the look and feel of the dashboard. Preferences are stored per-browser (not per-account) and apply
+          immediately without a reload.
+        </p>
+      </div>
+
+      <div className="px-7 py-6 max-w-4xl space-y-6">
+        {/* Theme */}
+        <SettingsPanel
+          kicker="Theme"
+          title="Light / dark"
+          description="Switches the warm-paper palette into its dark-mode variant. Surfaces stay cool-neutral in dark mode to avoid a muddy-warm tint."
+        >
           <ToggleGroup<Theme>
             value={theme}
             onChange={setTheme}
             options={[
-              { value: "light", label: "Light", icon: <Sun className="w-4 h-4" /> },
-              { value: "dark", label: "Dark", icon: <Moon className="w-4 h-4" /> },
+              { value: "light", label: "Light", icon: <Sun style={{ width: 12, height: 12 }} /> },
+              { value: "dark", label: "Dark", icon: <Moon style={{ width: 12, height: 12 }} /> },
             ]}
           />
-        </CardContent>
-      </Card>
+        </SettingsPanel>
 
-      {/* Background */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Background</CardTitle>
-          <CardDescription>Choose a decorative background pattern</CardDescription>
-        </CardHeader>
-        <CardContent>
+        {/* Background */}
+        <SettingsPanel
+          kicker="Background"
+          title="Decorative pattern"
+          description="Pick a full-page decorative background, or leave it plain (recommended for warm-paper). The previews below intentionally display the native style of each option; they are NOT rendered in the warm-paper palette."
+        >
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {BG_OPTIONS.map((opt) => (
-              <button
+              <SelectionTile
                 key={opt.value}
+                active={background === opt.value}
                 onClick={() => setBackground(opt.value)}
-                className={cn(
-                  "rounded-lg border-2 transition-all overflow-hidden text-left",
-                  background === opt.value ? "border-primary ring-2 ring-primary/20" : "border-border hover:border-muted-foreground/30"
-                )}
+                label={opt.label}
+                description={opt.description}
               >
-                <div className="h-20 relative">
-                  <BgPreview bg={opt.value} />
-                </div>
-                <div className="p-2">
-                  <p className="text-xs font-medium text-foreground">{opt.label}</p>
-                  <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{opt.description}</p>
-                </div>
-              </button>
+                <BgPreview bg={opt.value} />
+              </SelectionTile>
             ))}
           </div>
-        </CardContent>
-      </Card>
+        </SettingsPanel>
 
-      {/* Glass Effect */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Glass Effect</CardTitle>
-          <CardDescription>Control the frosted glass intensity on cards and panels</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <ToggleGroup<GlassEffect>
-            value={glass}
-            onChange={setGlass}
-            options={[
-              { value: "subtle", label: "Subtle" },
-              { value: "medium", label: "Medium" },
-              { value: "strong", label: "Strong" },
-            ]}
-          />
-          <div className="grid grid-cols-3 gap-3">
-            {(["subtle", "medium", "strong"] as GlassEffect[]).map((level) => (
-              <button
-                key={level}
-                onClick={() => setGlass(level)}
-                className={cn(
-                  "rounded-lg border-2 transition-all overflow-hidden",
-                  glass === level ? "border-primary ring-2 ring-primary/20" : "border-border hover:border-muted-foreground/30"
-                )}
-              >
-                <GlassPreview level={level} />
-                <p className="text-xs font-medium text-center py-1.5 capitalize text-muted-foreground">{level}</p>
-              </button>
-            ))}
+        {/* Glass effect */}
+        <SettingsPanel
+          kicker="Glass"
+          title="Frosted card intensity"
+          description="Controls how translucent cards and the sidebar appear when a decorative background is active. No visible effect when Background is set to None."
+        >
+          <div className="space-y-5">
+            <ToggleGroup<GlassEffect>
+              value={glass}
+              onChange={setGlass}
+              options={[
+                { value: "subtle", label: "Subtle" },
+                { value: "medium", label: "Medium" },
+                { value: "strong", label: "Strong" },
+              ]}
+            />
+            <div className="grid grid-cols-3 gap-3">
+              {(["subtle", "medium", "strong"] as GlassEffect[]).map((level) => (
+                <SelectionTile
+                  key={level}
+                  active={glass === level}
+                  onClick={() => setGlass(level)}
+                  label={level}
+                >
+                  <GlassPreview level={level} />
+                </SelectionTile>
+              ))}
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </SettingsPanel>
+      </div>
     </div>
   );
 }
