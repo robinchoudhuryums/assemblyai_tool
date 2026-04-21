@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Brain, CheckCircle, Clock, Key, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, Warning, X, XCircle } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Brain, CheckCircle, Clock, Key, PencilSimple, Shield, Sliders, Trash, UserPlus, Users, Warning, X, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,7 +11,7 @@ import { USER_ROLES } from "@shared/schema";
 import type { AccessRequest, Employee } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
-type TabView = "users" | "requests" | "roles" | "pipeline" | "models";
+type TabView = "users" | "requests" | "roles" | "pipeline" | "models" | "reanalyze";
 
 interface DbUser {
   id: string;
@@ -263,6 +263,7 @@ export default function AdminPage() {
           {tab === "roles" && "Role definitions"}
           {tab === "pipeline" && "Pipeline settings"}
           {tab === "models" && "AI models"}
+          {tab === "reanalyze" && "Bulk re-analysis"}
         </div>
       </div>
 
@@ -281,6 +282,7 @@ export default function AdminPage() {
         <AdminTab icon={Shield} label="Role Definitions" active={tab === "roles"} onClick={() => setTab("roles")} />
         <AdminTab icon={Sliders} label="Pipeline Settings" active={tab === "pipeline"} onClick={() => setTab("pipeline")} />
         <AdminTab icon={Brain} label="AI Models" active={tab === "models"} onClick={() => setTab("models")} />
+        <AdminTab icon={ArrowCounterClockwise} label="Bulk Re-analysis" active={tab === "reanalyze"} onClick={() => setTab("reanalyze")} />
       </div>
 
       <div className="px-7 py-6 space-y-6">
@@ -1019,6 +1021,9 @@ export default function AdminPage() {
 
         {/* ════════════════ AI MODELS TAB ════════════════ */}
         {tab === "models" && <ModelTiersCard />}
+
+        {/* ════════════════ BULK RE-ANALYSIS TAB ════════════════ */}
+        {tab === "reanalyze" && <BulkReanalyzeCard />}
       </div>
     </div>
   );
@@ -1894,5 +1899,210 @@ function AdminTab({
         </span>
       )}
     </button>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// Bulk Re-analysis — admin tool to re-run the AI pipeline against
+// historical calls. Useful after prompt template edits or model
+// swaps to refresh scores against the current prompt/model.
+// Backend endpoint POST /api/calls/bulk-reanalyze accepts either
+// a filter or an explicit callIds list; this UI uses the filter.
+// ════════════════════════════════════════════════════════════
+interface BulkReanalyzeResponse {
+  message: string;
+  results: Array<{ callId: string; status: string }>;
+}
+
+function BulkReanalyzeCard() {
+  const { toast } = useToast();
+  const [callCategory, setCallCategory] = useState<string>("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+  const [limit, setLimit] = useState(20);
+  const [lastResult, setLastResult] = useState<BulkReanalyzeResponse | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async (): Promise<BulkReanalyzeResponse> => {
+      const filter: Record<string, unknown> = { limit };
+      if (callCategory) filter.callCategory = callCategory;
+      if (from) filter.from = from;
+      if (to) filter.to = to;
+      if (employeeId) filter.employeeId = employeeId;
+      const res = await apiRequest("POST", "/api/calls/bulk-reanalyze", { filter });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setLastResult(data);
+      const queued = data.results.filter(r => r.status === "queued").length;
+      toast({
+        title: queued > 0 ? "Re-analysis queued" : "No calls queued",
+        description: data.message,
+      });
+      sharedQueryClient.invalidateQueries({ queryKey: ["/api/admin/queue-status"] });
+    },
+    onError: (err) => {
+      toast({
+        title: "Bulk re-analysis failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  return (
+    <div className="space-y-5">
+      <div
+        className="px-5 py-4 border border-border"
+        style={{
+          backgroundColor: "var(--amber-soft)",
+          boxShadow: "inset 3px 0 0 var(--amber)",
+        }}
+      >
+        <div className="font-medium text-foreground mb-1" style={{ fontSize: 13 }}>
+          Bulk re-analysis queues calls through the AI pipeline again.
+        </div>
+        <div className="text-xs text-muted-foreground" style={{ lineHeight: 1.55 }}>
+          Use this after editing prompt templates or swapping models to refresh
+          historical scores against the current configuration. Matching calls
+          are enqueued in the shared audio-processing queue (max {limit} per
+          run). Manager-edited analyses are preserved (UPSERT semantics).
+          Billed to AssemblyAI + Bedrock at standard rates.
+        </div>
+      </div>
+
+      <div
+        className="px-6 py-5 border border-border space-y-4"
+        style={{ backgroundColor: "var(--card)" }}
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1.5">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Call category
+            </span>
+            <select
+              value={callCategory}
+              onChange={(e) => setCallCategory(e.target.value)}
+              className="h-9 rounded-sm border border-input bg-background px-3 text-sm"
+            >
+              <option value="">All categories</option>
+              <option value="inbound">Inbound</option>
+              <option value="outbound">Outbound</option>
+              <option value="internal">Internal</option>
+              <option value="vendor">Vendor</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Employee ID (optional)
+            </span>
+            <input
+              type="text"
+              value={employeeId}
+              onChange={(e) => setEmployeeId(e.target.value)}
+              placeholder="UUID"
+              className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-mono"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              From (ISO date)
+            </span>
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              className="h-9 rounded-sm border border-input bg-background px-3 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              To (ISO date)
+            </span>
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              className="h-9 rounded-sm border border-input bg-background px-3 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            >
+              Limit (max 100)
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={limit}
+              onChange={(e) => setLimit(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+              className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-mono"
+            />
+          </label>
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+            className="font-mono uppercase rounded-sm px-4 py-2 bg-primary text-[var(--paper)] border border-primary disabled:opacity-60"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          >
+            {mutation.isPending ? "Queueing…" : "Queue re-analysis"}
+          </button>
+        </div>
+      </div>
+
+      {lastResult && (
+        <div
+          className="px-5 py-4 border border-border text-sm"
+          style={{ backgroundColor: "var(--card)" }}
+        >
+          <div className="font-medium text-foreground mb-2">
+            Last run: {lastResult.message}
+          </div>
+          {lastResult.results.length > 0 && (
+            <div
+              className="font-mono text-xs text-muted-foreground"
+              style={{ maxHeight: 160, overflowY: "auto" }}
+            >
+              {lastResult.results.map((r, i) => (
+                <div key={i} className="grid grid-cols-[1fr_auto] gap-4 py-0.5">
+                  <span className="truncate">{r.callId}</span>
+                  <span
+                    style={{
+                      color:
+                        r.status === "queued"
+                          ? "var(--sage)"
+                          : r.status === "not_found" || r.status === "no_audio"
+                          ? "var(--destructive)"
+                          : "var(--muted-foreground)",
+                    }}
+                  >
+                    {r.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

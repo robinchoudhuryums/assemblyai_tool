@@ -177,6 +177,10 @@ CREATE TABLE IF NOT EXISTS coaching_sessions (
   action_plan JSONB,
   status VARCHAR(50) DEFAULT 'pending',
   due_date TIMESTAMPTZ,
+  -- Manager-supplied effectiveness rating captured at session close.
+  -- Nullable; populated only once the manager rates the outcome.
+  effectiveness_rating VARCHAR(20),
+  effectiveness_note TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   completed_at TIMESTAMPTZ
 );

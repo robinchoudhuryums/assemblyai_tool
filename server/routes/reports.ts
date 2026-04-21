@@ -1049,4 +1049,143 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
       res.status(500).json({ message: "Failed to load scoring corrections" });
     }
   });
+
+  // Manager correction impact dashboard (Tier 2 #5).
+  //
+  // Finds completed calls that the AI scored in a similar range to this
+  // manager's recent corrections, but that this manager has NOT touched yet.
+  // The hypothesis: if a manager repeatedly corrects AI scores of ~3.5 up
+  // to ~5.0 in inbound calls, other inbound calls AI scored ~3.5 may be
+  // similarly mis-scored. Surfacing them closes the feedback loop.
+  //
+  // Quick heuristic (no embedding lookup required): group corrections by
+  // category + direction, compute the mean "original" (AI-assigned) score,
+  // and find completed calls in the same category where the AI score is
+  // within WINDOW points of that mean AND the call has no manualEdits entry
+  // from this user. Pure read; no mutations.
+  router.get("/api/scoring-corrections/similar-uncorrected", requireAuth, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const username = req.user!.username;
+      const windowScore = 0.5;
+      const perGroupLimit = 5;
+      const totalCap = clampInt(typeof req.query.limit === "string" ? req.query.limit : undefined, 20, 1, 50);
+      const sinceDays = clampInt(typeof req.query.days === "string" ? req.query.days : undefined, 30, 1, 180);
+
+      // Source corrections: the user's last ~20 in the window.
+      const corrections = getRecentCorrectionsByUser(username, 20)
+        .filter(c => {
+          const t = new Date(c.correctedAt).getTime();
+          return Number.isFinite(t) && t >= Date.now() - sinceDays * 86400000;
+        });
+      if (corrections.length === 0) {
+        res.json({ suggestions: [], groups: [] });
+        return;
+      }
+
+      // Group by (category || 'general', direction). Mean of originalScore is
+      // our "this is what AI tends to mis-score" centroid.
+      type GroupKey = string;
+      const groups = new Map<GroupKey, {
+        category: string;
+        direction: "upgraded" | "downgraded";
+        centroid: number;
+        count: number;
+      }>();
+      for (const c of corrections) {
+        const category = c.callCategory || "general";
+        const key = `${category}::${c.direction}`;
+        const existing = groups.get(key);
+        if (existing) {
+          existing.centroid = (existing.centroid * existing.count + c.originalScore) / (existing.count + 1);
+          existing.count += 1;
+        } else {
+          groups.set(key, { category, direction: c.direction, centroid: c.originalScore, count: 1 });
+        }
+      }
+
+      // Require at least 2 corrections per group so a single outlier doesn't
+      // generate a suggestion surface.
+      const qualifyingGroups = [...groups.values()]
+        .filter(g => g.count >= 2)
+        .sort((a, b) => b.count - a.count);
+
+      if (qualifyingGroups.length === 0) {
+        res.json({ suggestions: [], groups: [] });
+        return;
+      }
+
+      // Pull a window of recent completed calls, filter per-group.
+      const sinceDate = new Date(Date.now() - sinceDays * 86400000);
+      const recentCalls = await storage.getCallsSinceWithDetails(sinceDate);
+
+      const alreadyCorrectedCallIds = new Set(
+        corrections.filter(c => c.correctedBy === username).map(c => c.callId),
+      );
+
+      type Suggestion = {
+        callId: string;
+        aiScore: number;
+        callCategory: string | null | undefined;
+        direction: "upgraded" | "downgraded";
+        centroid: number;
+        uploadedAt: string | undefined;
+        employeeName: string | undefined;
+      };
+      const suggestions: Suggestion[] = [];
+
+      for (const group of qualifyingGroups) {
+        const perGroup: Suggestion[] = [];
+        for (const call of recentCalls) {
+          if (alreadyCorrectedCallIds.has(call.id)) continue;
+          const rawScore = call.analysis?.performanceScore;
+          if (rawScore === undefined || rawScore === null || String(rawScore) === "") continue;
+          const aiScore = parseFloat(String(rawScore));
+          if (!Number.isFinite(aiScore)) continue;
+
+          // Category match: "general" centroid matches any category (global
+          // pattern); otherwise require exact match.
+          const callCat = call.callCategory || "general";
+          if (group.category !== "general" && callCat !== group.category) continue;
+
+          // Score proximity to the group's centroid.
+          if (Math.abs(aiScore - group.centroid) > windowScore) continue;
+
+          // Exclude calls that already have manualEdits entries from this user.
+          const edits = Array.isArray(call.analysis?.manualEdits) ? call.analysis!.manualEdits : [];
+          const userAlreadyEdited = edits.some(
+            (e: any) => typeof e?.editedBy === "string" && e.editedBy === username,
+          );
+          if (userAlreadyEdited) continue;
+
+          perGroup.push({
+            callId: call.id,
+            aiScore,
+            callCategory: call.callCategory,
+            direction: group.direction,
+            centroid: Math.round(group.centroid * 10) / 10,
+            uploadedAt: call.uploadedAt,
+            employeeName: call.employee?.name,
+          });
+          if (perGroup.length >= perGroupLimit) break;
+        }
+        suggestions.push(...perGroup);
+        if (suggestions.length >= totalCap) break;
+      }
+
+      res.json({
+        suggestions: suggestions.slice(0, totalCap),
+        groups: qualifyingGroups.map(g => ({
+          category: g.category,
+          direction: g.direction,
+          centroid: Math.round(g.centroid * 10) / 10,
+          count: g.count,
+        })),
+      });
+    } catch (error) {
+      logger.error("failed to compute similar-uncorrected suggestions", {
+        error: (error as Error).message,
+      });
+      res.status(500).json({ message: "Failed to compute suggestions" });
+    }
+  });
 }

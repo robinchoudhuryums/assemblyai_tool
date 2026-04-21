@@ -273,6 +273,10 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "ALTER TABLE calls ADD COLUMN IF NOT EXISTS excluded_from_metrics BOOLEAN DEFAULT FALSE",
     "UPDATE calls SET excluded_from_metrics = FALSE WHERE excluded_from_metrics IS NULL",
     "ALTER TABLE calls ALTER COLUMN excluded_from_metrics SET NOT NULL",
+    // Coaching effectiveness rating (subjective manager closure signal).
+    // Complements the statistical before/after outcome with causal judgment.
+    "ALTER TABLE coaching_sessions ADD COLUMN IF NOT EXISTS effectiveness_rating VARCHAR(20)",
+    "ALTER TABLE coaching_sessions ADD COLUMN IF NOT EXISTS effectiveness_note TEXT",
     `CREATE TABLE IF NOT EXISTS simulated_calls (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       title VARCHAR(500) NOT NULL,

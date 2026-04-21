@@ -646,17 +646,64 @@ export function registerCallRoutes(
   });
 
   // ==================== BULK RE-ANALYSIS (admin only) ====================
+  // Two request shapes:
+  //  1. Explicit: { callIds: [uuid, ...] } — user selected calls in the UI.
+  //  2. Filter:   { filter: { callCategory?, from?, to?, employeeId?, limit? } }
+  //     — resolves to the N most recent completed calls matching the
+  //     filters and re-enqueues them. Useful after prompt template edits
+  //     or model swaps to refresh historical scores. Synthetic calls are
+  //     always excluded. Limit default 20, cap 100 to bound spend.
   router.post("/api/calls/bulk-reanalyze", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
-      const bulkSchema = z.object({
-        callIds: z.array(z.string().uuid()).min(1).max(50),
-      }).strict();
+      const bulkSchema = z.union([
+        z.object({
+          callIds: z.array(z.string().uuid()).min(1).max(50),
+        }).strict(),
+        z.object({
+          filter: z.object({
+            callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
+            from: z.string().optional(),
+            to: z.string().optional(),
+            employeeId: z.string().uuid().optional(),
+            limit: z.number().int().min(1).max(100).default(20),
+          }),
+        }).strict(),
+      ]);
       const parsed = bulkSchema.safeParse(req.body);
       if (!parsed.success) {
         sendValidationError(res, "Invalid bulk-reanalyze payload", parsed.error);
         return;
       }
-      const { callIds } = parsed.data;
+
+      // Resolve callIds from either payload variant.
+      let callIds: string[];
+      if ("callIds" in parsed.data) {
+        callIds = parsed.data.callIds;
+      } else {
+        const { callCategory, from, to, employeeId, limit } = parsed.data.filter;
+        // Use the existing getCallsWithDetails filter surface. Filter to
+        // completed status so we only re-run calls that have audio and
+        // finished a prior pipeline cycle.
+        const candidates = await storage.getCallsWithDetails({
+          status: "completed",
+          employee: employeeId,
+        });
+        const fromMs = from ? new Date(from).getTime() : 0;
+        const toMs = to ? new Date(to).getTime() : Infinity;
+        const filtered = candidates
+          .filter(c => !callCategory || c.callCategory === callCategory)
+          .filter(c => {
+            const t = new Date(c.uploadedAt || 0).getTime();
+            return Number.isFinite(t) && t >= fromMs && t <= toMs;
+          })
+          .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+          .slice(0, limit);
+        callIds = filtered.map(c => c.id);
+        if (callIds.length === 0) {
+          res.json({ message: "No calls matched the filter", results: [] });
+          return;
+        }
+      }
 
       const jobQueue = getJobQueue();
       const results: { callId: string; status: string }[] = [];
@@ -716,7 +763,11 @@ export function registerCallRoutes(
         timestamp: new Date().toISOString(),
         event: "bulk_reanalyze",
         resourceType: "calls",
-        resourceId: callIds.join(","),
+        // Cap resourceId at the first 10 IDs + a count suffix so the audit
+        // log row doesn't balloon when filter mode resolves 100 calls.
+        resourceId: callIds.length <= 10
+          ? callIds.join(",")
+          : `${callIds.slice(0, 10).join(",")},+${callIds.length - 10} more`,
         detail: `Bulk re-analysis of ${callIds.length} calls`,
       });
 

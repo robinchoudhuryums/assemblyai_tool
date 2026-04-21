@@ -416,6 +416,12 @@ export const insertCoachingSessionSchema = z.object({
   })).optional(),
   status: z.enum(["pending", "in_progress", "completed", "dismissed"]).default("pending"),
   dueDate: z.string().optional(),
+  // Manager-supplied subjective effectiveness rating captured at session
+  // close. Complements the statistical before/after outcome metric with
+  // causal judgment — "did this coaching actually help this agent?".
+  // Optional so existing sessions don't need backfill.
+  effectivenessRating: z.enum(["helpful", "neutral", "not_helpful"]).optional(),
+  effectivenessNote: z.string().max(1000).optional(),
 });
 
 export const coachingSessionSchema = insertCoachingSessionSchema.extend({

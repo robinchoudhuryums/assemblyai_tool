@@ -109,6 +109,8 @@ function mapCoachingSession(row: any): CoachingSession {
     assignedBy: row.assigned_by, category: row.category, title: row.title,
     notes: row.notes, actionPlan: row.action_plan, status: row.status,
     dueDate: row.due_date?.toISOString?.() ?? row.due_date,
+    effectivenessRating: row.effectiveness_rating ?? undefined,
+    effectivenessNote: row.effectiveness_note ?? undefined,
     createdAt: row.created_at?.toISOString?.() ?? row.created_at,
     completedAt: row.completed_at?.toISOString?.() ?? row.completed_at,
   };
@@ -1321,11 +1323,13 @@ export class PostgresStorage implements IStorage {
     const completedAt = merged.status === "completed" && !current.completedAt ? new Date().toISOString() : merged.completedAt;
     const { rows } = await this.db.query(
       `UPDATE coaching_sessions SET employee_id=$2, call_id=$3, assigned_by=$4, category=$5,
-       title=$6, notes=$7, action_plan=$8, status=$9, due_date=$10, completed_at=$11
+       title=$6, notes=$7, action_plan=$8, status=$9, due_date=$10, completed_at=$11,
+       effectiveness_rating=$12, effectiveness_note=$13
        WHERE id=$1 RETURNING *`,
       [id, merged.employeeId, merged.callId, merged.assignedBy, merged.category,
        merged.title, merged.notes, JSON.stringify(merged.actionPlan ?? null),
-       merged.status, merged.dueDate, completedAt],
+       merged.status, merged.dueDate, completedAt,
+       merged.effectivenessRating ?? null, merged.effectivenessNote ?? null],
     );
     return rows[0] ? mapCoachingSession(rows[0]) : undefined;
   }
