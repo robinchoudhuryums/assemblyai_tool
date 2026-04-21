@@ -92,10 +92,13 @@ app.use((req, _res, next) => {
   // Only validate in production where trust proxy is set
   if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-for"]) {
     const forwarded = (req.headers["x-forwarded-for"] as string).split(",").map(s => s.trim());
-    // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6)
-    // IPv4: 1-3 digits separated by dots (e.g. 192.168.1.1)
-    // IPv6: hex groups separated by colons, optionally with :: compression
-    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+    // Validate each IP in the chain is a plausible IP address (IPv4 or IPv6).
+    // IPv4: four dot-separated octets, each 0-255. The prior regex `\d{1,3}`
+    // accepted impossible values like 999.999.999.999 which would pass through
+    // and pollute rate-limit keys, audit log IP fields, and WAF IP tracking.
+    // Octet alternation: 250-255 | 200-249 | 100-199 | 10-99 | 0-9.
+    const ipv4Octet = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
+    const ipv4 = new RegExp(`^(?:${ipv4Octet}\\.){3}${ipv4Octet}$`);
     const ipv6 = /^[0-9a-fA-F:]{2,45}$/; // coarse IPv6 check (must contain colons, hex digits only)
     const validIPs = forwarded.filter(ip => ip.length <= 45 && (ipv4.test(ip) || (ip.includes(":") && ipv6.test(ip))));
     if (validIPs.length !== forwarded.length) {
