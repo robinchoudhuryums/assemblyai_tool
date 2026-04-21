@@ -190,6 +190,94 @@ export function register(router: Router) {
     }
   });
 
+  // Aggregate coaching effectiveness across all sessions in a time window.
+  // Reuses the same before/after window logic as /api/coaching/:id/outcome
+  // but rolls up the results so managers can see program-wide impact at a
+  // glance instead of clicking into each session.
+  router.get("/api/coaching/outcomes-summary", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const windowDaysRaw = parseInt((req.query.days as string) || "90", 10);
+      const windowDays = Math.max(7, Math.min(Number.isFinite(windowDaysRaw) ? windowDaysRaw : 90, 365));
+      const perSessionN = 10;
+      const MIN_WINDOW = 3;
+      const cutoff = Date.now() - windowDays * 86400000;
+
+      const sessions = await storage.getAllCoachingSessions();
+      const windowedSessions = sessions.filter(s => {
+        const t = new Date(s.createdAt || 0).getTime();
+        return Number.isFinite(t) && t > 0 && t >= cutoff;
+      });
+
+      // Group completed calls per employee so we don't re-query inside the loop.
+      const byEmployee = new Map<string, { call: any; ts: number }[]>();
+      for (const s of windowedSessions) {
+        if (byEmployee.has(s.employeeId)) continue;
+        const empCalls = await storage.getCallsWithDetails({
+          status: "completed",
+          employee: s.employeeId,
+        });
+        const withTs = empCalls
+          .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
+          .filter(x => Number.isFinite(x.ts) && x.ts > 0)
+          .sort((a, b) => a.ts - b.ts);
+        byEmployee.set(s.employeeId, withTs);
+      }
+
+      const avgScore = (window: { call: any }[]): number | null => {
+        const vals = window
+          .map(x => parseFloat(x.call.analysis?.performanceScore || ""))
+          .filter((v): v is number => Number.isFinite(v));
+        if (vals.length === 0) return null;
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+      };
+
+      let measured = 0;
+      let insufficient = 0;
+      let positive = 0;
+      let neutral = 0;
+      let negative = 0;
+      let deltaSum = 0;
+      let deltaCount = 0;
+
+      for (const s of windowedSessions) {
+        const sessionTs = new Date(s.createdAt || 0).getTime();
+        const empCalls = byEmployee.get(s.employeeId) || [];
+        const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
+        const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
+        if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
+          insufficient++;
+          continue;
+        }
+        const bAvg = avgScore(before);
+        const aAvg = avgScore(after);
+        if (bAvg === null || aAvg === null) {
+          insufficient++;
+          continue;
+        }
+        measured++;
+        const d = aAvg - bAvg;
+        deltaSum += d;
+        deltaCount++;
+        if (d >= 0.5) positive++;
+        else if (d <= -0.5) negative++;
+        else neutral++;
+      }
+
+      res.json({
+        windowDays,
+        totalSessions: windowedSessions.length,
+        measured,
+        insufficientData: insufficient,
+        positiveCount: positive,
+        neutralCount: neutral,
+        negativeCount: negative,
+        avgOverallDelta: deltaCount > 0 ? Math.round((deltaSum / deltaCount) * 100) / 100 : null,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to compute outcomes summary" });
+    }
+  });
+
   // Agent self-service: toggle a coaching action item's completed status.
   // Agents can only modify their OWN coaching sessions.
   router.patch("/api/coaching/:id/action-item/:index", requireAuth, validateIdParam, async (req, res) => {

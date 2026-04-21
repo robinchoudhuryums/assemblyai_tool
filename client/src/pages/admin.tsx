@@ -60,6 +60,13 @@ export default function AdminPage() {
     queryKey: ["/api/users"],
   });
 
+  // Self-service viewer onboarding: surface viewers with no matching employee.
+  // These users see empty data + 403s with no error — a common "why can't
+  // I see anything?" support puzzle. The endpoint is admin-scoped.
+  const { data: unlinked } = useQuery<{ count: number; users: DbUser[] }>({
+    queryKey: ["/api/users/unlinked"],
+  });
+
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createForm, setCreateForm] = useState({ username: "", password: "", displayName: "", role: "viewer" });
   const [editingUser, setEditingUser] = useState<DbUser | null>(null);
@@ -223,6 +230,56 @@ export default function AdminPage() {
         {/* ════════════════ USERS TAB ════════════════ */}
         {tab === "users" && (
           <div className="space-y-8">
+            {/* Unlinked viewer banner — shows only when there are viewers with no matching employee row. */}
+            {unlinked && unlinked.count > 0 && (
+              <div
+                className="border bg-card"
+                style={{
+                  borderRadius: "var(--radius)",
+                  boxShadow: "inset 3px 0 0 var(--amber)",
+                  padding: "16px 20px",
+                }}
+                data-testid="unlinked-users-banner"
+              >
+                <div className="flex items-start gap-3">
+                  <Warning style={{ width: 20, height: 20, color: "var(--amber)", flexShrink: 0, marginTop: 2 }} />
+                  <div className="flex-1">
+                    <div
+                      className="font-mono uppercase text-muted-foreground"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Onboarding
+                    </div>
+                    <div className="font-medium text-foreground mt-1">
+                      {unlinked.count} viewer{unlinked.count === 1 ? "" : "s"} not linked to an employee
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      These viewers see empty dashboards because their username (email) and display name don't
+                      match any employee row. Update the corresponding employee's email to match the user's
+                      login, or rename the user's display name to match an employee.
+                    </p>
+                    <div className="mt-3 space-y-1.5">
+                      {unlinked.users.slice(0, 5).map((u: any) => (
+                        <div
+                          key={u.id}
+                          className="font-mono text-xs flex items-center gap-3"
+                          style={{ color: "var(--foreground)" }}
+                        >
+                          <span style={{ color: "var(--muted-foreground)" }}>{u.username}</span>
+                          <span style={{ color: "var(--muted-foreground)" }}>·</span>
+                          <span>{u.name}</span>
+                        </div>
+                      ))}
+                      {unlinked.users.length > 5 && (
+                        <div className="font-mono text-xs text-muted-foreground">
+                          + {unlinked.users.length - 5} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {/* Create user inline panel */}
             <AdminPanel>
               <div className="p-6">

@@ -8,8 +8,9 @@ import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
 import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, escapeCsvValue } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
+import { embeddingCosineSimilarity } from "../services/call-clustering";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -59,6 +60,74 @@ export function registerReportRoutes(router: Router) {
       res.json(filtered);
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls" });
+    }
+  });
+
+  // Semantic search — embedding-based similarity over completed calls.
+  // Complements the keyword-based /api/search by matching meaning rather than
+  // exact word overlap. Reuses the same embedding model that call-clustering
+  // computes during the pipeline (already stored on call_analyses.embedding).
+  router.get("/api/search/semantic", requireAuth, async (req, res) => {
+    try {
+      const query = (req.query.q as string || "").trim();
+      if (!query) {
+        res.status(400).json({ message: "Search query is required" });
+        return;
+      }
+      if (query.length > 500) {
+        res.status(400).json({ message: "Search query too long (max 500 characters)" });
+        return;
+      }
+      const limit = clampInt(req.query.limit as string | undefined, 20, 1, 100);
+
+      // Embed the query. If embedding is unavailable (Bedrock unreachable or
+      // not configured), fall through to keyword search for graceful degrade.
+      let queryEmbedding: number[] | null = null;
+      try {
+        queryEmbedding = aiProvider.generateEmbedding
+          ? await aiProvider.generateEmbedding(query)
+          : null;
+      } catch (err) {
+        logger.warn("semantic search: embedding failed, falling back to keyword", {
+          error: (err as Error).message,
+        });
+      }
+
+      if (!queryEmbedding) {
+        const fallback = await storage.searchCalls(expandMedicalSynonyms(query), limit);
+        res.json({ mode: "keyword-fallback", results: fallback });
+        return;
+      }
+
+      // Pull completed calls + apply viewer scoping. Embeddings live on the
+      // analysis record; skip calls without one rather than re-embedding here
+      // (re-embedding on every search would be hot-path wasteful).
+      const all = await storage.getCallsWithDetails({ status: "completed" });
+      const userRole = req.user?.role || "viewer";
+      let accessible = all;
+      if (userRole === "viewer") {
+        const checks = await Promise.all(all.map(c => canViewerAccessCall(req, c)));
+        accessible = all.filter((_, i) => checks[i]);
+      }
+
+      const scored = accessible
+        .map(c => {
+          const emb = (c.analysis as { embedding?: number[] } | undefined)?.embedding;
+          if (!emb || !Array.isArray(emb) || emb.length === 0) return null;
+          return { call: c, similarity: embeddingCosineSimilarity(queryEmbedding!, emb) };
+        })
+        .filter((x): x is { call: typeof all[number]; similarity: number } => x !== null)
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
+
+      res.json({
+        mode: "semantic",
+        results: scored.map(x => ({ ...x.call, similarity: Math.round(x.similarity * 1000) / 1000 })),
+        coverage: { totalAccessible: accessible.length, withEmbeddings: scored.length },
+      });
+    } catch (error) {
+      logger.error("semantic search failed", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to run semantic search" });
     }
   });
 
@@ -150,6 +219,87 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to generate filtered report", { error });
       res.status(500).json({ message: "Failed to generate filtered report" });
+    }
+  });
+
+  // Server-side CSV export for filtered reports — replaces the client-built
+  // TXT export with a full server-generated CSV so the export is first-class
+  // auditable (direct HIPAA PHI access entry, no reliance on a client beacon)
+  // and supports richer formats (sub-score columns, trend rows).
+  router.get("/api/reports/filtered/export.csv", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const { from, to, employeeId, callPartyType } = req.query;
+      const rawRole = (req.query.role as string | undefined) ?? (req.query.department as string | undefined);
+      let role: string | undefined;
+      if (rawRole) {
+        try { role = decodeURIComponent(rawRole); } catch { role = rawRole; }
+      }
+
+      const result = await storage.getFilteredReportMetrics({
+        from: from as string | undefined,
+        to: to as string | undefined,
+        employeeId: employeeId as string | undefined,
+        role,
+        callPartyType: callPartyType as string | undefined,
+      });
+
+      const lines: string[] = [];
+      lines.push("Section,Field,Value");
+      lines.push(`Summary,Total Calls,${escapeCsvValue(result.metrics.totalCalls)}`);
+      lines.push(`Summary,Average Performance Score,${escapeCsvValue(result.metrics.avgPerformanceScore.toFixed(2))}`);
+      lines.push(`Summary,Average Sentiment,${escapeCsvValue(result.metrics.avgSentiment.toFixed(2))}`);
+      lines.push(`Summary,Auto-assigned Calls,${escapeCsvValue(result.autoAssignedCount)}`);
+      lines.push(`Sentiment,Positive,${escapeCsvValue(result.sentiment.positive)}`);
+      lines.push(`Sentiment,Neutral,${escapeCsvValue(result.sentiment.neutral)}`);
+      lines.push(`Sentiment,Negative,${escapeCsvValue(result.sentiment.negative)}`);
+      if (result.avgSubScores) {
+        lines.push(`Sub-Scores,Compliance,${escapeCsvValue(result.avgSubScores.compliance)}`);
+        lines.push(`Sub-Scores,Customer Experience,${escapeCsvValue(result.avgSubScores.customerExperience)}`);
+        lines.push(`Sub-Scores,Communication,${escapeCsvValue(result.avgSubScores.communication)}`);
+        lines.push(`Sub-Scores,Resolution,${escapeCsvValue(result.avgSubScores.resolution)}`);
+      }
+      lines.push("");
+      lines.push("Performer,Role,Call Count,Average Score");
+      for (const p of result.performers) {
+        lines.push([
+          escapeCsvValue(p.name),
+          escapeCsvValue(p.role),
+          escapeCsvValue(p.totalCalls),
+          escapeCsvValue(p.avgPerformanceScore ?? ""),
+        ].join(","));
+      }
+      lines.push("");
+      lines.push("Month,Calls,Avg Score,Positive,Neutral,Negative");
+      for (const t of result.trends) {
+        lines.push([
+          escapeCsvValue(t.month),
+          escapeCsvValue(t.calls),
+          escapeCsvValue(t.avgScore ?? ""),
+          escapeCsvValue(t.positive),
+          escapeCsvValue(t.neutral),
+          escapeCsvValue(t.negative),
+        ].join(","));
+      }
+
+      // HIPAA: first-class audit entry for this export (replaces the
+      // client-fire-and-forget beacon pattern for this endpoint).
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "export_report",
+        resourceType: "report",
+        detail: `format=csv; reportType=filtered; from=${from ?? ""}; to=${to ?? ""}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
+      });
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+      const filename = `filtered-report-${fromStr}-to-${toStr}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(lines.join("\n"));
+    } catch (error) {
+      logger.error("failed to export filtered report", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export filtered report" });
     }
   });
 

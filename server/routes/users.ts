@@ -33,6 +33,40 @@ export function registerUserRoutes(router: Router) {
     }
   });
 
+  // ==================== UNLINKED USERS (admin only) ====================
+  // Returns viewer-role users whose username (email) and display name don't
+  // match any employee row. These users see empty data + 403s with no error —
+  // the single most common "looks authenticated but sees nothing" production
+  // puzzle. Mirror of getUserEmployeeId()'s matching logic (email → name).
+  router.get("/api/users/unlinked", requireAuth, requireMFASetup, requireRole("admin"), async (_req, res) => {
+    try {
+      const [users, employees] = await Promise.all([
+        storage.getAllDbUsers(),
+        storage.getAllEmployees(),
+      ]);
+      const emailMap = new Map<string, string>();
+      const nameMap = new Map<string, string>();
+      for (const emp of employees) {
+        if (emp.email) emailMap.set(emp.email.toLowerCase(), emp.id);
+        nameMap.set(emp.name.toLowerCase(), emp.id);
+      }
+      const unlinked = users
+        .filter(u => u.active !== false)
+        .filter(u => u.role === "viewer")
+        .map(sanitizeUser)
+        .filter((u: any) => {
+          const byEmail = u.username ? emailMap.get(u.username.toLowerCase()) : undefined;
+          if (byEmail) return false;
+          const byName = u.name ? nameMap.get(u.name.toLowerCase()) : undefined;
+          return !byName;
+        });
+      res.json({ count: unlinked.length, users: unlinked });
+    } catch (error) {
+      logger.error("error fetching unlinked users", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to fetch unlinked users" });
+    }
+  });
+
   // ==================== CREATE USER (admin only) ====================
   router.post("/api/users", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {

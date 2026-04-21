@@ -49,6 +49,18 @@ export type InsertWebhookConfig = Omit<WebhookConfig, "id" | "createdAt">;
 let getS3Client: (() => ObjectStorageClient | undefined) | null = null;
 let initialized = false;
 
+// Persistent-retry accessor: when set, a webhook whose in-process retries all
+// fail gets enqueued as a `deliver_webhook` job in the durable job queue so it
+// survives process restart. When unset (e.g. dev without DATABASE_URL), the
+// exhausted delivery stays a logger.error with no durable retry.
+type EnqueueWebhookRetry = (payload: {
+  webhookId: string;
+  event: string;
+  body: string;
+  previousAttempts: number;
+}) => Promise<void> | void;
+let enqueueWebhookRetry: EnqueueWebhookRetry | null = null;
+
 /**
  * Initialize the webhook service with an S3 client accessor.
  * Called once at startup from the storage layer.
@@ -59,6 +71,15 @@ export function initWebhooks(s3ClientAccessor: () => ObjectStorageClient | undef
   // Reset cache so a re-init (e.g. in tests, or post-startup S3 swap)
   // doesn't serve stale entries from a prior wiring.
   invalidateConfigCache();
+}
+
+/**
+ * Install the persistent-retry handler. Called from `server/routes.ts` after
+ * the JobQueue is created. Optional — without it, webhooks fall back to the
+ * prior fire-and-forget behavior after in-process retries.
+ */
+export function setWebhookRetryEnqueuer(fn: EnqueueWebhookRetry | null): void {
+  enqueueWebhookRetry = fn;
 }
 
 function requireS3Client(op: string): ObjectStorageClient {
@@ -171,14 +192,27 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
   }
 }
 
-async function deliverWithRetry(config: WebhookConfig, event: string, body: string): Promise<void> {
+async function deliverWithRetry(config: WebhookConfig, event: string, body: string, initialAttempts = 0): Promise<void> {
   for (let attempt = 0; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
     try {
       await deliverWebhook(config, event, body);
       return;
     } catch (err) {
       if (attempt === WEBHOOK_MAX_RETRIES) {
-        logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: WEBHOOK_MAX_RETRIES + 1, error: (err as Error).message });
+        const totalAttempts = initialAttempts + WEBHOOK_MAX_RETRIES + 1;
+        logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: totalAttempts, error: (err as Error).message });
+        // Persistent retry: hand off to the durable job queue if available.
+        // The job queue has its own retry/dead-letter semantics (3 attempts),
+        // so we get ~5x the delivery durability vs. in-process retry alone,
+        // and it survives process restart.
+        if (enqueueWebhookRetry) {
+          try {
+            await enqueueWebhookRetry({ webhookId: config.id, event, body, previousAttempts: totalAttempts });
+            logger.info("Webhook delivery handed off to durable job queue", { url: config.url, event, webhookId: config.id });
+          } catch (enqueueErr) {
+            logger.error("Failed to enqueue webhook retry", { url: config.url, event, webhookId: config.id, error: (enqueueErr as Error).message });
+          }
+        }
         return;
       }
       // Exponential backoff: 2s, 4s, 8s, 16s
@@ -187,6 +221,27 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+}
+
+/**
+ * Redeliver a webhook payload by ID. Called by the durable job-queue handler
+ * when a previously-failed delivery needs another attempt across a restart.
+ * Re-reads the live config so a subsequent config update (URL/secret/active
+ * flag) is picked up; throws on config missing or inactive so the job's
+ * own retry/dead-letter logic handles the terminal outcome.
+ */
+export async function redeliverWebhook(payload: { webhookId: string; event: string; body: string; previousAttempts?: number }): Promise<void> {
+  const config = await getWebhookConfig(payload.webhookId);
+  if (!config) {
+    throw new Error(`Webhook config not found: ${payload.webhookId}`);
+  }
+  if (!config.active) {
+    throw new Error(`Webhook ${payload.webhookId} is no longer active`);
+  }
+  if (!config.events.includes(payload.event)) {
+    throw new Error(`Webhook ${payload.webhookId} no longer subscribes to event ${payload.event}`);
+  }
+  await deliverWithRetry(config, payload.event, payload.body, payload.previousAttempts ?? 0);
 }
 
 async function deliverWebhook(config: WebhookConfig, event: string, body: string): Promise<void> {

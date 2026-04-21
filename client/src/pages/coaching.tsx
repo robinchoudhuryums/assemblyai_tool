@@ -47,6 +47,19 @@ export default function CoachingPage() {
     }
   }, []);
 
+  const { data: outcomesSummary } = useQuery<{
+    windowDays: number;
+    totalSessions: number;
+    measured: number;
+    insufficientData: number;
+    positiveCount: number;
+    neutralCount: number;
+    negativeCount: number;
+    avgOverallDelta: number | null;
+  }>({
+    queryKey: ["/api/coaching/outcomes-summary"],
+  });
+
   const { data: sessions, isLoading, error: sessionsError } = useQuery<CoachingSession[]>({
     queryKey: ["/api/coaching"],
   });
@@ -124,6 +137,59 @@ export default function CoachingPage() {
 
   return (
     <CoachingPageShell active="manager">
+      {outcomesSummary && outcomesSummary.measured > 0 && (
+        <div
+          className="mx-6 md:mx-10 mt-6 border bg-card"
+          style={{
+            borderRadius: "var(--radius)",
+            boxShadow: "inset 3px 0 0 var(--accent)",
+            padding: "16px 20px",
+          }}
+          data-testid="coaching-outcomes-summary"
+        >
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            Program effectiveness · last {outcomesSummary.windowDays} days
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 mt-2">
+            <div>
+              <span
+                className="font-display"
+                style={{
+                  fontSize: 28,
+                  color:
+                    outcomesSummary.avgOverallDelta !== null && outcomesSummary.avgOverallDelta > 0
+                      ? "var(--sage)"
+                      : outcomesSummary.avgOverallDelta !== null && outcomesSummary.avgOverallDelta < 0
+                      ? "var(--destructive)"
+                      : "var(--foreground)",
+                }}
+              >
+                {outcomesSummary.avgOverallDelta === null
+                  ? "—"
+                  : `${outcomesSummary.avgOverallDelta > 0 ? "+" : ""}${outcomesSummary.avgOverallDelta.toFixed(2)}`}
+              </span>
+              <span className="font-mono text-xs text-muted-foreground ml-2">avg score delta</span>
+            </div>
+            <div className="font-mono text-xs text-muted-foreground">
+              <span style={{ color: "var(--sage)" }}>{outcomesSummary.positiveCount} up</span>
+              {" · "}
+              <span>{outcomesSummary.neutralCount} flat</span>
+              {" · "}
+              <span style={{ color: "var(--destructive)" }}>{outcomesSummary.negativeCount} down</span>
+              {" · "}
+              <span>
+                {outcomesSummary.measured} of {outcomesSummary.totalSessions} sessions measured
+                {outcomesSummary.insufficientData > 0
+                  ? ` (${outcomesSummary.insufficientData} insufficient data)`
+                  : ""}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
       {isLoading ? (
         <div className="px-6 md:px-10 py-8 text-center text-muted-foreground">
           Loading coaching sessions...

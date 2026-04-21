@@ -34,6 +34,8 @@ export interface AIAnalysisProvider {
   readonly modelId?: string;
   analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis>;
   generateText?(prompt: string, modelIdOverride?: string, maxTokensOverride?: number): Promise<string>;
+  /** Generate an embedding vector for the given text (nullable if provider fails or is not configured). Optional. */
+  generateEmbedding?(text: string): Promise<number[] | null>;
   /** Swap the underlying model at runtime (A/B test promotion). Optional — not all providers support runtime swap. */
   setModel?(modelId: string): void;
 }

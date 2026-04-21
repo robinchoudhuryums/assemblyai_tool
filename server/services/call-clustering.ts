@@ -203,7 +203,7 @@ function determineTrend(docs: { uploadedAt: string }[]): "rising" | "stable" | "
 /**
  * Cosine similarity between two embedding vectors
  */
-function embeddingCosineSimilarity(a: number[], b: number[]): number {
+export function embeddingCosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0, magA = 0, magB = 0;
   for (let i = 0; i < a.length; i++) {
