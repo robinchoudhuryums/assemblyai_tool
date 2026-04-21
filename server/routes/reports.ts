@@ -8,7 +8,7 @@ import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
 import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, type CsvSection } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse, type CsvSection } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 import { embeddingCosineSimilarity } from "../services/call-clustering";
 import { getPool, isPgvectorAvailable } from "../db/pool";
@@ -474,6 +474,81 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     }
   });
 
+  // Server-side PDF export of the same filtered report. Uses the same
+  // CsvSection shape fed into buildPdfBuffer. Audit event identical to the
+  // CSV variant but with format=pdf.
+  router.get("/api/reports/filtered/export.pdf", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const { from, to, employeeId, callPartyType } = req.query;
+      const rawRole = (req.query.role as string | undefined) ?? (req.query.department as string | undefined);
+      let role: string | undefined;
+      if (rawRole) {
+        try { role = decodeURIComponent(rawRole); } catch { role = rawRole; }
+      }
+
+      const result = await storage.getFilteredReportMetrics({
+        from: from as string | undefined,
+        to: to as string | undefined,
+        employeeId: employeeId as string | undefined,
+        role,
+        callPartyType: callPartyType as string | undefined,
+      });
+
+      const summaryRows: unknown[][] = [
+        ["Summary", "Total Calls", result.metrics.totalCalls],
+        ["Summary", "Average Performance Score", result.metrics.avgPerformanceScore.toFixed(2)],
+        ["Summary", "Average Sentiment", result.metrics.avgSentiment.toFixed(2)],
+        ["Summary", "Auto-assigned Calls", result.autoAssignedCount],
+        ["Sentiment", "Positive", result.sentiment.positive],
+        ["Sentiment", "Neutral", result.sentiment.neutral],
+        ["Sentiment", "Negative", result.sentiment.negative],
+      ];
+      if (result.avgSubScores) {
+        summaryRows.push(["Sub-Scores", "Compliance", result.avgSubScores.compliance]);
+        summaryRows.push(["Sub-Scores", "Customer Experience", result.avgSubScores.customerExperience]);
+        summaryRows.push(["Sub-Scores", "Communication", result.avgSubScores.communication]);
+        summaryRows.push(["Sub-Scores", "Resolution", result.avgSubScores.resolution]);
+      }
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+
+      const pdfBuffer = await buildPdfBuffer(
+        [
+          { headers: ["Section", "Field", "Value"], rows: summaryRows },
+          {
+            headers: ["Performer", "Role", "Call Count", "Average Score"],
+            rows: result.performers.map(p => [p.name, p.role, p.totalCalls, p.avgPerformanceScore ?? ""]),
+          },
+          {
+            headers: ["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"],
+            rows: result.trends.map(t => [t.month, t.calls, t.avgScore ?? "", t.positive, t.neutral, t.negative]),
+          },
+        ],
+        {
+          title: "Filtered Performance Report",
+          kicker: "Performance · Filtered",
+          companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+          period: `${fromStr} → ${toStr}`,
+          generatedAt: new Date(),
+        },
+      );
+
+      writePdfResponse(res, pdfBuffer, `filtered-report-${fromStr}-to-${toStr}.pdf`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=pdf; reportType=filtered; from=${from ?? ""}; to=${toStr}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export filtered report pdf", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export filtered report PDF" });
+    }
+  });
+
   // Agent profile: aggregated feedback across all calls for an employee.
   // #1 Phase 1: restrict to self-or-manager — profile exposes individual PHI.
   router.get("/api/reports/agent-profile/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
@@ -688,6 +763,101 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to export agent profile", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to export agent profile" });
+    }
+  });
+
+  // PDF export of the same agent profile. Audit event format=pdf.
+  router.get("/api/reports/agent-profile/:employeeId/export.pdf", requireAuth, requireMFASetup, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const { from, to } = req.query;
+
+      const employee = await storage.getEmployee(employeeId);
+      if (!employee) return res.status(404).json({ message: "Employee not found" });
+
+      const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
+      const filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
+
+      const scores: number[] = [];
+      const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
+      const topicFreq: Record<string, number> = {};
+      const callRows: unknown[][] = [];
+      for (const call of filtered) {
+        const score = call.analysis?.performanceScore ? safeFloat(call.analysis.performanceScore) : null;
+        if (score !== null && Number.isFinite(score)) scores.push(score);
+        const s = call.sentiment?.overallSentiment;
+        if (s === "positive" || s === "neutral" || s === "negative") sentimentCounts[s]++;
+        for (const topic of call.analysis?.topics || []) {
+          const t = typeof topic === "string" ? topic : (topic as { name?: string })?.name;
+          if (t) topicFreq[t] = (topicFreq[t] || 0) + 1;
+        }
+        callRows.push([
+          call.uploadedAt ? String(call.uploadedAt).slice(0, 10) : "",
+          call.duration ?? "",
+          score ?? "",
+          s ?? "",
+          // PDF column is narrower than CSV — trim harder.
+          (call.analysis?.summary || "").replace(/\s+/g, " ").slice(0, 120),
+        ]);
+      }
+      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+      const topicRows = Object.entries(topicFreq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 30)
+        .map(([topic, count]) => [topic, count]);
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+
+      const pdfBuffer = await buildPdfBuffer(
+        [
+          {
+            headers: ["Field", "Value"],
+            rows: [
+              ["Employee", employee.name],
+              ["Email", employee.email || ""],
+              ["Role", employee.role || ""],
+              ["Sub-Team", employee.subTeam || ""],
+              ["Window", `${fromStr} → ${toStr}`],
+              ["Call Count", filtered.length],
+              ["Average Score", avgScore === null ? "—" : avgScore.toFixed(2)],
+              ["Positive Sentiment", sentimentCounts.positive],
+              ["Neutral Sentiment", sentimentCounts.neutral],
+              ["Negative Sentiment", sentimentCounts.negative],
+            ],
+          },
+          {
+            headers: ["Date", "Duration (s)", "Score", "Sentiment", "Summary"],
+            rows: callRows,
+          },
+          {
+            headers: ["Topic", "Count"],
+            rows: topicRows,
+          },
+        ],
+        {
+          title: `Agent Profile — ${employee.name}`,
+          kicker: "Performance · Agent Profile",
+          companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+          period: `${fromStr} → ${toStr}`,
+          generatedAt: new Date(),
+        },
+      );
+
+      const safeName = (employee.name || employeeId).replace(/[^a-zA-Z0-9-_]/g, "_");
+      writePdfResponse(res, pdfBuffer, `agent-profile-${safeName}-${fromStr}-to-${toStr}.pdf`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          resourceId: employeeId,
+          detail: `format=pdf; reportType=agent-profile; employeeId=${employeeId}; from=${fromStr}; to=${toStr}; callCount=${filtered.length}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export agent profile pdf", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export agent profile PDF" });
     }
   });
 

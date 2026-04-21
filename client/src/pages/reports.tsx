@@ -266,6 +266,23 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   };
 
+  // Phase D: server-side PDF download. The endpoint does the audit
+  // internally, so no beacon needed here. Follows the link-and-click
+  // pattern that browsers map to a file save dialog.
+  const handleDownloadPDF = () => {
+    if (!report) return;
+    const params = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
+    if (reportType === "employee" && selectedEmployee) {
+      window.open(`/api/reports/agent-profile/${selectedEmployee}/export.pdf?${params}`, "_blank");
+    } else {
+      // Overall + department reports share the filtered-report PDF.
+      if (reportType === "department" && selectedDepartment) {
+        params.set("role", selectedDepartment);
+      }
+      window.open(`/api/reports/filtered/export.pdf?${params}`, "_blank");
+    }
+  };
+
   // Delta helper for comparison
   const delta = (current: number, previous: number | undefined) => {
     if (previous === undefined || previous === 0) return null;
@@ -341,6 +358,17 @@ export default function ReportsPage() {
         >
           <DownloadSimple style={{ width: 12, height: 12 }} />
           CSV
+        </button>
+        <button
+          type="button"
+          onClick={handleDownloadPDF}
+          disabled={!report}
+          className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="download-pdf"
+        >
+          <DownloadSimple style={{ width: 12, height: 12 }} />
+          PDF
         </button>
         <button
           type="button"

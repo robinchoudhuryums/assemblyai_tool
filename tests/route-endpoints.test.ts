@@ -115,6 +115,26 @@ async function req(
   return { status: res.status, body: parsed };
 }
 
+// Raw variant for binary endpoints (PDF export) — returns status, headers,
+// and the body as a Buffer so tests can verify content-type + PDF magic bytes.
+async function reqBinary(
+  baseUrl: string,
+  method: string,
+  path: string,
+  role = "admin",
+): Promise<{ status: number; headers: Headers; buffer: Buffer }> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "User-Agent": TEST_UA,
+      "Accept-Language": TEST_LANG,
+      "X-Test-Role": role,
+    },
+  });
+  const ab = await res.arrayBuffer();
+  return { status: res.status, headers: res.headers, buffer: Buffer.from(ab) };
+}
+
 // =====================================================================
 // EMPLOYEE ENDPOINTS
 // =====================================================================
@@ -881,6 +901,100 @@ describe("Coaching outcomes-summary (GET /api/coaching/outcomes-summary)", () =>
     assert.equal(body.windowDays, 30);
     assert.ok(Array.isArray(body.timeSeries));
     assert.ok(Array.isArray(body.skipped));
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// PDF EXPORTS (Phase D)
+// =====================================================================
+//
+// Verifies content-type, content-disposition, PDF magic bytes, and
+// auth/RBAC on the three Phase D PDF endpoints. Exact PDF content isn't
+// parsed — trusting pdfkit to produce valid output is reasonable; the
+// tests guard against regressions in the Express-level wiring.
+describe("Report PDF exports (Phase D)", () => {
+  const app = buildAppWith(registerReportRoutes, registerCoachingRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 401 without auth", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/reports/filtered/export.pdf", "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 403 for viewer", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/reports/filtered/export.pdf", "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 200 application/pdf for manager", async () => {
+    const { status, headers, buffer } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/reports/filtered/export.pdf?from=2025-01-01&to=2025-12-31",
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.match(headers.get("content-type") ?? "", /application\/pdf/);
+    assert.match(headers.get("content-disposition") ?? "", /attachment; filename=/);
+    // PDF magic bytes: %PDF-
+    assert.equal(buffer.slice(0, 4).toString("ascii"), "%PDF");
+  });
+
+  it("GET /api/reports/filtered/export.pdf filename embeds the period", async () => {
+    const { headers } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/reports/filtered/export.pdf?from=2025-06-01&to=2025-06-30",
+      "admin",
+    );
+    assert.match(headers.get("content-disposition") ?? "", /2025-06-01/);
+    assert.match(headers.get("content-disposition") ?? "", /2025-06-30/);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns 401 without auth", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/coaching/outcomes-summary/export.pdf", "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns 403 for viewer", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/coaching/outcomes-summary/export.pdf", "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns a valid PDF for manager", async () => {
+    const { status, headers, buffer } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary/export.pdf",
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.match(headers.get("content-type") ?? "", /application\/pdf/);
+    assert.equal(buffer.slice(0, 4).toString("ascii"), "%PDF");
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf clamps window days", async () => {
+    const { status, headers } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary/export.pdf?days=9999",
+      "manager",
+    );
+    assert.equal(status, 200);
+    // windowDays clamped to 365 — should appear in the filename.
+    assert.match(headers.get("content-disposition") ?? "", /365d/);
   });
 
   after((_, done) => {

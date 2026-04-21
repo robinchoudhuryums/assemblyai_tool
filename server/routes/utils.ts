@@ -194,6 +194,171 @@ export function writeCsvResponse(
 }
 
 /**
+ * PDF report metadata — rendered as the document header before the first
+ * section. `title` is the display-font page title; `kicker` is the small
+ * mono-uppercase label above it (typically report type + period).
+ */
+export interface PdfReportMetadata {
+  title: string;
+  kicker?: string;
+  companyName?: string;
+  period?: string;
+  generatedAt?: Date;
+}
+
+/**
+ * Build a PDF buffer from the same CsvSection shape `buildCsv` accepts.
+ * Produces a tabular PDF: a title page header, then each section as a
+ * labelled table. Uses pdfkit's synchronous row rendering + wraps long
+ * cells. Returned as a Promise<Buffer> rather than a stream because
+ * aggregating the entire buffer keeps error semantics predictable:
+ * if PDF generation throws after headers are sent, the client would
+ * see a truncated file. Buffering up front lets us catch failures and
+ * 500 cleanly.
+ *
+ * Typical exports (filtered reports, agent profiles) are <100 KB, so
+ * buffering is cheap. If a very large export arrives, switch to
+ * `pdf.pipe(res)` at the route level.
+ */
+export async function buildPdfBuffer(
+  sections: CsvSection[],
+  metadata: PdfReportMetadata,
+): Promise<Buffer> {
+  // Lazy-load pdfkit so Node test runs that never touch PDF exports
+  // don't pay the startup cost. The package initializes font lookups
+  // on require, which would add ~80ms to every test run.
+  const PDFDocumentMod = await import("pdfkit");
+  const PDFDocument = (PDFDocumentMod as unknown as { default: typeof import("pdfkit") }).default;
+
+  return new Promise<Buffer>((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        size: "LETTER",
+        margin: 54,  // 0.75"
+        info: {
+          Title: metadata.title,
+          Author: metadata.companyName ?? "CallAnalyzer",
+          Subject: metadata.kicker ?? "Call analytics report",
+        },
+      });
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      // --- Header ---
+      if (metadata.kicker) {
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(8)
+          .fillColor("#7a6b5a")
+          .text(metadata.kicker.toUpperCase(), { characterSpacing: 1.4 });
+        doc.moveDown(0.3);
+      }
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(22)
+        .fillColor("#2a2420")
+        .text(metadata.title);
+      const metaLine = [
+        metadata.companyName,
+        metadata.period,
+        metadata.generatedAt
+          ? `Generated ${metadata.generatedAt.toISOString().slice(0, 10)}`
+          : null,
+      ].filter(Boolean).join("  ·  ");
+      if (metaLine) {
+        doc.moveDown(0.3);
+        doc.font("Helvetica").fontSize(10).fillColor("#7a6b5a").text(metaLine);
+      }
+      doc.moveDown(1.2);
+
+      // --- Sections ---
+      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (i > 0) doc.moveDown(0.8);
+
+        // Approximate column widths: divide the page width evenly. pdfkit
+        // doesn't have a real table primitive so we lay out row-by-row.
+        const cols = section.headers.length;
+        const colW = pageWidth / cols;
+
+        // Header row
+        const rowY = doc.y;
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#2a2420");
+        for (let c = 0; c < cols; c++) {
+          doc.text(String(section.headers[c]), doc.page.margins.left + c * colW, rowY, {
+            width: colW - 6,
+            ellipsis: true,
+          });
+        }
+        // Compute the tallest cell height so the underline sits below everything.
+        const headerHeight = Math.max(14, doc.y - rowY);
+        doc
+          .strokeColor("#d9cfc4")
+          .lineWidth(0.75)
+          .moveTo(doc.page.margins.left, rowY + headerHeight + 2)
+          .lineTo(doc.page.margins.left + pageWidth, rowY + headerHeight + 2)
+          .stroke();
+        doc.y = rowY + headerHeight + 8;
+
+        // Data rows
+        doc.font("Helvetica").fontSize(9).fillColor("#2a2420");
+        for (const row of section.rows) {
+          // Add a new page if we'd overflow.
+          if (doc.y > doc.page.height - doc.page.margins.bottom - 30) {
+            doc.addPage();
+          }
+          const rY = doc.y;
+          let tallest = 0;
+          for (let c = 0; c < cols; c++) {
+            const cellText = row[c] === undefined || row[c] === null ? "" : String(row[c]);
+            doc.text(cellText, doc.page.margins.left + c * colW, rY, {
+              width: colW - 6,
+              ellipsis: true,
+            });
+            tallest = Math.max(tallest, doc.y - rY);
+          }
+          doc.y = rY + Math.max(tallest, 12) + 4;
+        }
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Write a PDF response with the HIPAA export audit entry, consistent
+ * filename quoting, and the correct content-type header. Mirrors
+ * `writeCsvResponse` — audit fires first, then the buffer is sent.
+ * Callers pass an already-built Buffer (from `buildPdfBuffer`) so
+ * synchronous generation errors surface before response headers are
+ * written.
+ */
+export function writePdfResponse(
+  res: import("express").Response,
+  pdf: Buffer,
+  filename: string,
+  audit?: () => void,
+): void {
+  if (audit) {
+    try { audit(); } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[pdf-export] audit logger threw", err);
+    }
+  }
+  const safe = filename.replace(/[\r\n"\\]/g, "_");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${safe}"`);
+  res.setHeader("Content-Length", String(pdf.byteLength));
+  res.send(pdf);
+}
+
+/**
  * Filter calls by date range (in-memory). Adjusts `to` date to end-of-day.
  * Used by reports, snapshots, and search — the single source of truth for date filtering.
  */

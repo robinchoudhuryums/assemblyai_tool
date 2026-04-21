@@ -201,11 +201,31 @@ export default function CoachingPage() {
           }}
           data-testid="coaching-outcomes-summary"
         >
-          <div
-            className="font-mono uppercase text-muted-foreground"
-            style={{ fontSize: 10, letterSpacing: "0.14em" }}
-          >
-            Program effectiveness · last {outcomesSummary.windowDays} days
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.14em" }}
+            >
+              Program effectiveness · last {outcomesSummary.windowDays} days
+            </div>
+            <div className="flex items-center gap-1">
+              <a
+                href="/api/coaching/outcomes-summary/export.csv"
+                className="font-mono uppercase border border-border rounded-sm px-2 py-1 text-muted-foreground hover:bg-secondary transition-colors"
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
+                data-testid="outcomes-download-csv"
+              >
+                CSV
+              </a>
+              <a
+                href="/api/coaching/outcomes-summary/export.pdf"
+                className="font-mono uppercase border border-border rounded-sm px-2 py-1 text-muted-foreground hover:bg-secondary transition-colors"
+                style={{ fontSize: 10, letterSpacing: "0.1em" }}
+                data-testid="outcomes-download-pdf"
+              >
+                PDF
+              </a>
+            </div>
           </div>
           <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 mt-2">
             <div>

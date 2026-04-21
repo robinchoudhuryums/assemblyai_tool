@@ -4,7 +4,7 @@ import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
-import { validateIdParam, validateParams, sendValidationError, buildCsv, writeCsvResponse } from "./utils";
+import { validateIdParam, validateParams, sendValidationError, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse } from "./utils";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 
 export function register(router: Router) {
@@ -578,6 +578,157 @@ export function register(router: Router) {
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to export coaching outcomes" });
+    }
+  });
+
+  // PDF export of the per-manager coaching-effectiveness breakdown. Mirrors
+  // the CSV route's aggregation; audit event format=pdf. Duplicating the
+  // aggregation (rather than extracting a shared helper) keeps Phase D's
+  // diff narrowly scoped to PDF addition — a future cleanup can extract
+  // `aggregateOutcomesByManager(windowDays)` once three consumers exist.
+  router.get("/api/coaching/outcomes-summary/export.pdf", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const windowDaysRaw = parseInt((req.query.days as string) || "90", 10);
+      const windowDays = Math.max(7, Math.min(Number.isFinite(windowDaysRaw) ? windowDaysRaw : 90, 365));
+      const perSessionN = 10;
+      const MIN_WINDOW = 3;
+      const cutoff = Date.now() - windowDays * 86400000;
+
+      const sessions = await storage.getAllCoachingSessions();
+      const windowedSessions = sessions.filter(s => {
+        const t = new Date(s.createdAt || 0).getTime();
+        return Number.isFinite(t) && t > 0 && t >= cutoff;
+      });
+      const byEmployee = new Map<string, { call: any; ts: number }[]>();
+      for (const s of windowedSessions) {
+        if (byEmployee.has(s.employeeId)) continue;
+        const empCalls = await storage.getCallsWithDetails({
+          status: "completed",
+          employee: s.employeeId,
+        });
+        byEmployee.set(s.employeeId, empCalls
+          .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
+          .filter(x => Number.isFinite(x.ts) && x.ts > 0)
+          .sort((a, b) => a.ts - b.ts));
+      }
+      const avgScore = (window: { call: any }[]): number | null => {
+        const vals = window
+          .map(x => parseFloat(x.call.analysis?.performanceScore || ""))
+          .filter((v): v is number => Number.isFinite(v));
+        if (vals.length === 0) return null;
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+      };
+
+      type Bucket = {
+        key: string;
+        totalSessions: number;
+        measured: number;
+        insufficientData: number;
+        positive: number;
+        neutral: number;
+        negative: number;
+        deltaSum: number;
+        deltaCount: number;
+      };
+      const managerBuckets = new Map<string, Bucket>();
+      const newBucket = (key: string): Bucket => ({
+        key, totalSessions: 0, measured: 0, insufficientData: 0,
+        positive: 0, neutral: 0, negative: 0, deltaSum: 0, deltaCount: 0,
+      });
+      for (const s of windowedSessions) {
+        const key = s.assignedBy || "unknown";
+        const b = managerBuckets.get(key) || newBucket(key);
+        b.totalSessions++;
+        const sessionTs = new Date(s.createdAt || 0).getTime();
+        const empCalls = byEmployee.get(s.employeeId) || [];
+        const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
+        const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
+        if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
+          b.insufficientData++;
+        } else {
+          const bAvg = avgScore(before);
+          const aAvg = avgScore(after);
+          if (bAvg === null || aAvg === null) {
+            b.insufficientData++;
+          } else {
+            b.measured++;
+            const d = aAvg - bAvg;
+            b.deltaSum += d;
+            b.deltaCount++;
+            if (d >= 0.5) b.positive++;
+            else if (d <= -0.5) b.negative++;
+            else b.neutral++;
+          }
+        }
+        managerBuckets.set(key, b);
+      }
+      const rows = Array.from(managerBuckets.values())
+        .map(b => ({
+          manager: b.key,
+          totalSessions: b.totalSessions,
+          measured: b.measured,
+          insufficient: b.insufficientData,
+          positive: b.positive,
+          neutral: b.neutral,
+          negative: b.negative,
+          avgDelta: b.deltaCount > 0 ? Math.round((b.deltaSum / b.deltaCount) * 100) / 100 : null,
+        }))
+        .sort((a, b) => (b.avgDelta ?? -Infinity) - (a.avgDelta ?? -Infinity));
+
+      // Compute rollup for the summary panel.
+      const totalMeasured = rows.reduce((s, r) => s + r.measured, 0);
+      const totalSessions = rows.reduce((s, r) => s + r.totalSessions, 0);
+      const totalInsufficient = rows.reduce((s, r) => s + r.insufficient, 0);
+      const deltaRows = rows.filter(r => r.avgDelta !== null);
+      const overallDelta = deltaRows.length > 0
+        ? deltaRows.reduce((s, r) => s + (r.avgDelta as number), 0) / deltaRows.length
+        : null;
+
+      const pdfBuffer = await buildPdfBuffer(
+        [
+          {
+            headers: ["Field", "Value"],
+            rows: [
+              ["Window (days)", windowDays],
+              ["Total Sessions", totalSessions],
+              ["Measured", totalMeasured],
+              ["Insufficient Data", totalInsufficient],
+              ["Program Avg Delta", overallDelta === null ? "—" : `${overallDelta > 0 ? "+" : ""}${overallDelta.toFixed(2)}`],
+            ],
+          },
+          {
+            headers: ["Manager", "Sessions", "Measured", "Up (+0.5)", "Flat", "Down (-0.5)", "Avg Delta"],
+            rows: rows.map(r => [
+              r.manager,
+              r.totalSessions,
+              r.measured,
+              r.positive,
+              r.neutral,
+              r.negative,
+              r.avgDelta === null ? "—" : `${r.avgDelta > 0 ? "+" : ""}${r.avgDelta.toFixed(2)}`,
+            ]),
+          },
+        ],
+        {
+          title: "Coaching Effectiveness — By Manager",
+          kicker: "Coaching · Program outcomes",
+          companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+          period: `Last ${windowDays} days`,
+          generatedAt: new Date(),
+        },
+      );
+
+      writePdfResponse(res, pdfBuffer, `coaching-outcomes-by-manager-${windowDays}d.pdf`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=pdf; reportType=coaching-outcomes-by-manager; windowDays=${windowDays}`,
+        });
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export coaching outcomes PDF" });
     }
   });
 
