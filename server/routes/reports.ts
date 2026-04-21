@@ -527,6 +527,18 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
           {
             headers: ["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"],
             rows: result.trends.map(t => [t.month, t.calls, t.avgScore ?? "", t.positive, t.neutral, t.negative]),
+            // Line chart visualizes the monthly avg-score trajectory above
+            // the table. Skipped automatically when fewer than 2 months.
+            chart: result.trends.length >= 2 ? {
+              type: "line" as const,
+              title: "Monthly average score trend",
+              series: [
+                {
+                  label: "Avg score",
+                  points: result.trends.map(t => ({ x: t.month, y: t.avgScore })),
+                },
+              ],
+            } : undefined,
           },
         ],
         {

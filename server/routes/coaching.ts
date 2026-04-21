@@ -568,6 +568,9 @@ export function register(router: Router) {
         ? deltaRows.reduce((s, r) => s + (r.avgDelta as number), 0) / deltaRows.length
         : null;
 
+      // Per-manager bar chart — visualizes avg-delta ranking so managers
+      // don't have to read the column to find outliers. Nulls render as a
+      // blank row with an em-dash in the value column.
       const pdfBuffer = await buildPdfBuffer(
         [
           {
@@ -591,6 +594,11 @@ export function register(router: Router) {
               r.negative,
               r.avgDelta === null ? "—" : `${r.avgDelta > 0 ? "+" : ""}${r.avgDelta.toFixed(2)}`,
             ]),
+            chart: {
+              type: "bar",
+              title: "Avg score delta by manager",
+              bars: rows.slice(0, 10).map(r => ({ label: r.manager, value: r.avgDelta })),
+            },
           },
         ],
         {

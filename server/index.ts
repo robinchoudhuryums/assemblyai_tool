@@ -1,5 +1,16 @@
 import "dotenv/config";
 
+// E2E mock server — activated only when `E2E_MOCKS=true` is set. Intercepts
+// outbound fetch to AssemblyAI / Bedrock / S3 so Playwright tests can drive
+// the full audio pipeline without live external services. Zero production
+// effect: the import is gated behind the env flag and the whole module is
+// tree-shaken / never loaded in normal runs.
+if (process.env.E2E_MOCKS === "true") {
+  // Dynamic import so the msw/node dependency tree isn't loaded in prod.
+  const { startMockServer } = await import("./test-mocks/setup");
+  startMockServer();
+}
+
 // OpenTelemetry must be initialized before any other imports so auto-instrumentation
 // hooks are registered before Express, HTTP, and AWS SDK modules load.
 import "./services/tracing";

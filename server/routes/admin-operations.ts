@@ -12,6 +12,7 @@ import { getDroppedAuditEntryCount, getPendingAuditEntryCount } from "../service
 import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
 import { getBedrockCircuitBreakerState } from "../services/bedrock";
 import { is8x8Enabled } from "../services/telephony-8x8";
+import { getPool } from "../db/pool";
 import { getPipelineSettingsWithMeta, setPipelineSettings } from "../services/pipeline-settings";
 import {
   MODEL_TIERS,
@@ -67,6 +68,30 @@ export function registerOperationsRoutes(
       // 8x8 telephony
       const telephonyEnabled = is8x8Enabled();
 
+      // Phase E follow-on: count distinct viewer/manager accounts that
+      // have fired user_employee_link_unresolved in the last 7 days.
+      // Signal of "how many viewers are chronically unlinked" — higher
+      // number = more support-puzzle surface area. Throttled to once per
+      // user per UTC day at the emit site, so the count is days-unique
+      // across the window. Gracefully degrades to null when no DB.
+      const pool = getPool();
+      let chronicallyUnlinkedLast7d: number | null = null;
+      if (pool) {
+        try {
+          const { rows } = await pool.query<{ cnt: string }>(
+            `SELECT COUNT(DISTINCT username)::text AS cnt
+             FROM audit_log
+             WHERE event = 'user_employee_link_unresolved'
+               AND timestamp >= NOW() - INTERVAL '7 days'`,
+          );
+          chronicallyUnlinkedLast7d = parseInt(rows[0]?.cnt ?? "0", 10);
+        } catch (err) {
+          // Table may not exist in a fresh deploy, or DB temporarily
+          // unavailable. Don't fail the whole health endpoint.
+          logger.warn("health-deep: unlinked-login query failed", { error: (err as Error).message });
+        }
+      }
+
       // Overall status: "healthy" / "degraded" / "unhealthy"
       let overallStatus: "healthy" | "degraded" | "unhealthy" = "healthy";
       const issues: string[] = [];
@@ -77,6 +102,12 @@ export function registerOperationsRoutes(
       if (bedrockCircuitState === "half-open") { issues.push("Bedrock circuit breaker half-open (testing)"); overallStatus = "degraded"; }
       if (queueStats.failedToday > 10) { issues.push(`${queueStats.failedToday} jobs failed today`); overallStatus = "degraded"; }
       if (qualityAlerts.some(a => a.severity === "critical")) { issues.push("Critical scoring quality alert"); overallStatus = "degraded"; }
+      // Onboarding: flag at 3+ chronic unlinked users so small teams don't
+      // get noisy alerts but larger teams see the signal before support
+      // tickets pile up.
+      if (chronicallyUnlinkedLast7d !== null && chronicallyUnlinkedLast7d >= 3) {
+        issues.push(`${chronicallyUnlinkedLast7d} viewers/managers unlinked for 7d+`);
+      }
 
       res.json({
         status: overallStatus,
@@ -91,6 +122,10 @@ export function registerOperationsRoutes(
           scoringQuality: { ...correctionStats, alerts: qualityAlerts },
           calibration: { lastSnapshot: calibrationSnapshot?.timestamp || null, driftDetected: calibrationSnapshot?.driftDetected || false },
           telephony8x8: { enabled: telephonyEnabled },
+          onboarding: {
+            chronicallyUnlinkedLast7d,
+            healthy: chronicallyUnlinkedLast7d === null || chronicallyUnlinkedLast7d === 0,
+          },
         },
       });
     } catch (error) {

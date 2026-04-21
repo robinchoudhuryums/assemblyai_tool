@@ -143,7 +143,33 @@ export interface CsvSection {
   headers: string[];
   /** Rows. Each cell is CSV-escaped via escapeCsvValue. */
   rows: unknown[][];
+  /**
+   * PDF-only: optional chart rendered ABOVE the table (or standalone when
+   * headers/rows are empty). Ignored by `buildCsv`. `line` renders each
+   * series as a polyline; `bar` renders horizontal bars labelled on the
+   * left. Values may be null — nulls are skipped, not drawn at zero.
+   */
+  chart?: PdfChartSpec;
 }
+
+/** PDF chart spec — supports two shapes rendered via pdfkit paths. */
+export type PdfChartSpec =
+  | {
+      type: "line";
+      title?: string;
+      /** Each series = one polyline. Multiple series share the same axes. */
+      series: Array<{ label: string; points: Array<{ x: string | number; y: number | null }> }>;
+      height?: number;
+      valueRange?: { min?: number; max?: number };
+    }
+  | {
+      type: "bar";
+      title?: string;
+      /** Single-series horizontal bars, top-down. */
+      bars: Array<{ label: string; value: number | null }>;
+      height?: number;
+      valueRange?: { min?: number; max?: number };
+    };
 
 /**
  * Build a multi-section CSV body from a list of `CsvSection`s. Sections are
@@ -204,6 +230,152 @@ export interface PdfReportMetadata {
   companyName?: string;
   period?: string;
   generatedAt?: Date;
+}
+
+/**
+ * Render an inline chart inside a PDF document. Uses pdfkit's path
+ * primitives (moveTo / lineTo / rect / stroke / fill) so no new
+ * dependency is needed. Coordinates are in PDF points; the caller passes
+ * `pageWidth` (the usable width between the margins) and this function
+ * draws the chart starting at the current `doc.y` and advances `doc.y`
+ * past the bottom of the chart when done.
+ *
+ * Line chart:  timeseries with a dashed zero baseline, one polyline per
+ *              series. Y-axis auto-ranges (min/max from data, padded).
+ * Bar chart:   horizontal bars with labels on the left, values on the
+ *              right. Bar width scales by the max absolute value.
+ *
+ * Null/NaN points are skipped for line charts and rendered as blanks
+ * (no bar) for bar charts — same convention the on-screen analytics use.
+ */
+// Typed against pdfkit's doc without importing the types at module scope
+// (pdfkit is lazy-loaded in buildPdfBuffer to avoid the font load cost on
+// tests that never touch PDFs).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function renderChart(doc: any, chart: PdfChartSpec, pageWidth: number): void {
+  const startY = doc.y;
+  const leftX = doc.page.margins.left;
+  const rightX = leftX + pageWidth;
+
+  // Optional title above the chart, left-aligned.
+  if (chart.title) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#2a2420");
+    doc.text(chart.title, leftX, startY);
+    doc.moveDown(0.2);
+  }
+  const plotTop = doc.y + 4;
+  const plotHeight = chart.height ?? 90;
+
+  if (chart.type === "line") {
+    // Flatten all points across series to compute the shared Y range.
+    const allY: number[] = [];
+    for (const s of chart.series) {
+      for (const p of s.points) if (p.y !== null && Number.isFinite(p.y)) allY.push(p.y);
+    }
+    if (allY.length === 0) {
+      // Render an empty plot with just the zero baseline so the caller
+      // still gets a visual placeholder instead of a silent blank.
+      doc.strokeColor("#d9cfc4").lineWidth(0.5).dash(2, { space: 2 })
+        .moveTo(leftX, plotTop + plotHeight / 2)
+        .lineTo(rightX, plotTop + plotHeight / 2)
+        .stroke()
+        .undash();
+      doc.y = plotTop + plotHeight + 4;
+      return;
+    }
+    const dataMin = chart.valueRange?.min ?? Math.min(0, ...allY);
+    const dataMax = chart.valueRange?.max ?? Math.max(0, ...allY);
+    const span = (dataMax - dataMin) || 1;
+
+    // Assume all series share the same X points (our callers do). Use the
+    // longest series as the X axis count.
+    const maxPoints = Math.max(...chart.series.map(s => s.points.length), 1);
+    const plotWidth = pageWidth;
+    const xForIdx = (idx: number) =>
+      leftX + (idx / Math.max(maxPoints - 1, 1)) * plotWidth;
+    const yForVal = (v: number) =>
+      plotTop + plotHeight - ((v - dataMin) / span) * plotHeight;
+
+    // Dashed zero baseline, but only if zero is within the visible range.
+    if (dataMin <= 0 && dataMax >= 0) {
+      const zeroY = yForVal(0);
+      doc.strokeColor("#d9cfc4").lineWidth(0.5).dash(2, { space: 2 })
+        .moveTo(leftX, zeroY).lineTo(rightX, zeroY).stroke().undash();
+    }
+
+    // Per-series rendering. First series = accent color; subsequent series
+    // share a muted palette. Keeping it simple — callers typically use
+    // one series.
+    const palette = ["#b8733f", "#7a6b5a", "#8fa68a", "#a85533"];
+    for (let si = 0; si < chart.series.length; si++) {
+      const s = chart.series[si];
+      const color = palette[si % palette.length];
+      doc.strokeColor(color).lineWidth(1.5);
+      let started = false;
+      for (let pi = 0; pi < s.points.length; pi++) {
+        const p = s.points[pi];
+        if (p.y === null || !Number.isFinite(p.y)) continue;
+        const x = xForIdx(pi);
+        const y = yForVal(p.y);
+        if (!started) {
+          doc.moveTo(x, y);
+          started = true;
+        } else {
+          doc.lineTo(x, y);
+        }
+      }
+      if (started) doc.stroke();
+      // Point dots for visibility at chart scale.
+      doc.fillColor(color);
+      for (let pi = 0; pi < s.points.length; pi++) {
+        const p = s.points[pi];
+        if (p.y === null || !Number.isFinite(p.y)) continue;
+        doc.circle(xForIdx(pi), yForVal(p.y), 1.5).fill();
+      }
+    }
+    doc.y = plotTop + plotHeight + 6;
+    return;
+  }
+
+  // Bar chart
+  const bars = chart.bars;
+  const labelColW = 140;
+  const valueColW = 50;
+  const barsLeft = leftX + labelColW;
+  const barsWidth = pageWidth - labelColW - valueColW;
+  const rowHeight = 16;
+  const barRowTop = plotTop;
+  const allValues = bars.map(b => b.value).filter((v): v is number => v !== null && Number.isFinite(v));
+  const maxAbs = allValues.length > 0 ? Math.max(...allValues.map(v => Math.abs(v)), 0) : 1;
+  const scale = maxAbs > 0 ? barsWidth / maxAbs : 0;
+
+  for (let bi = 0; bi < bars.length; bi++) {
+    const y = barRowTop + bi * rowHeight;
+    // Page-break guard — push to next page if we'd overflow.
+    if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 20) {
+      doc.addPage();
+      // Reset plotTop-equivalent to the top of the new page.
+      return renderChart(doc, { ...chart, bars: bars.slice(bi) }, pageWidth);
+    }
+    const b = bars[bi];
+    // Label on left.
+    doc.font("Helvetica").fontSize(9).fillColor("#2a2420");
+    doc.text(String(b.label), leftX, y + 3, { width: labelColW - 6, ellipsis: true });
+    if (b.value !== null && Number.isFinite(b.value) && scale > 0) {
+      const w = Math.max(1, Math.abs(b.value) * scale);
+      doc.rect(barsLeft, y + 3, w, rowHeight - 8)
+        .fill(b.value >= 0 ? "#b8733f" : "#a85533");
+      // Value label on right.
+      doc.fillColor("#2a2420").font("Helvetica").fontSize(9);
+      doc.text(b.value.toFixed(2), barsLeft + barsWidth + 4, y + 3, {
+        width: valueColW - 4,
+      });
+    } else {
+      doc.fillColor("#7a6b5a").font("Helvetica").fontSize(9);
+      doc.text("—", barsLeft + barsWidth + 4, y + 3, { width: valueColW - 4 });
+    }
+  }
+  doc.y = barRowTop + bars.length * rowHeight + 6;
 }
 
 /**
@@ -278,6 +450,18 @@ export async function buildPdfBuffer(
       for (let i = 0; i < sections.length; i++) {
         const section = sections[i];
         if (i > 0) doc.moveDown(0.8);
+
+        // Optional chart rendered above the table (or standalone when the
+        // section has no headers/rows). Kept inline rather than extracted
+        // so it reads top-to-bottom with the table rendering below.
+        if (section.chart) {
+          renderChart(doc, section.chart, pageWidth);
+          doc.moveDown(0.4);
+        }
+
+        // If headers are empty, this was a chart-only section — skip the
+        // table rendering entirely.
+        if (section.headers.length === 0) continue;
 
         // Approximate column widths: divide the page width evenly. pdfkit
         // doesn't have a real table primitive so we lay out row-by-row.
