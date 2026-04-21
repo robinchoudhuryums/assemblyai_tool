@@ -11,6 +11,7 @@ import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
 import type { CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
+import { safeSet } from "@/lib/safe-storage";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
 import { LoadingIndicator } from "@/components/ui/loading";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -65,9 +66,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     audioRef.current.muted = muted;
   }, [volume, muted]);
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      try { localStorage.setItem("transcript-audio-volume", String(volume)); } catch { /* quota */ }
-    }
+    safeSet("transcript-audio-volume", String(volume));
   }, [volume]);
 
   // Manual edit state

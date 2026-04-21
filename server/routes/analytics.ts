@@ -77,7 +77,7 @@ export function register(router: Router) {
            ROUND(AVG(c.duration), 0) as avg_duration,
            jsonb_agg(DISTINCT e.name) FILTER (WHERE e.name IS NOT NULL) as employee_names
          FROM employees e
-         LEFT JOIN calls c ON c.employee_id = e.id ${dateFilter}
+         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE ${dateFilter}
          LEFT JOIN call_analyses ca ON ca.call_id = c.id
          WHERE e.status = 'Active'
          GROUP BY COALESCE(e.sub_team, 'Unassigned')
@@ -129,7 +129,7 @@ export function register(router: Router) {
            ROUND(AVG(c.duration), 0) as avg_duration,
            MAX(c.uploaded_at) as last_call_date
          FROM employees e
-         LEFT JOIN calls c ON c.employee_id = e.id ${dateFilter}
+         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE ${dateFilter}
          LEFT JOIN call_analyses ca ON ca.call_id = c.id
          WHERE ${teamCondition} AND e.status = 'Active'
          GROUP BY e.id, e.name, e.email, e.initials, e.pseudonym
@@ -434,7 +434,7 @@ export function register(router: Router) {
             'resolution', ROUND(AVG(NULLIF((ca.sub_scores->>'resolution')::numeric, 0)), 1)
           ) as avg_sub_scores
         FROM employees e
-        LEFT JOIN calls c ON c.employee_id = e.id AND c.status = 'completed'
+        LEFT JOIN calls c ON c.employee_id = e.id AND c.status = 'completed' AND c.synthetic = FALSE
         LEFT JOIN call_analyses ca ON ca.call_id = c.id
         LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
         WHERE e.id = ANY($1)

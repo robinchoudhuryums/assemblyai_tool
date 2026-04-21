@@ -310,9 +310,15 @@ function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number
     // Use the same `output_anomaly:` prefix that prompt-guard.ts uses for
     // downstream flag-filtering consistency. UI / scoring dashboards already
     // classify `output_anomaly:*` as a quality-warning badge.
-    if (!existingFlags.some(f => f.startsWith("output_anomaly:invalid_feedback_timestamps"))) {
-      validated.flags = [...existingFlags, `output_anomaly:invalid_feedback_timestamps:${strippedCount}`];
-    }
+    // Consolidate counts on re-validation: strip any pre-existing
+    // invalid_feedback_timestamps flag and emit a single fresh flag with the
+    // current strippedCount, rather than accumulating duplicate flags with
+    // different suffix counts.
+    const prefix = "output_anomaly:invalid_feedback_timestamps:";
+    validated.flags = [
+      ...existingFlags.filter(f => !f.startsWith(prefix)),
+      `${prefix}${strippedCount}`,
+    ];
   }
 
   return validated;

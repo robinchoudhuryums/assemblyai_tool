@@ -24,7 +24,19 @@ export function registerAuthRoutes(router: Router) {
   // force within the token's 5-minute lifetime. The per-IP login limiter
   // (5/15min) still applies at the outer layer.
   const MFA_MAX_ATTEMPTS = 5;
+  // LRU cap prevents unbounded growth under sustained legitimate login pressure
+  // (e.g., deploy-day login spike) between cleanup intervals. On overflow, evict
+  // the oldest (insertion-order) entry — that user will be forced to re-enter
+  // their password to obtain a fresh token.
+  const MFA_PENDING_TOKENS_MAX = 10_000;
   const mfaPendingTokens = new Map<string, { user: Express.User; expires: number; attempts: number }>();
+  function setMfaPendingToken(token: string, data: { user: Express.User; expires: number; attempts: number }): void {
+    if (mfaPendingTokens.size >= MFA_PENDING_TOKENS_MAX && !mfaPendingTokens.has(token)) {
+      const oldest = mfaPendingTokens.keys().next().value;
+      if (oldest !== undefined) mfaPendingTokens.delete(oldest);
+    }
+    mfaPendingTokens.set(token, data);
+  }
   // Cleanup expired MFA tokens every 5 minutes
   setInterval(() => {
     const now = Date.now();
@@ -133,7 +145,7 @@ export function registerAuthRoutes(router: Router) {
         if (mfaRecord?.enabled) {
           // MFA required — issue temporary token, don't create session yet
           const token = randomUUID();
-          mfaPendingTokens.set(token, { user, expires: Date.now() + 5 * 60 * 1000, attempts: 0 }); // 5 min expiry
+          setMfaPendingToken(token, { user, expires: Date.now() + 5 * 60 * 1000, attempts: 0 }); // 5 min expiry
           logPhiAccess({
             timestamp: new Date().toISOString(),
             event: "mfa_challenge_issued",

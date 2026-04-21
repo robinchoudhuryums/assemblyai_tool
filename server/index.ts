@@ -617,10 +617,14 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           const { getJobQueue } = await import("./routes");
           const jq = getJobQueue();
           if (jq) {
+            // 20s gives in-flight audio pipeline jobs more drain time than the
+            // prior 15s cap. Scheduler stops preceding this are all synchronous
+            // clearInterval calls so they consume ~no budget; the 30s outer
+            // hard-exit backstops the worst case.
             await Promise.race([
               jq.stop(),
               new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error("jobQueue.stop timed out after 15s")), 15_000)
+                setTimeout(() => reject(new Error("jobQueue.stop timed out after 20s")), 20_000)
               ),
             ]);
             log("Job queue stopped.");
