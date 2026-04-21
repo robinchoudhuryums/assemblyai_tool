@@ -21,6 +21,7 @@ import { registerUserRoutes } from "../server/routes/users.js";
 import { register as registerDashboardRoutes } from "../server/routes/dashboard.js";
 import { registerConfigRoutes } from "../server/routes/config.js";
 import { registerReportRoutes } from "../server/routes/reports.js";
+import { register as registerCoachingRoutes } from "../server/routes/coaching.js";
 
 // --- Test harness ---
 
@@ -766,6 +767,120 @@ describe("Reports export beacon (POST /api/reports/export-beacon)", () => {
       targetId: undefined,
     }, "viewer");
     assert.equal(status, 204);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// COACHING OUTCOMES-SUMMARY (Phase B)
+// =====================================================================
+//
+// Exercises the Phase B extensions: ?groupBy=employee, ?bucket=week,
+// ?includeSkipped=true, and the new avgSubDeltas fields on every rollup.
+// With MemStorage there are no sessions so the rollup is zero-measured;
+// the tests verify shape + validation + auth rather than non-trivial math.
+// The math is covered in the Phase B frontend tests via synthetic fixtures.
+describe("Coaching outcomes-summary (GET /api/coaching/outcomes-summary)", () => {
+  const app = buildAppWith(registerCoachingRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("returns 403 for viewer role", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("returns flat shape for manager role without groupBy", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(typeof body.windowDays, "number");
+    assert.equal(typeof body.totalSessions, "number");
+    assert.equal(typeof body.measured, "number");
+    // Phase B: avgSubDeltas is on the rollup even when no sessions measured.
+    assert.ok(body.avgSubDeltas, "avgSubDeltas should be present");
+    assert.ok("compliance" in body.avgSubDeltas);
+    assert.ok("customerExperience" in body.avgSubDeltas);
+    assert.ok("communication" in body.avgSubDeltas);
+    assert.ok("resolution" in body.avgSubDeltas);
+  });
+
+  it("returns grouped shape for ?groupBy=manager", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?groupBy=manager", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "manager");
+    assert.ok(Array.isArray(body.groups));
+    assert.ok(body.overall);
+  });
+
+  it("returns grouped shape for ?groupBy=employee", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?groupBy=employee", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "employee");
+    assert.ok(Array.isArray(body.groups));
+  });
+
+  it("includes timeSeries when ?bucket=week", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?bucket=week", undefined, "manager");
+    assert.equal(status, 200);
+    // Empty storage → empty time series, but the field must be present.
+    assert.ok(Array.isArray(body.timeSeries));
+  });
+
+  it("omits timeSeries when bucket param absent", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.timeSeries, undefined);
+  });
+
+  it("includes skipped list when ?includeSkipped=true", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?includeSkipped=true", undefined, "manager");
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.skipped));
+  });
+
+  it("omits skipped list by default", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.skipped, undefined);
+  });
+
+  it("clamps days outside [7, 365] to the bounds", async () => {
+    const low = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?days=1", undefined, "manager");
+    assert.equal(low.status, 200);
+    assert.equal(low.body.windowDays, 7);
+    const high = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?days=9999", undefined, "manager");
+    assert.equal(high.status, 200);
+    assert.equal(high.body.windowDays, 365);
+  });
+
+  it("accepts all Phase B params simultaneously", async () => {
+    const { status, body } = await req(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary?groupBy=employee&bucket=week&includeSkipped=true&days=30",
+      undefined,
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "employee");
+    assert.equal(body.windowDays, 30);
+    assert.ok(Array.isArray(body.timeSeries));
+    assert.ok(Array.isArray(body.skipped));
   });
 
   after((_, done) => {

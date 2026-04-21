@@ -210,6 +210,16 @@ export function register(router: Router) {
       const MIN_WINDOW = 3;
       const cutoff = Date.now() - windowDays * 86400000;
 
+      // ?bucket=week — return a weekly time-series of per-session deltas
+      // so managers can see whether the program is trending up/down over
+      // time. Shape kept separate from the rollup response so clients can
+      // layer the bucketed view on top of the summary strip.
+      const bucket = (req.query.bucket as string | undefined) ?? "";
+      // ?includeSkipped=true — drill-in: include the full list of sessions
+      // that were skipped for insufficient-data so managers can see WHICH
+      // sessions didn't have enough calls and why.
+      const includeSkipped = req.query.includeSkipped === "true";
+
       const sessions = await storage.getAllCoachingSessions();
       const windowedSessions = sessions.filter(s => {
         const t = new Date(s.createdAt || 0).getTime();
@@ -239,9 +249,40 @@ export function register(router: Router) {
         return vals.reduce((a, b) => a + b, 0) / vals.length;
       };
 
+      // Per-sub-score average. Returns null only when the window has zero
+      // calls carrying that sub-score. INV-23: sub-scores are camelCase in
+      // storage (pipeline normalizes from snake_case at the AI boundary).
+      const avgSub = (window: { call: any }[], key: "compliance" | "customerExperience" | "communication" | "resolution"): number | null => {
+        const vals = window
+          .map(x => {
+            const sub = x.call.analysis?.subScores as Record<string, unknown> | undefined;
+            const v = sub?.[key];
+            return typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+          })
+          .filter(v => Number.isFinite(v));
+        if (vals.length === 0) return null;
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+      };
+
+      type SubScoreDelta = {
+        compliance: number | null;
+        customerExperience: number | null;
+        communication: number | null;
+        resolution: number | null;
+      };
+
       // Per-session result — categorized for bucket counting.
       type Outcome = "positive" | "neutral" | "negative" | "insufficient";
-      const perSession: { session: typeof windowedSessions[number]; delta: number | null; outcome: Outcome }[] = [];
+      type PerSession = {
+        session: typeof windowedSessions[number];
+        delta: number | null;
+        subDeltas: SubScoreDelta;
+        outcome: Outcome;
+        skipReason?: string;  // set when outcome === "insufficient"
+      };
+      const perSession: PerSession[] = [];
+
+      const emptySub: SubScoreDelta = { compliance: null, customerExperience: null, communication: null, resolution: null };
 
       for (const s of windowedSessions) {
         const sessionTs = new Date(s.createdAt || 0).getTime();
@@ -249,24 +290,51 @@ export function register(router: Router) {
         const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
         const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
         if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
-          perSession.push({ session: s, delta: null, outcome: "insufficient" });
+          perSession.push({
+            session: s, delta: null, subDeltas: emptySub, outcome: "insufficient",
+            skipReason: `before=${before.length}, after=${after.length}; need ≥${MIN_WINDOW} each`,
+          });
           continue;
         }
         const bAvg = avgScore(before);
         const aAvg = avgScore(after);
         if (bAvg === null || aAvg === null) {
-          perSession.push({ session: s, delta: null, outcome: "insufficient" });
+          perSession.push({
+            session: s, delta: null, subDeltas: emptySub, outcome: "insufficient",
+            skipReason: "no valid performance_score values in at least one window",
+          });
           continue;
         }
         const d = aAvg - bAvg;
         const outcome: Outcome = d >= 0.5 ? "positive" : d <= -0.5 ? "negative" : "neutral";
-        perSession.push({ session: s, delta: d, outcome });
+        // Per-sub-score delta — null when either before or after has no
+        // calls with that sub-score populated.
+        const subDeltaFor = (key: "compliance" | "customerExperience" | "communication" | "resolution"): number | null => {
+          const b = avgSub(before, key);
+          const a = avgSub(after, key);
+          return b === null || a === null ? null : a - b;
+        };
+        perSession.push({
+          session: s, delta: d, outcome,
+          subDeltas: {
+            compliance: subDeltaFor("compliance"),
+            customerExperience: subDeltaFor("customerExperience"),
+            communication: subDeltaFor("communication"),
+            resolution: subDeltaFor("resolution"),
+          },
+        });
       }
 
       // Build the overall totals (used by every response shape).
-      const rollup = (entries: typeof perSession) => {
+      const rollup = (entries: PerSession[]) => {
         let measured = 0, insufficient = 0, positive = 0, neutral = 0, negative = 0;
         let deltaSum = 0, deltaCount = 0;
+        const subSums: Record<keyof SubScoreDelta, { sum: number; count: number }> = {
+          compliance: { sum: 0, count: 0 },
+          customerExperience: { sum: 0, count: 0 },
+          communication: { sum: 0, count: 0 },
+          resolution: { sum: 0, count: 0 },
+        };
         for (const e of entries) {
           if (e.outcome === "insufficient") { insufficient++; continue; }
           measured++;
@@ -274,7 +342,15 @@ export function register(router: Router) {
           else if (e.outcome === "negative") negative++;
           else neutral++;
           if (e.delta !== null) { deltaSum += e.delta; deltaCount++; }
+          for (const key of Object.keys(subSums) as (keyof SubScoreDelta)[]) {
+            const v = e.subDeltas[key];
+            if (v !== null && Number.isFinite(v)) {
+              subSums[key].sum += v;
+              subSums[key].count++;
+            }
+          }
         }
+        const round2 = (n: number) => Math.round(n * 100) / 100;
         return {
           totalSessions: entries.length,
           measured,
@@ -282,11 +358,63 @@ export function register(router: Router) {
           positiveCount: positive,
           neutralCount: neutral,
           negativeCount: negative,
-          avgOverallDelta: deltaCount > 0 ? Math.round((deltaSum / deltaCount) * 100) / 100 : null,
+          avgOverallDelta: deltaCount > 0 ? round2(deltaSum / deltaCount) : null,
+          avgSubDeltas: {
+            compliance: subSums.compliance.count > 0 ? round2(subSums.compliance.sum / subSums.compliance.count) : null,
+            customerExperience: subSums.customerExperience.count > 0 ? round2(subSums.customerExperience.sum / subSums.customerExperience.count) : null,
+            communication: subSums.communication.count > 0 ? round2(subSums.communication.sum / subSums.communication.count) : null,
+            resolution: subSums.resolution.count > 0 ? round2(subSums.resolution.sum / subSums.resolution.count) : null,
+          },
         };
       };
 
       const overall = rollup(perSession);
+
+      // Optional drill-in payload — sessions that were skipped for
+      // insufficient data + why. Capped at 100 entries to keep the
+      // response small even on large windows.
+      const skipped = includeSkipped
+        ? perSession
+            .filter(e => e.outcome === "insufficient")
+            .slice(0, 100)
+            .map(e => ({
+              sessionId: e.session.id,
+              employeeId: e.session.employeeId,
+              createdAt: e.session.createdAt,
+              reason: e.skipReason ?? "unknown",
+            }))
+        : undefined;
+
+      // Optional time-series bucketing: groups sessions by the Monday of
+      // the week they were created in (UTC), returns a rolling weekly
+      // series. Only bucket=week is supported currently.
+      let timeSeries: { bucketStart: string; measured: number; avgOverallDelta: number | null }[] | undefined;
+      if (bucket === "week") {
+        const weekBuckets = new Map<string, PerSession[]>();
+        for (const e of perSession) {
+          const ts = new Date(e.session.createdAt || 0);
+          if (!Number.isFinite(ts.getTime())) continue;
+          // Round DOWN to the Monday of that week (UTC). getUTCDay(): Sun=0..Sat=6.
+          // For the bucket key, use YYYY-MM-DD of that Monday.
+          const dow = ts.getUTCDay();
+          const daysToMonday = (dow + 6) % 7;  // Mon=0, Tue=1, ..., Sun=6
+          const monday = new Date(Date.UTC(ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate() - daysToMonday));
+          const key = monday.toISOString().slice(0, 10);
+          const arr = weekBuckets.get(key) || [];
+          arr.push(e);
+          weekBuckets.set(key, arr);
+        }
+        timeSeries = Array.from(weekBuckets.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([bucketStart, entries]) => {
+            const r = rollup(entries);
+            return {
+              bucketStart,
+              measured: r.measured,
+              avgOverallDelta: r.avgOverallDelta,
+            };
+          });
+      }
 
       if (groupBy === "manager" || groupBy === "employee") {
         // Build per-group buckets. For manager grouping, the key is
@@ -294,12 +422,12 @@ export function register(router: Router) {
         const getKey = (s: typeof windowedSessions[number]) =>
           groupBy === "manager" ? (s.assignedBy || "unknown") : s.employeeId;
 
-        const groupBuckets = new Map<string, typeof perSession>();
+        const groupBuckets = new Map<string, PerSession[]>();
         for (const entry of perSession) {
           const key = getKey(entry.session);
-          const bucket = groupBuckets.get(key) || [];
-          bucket.push(entry);
-          groupBuckets.set(key, bucket);
+          const arr = groupBuckets.get(key) || [];
+          arr.push(entry);
+          groupBuckets.set(key, arr);
         }
 
         // For employee grouping, enrich with employee name so the UI doesn't
@@ -319,11 +447,17 @@ export function register(router: Router) {
           return bv - av;
         });
 
-        res.json({ windowDays, groupBy, overall, groups });
+        const responseBody: Record<string, unknown> = { windowDays, groupBy, overall, groups };
+        if (timeSeries !== undefined) responseBody.timeSeries = timeSeries;
+        if (skipped !== undefined) responseBody.skipped = skipped;
+        res.json(responseBody);
         return;
       }
 
-      res.json({ windowDays, ...overall });
+      const flatBody: Record<string, unknown> = { windowDays, ...overall };
+      if (timeSeries !== undefined) flatBody.timeSeries = timeSeries;
+      if (skipped !== undefined) flatBody.skipped = skipped;
+      res.json(flatBody);
     } catch (error) {
       res.status(500).json({ message: "Failed to compute outcomes summary" });
     }
