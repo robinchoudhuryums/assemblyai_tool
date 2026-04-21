@@ -20,6 +20,7 @@ import {
   deleteWebhookConfig,
   triggerWebhook,
   getWebhookBreakerSnapshot,
+  webhookBreaker,
   WEBHOOK_EVENTS,
   type WebhookConfig,
 } from "../services/webhooks";
@@ -605,6 +606,14 @@ export function registerContentRoutes(
       if (!updated) {
         res.status(404).json({ message: "Webhook config not found" });
         return;
+      }
+      // If the retry policy was updated, reset the per-webhook circuit
+      // breaker so the new thresholds take effect on the next delivery.
+      // Without this, an admin who tightens the threshold to "open faster"
+      // would keep getting the old (looser) behavior until the LRU evicts
+      // the breaker (effectively never, for a small webhook fleet).
+      if ("retryPolicy" in parsed.data) {
+        webhookBreaker.reset(req.params.id);
       }
       res.json(updated);
     } catch (error) {

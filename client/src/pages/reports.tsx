@@ -128,154 +128,32 @@ export default function ReportsPage() {
     enabled: reportType === "employee" && !!selectedEmployee,
   });
 
-  // HIPAA: emit a server-side audit beacon before any client-built export.
-  // The TXT and CSV downloads are constructed in the browser, so without
-  // this beacon the access never lands in the audit log. Best-effort: a
-  // failed beacon does not block the user-initiated download.
-  const sendExportBeacon = async (format: "txt" | "csv") => {
-    try {
-      const { getCsrfToken } = await import("@/lib/queryClient");
-      const targetId = reportType === "employee" ? selectedEmployee
-        : reportType === "department" ? selectedDepartment
-        : "overall";
-      await fetch("/api/reports/export-beacon", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}),
-        },
-        body: JSON.stringify({
-          format,
-          reportType,
-          from: dateRange.from,
-          to: dateRange.to,
-          targetId,
-        }),
-      });
-    } catch {
-      // Audit beacon is best-effort; don't block the download on failure.
-    }
-  };
-
-  // Download handler
-  const handleDownloadReport = async () => {
+  // Server-side CSV export. Retired the prior client-built CSV + TXT
+  // downloads + export-beacon pattern (the browser-assembled files never
+  // made it cleanly into the audit log when the beacon failed). The
+  // server endpoints emit `event: "export_report"` HIPAA audit entries
+  // synchronously as part of request handling.
+  const handleDownloadCSV = () => {
     if (!report) return;
-    await sendExportBeacon("txt");
-    const lines: string[] = [];
-    const typeLabel = reportType === "employee"
-      ? `Employee Report: ${employees?.find(e => e.id === selectedEmployee)?.name || selectedEmployee}`
-      : reportType === "department"
-      ? `Department Report: ${selectedDepartment}`
-      : "Overall Report";
-
-    lines.push("CallAnalyzer Performance Report");
-    lines.push("===============================");
-    lines.push(`Type: ${typeLabel}`);
-    lines.push(`Period: ${dateRange.from} to ${dateRange.to} (${PRESET_LABELS[datePreset]})`);
-    lines.push(`Generated: ${new Date().toLocaleString()}`);
-    lines.push("");
-    lines.push("Overall Metrics");
-    lines.push("---------------");
-    lines.push(`Total Calls Analyzed: ${report.metrics.totalCalls}`);
-    lines.push(`Average Sentiment Score: ${report.metrics.avgSentiment.toFixed(2)}`);
-    lines.push(`Average Performance Score: ${report.metrics.avgPerformanceScore.toFixed(1)}/10`);
-    lines.push("");
-    lines.push("Sentiment Breakdown");
-    lines.push("-------------------");
-    lines.push(`Positive: ${report.sentiment.positive}`);
-    lines.push(`Neutral: ${report.sentiment.neutral}`);
-    lines.push(`Negative: ${report.sentiment.negative}`);
-    lines.push("");
-    lines.push("Performers");
-    lines.push("----------");
-    report.performers.forEach((p, i) => {
-      lines.push(`${i + 1}. ${p.name} — ${p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "N/A"}/10 (${p.totalCalls} calls)`);
-    });
-
-    if (agentProfile && reportType === "employee") {
-      lines.push("");
-      lines.push("Agent Profile Summary");
-      lines.push("---------------------");
-      lines.push(`Score Range: ${agentProfile.lowScore?.toFixed(1) ?? "N/A"} - ${agentProfile.highScore?.toFixed(1) ?? "N/A"}`);
-      lines.push("");
-      lines.push("Top Strengths:");
-      agentProfile.topStrengths.forEach(s => lines.push(`  - ${s.text} (x${s.count})`));
-      lines.push("");
-      lines.push("Top Suggestions:");
-      agentProfile.topSuggestions.forEach(s => lines.push(`  - ${s.text} (x${s.count})`));
+    const params = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
+    if (reportType === "employee" && selectedEmployee) {
+      window.open(`/api/reports/agent-profile/${selectedEmployee}/export.csv?${params}`, "_blank");
+    } else {
+      if (reportType === "department" && selectedDepartment) {
+        params.set("role", selectedDepartment);
+      }
+      window.open(`/api/reports/filtered/export.csv?${params}`, "_blank");
     }
-
-    if (aiSummary) {
-      lines.push("");
-      lines.push("AI-Generated Summary");
-      lines.push("--------------------");
-      lines.push(aiSummary);
-    }
-
-    if (compareEnabled && compareReport) {
-      lines.push("");
-      lines.push(`Comparison Period: ${compareDateRange.from} to ${compareDateRange.to}`);
-      lines.push("---------------------------------------------------");
-      lines.push(`Total Calls: ${compareReport.metrics.totalCalls}`);
-      lines.push(`Avg Performance: ${compareReport.metrics.avgPerformanceScore.toFixed(1)}/10`);
-      lines.push(`Avg Sentiment: ${compareReport.metrics.avgSentiment.toFixed(2)}`);
-    }
-
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `report-${reportType}-${dateRange.from}-to-${dateRange.to}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
-  // CSV export of performers + trends for spreadsheet analysis
-  const handleDownloadCSV = async () => {
-    if (!report) return;
-    await sendExportBeacon("csv");
-    const rows: string[][] = [];
-    // Performers sheet
-    rows.push(["Performers"]);
-    rows.push(["Rank", "Name", "Role", "Avg Score", "Total Calls"]);
-    report.performers.forEach((p, i) => {
-      rows.push([(i + 1).toString(), p.name, p.role, p.avgPerformanceScore != null ? Number(p.avgPerformanceScore).toFixed(1) : "", p.totalCalls.toString()]);
-    });
-    rows.push([]);
-    // Monthly trends
-    rows.push(["Monthly Trends"]);
-    rows.push(["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"]);
-    report.trends.forEach(t => {
-      rows.push([t.month, t.calls.toString(), t.avgScore != null ? t.avgScore.toFixed(1) : "", t.positive.toString(), t.neutral.toString(), t.negative.toString()]);
-    });
-    rows.push([]);
-    // Summary
-    rows.push(["Summary"]);
-    rows.push(["Total Calls", report.metrics.totalCalls.toString()]);
-    rows.push(["Avg Performance", report.metrics.avgPerformanceScore.toFixed(1)]);
-    rows.push(["Avg Sentiment", report.metrics.avgSentiment.toFixed(2)]);
-
-    const csvContent = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `report-${reportType}-${dateRange.from}-to-${dateRange.to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Phase D: server-side PDF download. The endpoint does the audit
-  // internally, so no beacon needed here. Follows the link-and-click
-  // pattern that browsers map to a file save dialog.
+  // Server-side PDF export (Phase D). Same shape as CSV; separate handler
+  // only because the endpoint paths differ by file extension.
   const handleDownloadPDF = () => {
     if (!report) return;
     const params = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
     if (reportType === "employee" && selectedEmployee) {
       window.open(`/api/reports/agent-profile/${selectedEmployee}/export.pdf?${params}`, "_blank");
     } else {
-      // Overall + department reports share the filtered-report PDF.
       if (reportType === "department" && selectedDepartment) {
         params.set("role", selectedDepartment);
       }
@@ -369,17 +247,6 @@ export default function ReportsPage() {
         >
           <DownloadSimple style={{ width: 12, height: 12 }} />
           PDF
-        </button>
-        <button
-          type="button"
-          onClick={handleDownloadReport}
-          disabled={!report}
-          className="font-mono uppercase inline-flex items-center gap-1.5 border rounded-sm px-2.5 py-1.5 text-[var(--paper)] bg-primary border-primary hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ fontSize: 10, letterSpacing: "0.1em" }}
-          data-testid="download-report"
-        >
-          <DownloadSimple style={{ width: 12, height: 12 }} />
-          Report
         </button>
       </div>
 

@@ -262,13 +262,17 @@ export function registerReportRoutes(router: Router) {
         );
         const simByCallId = new Map<string, number>(rows.map(r => [r.id, parseFloat(r.similarity)]));
         // For hybrid, also include keyword-only hits (which may have different
-        // candidate IDs than pgvector returned). Hydrate the union.
+        // candidate IDs than pgvector returned). Hydrate the union via the
+        // ID-bulk helper so we fetch ONLY the candidates (~60 rows) instead
+        // of scanning every completed call in the table. This is the second
+        // half of the pgvector performance win — the first half is the
+        // vector-indexed SELECT above; without this we still paid O(N) for
+        // hydration which partially undid the SQL-native speedup.
         const candidateIds = new Set<string>(simByCallId.keys());
         if (mode === "hybrid") {
           for (const c of keywordResults) candidateIds.add(c.id);
         }
-        const allDetails = await storage.getCallsWithDetails({ status: "completed" });
-        let hydrated = allDetails.filter(c => candidateIds.has(c.id));
+        let hydrated = await storage.getCallsWithDetailsByIds(Array.from(candidateIds));
         // Synthesize a default similarity for keyword-only hits so they
         // can still pass through the pipeline. Reuse a low floor so they
         // can only win via keyword weight.
@@ -963,37 +967,6 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to generate agent summary", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate AI summary" });
-    }
-  });
-
-  // HIPAA audit beacon for client-side report exports.
-  // The export file is built in the browser today (see client/src/pages/reports.tsx),
-  // so the server never sees the bytes leave. This endpoint receives a beacon BEFORE
-  // the download fires, so the access still lands in the audit log. Full server-side
-  // export generation is the long-term fix and is tracked in the roadmap.
-  router.post("/api/reports/export-beacon", requireAuth, async (req, res) => {
-    try {
-      const body = req.body ?? {};
-      const format = typeof body.format === "string" ? body.format.slice(0, 16) : "unknown";
-      const reportType = typeof body.reportType === "string" ? body.reportType.slice(0, 32) : "unknown";
-      const fromDate = typeof body.from === "string" ? body.from.slice(0, 32) : "";
-      const toDate = typeof body.to === "string" ? body.to.slice(0, 32) : "";
-      const targetId = typeof body.targetId === "string" ? body.targetId.slice(0, 64) : "";
-
-      logPhiAccess({
-        ...auditContext(req),
-        timestamp: new Date().toISOString(),
-        event: "export_report_clientside",
-        resourceType: "report",
-        resourceId: targetId || undefined,
-        detail: `format=${format}; reportType=${reportType}; from=${fromDate}; to=${toDate}`,
-      });
-
-      res.status(204).send();
-    } catch (error) {
-      // Don't leak details — beacon is fire-and-forget. Log on the server side.
-      logger.error("failed to record export beacon", { error: (error as Error).message });
-      res.status(500).json({ message: "Failed to record export" });
     }
   });
 

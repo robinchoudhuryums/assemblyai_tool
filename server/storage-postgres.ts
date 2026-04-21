@@ -1126,6 +1126,37 @@ export class PostgresStorage implements IStorage {
   }
 
   // ── Search ────────────────────────────────────────────────
+  /**
+   * Bulk-hydrate by ID list. Single SQL round trip joining employees +
+   * transcripts + sentiment + analysis. Synthetic calls excluded (INV-34);
+   * semantic search is the primary caller and it already filters synthetic
+   * in the pgvector SELECT, but excluding here too is defense-in-depth.
+   * Returns an empty array when `ids` is empty — no pointless SELECT.
+   */
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(",");
+    const { rows } = await this.db.query(`
+      SELECT c.*,
+        e.id AS e_id, e.name AS e_name, e.role AS e_role, e.email AS e_email,
+        e.initials AS e_initials, e.status AS e_status, e.sub_team AS e_sub_team, e.created_at AS e_created_at,
+        t.id AS t_id, t.text AS t_text, t.confidence AS t_confidence, t.words AS t_words, t.created_at AS t_created_at,
+        s.id AS s_id, s.overall_sentiment, s.overall_score, s.segments AS s_segments, s.created_at AS s_created_at,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN transcripts t ON t.call_id = c.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE c.id IN (${placeholders})
+        AND c.synthetic = FALSE
+    `, ids);
+    return rows.map(mapCallWithDetailsRow);
+  }
+
   async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
     // Single query: join transcript search with full call details (no N+1)
     const { rows } = await this.db.query(`

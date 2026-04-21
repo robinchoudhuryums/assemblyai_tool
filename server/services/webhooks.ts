@@ -50,12 +50,27 @@ export const WEBHOOK_EVENTS: WebhookEvent[] = [
   "coaching.created",
 ];
 
+/**
+ * Optional per-webhook retry policy override. Mission-critical consumers
+ * (e.g. a CRM that must not miss `call.completed`) can raise retry counts;
+ * low-priority consumers (e.g. Slack) can lower the circuit threshold so
+ * flaky receivers trip sooner. All fields are optional — unset values
+ * inherit service-wide defaults (4 in-process retries, circuit opens at 5
+ * failures for 5 min).
+ */
+export interface WebhookRetryPolicy {
+  maxInProcessRetries?: number;
+  circuitThreshold?: number;
+  circuitResetMs?: number;
+}
+
 export interface WebhookConfig {
   id: string;
   url: string;
   events: string[];
   secret: string;
   active: boolean;
+  retryPolicy?: WebhookRetryPolicy;
   createdBy: string;
   createdAt: string;
 }
@@ -162,14 +177,27 @@ export async function createWebhookConfig(config: WebhookConfig): Promise<void> 
   invalidateConfigCache();
 }
 
-export async function updateWebhookConfig(id: string, updates: Partial<WebhookConfig>): Promise<WebhookConfig | undefined> {
+// `retryPolicy: null` is accepted as an explicit "clear the policy" signal;
+// undefined means "leave unchanged". Any other field behaves as normal.
+export async function updateWebhookConfig(
+  id: string,
+  updates: Partial<Omit<WebhookConfig, "retryPolicy">> & { retryPolicy?: WebhookRetryPolicy | null },
+): Promise<WebhookConfig | undefined> {
   const existing = await getWebhookConfig(id);
   if (!existing) return undefined;
-  const updated = { ...existing, ...updates, id }; // prevent id change
+  // Merge carefully: `retryPolicy: null` means "clear it", explicit
+  // undefined means "don't touch", a policy object means "replace wholly".
+  const { retryPolicy: incomingPolicy, ...restUpdates } = updates;
+  const merged: WebhookConfig = { ...existing, ...restUpdates, id };
+  if (incomingPolicy === null) {
+    delete merged.retryPolicy;
+  } else if (incomingPolicy !== undefined) {
+    merged.retryPolicy = incomingPolicy;
+  }
   const client = requireS3Client("updateWebhookConfig");
-  await client.uploadJson(`webhooks/${id}.json`, updated);
+  await client.uploadJson(`webhooks/${id}.json`, merged);
   invalidateConfigCache();
-  return updated;
+  return merged;
 }
 
 export async function deleteWebhookConfig(id: string): Promise<void> {
@@ -211,6 +239,14 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
 }
 
 async function deliverWithRetry(config: WebhookConfig, event: string, body: string, initialAttempts = 0): Promise<void> {
+  // Resolve per-webhook policy overrides with sensible defaults. Unset
+  // fields inherit the service-wide defaults declared at module scope.
+  const policy = config.retryPolicy ?? {};
+  const maxRetries = policy.maxInProcessRetries ?? WEBHOOK_MAX_RETRIES;
+  const breakerOverride = policy.circuitThreshold !== undefined || policy.circuitResetMs !== undefined
+    ? { threshold: policy.circuitThreshold, resetMs: policy.circuitResetMs }
+    : undefined;
+
   // Per-webhook circuit breaker check. When open, skip delivery AND skip the
   // durable-retry enqueue — the receiver is known-broken, hammering it with
   // new queue entries is worse than dropping this delivery (the event stays
@@ -224,13 +260,18 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
     return;
   }
 
-  for (let attempt = 0; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       // Wrap the individual delivery in the breaker. Success resets the
       // breaker's counter for this webhookId; failure increments it. After
       // the threshold trips, subsequent `webhookBreaker.isOpen()` checks
-      // short-circuit future calls for this key.
-      await webhookBreaker.execute(config.id, () => deliverWebhook(config, event, body));
+      // short-circuit future calls for this key. Per-key thresholds are
+      // applied on first creation of the breaker for this webhookId.
+      await webhookBreaker.execute(
+        config.id,
+        () => deliverWebhook(config, event, body),
+        breakerOverride ?? undefined,
+      );
       return;
     } catch (err) {
       // If the breaker opened mid-retry, abandon further in-process retries.
@@ -243,8 +284,8 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
         });
         return;
       }
-      if (attempt === WEBHOOK_MAX_RETRIES) {
-        const totalAttempts = initialAttempts + WEBHOOK_MAX_RETRIES + 1;
+      if (attempt === maxRetries) {
+        const totalAttempts = initialAttempts + maxRetries + 1;
         logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: totalAttempts, error: (err as Error).message });
         // Persistent retry: hand off to the durable job queue if available.
         // The job queue has its own retry/dead-letter semantics (3 attempts),

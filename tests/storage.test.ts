@@ -143,6 +143,38 @@ describe("MemStorage — Transcript, Sentiment, Analysis", () => {
     const result = await storage.getCallAnalysesBulk([]);
     assert.equal(result.size, 0);
   });
+
+  // Semantic search hydration fast path. Exercised indirectly by the
+  // /api/search/semantic pgvector path; these tests pin the IStorage
+  // contract (empty input, ID filter, synthetic exclusion).
+  it("getCallsWithDetailsByIds returns empty array for empty input", async () => {
+    const storage = new MemStorage();
+    const result = await storage.getCallsWithDetailsByIds([]);
+    assert.equal(result.length, 0);
+  });
+
+  it("getCallsWithDetailsByIds filters to the provided IDs only", async () => {
+    const storage = new MemStorage();
+    const c1 = await storage.createCall({ fileName: "a.mp3", mimeType: "audio/mp3", fileSize: 1, status: "completed", contentHash: "hidsa-1" });
+    const c2 = await storage.createCall({ fileName: "b.mp3", mimeType: "audio/mp3", fileSize: 1, status: "completed", contentHash: "hidsa-2" });
+    const c3 = await storage.createCall({ fileName: "c.mp3", mimeType: "audio/mp3", fileSize: 1, status: "completed", contentHash: "hidsa-3" });
+    const result = await storage.getCallsWithDetailsByIds([c1.id, c3.id]);
+    assert.equal(result.length, 2);
+    const ids = new Set(result.map(c => c.id));
+    assert.ok(ids.has(c1.id));
+    assert.ok(ids.has(c3.id));
+    assert.ok(!ids.has(c2.id));
+  });
+
+  it("getCallsWithDetailsByIds omits synthetic calls even when explicitly requested (INV-34)", async () => {
+    const storage = new MemStorage();
+    const real = await storage.createCall({ fileName: "real.mp3", mimeType: "audio/mp3", fileSize: 1, status: "completed", contentHash: "hidsa-s-real" });
+    const syn = await storage.createCall({ fileName: "syn.mp3", mimeType: "audio/mp3", fileSize: 1, status: "completed", contentHash: "hidsa-s-syn", synthetic: true });
+    const result = await storage.getCallsWithDetailsByIds([real.id, syn.id]);
+    // Synthetic excluded — only the real call is hydrated.
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, real.id);
+  });
 });
 
 describe("MemStorage — Dashboard metrics", () => {

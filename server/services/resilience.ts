@@ -124,7 +124,7 @@ export class PerKeyCircuitBreaker {
     private readonly resetTimeoutMs: number = 30_000,
   ) {}
 
-  private getOrCreate(key: string): CircuitBreaker {
+  private getOrCreate(key: string, override?: { threshold?: number; resetMs?: number }): CircuitBreaker {
     let b = this.breakers.get(key);
     if (b) {
       // LRU touch: delete-then-set to move to the most-recently-used end.
@@ -136,14 +136,36 @@ export class PerKeyCircuitBreaker {
       const oldest = this.breakers.keys().next().value;
       if (oldest !== undefined) this.breakers.delete(oldest);
     }
-    b = new CircuitBreaker(`${this.labelPrefix}:${key}`, this.failureThreshold, this.resetTimeoutMs);
+    // Per-key override is applied only on first creation. A later policy
+    // change by the caller won't retroactively update the breaker — the
+    // caller must `reset(key)` to recreate with new thresholds.
+    const threshold = override?.threshold ?? this.failureThreshold;
+    const resetMs = override?.resetMs ?? this.resetTimeoutMs;
+    b = new CircuitBreaker(`${this.labelPrefix}:${key}`, threshold, resetMs);
     this.breakers.set(key, b);
     return b;
   }
 
-  /** Execute `fn` under the per-key circuit. Throws immediately if the key's circuit is open. */
-  async execute<T>(key: string, fn: () => Promise<T>, isFailure?: (err: unknown) => boolean): Promise<T> {
-    return this.getOrCreate(key).execute(fn, isFailure);
+  /**
+   * Execute `fn` under the per-key circuit. Throws immediately if the key's
+   * circuit is open. Optional `override.threshold` / `override.resetMs` are
+   * applied only when first creating a breaker for this key; subsequent
+   * policy changes require an explicit `reset(key)` to take effect.
+   */
+  async execute<T>(
+    key: string,
+    fn: () => Promise<T>,
+    isFailureOrOptions?: ((err: unknown) => boolean) | { isFailure?: (err: unknown) => boolean; threshold?: number; resetMs?: number },
+  ): Promise<T> {
+    // Back-compat: allow the third arg to be a plain isFailure predicate OR
+    // an options object carrying threshold/resetMs overrides.
+    const opts = typeof isFailureOrOptions === "function"
+      ? { isFailure: isFailureOrOptions }
+      : (isFailureOrOptions ?? {});
+    const override = opts.threshold !== undefined || opts.resetMs !== undefined
+      ? { threshold: opts.threshold, resetMs: opts.resetMs }
+      : undefined;
+    return this.getOrCreate(key, override).execute(fn, opts.isFailure);
   }
 
   /** Current state for a specific key — "closed" for unknown keys. */

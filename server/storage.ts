@@ -174,6 +174,19 @@ export interface IStorage {
    * the full call universe to filter by date in JS.
    */
   getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]>;
+
+  /**
+   * Bulk-hydrate a specific set of calls with employee + transcript +
+   * sentiment + analysis joined. Used by the semantic search fast path
+   * (`/api/search/semantic`) which identifies candidate IDs via pgvector
+   * cosine similarity, then needs full CallWithDetails for just those IDs
+   * rather than scanning the full completed-calls table. Order of the
+   * returned array is NOT guaranteed to match the input `ids` — the caller
+   * should re-sort by whatever criterion it cares about (pgvector's
+   * similarity, typically).
+   */
+  getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]>;
+
   getCallsPaginated(options: {
     filters?: { status?: string; sentiment?: string; employee?: string };
     cursor?: string; // ISO timestamp:id cursor
@@ -543,6 +556,21 @@ export class MemStorage implements IStorage {
     const calls = [...this.calls.values()]
       .filter(c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .filter(c => !employeeId || c.employeeId === employeeId);
+    return Promise.all(calls.map(async (call) => {
+      const [employee, transcript, sentiment, analysis] = await Promise.all([
+        call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
+        this.getTranscript(call.id),
+        this.getSentimentAnalysis(call.id),
+        this.getCallAnalysis(call.id),
+      ]);
+      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+    }));
+  }
+
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    const calls = [...this.calls.values()].filter(c => !c.synthetic && idSet.has(c.id));
     return Promise.all(calls.map(async (call) => {
       const [employee, transcript, sentiment, analysis] = await Promise.all([
         call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
@@ -1251,6 +1279,16 @@ export class CloudStorage implements IStorage {
     const all = await this.getCallsWithDetails(filters);
     const sinceMs = since.getTime();
     return all.filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
+  }
+
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    // S3-only backend has no secondary index — defer to the full scan
+    // and filter by ID. The semantic-search hot path only uses this
+    // backend in dev; production uses PostgresStorage's SQL IN-clause.
+    const all = await this.getCallsWithDetails();
+    const idSet = new Set(ids);
+    return all.filter(c => idSet.has(c.id));
   }
 
   async getCallsPaginated(options: {
