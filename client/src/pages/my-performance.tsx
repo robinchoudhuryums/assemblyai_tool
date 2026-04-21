@@ -308,6 +308,162 @@ function SimilarUncorrectedCard() {
   );
 }
 
+// Manager-only: scoring-quality dashboard. Surfaces AI-scoring health
+// signals that used to be admin-only via /api/admin/calibration. Shifts
+// accountability from admin-only into manager visibility: if the AI is
+// systematically scoring too low/high, managers see it here.
+//
+// Renders nothing for viewers (server returns 403 → on401:"returnNull"
+// default gives `undefined` → empty render).
+interface ScoringQualityResponse {
+  correctionStats: {
+    total: number;
+    upgrades: number;
+    downgrades: number;
+    avgDelta: number;
+    byCategory: Record<string, number>;
+  };
+  qualityAlerts: Array<{
+    type: "high_correction_rate" | "systematic_bias";
+    severity: "warning" | "critical";
+    message: string;
+    timestamp: string;
+  }>;
+  calibration: {
+    lastSnapshotAt: string | null;
+    driftDetected: boolean;
+    observedMean: number | null;
+    configuredMean: number | null;
+  };
+}
+
+function ScoringQualityCard() {
+  const { data } = useQuery<ScoringQualityResponse>({
+    queryKey: ["/api/scoring-quality"],
+  });
+
+  if (!data) return null;
+
+  const { correctionStats, qualityAlerts, calibration } = data;
+  // Hide entirely when there's nothing actionable — no corrections and no
+  // alerts and no drift. Avoids a noisy empty panel on low-volume deploys.
+  const hasAnySignal =
+    correctionStats.total > 0 ||
+    qualityAlerts.length > 0 ||
+    calibration.driftDetected;
+  if (!hasAnySignal) return null;
+
+  return (
+    <div>
+      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+        AI scoring health
+      </div>
+      <div
+        className="font-display font-medium text-foreground mt-1 mb-2"
+        style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+      >
+        {qualityAlerts.length > 0 || calibration.driftDetected
+          ? "Signals worth reviewing."
+          : "Looks healthy across the board."}
+      </div>
+      <div
+        className="text-xs text-muted-foreground mb-4"
+        style={{ lineHeight: 1.55 }}
+      >
+        Correction patterns, systematic-bias detection, and calibration drift —
+        aggregated across every scored call on the platform. Shifts accountability
+        for AI scoring quality from admin-only into direct manager visibility.
+      </div>
+
+      {/* Alerts */}
+      {qualityAlerts.length > 0 && (
+        <div className="space-y-2 mb-4">
+          {qualityAlerts.map((a, i) => {
+            const tone =
+              a.severity === "critical"
+                ? { stripe: "var(--destructive)", bg: "var(--destructive-soft)" }
+                : { stripe: "var(--amber)", bg: "var(--amber-soft)" };
+            return (
+              <div
+                key={i}
+                className="px-4 py-3 text-sm"
+                style={{
+                  backgroundColor: tone.bg,
+                  boxShadow: `inset 3px 0 0 ${tone.stripe}`,
+                }}
+              >
+                <div
+                  className="font-mono uppercase text-[10px] mb-0.5"
+                  style={{ letterSpacing: "0.1em", color: tone.stripe }}
+                >
+                  {a.severity} · {a.type.replace(/_/g, " ")}
+                </div>
+                <div className="text-foreground">{a.message}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Calibration summary */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium text-foreground tabular-nums"
+            style={{ fontSize: 24, letterSpacing: "-0.5px", lineHeight: 1 }}
+          >
+            {correctionStats.total}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Corrections on file
+          </div>
+        </div>
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium tabular-nums"
+            style={{
+              fontSize: 24,
+              letterSpacing: "-0.5px",
+              lineHeight: 1,
+              color: correctionStats.upgrades > correctionStats.downgrades ? "var(--sage)" : "var(--destructive)",
+            }}
+          >
+            {correctionStats.upgrades > correctionStats.downgrades ? "↑" : "↓"}{" "}
+            {Math.abs(correctionStats.upgrades - correctionStats.downgrades)}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Bias direction
+          </div>
+        </div>
+        <div className="bg-card border border-border px-4 py-3.5">
+          <div
+            className="font-display font-medium tabular-nums"
+            style={{
+              fontSize: 24,
+              letterSpacing: "-0.5px",
+              lineHeight: 1,
+              color: calibration.driftDetected ? "var(--amber)" : "var(--sage)",
+            }}
+          >
+            {calibration.driftDetected ? "Drift" : "OK"}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground mt-1.5">
+            Calibration
+            {calibration.lastSnapshotAt && (
+              <>
+                {" · "}
+                <span className="normal-case">
+                  {new Date(calibration.lastSnapshotAt).toLocaleDateString()}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Agent self-service portal.
  * Viewers see their own performance scores, badges, trends, and coaching sessions.
@@ -540,6 +696,11 @@ export default function MyPerformancePage() {
                 viewers because the server returns 401/403 via the default
                 on401:"returnNull" query handler. */}
             <SimilarUncorrectedCard />
+
+            {/* Scoring-quality dashboard (manager+). Exposes AI scoring
+                health signals that used to be admin-only — correction
+                stats, quality alerts, calibration drift. */}
+            <ScoringQualityCard />
 
             {/* Badges + Week strip — 2-column airy block */}
             {(myData.badges.length > 0 || myData.recentCalls.length > 0) && (

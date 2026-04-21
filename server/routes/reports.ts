@@ -7,7 +7,8 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
-import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
+import { getRecentCorrectionsByUser, getUserCorrectionStats, getScoringQualityAlerts, getCorrectionStats } from "../services/scoring-feedback";
+import { getLatestCalibrationSnapshot } from "../services/auto-calibration";
 import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse, type CsvSection } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 import { embeddingCosineSimilarity } from "../services/call-clustering";
@@ -1186,6 +1187,69 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         error: (error as Error).message,
       });
       res.status(500).json({ message: "Failed to compute suggestions" });
+    }
+  });
+
+  // Manager-scoped scoring-quality dashboard (Tier A #3).
+  //
+  // Surfaces the same scoring-quality signals that powered the admin-only
+  // /api/admin/calibration response (correction stats + auto-calibration
+  // quality alerts + regression-detection summary), but to manager+ roles.
+  // The goal is to shift AI-trust accountability from admin-only into
+  // direct manager visibility: if the AI is systematically scoring their
+  // team too low, managers see the signal first-hand rather than waiting
+  // on an admin.
+  //
+  // Data is currently global — `scoring-feedback` tracks corrections
+  // across every user and `auto-calibration` operates on the full call
+  // corpus. Per-team scoping would require filtering corrections by the
+  // manager's reports and is deferred as a follow-on.
+  //
+  // Read-only; no MFA gate (reveals no new PHI — stats only, no call-level
+  // data). Viewers get 403.
+  router.get("/api/scoring-quality", requireAuth, requireRole("manager", "admin"), async (_req, res) => {
+    try {
+      const correctionStats = getCorrectionStats();
+      const qualityAlerts = getScoringQualityAlerts();
+
+      // Calibration snapshot — lightweight projection, only timestamp + the
+      // drift-detected flag. Full snapshot stays admin-scoped via
+      // /api/admin/calibration.
+      let calibrationSummary: {
+        lastSnapshotAt: string | null;
+        driftDetected: boolean;
+        observedMean: number | null;
+        configuredMean: number | null;
+      } = {
+        lastSnapshotAt: null,
+        driftDetected: false,
+        observedMean: null,
+        configuredMean: null,
+      };
+      try {
+        const snapshot = await getLatestCalibrationSnapshot();
+        if (snapshot) {
+          calibrationSummary = {
+            lastSnapshotAt: snapshot.timestamp,
+            driftDetected: snapshot.driftDetected,
+            observedMean: snapshot.observed?.mean ?? null,
+            configuredMean: snapshot.current?.aiModelMean ?? null,
+          };
+        }
+      } catch {
+        /* snapshot unavailable — leave defaults */
+      }
+
+      res.json({
+        correctionStats,
+        qualityAlerts,
+        calibration: calibrationSummary,
+      });
+    } catch (error) {
+      logger.error("failed to fetch scoring quality dashboard", {
+        error: (error as Error).message,
+      });
+      res.status(500).json({ message: "Failed to fetch scoring quality" });
     }
   });
 }

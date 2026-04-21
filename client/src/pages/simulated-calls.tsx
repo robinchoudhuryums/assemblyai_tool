@@ -1892,9 +1892,49 @@ interface CalibrationSuiteResponse {
 }
 
 function CalibrationSuitePanel() {
+  const { toast } = useToast();
   const { data, isLoading, refetch, isFetching } = useQuery<CalibrationSuiteResponse>({
     queryKey: ["/api/admin/simulated-calls/calibration-suite"],
     refetchOnWindowFocus: true,
+  });
+
+  // Runner: re-analyzes every preset with an expectedScoreRange against the
+  // current prompt template + AI model. Does NOT regenerate audio; audio
+  // is reused from S3. Returns immediately with counts; the actual analyses
+  // take a few minutes to complete. Operator refreshes the report to see
+  // updated pass/fail status once the jobs finish.
+  const runMutation = useMutation({
+    mutationFn: async (): Promise<{
+      presetsTotal: number;
+      presetsEligible: number;
+      queued: number;
+      skipped: number;
+      skippedReasons: Array<{ id: string; title: string; reason: string }>;
+    }> => {
+      const res = await apiRequest(
+        "POST",
+        "/api/admin/simulated-calls/calibration-suite/run",
+        {},
+      );
+      return res.json();
+    },
+    onSuccess: (result) => {
+      toast({
+        title: "Calibration suite running",
+        description: `${result.queued} preset${result.queued === 1 ? "" : "s"} queued for re-analysis. ${result.skipped > 0 ? `${result.skipped} skipped.` : ""} Results appear in a few minutes.`,
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/admin/simulated-calls/calibration-suite"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/simulated-calls"] });
+    },
+    onError: (err) => {
+      toast({
+        title: "Calibration run failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
   });
 
   if (isLoading) {
@@ -1945,19 +1985,33 @@ function CalibrationSuitePanel() {
         <SummaryCell label="Not run" value={summary.notRun} tone="var(--muted-foreground)" />
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-muted-foreground">
+      <div className="flex items-start justify-between gap-4">
+        <div className="text-xs text-muted-foreground flex-1" style={{ lineHeight: 1.55 }}>
           Each preset with an expected score range is compared against its most recently analyzed score.
-          Click "Send to Analysis" on a preset in the Library to refresh its actual score.
+          Click <span className="font-medium text-foreground">Run suite</span> to re-analyze every preset
+          against the current prompt template + AI model (audio is reused; no regeneration cost).
+          Analyses complete over a few minutes; refresh to see updated pass/fail.
         </div>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50"
-        >
-          {isFetching ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50"
+          >
+            {isFetching ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runMutation.mutate()}
+            disabled={runMutation.isPending}
+            className="font-mono uppercase rounded-sm px-3 py-2 bg-primary text-[var(--paper)] border border-primary disabled:opacity-60"
+            style={{ fontSize: 10, letterSpacing: "0.1em" }}
+            data-testid="calibration-run"
+          >
+            {runMutation.isPending ? "Queueing…" : "Run suite"}
+          </button>
+        </div>
       </div>
 
       {/* Preset rows */}

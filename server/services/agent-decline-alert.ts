@@ -1,5 +1,5 @@
 /**
- * Agent decline alert scheduler (Tier 2 #6).
+ * Agent decline alert scheduler (Tier 2 #6, Tier A #2 persistence).
  *
  * Periodically computes a health pulse for every active employee — the same
  * current-window-vs-prior-window comparison used by
@@ -24,16 +24,17 @@
  *     windowDays, severity ("warning" | "critical")
  *   }
  *
- * Dedup: only alerts for employees that weren't flagged in the previous
- * check cycle. Once an agent stabilizes (delta > threshold), they become
- * eligible to re-alert on the next decline. Dedup state is in-memory —
- * restart clears it, which means a just-restarted process may re-fire one
- * alert per declining agent. Acceptable trade-off given scheduler runs
- * every 24h by default.
+ * Dedup: Tier A #2 added DB persistence. When DATABASE_URL is set, the
+ * `agent_decline_alert_history` table records every fire with a timestamp;
+ * new cycles skip employees whose last alert was within a cool-off window
+ * (2× the scheduler interval, default 48h). A process restart no longer
+ * re-fires alerts for every currently-declining agent. Without DATABASE_URL,
+ * falls back to the prior in-memory-only dedup (one-cycle cooldown).
  */
 import { storage } from "../storage";
 import { triggerWebhook } from "./webhooks";
 import { logger } from "./logger";
+import { getPool } from "../db/pool";
 
 // Same thresholds used by /api/analytics/health-pulse so the alert and
 // dashboard widget agree on what "declining" means.
@@ -44,12 +45,79 @@ const CRITICAL_THRESHOLD = 1.5;     // delta magnitude that escalates severity
 let checkInterval: ReturnType<typeof setInterval> | null = null;
 let checkTimeout: ReturnType<typeof setTimeout> | null = null;
 
-// Dedup: employeeIds that were alerted on in the most recent cycle.
-// Rebuilt each cycle so a stable agent is re-eligible.
+// In-memory dedup — used both as the authoritative store when DATABASE_URL
+// is unset AND as a per-cycle scratchpad when DB-backed dedup is available.
+// Rebuilt each cycle so a stable-then-declining agent is re-eligible after
+// stability.
 const previouslyAlerted = new Set<string>();
 
 export function isAgentDeclineCheckEnabled(): boolean {
   return process.env.AGENT_DECLINE_CHECK_ENABLED === "true";
+}
+
+/**
+ * Load the set of employees whose last alert was within the cool-off window
+ * (2× scheduler interval, default 48h). Returns null when DATABASE_URL is
+ * unset — callers fall back to the in-memory `previouslyAlerted` set.
+ */
+async function loadDedupSetFromDb(coolOffMs: number): Promise<Set<string> | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const cutoff = new Date(Date.now() - coolOffMs);
+    const { rows } = await pool.query<{ employee_id: string }>(
+      `SELECT employee_id FROM agent_decline_alert_history WHERE last_alerted_at >= $1`,
+      [cutoff],
+    );
+    return new Set(rows.map(r => r.employee_id));
+  } catch (err) {
+    logger.warn("agent-decline-alert: failed to load dedup set from DB (falling back to in-memory)", {
+      error: (err as Error).message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Record an alert in the DB history table. Upserts on employee_id so a
+ * re-alert after the cool-off window refreshes the timestamp. Returns
+ * silently on failure — the in-memory `previouslyAlerted` set still
+ * provides one-cycle dedup as a fallback.
+ */
+async function recordAlertInDb(employeeId: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO agent_decline_alert_history (employee_id, last_alerted_at)
+       VALUES ($1, NOW())
+       ON CONFLICT (employee_id) DO UPDATE SET last_alerted_at = NOW()`,
+      [employeeId],
+    );
+  } catch (err) {
+    logger.warn("agent-decline-alert: failed to persist alert to DB (non-blocking)", {
+      employeeId,
+      error: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Prune history rows older than the cool-off window. Opportunistic cleanup
+ * runs at the top of each cycle so the table stays bounded at roughly
+ * `num-declining-agents × retention-window` rows.
+ */
+async function pruneDedupHistory(coolOffMs: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    const cutoff = new Date(Date.now() - coolOffMs);
+    await pool.query(`DELETE FROM agent_decline_alert_history WHERE last_alerted_at < $1`, [cutoff]);
+  } catch (err) {
+    logger.warn("agent-decline-alert: dedup history prune failed (non-blocking)", {
+      error: (err as Error).message,
+    });
+  }
 }
 
 /**
@@ -111,6 +179,21 @@ export async function runDeclineCheck(): Promise<{
 }> {
   const windowDays = Math.max(7, Math.min(parseInt(process.env.AGENT_DECLINE_WINDOW_DAYS || "14", 10) || 14, 90));
   const threshold = Math.max(0.1, parseFloat(process.env.AGENT_DECLINE_THRESHOLD || String(DEFAULT_THRESHOLD)) || DEFAULT_THRESHOLD);
+  const intervalHours = Math.max(1, Math.min(parseInt(process.env.AGENT_DECLINE_CHECK_INTERVAL_HOURS || "24", 10) || 24, 168));
+  // Cool-off window: 2× the scheduler interval. An agent who fired an
+  // alert stays muted until 2 full cycles have passed, giving them time
+  // to recover before we repeat the alert.
+  const coolOffMs = 2 * intervalHours * 3600 * 1000;
+
+  // Opportunistic prune of expired history so the table stays bounded.
+  await pruneDedupHistory(coolOffMs);
+
+  // Load the effective dedup set. DB-backed when DATABASE_URL is set
+  // (survives restarts); falls back to the in-memory previouslyAlerted
+  // set when DB is unavailable. Crash during a cycle no longer re-fires
+  // alerts for every currently-declining agent on next boot.
+  const dbDedup = await loadDedupSetFromDb(coolOffMs);
+  const dedupSet = dbDedup ?? previouslyAlerted;
 
   const employees = await storage.getAllEmployees();
   const activeEmployees = employees.filter(e => (e.status || "Active") === "Active");
@@ -132,9 +215,9 @@ export async function runDeclineCheck(): Promise<{
 
       newlyAlerted.add(emp.id);
 
-      // Dedup: skip if we already fired for this employee in the prior
-      // cycle (they're still declining; we don't want to spam).
-      if (previouslyAlerted.has(emp.id)) continue;
+      // Dedup: skip if we already fired for this employee within the
+      // cool-off window (DB-backed when available, in-memory fallback).
+      if (dedupSet.has(emp.id)) continue;
 
       alertedIds.push(emp.id);
       const severity = Math.abs(pulse.delta) >= CRITICAL_THRESHOLD ? "critical" : "warning";
@@ -157,6 +240,11 @@ export async function runDeclineCheck(): Promise<{
         });
       });
 
+      // Persist to DB so a crash before cycle-end still dedups next boot.
+      // Fire-and-forget — the in-memory set below provides fallback dedup
+      // for the rest of this cycle even if the DB write fails.
+      await recordAlertInDb(emp.id);
+
       logger.info("agent-decline-alert: fired", {
         employeeId: emp.id,
         employeeName: emp.name,
@@ -171,7 +259,8 @@ export async function runDeclineCheck(): Promise<{
     }
   }
 
-  // Replace the dedup set for the next cycle.
+  // Replace the in-memory dedup set for the next cycle. Still meaningful
+  // as a fallback when DB-backed dedup is unavailable.
   previouslyAlerted.clear();
   newlyAlerted.forEach(id => previouslyAlerted.add(id));
 
@@ -179,6 +268,7 @@ export async function runDeclineCheck(): Promise<{
     checked: activeEmployees.length,
     alerted: alertedIds.length,
     alertedIds,
+    dedupBackend: dbDedup ? "db" : "in-memory",
   });
 
   return {
