@@ -4,7 +4,7 @@ import { z } from "zod";
 import { sendValidationError } from "./utils";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint, getUserEmployeeId } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { logger } from "../services/logger";
@@ -16,6 +16,49 @@ function bindSessionFingerprint(req: import("express").Request): void {
   (req.session as typeof req.session & { fingerprint?: string }).fingerprint = getSessionFingerprint(req);
 }
 
+/**
+ * Phase E: emit `user_employee_link_unresolved` audit event when a viewer or
+ * manager logs in without a matching employee row. Fires at most once per
+ * user per UTC day so the audit log accumulates a time-series signal rather
+ * than getting spammed by every request. Purely observational — does not
+ * block login. Admins are skipped because they don't need employee linkage.
+ *
+ * The dedup set is in-memory; a restart will refire the audit once for each
+ * active unlinked user on their next login that day. Acceptable trade-off
+ * vs. adding a new DB table just for this cheap signal.
+ */
+const unlinkedLoginAuditDedup = new Set<string>();
+// Clean the dedup set daily to prevent unbounded growth.
+setInterval(() => unlinkedLoginAuditDedup.clear(), 24 * 60 * 60 * 1000).unref();
+
+function fireUnlinkedLoginAuditIfNeeded(
+  req: import("express").Request,
+  user: Express.User,
+): void {
+  // Fire-and-forget. No await — must not block login response.
+  void (async () => {
+    try {
+      if (user.role !== "viewer" && user.role !== "manager") return;
+      const employeeId = await getUserEmployeeId(user.username, user.name);
+      if (employeeId) return;
+      const dayKey = `${user.username}:${new Date().toISOString().slice(0, 10)}`;
+      if (unlinkedLoginAuditDedup.has(dayKey)) return;
+      unlinkedLoginAuditDedup.add(dayKey);
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "user_employee_link_unresolved",
+        ...auditContext(req),
+        username: user.username,
+        resourceType: "user",
+        resourceId: user.id,
+        detail: `role=${user.role}; displayName="${user.name}"`,
+      });
+    } catch (err) {
+      logger.warn("unlinked-login audit failed", { error: (err as Error).message });
+    }
+  })();
+}
+
 export function registerAuthRoutes(router: Router) {
 
   // Temporary store for MFA-pending logins (password verified, awaiting TOTP).
@@ -24,7 +67,19 @@ export function registerAuthRoutes(router: Router) {
   // force within the token's 5-minute lifetime. The per-IP login limiter
   // (5/15min) still applies at the outer layer.
   const MFA_MAX_ATTEMPTS = 5;
+  // LRU cap prevents unbounded growth under sustained legitimate login pressure
+  // (e.g., deploy-day login spike) between cleanup intervals. On overflow, evict
+  // the oldest (insertion-order) entry — that user will be forced to re-enter
+  // their password to obtain a fresh token.
+  const MFA_PENDING_TOKENS_MAX = 10_000;
   const mfaPendingTokens = new Map<string, { user: Express.User; expires: number; attempts: number }>();
+  function setMfaPendingToken(token: string, data: { user: Express.User; expires: number; attempts: number }): void {
+    if (mfaPendingTokens.size >= MFA_PENDING_TOKENS_MAX && !mfaPendingTokens.has(token)) {
+      const oldest = mfaPendingTokens.keys().next().value;
+      if (oldest !== undefined) mfaPendingTokens.delete(oldest);
+    }
+    mfaPendingTokens.set(token, data);
+  }
   // Cleanup expired MFA tokens every 5 minutes
   setInterval(() => {
     const now = Date.now();
@@ -111,6 +166,7 @@ export function registerAuthRoutes(router: Router) {
           req.login(pending.user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
+            fireUnlinkedLoginAuditIfNeeded(req, pending.user);
             res.json({ id: pending.user.id, username: pending.user.username, name: pending.user.name, role: pending.user.role });
           });
         } catch (err) {
@@ -133,7 +189,7 @@ export function registerAuthRoutes(router: Router) {
         if (mfaRecord?.enabled) {
           // MFA required — issue temporary token, don't create session yet
           const token = randomUUID();
-          mfaPendingTokens.set(token, { user, expires: Date.now() + 5 * 60 * 1000, attempts: 0 }); // 5 min expiry
+          setMfaPendingToken(token, { user, expires: Date.now() + 5 * 60 * 1000, attempts: 0 }); // 5 min expiry
           logPhiAccess({
             timestamp: new Date().toISOString(),
             event: "mfa_challenge_issued",
@@ -150,6 +206,7 @@ export function registerAuthRoutes(router: Router) {
           req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
+            fireUnlinkedLoginAuditIfNeeded(req, user);
             res.json({ id: user.id, username: user.username, name: user.name, role: user.role, mfaSetupRequired: true });
           });
           return;
@@ -159,6 +216,7 @@ export function registerAuthRoutes(router: Router) {
         req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
           if (loginErr) return next(loginErr);
           bindSessionFingerprint(req);
+          fireUnlinkedLoginAuditIfNeeded(req, user);
           res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
         });
       } catch (mfaErr) {

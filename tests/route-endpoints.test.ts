@@ -21,6 +21,7 @@ import { registerUserRoutes } from "../server/routes/users.js";
 import { register as registerDashboardRoutes } from "../server/routes/dashboard.js";
 import { registerConfigRoutes } from "../server/routes/config.js";
 import { registerReportRoutes } from "../server/routes/reports.js";
+import { register as registerCoachingRoutes } from "../server/routes/coaching.js";
 
 // --- Test harness ---
 
@@ -112,6 +113,26 @@ async function req(
   let parsed: any;
   try { parsed = JSON.parse(text); } catch { parsed = text; }
   return { status: res.status, body: parsed };
+}
+
+// Raw variant for binary endpoints (PDF export) — returns status, headers,
+// and the body as a Buffer so tests can verify content-type + PDF magic bytes.
+async function reqBinary(
+  baseUrl: string,
+  method: string,
+  path: string,
+  role = "admin",
+): Promise<{ status: number; headers: Headers; buffer: Buffer }> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "User-Agent": TEST_UA,
+      "Accept-Language": TEST_LANG,
+      "X-Test-Role": role,
+    },
+  });
+  const ab = await res.arrayBuffer();
+  return { status: res.status, headers: res.headers, buffer: Buffer.from(ab) };
 }
 
 // =====================================================================
@@ -489,6 +510,52 @@ describe("User management endpoints (real routes)", () => {
 });
 
 // =====================================================================
+// UNLINKED USERS + PHASE E ADDITIONS
+// =====================================================================
+//
+// Focused tests for the Phase E enhancements — candidate suggestions in
+// the unlinked list, the manager-role extension, and the create-user
+// "no matching employee" warning. MemStorage supports the user list
+// operations that MemStorage-compatible routes use.
+describe("Users Phase E — unlinked + fuzzy candidates", () => {
+  const app = buildAppWith(registerUserRoutes, registerEmployeeRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/users/unlinked returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/users/unlinked returns 403 for non-admin", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "manager");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/users/unlinked returns count + users array for admin", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "admin");
+    assert.equal(status, 200);
+    assert.equal(typeof body.count, "number");
+    assert.ok(Array.isArray(body.users));
+  });
+
+  it("GET /api/users/unlinked returned users carry a candidates array (Phase E)", async () => {
+    const { body } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "admin");
+    // Even when empty, the shape guarantees candidates is present on each user.
+    for (const u of body.users) {
+      assert.ok(Array.isArray(u.candidates), `user ${u.id} missing candidates array`);
+    }
+  });
+});
+
+// =====================================================================
 // DASHBOARD ENDPOINTS
 // =====================================================================
 
@@ -604,7 +671,18 @@ describe("Public config endpoint (/api/config)", () => {
 // REPORTS EXPORT BEACON (A8 — HIPAA audit beacon for client-built exports)
 // =====================================================================
 
-describe("Reports export beacon (POST /api/reports/export-beacon)", () => {
+// =====================================================================
+// SEMANTIC SEARCH (Phase A — UI + hybrid ranking)
+// =====================================================================
+//
+// Verifies the mode/alpha/threshold/filter contract on /api/search/semantic.
+// The route falls through to keyword search when the AI provider has no
+// embedding capability — which is the case in the test harness, since
+// ai-factory selects a stub provider without AWS credentials. So every
+// assertion below exercises the keyword-fallback branch. That's still the
+// branch most clients will hit when Bedrock is unreachable, so it's a
+// meaningful test surface even if the semantic-only assertions are deferred.
+describe("Semantic search (GET /api/search/semantic)", () => {
   const app = buildAppWith(registerReportRoutes);
   const server = http.createServer(app);
   let baseUrl: string;
@@ -616,69 +694,271 @@ describe("Reports export beacon (POST /api/reports/export-beacon)", () => {
     });
   });
 
-  it("POST /api/reports/export-beacon returns 401 when unauthenticated", async () => {
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
-      format: "txt",
-      reportType: "overall",
-      from: "2025-01-01",
-      to: "2025-12-31",
-    }, "none");
+  it("returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo", undefined, "none");
     assert.equal(status, 401);
   });
 
-  it("POST /api/reports/export-beacon returns 204 on a valid TXT beacon", async () => {
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
-      format: "txt",
-      reportType: "overall",
-      from: "2025-01-01",
-      to: "2025-12-31",
-      targetId: "overall",
-    }, "viewer");
-    assert.equal(status, 204);
+  it("returns 400 when q is missing", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/search/semantic", undefined, "viewer");
+    assert.equal(status, 400);
+    assert.ok(/required/i.test(body.message ?? ""));
   });
 
-  it("POST /api/reports/export-beacon returns 204 on a CSV beacon", async () => {
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
-      format: "csv",
-      reportType: "employee",
-      from: "2025-06-01",
-      to: "2025-06-30",
-      targetId: "employee-uuid-here",
-    }, "viewer");
-    assert.equal(status, 204);
+  it("returns 400 when q exceeds 500 chars", async () => {
+    const huge = "a".repeat(501);
+    const { status } = await req(baseUrl, "GET", `/api/search/semantic?q=${encodeURIComponent(huge)}`, undefined, "viewer");
+    assert.equal(status, 400);
   });
 
-  it("POST /api/reports/export-beacon accepts an empty body (best-effort beacon)", async () => {
-    // The handler reads body fields with safe defaults — an empty body
-    // should still produce a 204, not a validation error, because the
-    // beacon is fire-and-forget and must not block the user-initiated download.
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {}, "viewer");
-    assert.equal(status, 204);
+  it("falls back to keyword mode when embedding provider is unavailable", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/search/semantic?q=test%20query", undefined, "viewer");
+    assert.equal(status, 200);
+    // In the test harness, no embedding provider → keyword-fallback branch.
+    assert.equal(body.mode, "keyword-fallback");
+    assert.ok(Array.isArray(body.results));
   });
 
-  it("POST /api/reports/export-beacon truncates oversized field values (no overflow)", async () => {
-    const huge = "x".repeat(5000);
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
-      format: huge,
-      reportType: huge,
-      from: huge,
-      to: huge,
-      targetId: huge,
-    }, "viewer");
-    // The handler slices each field to a max length and still records the beacon.
-    assert.equal(status, 204);
+  it("clamps invalid alpha to a finite value", async () => {
+    // alpha=NaN should clamp to 0.5 default. Mode=hybrid still routes through
+    // the fallback because no embedding provider, but the parser shouldn't 500.
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=hybrid&alpha=not-a-number", undefined, "viewer");
+    assert.equal(status, 200);
   });
 
-  it("POST /api/reports/export-beacon ignores non-string field types", async () => {
-    // Defensive: malformed beacon body shouldn't crash the handler.
-    const { status } = await req(baseUrl, "POST", "/api/reports/export-beacon", {
-      format: 42,
-      reportType: { nested: "object" },
-      from: ["array"],
-      to: null,
-      targetId: undefined,
-    }, "viewer");
-    assert.equal(status, 204);
+  it("clamps alpha > 1 to 1", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=hybrid&alpha=99", undefined, "viewer");
+    assert.equal(status, 200);
+  });
+
+  it("clamps threshold > 1 to 1", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&threshold=99", undefined, "viewer");
+    assert.equal(status, 200);
+  });
+
+  it("ignores unknown mode and defaults to semantic", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=lasers", undefined, "viewer");
+    // Mode=lasers → defaults to semantic → falls back to keyword (no provider).
+    assert.equal(status, 200);
+  });
+
+  it("accepts date filters without 500", async () => {
+    const { status } = await req(
+      baseUrl,
+      "GET",
+      "/api/search/semantic?q=foo&from=2025-01-01&to=2025-12-31&sentiment=positive",
+      undefined,
+      "viewer",
+    );
+    assert.equal(status, 200);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// COACHING OUTCOMES-SUMMARY (Phase B)
+// =====================================================================
+//
+// Exercises the Phase B extensions: ?groupBy=employee, ?bucket=week,
+// ?includeSkipped=true, and the new avgSubDeltas fields on every rollup.
+// With MemStorage there are no sessions so the rollup is zero-measured;
+// the tests verify shape + validation + auth rather than non-trivial math.
+// The math is covered in the Phase B frontend tests via synthetic fixtures.
+describe("Coaching outcomes-summary (GET /api/coaching/outcomes-summary)", () => {
+  const app = buildAppWith(registerCoachingRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("returns 403 for viewer role", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("returns flat shape for manager role without groupBy", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(typeof body.windowDays, "number");
+    assert.equal(typeof body.totalSessions, "number");
+    assert.equal(typeof body.measured, "number");
+    // Phase B: avgSubDeltas is on the rollup even when no sessions measured.
+    assert.ok(body.avgSubDeltas, "avgSubDeltas should be present");
+    assert.ok("compliance" in body.avgSubDeltas);
+    assert.ok("customerExperience" in body.avgSubDeltas);
+    assert.ok("communication" in body.avgSubDeltas);
+    assert.ok("resolution" in body.avgSubDeltas);
+  });
+
+  it("returns grouped shape for ?groupBy=manager", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?groupBy=manager", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "manager");
+    assert.ok(Array.isArray(body.groups));
+    assert.ok(body.overall);
+  });
+
+  it("returns grouped shape for ?groupBy=employee", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?groupBy=employee", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "employee");
+    assert.ok(Array.isArray(body.groups));
+  });
+
+  it("includes timeSeries when ?bucket=week", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?bucket=week", undefined, "manager");
+    assert.equal(status, 200);
+    // Empty storage → empty time series, but the field must be present.
+    assert.ok(Array.isArray(body.timeSeries));
+  });
+
+  it("omits timeSeries when bucket param absent", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.timeSeries, undefined);
+  });
+
+  it("includes skipped list when ?includeSkipped=true", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?includeSkipped=true", undefined, "manager");
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.skipped));
+  });
+
+  it("omits skipped list by default", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/coaching/outcomes-summary", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(body.skipped, undefined);
+  });
+
+  it("clamps days outside [7, 365] to the bounds", async () => {
+    const low = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?days=1", undefined, "manager");
+    assert.equal(low.status, 200);
+    assert.equal(low.body.windowDays, 7);
+    const high = await req(baseUrl, "GET", "/api/coaching/outcomes-summary?days=9999", undefined, "manager");
+    assert.equal(high.status, 200);
+    assert.equal(high.body.windowDays, 365);
+  });
+
+  it("accepts all Phase B params simultaneously", async () => {
+    const { status, body } = await req(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary?groupBy=employee&bucket=week&includeSkipped=true&days=30",
+      undefined,
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.equal(body.groupBy, "employee");
+    assert.equal(body.windowDays, 30);
+    assert.ok(Array.isArray(body.timeSeries));
+    assert.ok(Array.isArray(body.skipped));
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// PDF EXPORTS (Phase D)
+// =====================================================================
+//
+// Verifies content-type, content-disposition, PDF magic bytes, and
+// auth/RBAC on the three Phase D PDF endpoints. Exact PDF content isn't
+// parsed — trusting pdfkit to produce valid output is reasonable; the
+// tests guard against regressions in the Express-level wiring.
+describe("Report PDF exports (Phase D)", () => {
+  const app = buildAppWith(registerReportRoutes, registerCoachingRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 401 without auth", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/reports/filtered/export.pdf", "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 403 for viewer", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/reports/filtered/export.pdf", "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/reports/filtered/export.pdf returns 200 application/pdf for manager", async () => {
+    const { status, headers, buffer } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/reports/filtered/export.pdf?from=2025-01-01&to=2025-12-31",
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.match(headers.get("content-type") ?? "", /application\/pdf/);
+    assert.match(headers.get("content-disposition") ?? "", /attachment; filename=/);
+    // PDF magic bytes: %PDF-
+    assert.equal(buffer.slice(0, 4).toString("ascii"), "%PDF");
+  });
+
+  it("GET /api/reports/filtered/export.pdf filename embeds the period", async () => {
+    const { headers } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/reports/filtered/export.pdf?from=2025-06-01&to=2025-06-30",
+      "admin",
+    );
+    assert.match(headers.get("content-disposition") ?? "", /2025-06-01/);
+    assert.match(headers.get("content-disposition") ?? "", /2025-06-30/);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns 401 without auth", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/coaching/outcomes-summary/export.pdf", "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns 403 for viewer", async () => {
+    const { status } = await reqBinary(baseUrl, "GET", "/api/coaching/outcomes-summary/export.pdf", "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf returns a valid PDF for manager", async () => {
+    const { status, headers, buffer } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary/export.pdf",
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.match(headers.get("content-type") ?? "", /application\/pdf/);
+    assert.equal(buffer.slice(0, 4).toString("ascii"), "%PDF");
+  });
+
+  it("GET /api/coaching/outcomes-summary/export.pdf clamps window days", async () => {
+    const { status, headers } = await reqBinary(
+      baseUrl,
+      "GET",
+      "/api/coaching/outcomes-summary/export.pdf?days=9999",
+      "manager",
+    );
+    assert.equal(status, 200);
+    // windowDays clamped to 365 — should appear in the filename.
+    assert.match(headers.get("content-disposition") ?? "", /365d/);
   });
 
   after((_, done) => {

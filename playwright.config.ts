@@ -31,6 +31,16 @@ export default defineConfig({
     env: {
       SESSION_SECRET: "test-secret-for-e2e",
       AUTH_USERS: "testadmin:TestPass123!:admin:Test Admin,testviewer:ViewPass123!:viewer:Test Viewer",
+      // Activate MSW-Node interception of AssemblyAI / Bedrock / S3.
+      // Without this the dev server would fail on the first outbound
+      // fetch during the upload → transcribe → analyze flow.
+      E2E_MOCKS: "true",
+      // Dummy creds so the providers don't refuse to initialize. The
+      // actual fetches are intercepted by MSW.
+      ASSEMBLYAI_API_KEY: "e2e-mock-key",
+      AWS_ACCESS_KEY_ID: "e2e-mock-aws-key",
+      AWS_SECRET_ACCESS_KEY: "e2e-mock-aws-secret",
+      AWS_REGION: "us-east-1",
     },
   },
 });

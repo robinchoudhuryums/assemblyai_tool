@@ -8,8 +8,11 @@ import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
 import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse, type CsvSection } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
+import { embeddingCosineSimilarity } from "../services/call-clustering";
+import { getPool, isPgvectorAvailable } from "../db/pool";
+import type { CallWithDetails } from "@shared/schema";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -59,6 +62,261 @@ export function registerReportRoutes(router: Router) {
       res.json(filtered);
     } catch (error) {
       res.status(500).json({ message: "Failed to search calls" });
+    }
+  });
+
+  // Query embedding LFU-ish cache. Repeated queries (e.g. user refining
+  // filters on the same q) reuse the embedding instead of re-paying Bedrock
+  // cost. Bounded to 200 entries, 5-minute TTL — same conservative bounds
+  // the call-embedding cache uses in bedrock.ts. Insertion-order Map +
+  // delete-then-set on hit gives true LRU semantics.
+  const QUERY_EMBED_CACHE_MAX = 200;
+  const QUERY_EMBED_CACHE_TTL_MS = 5 * 60_000;
+  const queryEmbedCache = new Map<string, { vec: number[]; expiresAt: number }>();
+  function getCachedQueryEmbedding(query: string): number[] | null {
+    const entry = queryEmbedCache.get(query);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      queryEmbedCache.delete(query);
+      return null;
+    }
+    queryEmbedCache.delete(query);
+    queryEmbedCache.set(query, entry);
+    return entry.vec;
+  }
+  function setCachedQueryEmbedding(query: string, vec: number[]): void {
+    if (queryEmbedCache.size >= QUERY_EMBED_CACHE_MAX && !queryEmbedCache.has(query)) {
+      const oldest = queryEmbedCache.keys().next().value;
+      if (oldest !== undefined) queryEmbedCache.delete(oldest);
+    }
+    queryEmbedCache.set(query, { vec, expiresAt: Date.now() + QUERY_EMBED_CACHE_TTL_MS });
+  }
+
+  // Semantic search — embedding-based similarity over completed calls.
+  // Complements the keyword-based /api/search by matching meaning rather than
+  // exact word overlap. Reuses the same embedding model that call-clustering
+  // computes during the pipeline (already stored on call_analyses.embedding).
+  router.get("/api/search/semantic", requireAuth, async (req, res) => {
+    try {
+      const query = (req.query.q as string || "").trim();
+      if (!query) {
+        res.status(400).json({ message: "Search query is required" });
+        return;
+      }
+      if (query.length > 500) {
+        res.status(400).json({ message: "Search query too long (max 500 characters)" });
+        return;
+      }
+
+      // Mode: "semantic" (embedding only), "hybrid" (semantic + keyword
+      // weighted), or "keyword-fallback" (auto-selected when embedding fails).
+      // Default semantic. Anything unrecognized clamps to semantic.
+      const mode: "semantic" | "hybrid" = req.query.mode === "hybrid" ? "hybrid" : "semantic";
+      // Hybrid mix: alpha = weight of semantic (cosine), 1-alpha = weight of
+      // keyword (BM25-ish rank). Clamped to [0, 1]. Default 0.5.
+      const alphaRaw = parseFloat((req.query.alpha as string) || "0.5");
+      const alpha = Number.isFinite(alphaRaw) ? Math.max(0, Math.min(1, alphaRaw)) : 0.5;
+      // Relevance threshold on the FINAL score (semantic similarity in
+      // [0,1] or hybrid combined score in [0,1]). Default 0.25 — drops
+      // the long tail of weak matches that pad the top-N. Set to 0 to
+      // disable. Clamped to [0, 1].
+      const thresholdRaw = parseFloat((req.query.threshold as string) || "0.25");
+      const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.min(1, thresholdRaw)) : 0.25;
+      const limit = clampInt(req.query.limit as string | undefined, 20, 1, 100);
+
+      // Optional layered filters — applied AFTER scoring + viewer scoping
+      // so that semantic ranking still operates on the full candidate pool.
+      // Cheap to apply in JS at this point; date/employee/sentiment are
+      // pre-existing filter dimensions on the keyword search route.
+      const dateFrom = (req.query.from as string | undefined)?.trim();
+      const dateTo = (req.query.to as string | undefined)?.trim();
+      const filterSentiment = (req.query.sentiment as string | undefined)?.trim();
+      const filterEmployeeId = (req.query.employeeId as string | undefined)?.trim();
+
+      const applyClientFilters = (calls: CallWithDetails[]): CallWithDetails[] => {
+        let out = calls;
+        if (dateFrom) {
+          const from = new Date(dateFrom).getTime();
+          if (Number.isFinite(from)) {
+            out = out.filter(c => new Date(c.uploadedAt || 0).getTime() >= from);
+          }
+        }
+        if (dateTo) {
+          const toDate = new Date(dateTo);
+          toDate.setUTCHours(23, 59, 59, 999);
+          const toMs = toDate.getTime();
+          if (Number.isFinite(toMs)) {
+            out = out.filter(c => new Date(c.uploadedAt || 0).getTime() <= toMs);
+          }
+        }
+        if (filterSentiment && filterSentiment !== "all") {
+          out = out.filter(c => c.sentiment?.overallSentiment === filterSentiment);
+        }
+        if (filterEmployeeId) {
+          out = out.filter(c => c.employeeId === filterEmployeeId);
+        }
+        return out;
+      };
+
+      // Embed the query (with cache). If embedding is unavailable (Bedrock
+      // unreachable or not configured), fall through to keyword search for
+      // graceful degrade — applies to both semantic and hybrid modes.
+      let queryEmbedding: number[] | null = getCachedQueryEmbedding(query);
+      if (!queryEmbedding) {
+        try {
+          queryEmbedding = aiProvider.generateEmbedding
+            ? await aiProvider.generateEmbedding(query)
+            : null;
+          if (queryEmbedding) setCachedQueryEmbedding(query, queryEmbedding);
+        } catch (err) {
+          logger.warn("semantic search: embedding failed, falling back to keyword", {
+            error: (err as Error).message,
+          });
+        }
+      }
+
+      if (!queryEmbedding) {
+        const fallback = await storage.searchCalls(expandMedicalSynonyms(query), limit);
+        const filtered = applyClientFilters(fallback);
+        res.json({ mode: "keyword-fallback", results: filtered });
+        return;
+      }
+
+      // For hybrid mode, also pull keyword results so we can fuse rankings.
+      // Limit larger so the fusion has more candidates to consider.
+      const keywordResults = mode === "hybrid"
+        ? await storage.searchCalls(expandMedicalSynonyms(query), Math.max(limit * 2, 40))
+        : [];
+      // Build a [0..1] rank-based keyword score: top hit = 1.0, last = 1/N.
+      // Reciprocal-rank rather than absolute BM25 lets us combine cleanly
+      // with the cosine similarity scale.
+      const keywordScores = new Map<string, number>();
+      keywordResults.forEach((c, i) => {
+        keywordScores.set(c.id, 1 - i / Math.max(keywordResults.length, 1));
+      });
+
+      // pgvector fast path: SQL-native cosine similarity with ivfflat index.
+      const pool = getPool();
+      const pgvectorReady = pool && isPgvectorAvailable();
+      const userRole = req.user?.role || "viewer";
+
+      // Common scoring + return path: takes a map of callId -> semantic similarity
+      // plus the candidate hydrated calls, fuses with keyword scores when in
+      // hybrid mode, applies the relevance threshold, sorts, slices.
+      const scoreAndRespond = (
+        backend: "pgvector" | "in-memory",
+        simByCallId: Map<string, number>,
+        accessible: CallWithDetails[],
+        coverage: { totalAccessible: number; withEmbeddings: number },
+      ) => {
+        const filtered = applyClientFilters(accessible);
+        const scored = filtered
+          .map(c => {
+            const sim = simByCallId.get(c.id);
+            if (sim === undefined) return null;
+            const kw = keywordScores.get(c.id) ?? 0;
+            const combined = mode === "hybrid"
+              ? alpha * sim + (1 - alpha) * kw
+              : sim;
+            return { call: c, similarity: sim, keyword: kw, score: combined };
+          })
+          .filter((x): x is { call: CallWithDetails; similarity: number; keyword: number; score: number } => x !== null)
+          .filter(x => x.score >= threshold)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+
+        res.json({
+          mode,
+          backend,
+          alpha: mode === "hybrid" ? alpha : undefined,
+          threshold,
+          results: scored.map(x => ({
+            ...x.call,
+            similarity: Math.round(x.similarity * 1000) / 1000,
+            keywordScore: mode === "hybrid" ? Math.round(x.keyword * 1000) / 1000 : undefined,
+            score: Math.round(x.score * 1000) / 1000,
+          })),
+          coverage,
+        });
+      };
+
+      if (pgvectorReady) {
+        const candidateLimit = Math.max(limit * 3, limit + 20);
+        const { rows } = await pool.query(
+          `SELECT c.id, 1 - (a.embedding_vec <=> $1::vector) AS similarity
+           FROM call_analyses a
+           JOIN calls c ON c.id = a.call_id
+           WHERE a.embedding_vec IS NOT NULL
+             AND c.status = 'completed'
+             AND c.synthetic = FALSE
+           ORDER BY a.embedding_vec <=> $1::vector
+           LIMIT $2`,
+          [`[${queryEmbedding.join(",")}]`, candidateLimit],
+        );
+        const { rows: coverageRows } = await pool.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM call_analyses a JOIN calls c ON c.id = a.call_id
+              WHERE c.status = 'completed' AND c.synthetic = FALSE) AS total_accessible,
+             (SELECT COUNT(*)::int FROM call_analyses a JOIN calls c ON c.id = a.call_id
+              WHERE c.status = 'completed' AND c.synthetic = FALSE AND a.embedding_vec IS NOT NULL) AS with_embeddings`,
+        );
+        const simByCallId = new Map<string, number>(rows.map(r => [r.id, parseFloat(r.similarity)]));
+        // For hybrid, also include keyword-only hits (which may have different
+        // candidate IDs than pgvector returned). Hydrate the union via the
+        // ID-bulk helper so we fetch ONLY the candidates (~60 rows) instead
+        // of scanning every completed call in the table. This is the second
+        // half of the pgvector performance win — the first half is the
+        // vector-indexed SELECT above; without this we still paid O(N) for
+        // hydration which partially undid the SQL-native speedup.
+        const candidateIds = new Set<string>(simByCallId.keys());
+        if (mode === "hybrid") {
+          for (const c of keywordResults) candidateIds.add(c.id);
+        }
+        let hydrated = await storage.getCallsWithDetailsByIds(Array.from(candidateIds));
+        // Synthesize a default similarity for keyword-only hits so they
+        // can still pass through the pipeline. Reuse a low floor so they
+        // can only win via keyword weight.
+        for (const c of hydrated) {
+          if (!simByCallId.has(c.id)) simByCallId.set(c.id, 0);
+        }
+        if (userRole === "viewer") {
+          const checks = await Promise.all(hydrated.map(c => canViewerAccessCall(req, c)));
+          hydrated = hydrated.filter((_, i) => checks[i]);
+        }
+        scoreAndRespond("pgvector", simByCallId, hydrated, {
+          totalAccessible: coverageRows[0]?.total_accessible ?? 0,
+          withEmbeddings: coverageRows[0]?.with_embeddings ?? 0,
+        });
+        return;
+      }
+
+      // In-memory fallback: pulls all completed calls. Works for small
+      // deployments (< 10k calls); pgvector path is required for scale.
+      const all = await storage.getCallsWithDetails({ status: "completed" });
+      let accessible = all;
+      if (userRole === "viewer") {
+        const checks = await Promise.all(all.map(c => canViewerAccessCall(req, c)));
+        accessible = all.filter((_, i) => checks[i]);
+      }
+
+      const simByCallIdInMem = new Map<string, number>();
+      for (const c of accessible) {
+        const emb = (c.analysis as { embedding?: number[] } | undefined)?.embedding;
+        if (emb && Array.isArray(emb) && emb.length > 0) {
+          simByCallIdInMem.set(c.id, embeddingCosineSimilarity(queryEmbedding, emb));
+        } else if (mode === "hybrid" && keywordScores.has(c.id)) {
+          // Keyword-only hit: include with similarity 0 so it can still
+          // win on keyword weight.
+          simByCallIdInMem.set(c.id, 0);
+        }
+      }
+      scoreAndRespond("in-memory", simByCallIdInMem, accessible, {
+        totalAccessible: accessible.length,
+        withEmbeddings: Array.from(simByCallIdInMem.values()).filter(v => v > 0).length,
+      });
+    } catch (error) {
+      logger.error("semantic search failed", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to run semantic search" });
     }
   });
 
@@ -150,6 +408,160 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to generate filtered report", { error });
       res.status(500).json({ message: "Failed to generate filtered report" });
+    }
+  });
+
+  // Server-side CSV export for filtered reports — replaces the client-built
+  // TXT export with a full server-generated CSV so the export is first-class
+  // auditable (direct HIPAA PHI access entry, no reliance on a client beacon)
+  // and supports richer formats (sub-score columns, trend rows).
+  router.get("/api/reports/filtered/export.csv", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const { from, to, employeeId, callPartyType } = req.query;
+      const rawRole = (req.query.role as string | undefined) ?? (req.query.department as string | undefined);
+      let role: string | undefined;
+      if (rawRole) {
+        try { role = decodeURIComponent(rawRole); } catch { role = rawRole; }
+      }
+
+      const result = await storage.getFilteredReportMetrics({
+        from: from as string | undefined,
+        to: to as string | undefined,
+        employeeId: employeeId as string | undefined,
+        role,
+        callPartyType: callPartyType as string | undefined,
+      });
+
+      const summaryRows: unknown[][] = [
+        ["Summary", "Total Calls", result.metrics.totalCalls],
+        ["Summary", "Average Performance Score", result.metrics.avgPerformanceScore.toFixed(2)],
+        ["Summary", "Average Sentiment", result.metrics.avgSentiment.toFixed(2)],
+        ["Summary", "Auto-assigned Calls", result.autoAssignedCount],
+        ["Sentiment", "Positive", result.sentiment.positive],
+        ["Sentiment", "Neutral", result.sentiment.neutral],
+        ["Sentiment", "Negative", result.sentiment.negative],
+      ];
+      if (result.avgSubScores) {
+        summaryRows.push(["Sub-Scores", "Compliance", result.avgSubScores.compliance]);
+        summaryRows.push(["Sub-Scores", "Customer Experience", result.avgSubScores.customerExperience]);
+        summaryRows.push(["Sub-Scores", "Communication", result.avgSubScores.communication]);
+        summaryRows.push(["Sub-Scores", "Resolution", result.avgSubScores.resolution]);
+      }
+
+      const csv = buildCsv([
+        { headers: ["Section", "Field", "Value"], rows: summaryRows },
+        {
+          headers: ["Performer", "Role", "Call Count", "Average Score"],
+          rows: result.performers.map(p => [p.name, p.role, p.totalCalls, p.avgPerformanceScore ?? ""]),
+        },
+        {
+          headers: ["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"],
+          rows: result.trends.map(t => [t.month, t.calls, t.avgScore ?? "", t.positive, t.neutral, t.negative]),
+        },
+      ]);
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+      writeCsvResponse(res, csv, `filtered-report-${fromStr}-to-${toStr}.csv`, () => {
+        // HIPAA: first-class audit entry (replaces client beacon for this surface).
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=csv; reportType=filtered; from=${from ?? ""}; to=${toStr}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export filtered report", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export filtered report" });
+    }
+  });
+
+  // Server-side PDF export of the same filtered report. Uses the same
+  // CsvSection shape fed into buildPdfBuffer. Audit event identical to the
+  // CSV variant but with format=pdf.
+  router.get("/api/reports/filtered/export.pdf", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const { from, to, employeeId, callPartyType } = req.query;
+      const rawRole = (req.query.role as string | undefined) ?? (req.query.department as string | undefined);
+      let role: string | undefined;
+      if (rawRole) {
+        try { role = decodeURIComponent(rawRole); } catch { role = rawRole; }
+      }
+
+      const result = await storage.getFilteredReportMetrics({
+        from: from as string | undefined,
+        to: to as string | undefined,
+        employeeId: employeeId as string | undefined,
+        role,
+        callPartyType: callPartyType as string | undefined,
+      });
+
+      const summaryRows: unknown[][] = [
+        ["Summary", "Total Calls", result.metrics.totalCalls],
+        ["Summary", "Average Performance Score", result.metrics.avgPerformanceScore.toFixed(2)],
+        ["Summary", "Average Sentiment", result.metrics.avgSentiment.toFixed(2)],
+        ["Summary", "Auto-assigned Calls", result.autoAssignedCount],
+        ["Sentiment", "Positive", result.sentiment.positive],
+        ["Sentiment", "Neutral", result.sentiment.neutral],
+        ["Sentiment", "Negative", result.sentiment.negative],
+      ];
+      if (result.avgSubScores) {
+        summaryRows.push(["Sub-Scores", "Compliance", result.avgSubScores.compliance]);
+        summaryRows.push(["Sub-Scores", "Customer Experience", result.avgSubScores.customerExperience]);
+        summaryRows.push(["Sub-Scores", "Communication", result.avgSubScores.communication]);
+        summaryRows.push(["Sub-Scores", "Resolution", result.avgSubScores.resolution]);
+      }
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+
+      const pdfBuffer = await buildPdfBuffer(
+        [
+          { headers: ["Section", "Field", "Value"], rows: summaryRows },
+          {
+            headers: ["Performer", "Role", "Call Count", "Average Score"],
+            rows: result.performers.map(p => [p.name, p.role, p.totalCalls, p.avgPerformanceScore ?? ""]),
+          },
+          {
+            headers: ["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"],
+            rows: result.trends.map(t => [t.month, t.calls, t.avgScore ?? "", t.positive, t.neutral, t.negative]),
+            // Line chart visualizes the monthly avg-score trajectory above
+            // the table. Skipped automatically when fewer than 2 months.
+            chart: result.trends.length >= 2 ? {
+              type: "line" as const,
+              title: "Monthly average score trend",
+              series: [
+                {
+                  label: "Avg score",
+                  points: result.trends.map(t => ({ x: t.month, y: t.avgScore })),
+                },
+              ],
+            } : undefined,
+          },
+        ],
+        {
+          title: "Filtered Performance Report",
+          kicker: "Performance · Filtered",
+          companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+          period: `${fromStr} → ${toStr}`,
+          generatedAt: new Date(),
+        },
+      );
+
+      writePdfResponse(res, pdfBuffer, `filtered-report-${fromStr}-to-${toStr}.pdf`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=pdf; reportType=filtered; from=${from ?? ""}; to=${toStr}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export filtered report pdf", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export filtered report PDF" });
     }
   });
 
@@ -280,6 +692,191 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     }
   });
 
+  // Server-side CSV export of an agent profile — summary, call history,
+  // sub-scores, flagged calls, and topic frequencies. Written as a first-
+  // class export_report HIPAA audit entry so no client beacon is required.
+  router.get("/api/reports/agent-profile/:employeeId/export.csv", requireAuth, requireMFASetup, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const { from, to } = req.query;
+
+      const employee = await storage.getEmployee(employeeId);
+      if (!employee) return res.status(404).json({ message: "Employee not found" });
+
+      const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
+      const filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
+
+      const scores: number[] = [];
+      const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
+      const topicFreq: Record<string, number> = {};
+      const callRows: unknown[][] = [];
+      for (const call of filtered) {
+        const score = call.analysis?.performanceScore ? safeFloat(call.analysis.performanceScore) : null;
+        if (score !== null && Number.isFinite(score)) scores.push(score);
+        const s = call.sentiment?.overallSentiment;
+        if (s === "positive" || s === "neutral" || s === "negative") sentimentCounts[s]++;
+        for (const topic of call.analysis?.topics || []) {
+          const t = typeof topic === "string" ? topic : (topic as { name?: string })?.name;
+          if (t) topicFreq[t] = (topicFreq[t] || 0) + 1;
+        }
+        callRows.push([
+          call.id,
+          call.uploadedAt || "",
+          call.fileName || "",
+          call.duration ?? "",
+          score ?? "",
+          s ?? "",
+          (call.analysis?.summary || "").replace(/\s+/g, " ").slice(0, 300),
+          (call.analysis?.flags || []).join("|"),
+        ]);
+      }
+      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+      const topicRows = Object.entries(topicFreq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 50)
+        .map(([topic, count]) => [topic, count]);
+
+      const csv = buildCsv([
+        {
+          headers: ["Field", "Value"],
+          rows: [
+            ["Employee", employee.name],
+            ["Email", employee.email || ""],
+            ["Role", employee.role || ""],
+            ["Sub-Team", employee.subTeam || ""],
+            ["Window From", (from as string | undefined) || "all"],
+            ["Window To", (to as string | undefined) || "all"],
+            ["Call Count", filtered.length],
+            ["Average Score", avgScore === null ? "" : avgScore.toFixed(2)],
+            ["Positive Sentiment", sentimentCounts.positive],
+            ["Neutral Sentiment", sentimentCounts.neutral],
+            ["Negative Sentiment", sentimentCounts.negative],
+          ],
+        },
+        {
+          headers: ["Call ID", "Uploaded At", "File Name", "Duration (s)", "Score", "Sentiment", "Summary", "Flags"],
+          rows: callRows,
+        },
+        {
+          headers: ["Topic", "Count"],
+          rows: topicRows,
+        },
+      ]);
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+      const safeName = (employee.name || employeeId).replace(/[^a-zA-Z0-9-_]/g, "_");
+      writeCsvResponse(res, csv, `agent-profile-${safeName}-${fromStr}-to-${toStr}.csv`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          resourceId: employeeId,
+          detail: `format=csv; reportType=agent-profile; employeeId=${employeeId}; from=${fromStr}; to=${toStr}; callCount=${filtered.length}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export agent profile", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export agent profile" });
+    }
+  });
+
+  // PDF export of the same agent profile. Audit event format=pdf.
+  router.get("/api/reports/agent-profile/:employeeId/export.pdf", requireAuth, requireMFASetup, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const { from, to } = req.query;
+
+      const employee = await storage.getEmployee(employeeId);
+      if (!employee) return res.status(404).json({ message: "Employee not found" });
+
+      const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
+      const filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
+
+      const scores: number[] = [];
+      const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
+      const topicFreq: Record<string, number> = {};
+      const callRows: unknown[][] = [];
+      for (const call of filtered) {
+        const score = call.analysis?.performanceScore ? safeFloat(call.analysis.performanceScore) : null;
+        if (score !== null && Number.isFinite(score)) scores.push(score);
+        const s = call.sentiment?.overallSentiment;
+        if (s === "positive" || s === "neutral" || s === "negative") sentimentCounts[s]++;
+        for (const topic of call.analysis?.topics || []) {
+          const t = typeof topic === "string" ? topic : (topic as { name?: string })?.name;
+          if (t) topicFreq[t] = (topicFreq[t] || 0) + 1;
+        }
+        callRows.push([
+          call.uploadedAt ? String(call.uploadedAt).slice(0, 10) : "",
+          call.duration ?? "",
+          score ?? "",
+          s ?? "",
+          // PDF column is narrower than CSV — trim harder.
+          (call.analysis?.summary || "").replace(/\s+/g, " ").slice(0, 120),
+        ]);
+      }
+      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+      const topicRows = Object.entries(topicFreq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 30)
+        .map(([topic, count]) => [topic, count]);
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+
+      const pdfBuffer = await buildPdfBuffer(
+        [
+          {
+            headers: ["Field", "Value"],
+            rows: [
+              ["Employee", employee.name],
+              ["Email", employee.email || ""],
+              ["Role", employee.role || ""],
+              ["Sub-Team", employee.subTeam || ""],
+              ["Window", `${fromStr} → ${toStr}`],
+              ["Call Count", filtered.length],
+              ["Average Score", avgScore === null ? "—" : avgScore.toFixed(2)],
+              ["Positive Sentiment", sentimentCounts.positive],
+              ["Neutral Sentiment", sentimentCounts.neutral],
+              ["Negative Sentiment", sentimentCounts.negative],
+            ],
+          },
+          {
+            headers: ["Date", "Duration (s)", "Score", "Sentiment", "Summary"],
+            rows: callRows,
+          },
+          {
+            headers: ["Topic", "Count"],
+            rows: topicRows,
+          },
+        ],
+        {
+          title: `Agent Profile — ${employee.name}`,
+          kicker: "Performance · Agent Profile",
+          companyName: process.env.COMPANY_NAME || "UniversalMed Supply",
+          period: `${fromStr} → ${toStr}`,
+          generatedAt: new Date(),
+        },
+      );
+
+      const safeName = (employee.name || employeeId).replace(/[^a-zA-Z0-9-_]/g, "_");
+      writePdfResponse(res, pdfBuffer, `agent-profile-${safeName}-${fromStr}-to-${toStr}.pdf`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          resourceId: employeeId,
+          detail: `format=pdf; reportType=agent-profile; employeeId=${employeeId}; from=${fromStr}; to=${toStr}; callCount=${filtered.length}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export agent profile pdf", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export agent profile PDF" });
+    }
+  });
+
   // Generate AI narrative summary for an agent's performance.
   // #1 Phase 1: restrict to self-or-manager.
   router.post("/api/reports/agent-summary/:employeeId", requireAuth, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
@@ -382,37 +979,6 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to generate agent summary", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to generate AI summary" });
-    }
-  });
-
-  // HIPAA audit beacon for client-side report exports.
-  // The export file is built in the browser today (see client/src/pages/reports.tsx),
-  // so the server never sees the bytes leave. This endpoint receives a beacon BEFORE
-  // the download fires, so the access still lands in the audit log. Full server-side
-  // export generation is the long-term fix and is tracked in the roadmap.
-  router.post("/api/reports/export-beacon", requireAuth, async (req, res) => {
-    try {
-      const body = req.body ?? {};
-      const format = typeof body.format === "string" ? body.format.slice(0, 16) : "unknown";
-      const reportType = typeof body.reportType === "string" ? body.reportType.slice(0, 32) : "unknown";
-      const fromDate = typeof body.from === "string" ? body.from.slice(0, 32) : "";
-      const toDate = typeof body.to === "string" ? body.to.slice(0, 32) : "";
-      const targetId = typeof body.targetId === "string" ? body.targetId.slice(0, 64) : "";
-
-      logPhiAccess({
-        ...auditContext(req),
-        timestamp: new Date().toISOString(),
-        event: "export_report_clientside",
-        resourceType: "report",
-        resourceId: targetId || undefined,
-        detail: `format=${format}; reportType=${reportType}; from=${fromDate}; to=${toDate}`,
-      });
-
-      res.status(204).send();
-    } catch (error) {
-      // Don't leak details — beacon is fire-and-forget. Log on the server side.
-      logger.error("failed to record export beacon", { error: (error as Error).message });
-      res.status(500).json({ message: "Failed to record export" });
     }
   });
 

@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient as sharedQueryClient } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
-import type { AccessRequest } from "@shared/schema";
+import type { AccessRequest, Employee } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
 type TabView = "users" | "requests" | "roles" | "pipeline" | "models";
@@ -60,12 +60,65 @@ export default function AdminPage() {
     queryKey: ["/api/users"],
   });
 
+  // Self-service viewer onboarding: surface viewers with no matching employee.
+  // These users see empty data + 403s with no error — a common "why can't
+  // I see anything?" support puzzle. The endpoint is admin-scoped.
+  const { data: unlinked } = useQuery<{ count: number; users: DbUser[] }>({
+    queryKey: ["/api/users/unlinked"],
+  });
+
+  // Employee list feeds the "Link to employee" dropdown on each unlinked row.
+  // The same query is used elsewhere in admin; TanStack Query dedupes.
+  const { data: allEmployees } = useQuery<Employee[]>({
+    queryKey: ["/api/employees"],
+    enabled: Boolean(unlinked && unlinked.count > 0),
+  });
+
+  // Per-row state: which employee the admin chose to link each user to.
+  const [linkSelections, setLinkSelections] = useState<Record<string, string>>({});
+
+  const linkEmployeeMutation = useMutation({
+    mutationFn: async ({ userId, employeeId }: { userId: string; employeeId: string }) => {
+      const res = await apiRequest("POST", `/api/users/${userId}/link-employee`, { employeeId });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to link user");
+      }
+      return res.json();
+    },
+    onSuccess: (_updated, { userId }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/unlinked"] });
+      setLinkSelections(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      toast({ title: "User linked", description: "Display name updated to match employee." });
+    },
+    onError: (error) => {
+      toast({ title: "Link failed", description: (error as Error).message, variant: "destructive" });
+    },
+  });
+
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createForm, setCreateForm] = useState({ username: "", password: "", displayName: "", role: "viewer" });
   const [editingUser, setEditingUser] = useState<DbUser | null>(null);
   const [editForm, setEditForm] = useState({ displayName: "", role: "", active: true });
   const [resetPasswordUser, setResetPasswordUser] = useState<DbUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
+
+  // Phase E: if the server attaches a `warning` to the response (no matching
+  // employee for a viewer/manager), show an amber panel with the fuzzy
+  // candidates so the admin can one-click link without navigating to the
+  // banner below. Cleared when the admin creates another user or closes.
+  type CreateWarning = {
+    userId: string;
+    code: string;
+    message: string;
+    candidates: Array<{ id: string; name: string; email: string | null; similarity: number }>;
+  };
+  const [createWarning, setCreateWarning] = useState<CreateWarning | null>(null);
 
   const createUserMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
@@ -76,10 +129,21 @@ export default function AdminPage() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (created: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/unlinked"] });
       setShowCreateForm(false);
       setCreateForm({ username: "", password: "", displayName: "", role: "viewer" });
+      if (created?.warning?.code === "no_matching_employee") {
+        setCreateWarning({
+          userId: created.id,
+          code: created.warning.code,
+          message: created.warning.message,
+          candidates: Array.isArray(created.warning.candidates) ? created.warning.candidates : [],
+        });
+      } else {
+        setCreateWarning(null);
+      }
       toast({ title: "User Created", description: "The new user account is ready." });
     },
     onError: (error) => {
@@ -223,6 +287,200 @@ export default function AdminPage() {
         {/* ════════════════ USERS TAB ════════════════ */}
         {tab === "users" && (
           <div className="space-y-8">
+            {/* Unlinked viewer banner — shows only when there are viewers with no matching employee row. */}
+            {unlinked && unlinked.count > 0 && (
+              <div
+                className="border bg-card"
+                style={{
+                  borderRadius: "var(--radius)",
+                  boxShadow: "inset 3px 0 0 var(--amber)",
+                  padding: "16px 20px",
+                }}
+                data-testid="unlinked-users-banner"
+              >
+                <div className="flex items-start gap-3">
+                  <Warning style={{ width: 20, height: 20, color: "var(--amber)", flexShrink: 0, marginTop: 2 }} />
+                  <div className="flex-1">
+                    <div
+                      className="font-mono uppercase text-muted-foreground"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Onboarding
+                    </div>
+                    <div className="font-medium text-foreground mt-1">
+                      {unlinked.count} viewer{unlinked.count === 1 ? "" : "s"} not linked to an employee
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      These viewers see empty dashboards because their username (email) and display name don't
+                      match any employee row. Update the corresponding employee's email to match the user's
+                      login, or rename the user's display name to match an employee.
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {unlinked.users.slice(0, 5).map((u: any) => {
+                        const selectedId = linkSelections[u.id] || "";
+                        const isLinking = linkEmployeeMutation.isPending && linkEmployeeMutation.variables?.userId === u.id;
+                        const candidates: Array<{ id: string; name: string; email: string | null; similarity: number }> =
+                          Array.isArray(u.candidates) ? u.candidates : [];
+                        return (
+                          <div
+                            key={u.id}
+                            className="py-2 border-t first:border-t-0"
+                            data-testid={`unlinked-row-${u.id}`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="font-mono text-xs flex items-center gap-2 flex-1 min-w-[220px]">
+                                <span style={{ color: "var(--muted-foreground)" }}>{u.username}</span>
+                                <span style={{ color: "var(--muted-foreground)" }}>·</span>
+                                <span className="text-foreground">{u.name}</span>
+                                {u.role && u.role !== "viewer" && (
+                                  <>
+                                    <span style={{ color: "var(--muted-foreground)" }}>·</span>
+                                    <span className="uppercase" style={{ color: "var(--muted-foreground)", fontSize: 10, letterSpacing: "0.1em" }}>
+                                      {u.role}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                              <select
+                                value={selectedId}
+                                onChange={(e) => setLinkSelections(prev => ({ ...prev, [u.id]: e.target.value }))}
+                                className="h-8 min-w-[180px] border bg-background text-foreground font-mono text-xs px-2"
+                                style={{ borderRadius: "calc(var(--radius) - 2px)" }}
+                                disabled={isLinking || !allEmployees}
+                                data-testid={`unlinked-select-${u.id}`}
+                              >
+                                <option value="">Link to employee…</option>
+                                {(allEmployees || [])
+                                  .filter((e) => e.status !== "Inactive")
+                                  .map((e) => (
+                                    <option key={e.id} value={e.id}>
+                                      {e.name} {e.email ? `(${e.email})` : ""}
+                                    </option>
+                                  ))}
+                              </select>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!selectedId || isLinking}
+                                onClick={() => {
+                                  if (!selectedId) return;
+                                  linkEmployeeMutation.mutate({ userId: u.id, employeeId: selectedId });
+                                }}
+                                data-testid={`unlinked-link-${u.id}`}
+                              >
+                                {isLinking ? "Linking…" : "Link"}
+                              </Button>
+                            </div>
+                            {candidates.length > 0 && (
+                              <div
+                                className="flex flex-wrap items-center gap-1.5 mt-1.5 ml-0.5"
+                                data-testid={`unlinked-candidates-${u.id}`}
+                              >
+                                <span
+                                  className="font-mono uppercase text-muted-foreground"
+                                  style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                                >
+                                  Did you mean
+                                </span>
+                                {candidates.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => {
+                                      // One-click pre-select + link — short-circuits the dropdown.
+                                      setLinkSelections((prev) => ({ ...prev, [u.id]: c.id }));
+                                      linkEmployeeMutation.mutate({ userId: u.id, employeeId: c.id });
+                                    }}
+                                    disabled={isLinking}
+                                    className="font-mono text-xs border border-border rounded-sm px-2 py-0.5 hover:bg-secondary transition-colors disabled:opacity-50"
+                                    style={{ fontSize: 11 }}
+                                    title={c.email ? `${c.email} · similarity ${c.similarity}` : `similarity ${c.similarity}`}
+                                    data-testid={`unlinked-candidate-${u.id}-${c.id}`}
+                                  >
+                                    {c.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {unlinked.users.length > 5 && (
+                        <div className="font-mono text-xs text-muted-foreground pt-1">
+                          + {unlinked.users.length - 5} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {createWarning && (
+              <div
+                className="border bg-card"
+                style={{
+                  borderRadius: "var(--radius)",
+                  boxShadow: "inset 3px 0 0 var(--amber)",
+                  padding: "14px 18px",
+                }}
+                data-testid="create-warning-banner"
+              >
+                <div className="flex items-start gap-3">
+                  <Warning style={{ width: 18, height: 18, color: "var(--amber)", flexShrink: 0, marginTop: 2 }} />
+                  <div className="flex-1">
+                    <div
+                      className="font-mono uppercase text-muted-foreground"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Onboarding warning
+                    </div>
+                    <p className="text-sm text-foreground mt-1">{createWarning.message}</p>
+                    {createWarning.candidates.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span
+                          className="font-mono uppercase text-muted-foreground"
+                          style={{ fontSize: 10, letterSpacing: "0.12em" }}
+                        >
+                          Did you mean
+                        </span>
+                        {createWarning.candidates.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              linkEmployeeMutation.mutate(
+                                { userId: createWarning.userId, employeeId: c.id },
+                                { onSuccess: () => setCreateWarning(null) },
+                              );
+                            }}
+                            disabled={linkEmployeeMutation.isPending}
+                            className="font-mono border border-border rounded-sm px-2 py-0.5 hover:bg-secondary transition-colors disabled:opacity-50"
+                            style={{ fontSize: 11 }}
+                            title={c.email ? `${c.email} · similarity ${c.similarity}` : `similarity ${c.similarity}`}
+                            data-testid={`create-warning-candidate-${c.id}`}
+                          >
+                            {c.name}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setCreateWarning(null)}
+                          className="font-mono uppercase text-muted-foreground hover:text-foreground transition-colors ml-2"
+                          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+                          data-testid="create-warning-dismiss"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground mt-1">
+                        No fuzzy matches found — link manually via the Onboarding banner above, or add a matching employee row first.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {/* Create user inline panel */}
             <AdminPanel>
               <div className="p-6">

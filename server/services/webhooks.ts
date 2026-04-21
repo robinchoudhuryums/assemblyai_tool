@@ -9,10 +9,28 @@
 import { createHmac } from "crypto";
 import { isUrlSafe } from "./url-validator";
 import { logger } from "./logger";
+import { PerKeyCircuitBreaker, type CircuitSnapshot } from "./resilience";
 import type { ObjectStorageClient } from "../storage";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
+
+// Per-webhook circuit breaker. Opens after 5 consecutive failures per webhookId
+// for 5 minutes, then transitions to half-open for one test call. Keyed on
+// webhook config ID so one broken receiver doesn't brownout the rest; one open
+// circuit skips both the in-process retries AND the durable-retry enqueue.
+const WEBHOOK_BREAKER_THRESHOLD = 5;
+const WEBHOOK_BREAKER_RESET_MS = 5 * 60_000;
+export const webhookBreaker = new PerKeyCircuitBreaker(
+  "webhook",
+  WEBHOOK_BREAKER_THRESHOLD,
+  WEBHOOK_BREAKER_RESET_MS,
+);
+
+/** Exported for the admin observability endpoint. */
+export function getWebhookBreakerSnapshot(): CircuitSnapshot[] {
+  return webhookBreaker.snapshot();
+}
 const WEBHOOK_MAX_RETRIES = 4;
 
 // --- Types ---
@@ -32,12 +50,27 @@ export const WEBHOOK_EVENTS: WebhookEvent[] = [
   "coaching.created",
 ];
 
+/**
+ * Optional per-webhook retry policy override. Mission-critical consumers
+ * (e.g. a CRM that must not miss `call.completed`) can raise retry counts;
+ * low-priority consumers (e.g. Slack) can lower the circuit threshold so
+ * flaky receivers trip sooner. All fields are optional — unset values
+ * inherit service-wide defaults (4 in-process retries, circuit opens at 5
+ * failures for 5 min).
+ */
+export interface WebhookRetryPolicy {
+  maxInProcessRetries?: number;
+  circuitThreshold?: number;
+  circuitResetMs?: number;
+}
+
 export interface WebhookConfig {
   id: string;
   url: string;
   events: string[];
   secret: string;
   active: boolean;
+  retryPolicy?: WebhookRetryPolicy;
   createdBy: string;
   createdAt: string;
 }
@@ -49,6 +82,18 @@ export type InsertWebhookConfig = Omit<WebhookConfig, "id" | "createdAt">;
 let getS3Client: (() => ObjectStorageClient | undefined) | null = null;
 let initialized = false;
 
+// Persistent-retry accessor: when set, a webhook whose in-process retries all
+// fail gets enqueued as a `deliver_webhook` job in the durable job queue so it
+// survives process restart. When unset (e.g. dev without DATABASE_URL), the
+// exhausted delivery stays a logger.error with no durable retry.
+type EnqueueWebhookRetry = (payload: {
+  webhookId: string;
+  event: string;
+  body: string;
+  previousAttempts: number;
+}) => Promise<void> | void;
+let enqueueWebhookRetry: EnqueueWebhookRetry | null = null;
+
 /**
  * Initialize the webhook service with an S3 client accessor.
  * Called once at startup from the storage layer.
@@ -59,6 +104,15 @@ export function initWebhooks(s3ClientAccessor: () => ObjectStorageClient | undef
   // Reset cache so a re-init (e.g. in tests, or post-startup S3 swap)
   // doesn't serve stale entries from a prior wiring.
   invalidateConfigCache();
+}
+
+/**
+ * Install the persistent-retry handler. Called from `server/routes.ts` after
+ * the JobQueue is created. Optional — without it, webhooks fall back to the
+ * prior fire-and-forget behavior after in-process retries.
+ */
+export function setWebhookRetryEnqueuer(fn: EnqueueWebhookRetry | null): void {
+  enqueueWebhookRetry = fn;
 }
 
 function requireS3Client(op: string): ObjectStorageClient {
@@ -123,14 +177,27 @@ export async function createWebhookConfig(config: WebhookConfig): Promise<void> 
   invalidateConfigCache();
 }
 
-export async function updateWebhookConfig(id: string, updates: Partial<WebhookConfig>): Promise<WebhookConfig | undefined> {
+// `retryPolicy: null` is accepted as an explicit "clear the policy" signal;
+// undefined means "leave unchanged". Any other field behaves as normal.
+export async function updateWebhookConfig(
+  id: string,
+  updates: Partial<Omit<WebhookConfig, "retryPolicy">> & { retryPolicy?: WebhookRetryPolicy | null },
+): Promise<WebhookConfig | undefined> {
   const existing = await getWebhookConfig(id);
   if (!existing) return undefined;
-  const updated = { ...existing, ...updates, id }; // prevent id change
+  // Merge carefully: `retryPolicy: null` means "clear it", explicit
+  // undefined means "don't touch", a policy object means "replace wholly".
+  const { retryPolicy: incomingPolicy, ...restUpdates } = updates;
+  const merged: WebhookConfig = { ...existing, ...restUpdates, id };
+  if (incomingPolicy === null) {
+    delete merged.retryPolicy;
+  } else if (incomingPolicy !== undefined) {
+    merged.retryPolicy = incomingPolicy;
+  }
   const client = requireS3Client("updateWebhookConfig");
-  await client.uploadJson(`webhooks/${id}.json`, updated);
+  await client.uploadJson(`webhooks/${id}.json`, merged);
   invalidateConfigCache();
-  return updated;
+  return merged;
 }
 
 export async function deleteWebhookConfig(id: string): Promise<void> {
@@ -171,14 +238,69 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
   }
 }
 
-async function deliverWithRetry(config: WebhookConfig, event: string, body: string): Promise<void> {
-  for (let attempt = 0; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
+async function deliverWithRetry(config: WebhookConfig, event: string, body: string, initialAttempts = 0): Promise<void> {
+  // Resolve per-webhook policy overrides with sensible defaults. Unset
+  // fields inherit the service-wide defaults declared at module scope.
+  const policy = config.retryPolicy ?? {};
+  const maxRetries = policy.maxInProcessRetries ?? WEBHOOK_MAX_RETRIES;
+  const breakerOverride = policy.circuitThreshold !== undefined || policy.circuitResetMs !== undefined
+    ? { threshold: policy.circuitThreshold, resetMs: policy.circuitResetMs }
+    : undefined;
+
+  // Per-webhook circuit breaker check. When open, skip delivery AND skip the
+  // durable-retry enqueue — the receiver is known-broken, hammering it with
+  // new queue entries is worse than dropping this delivery (the event stays
+  // in the stdout log for operator reconstruction).
+  if (webhookBreaker.isOpen(config.id)) {
+    logger.warn("Webhook circuit open — skipping delivery", {
+      url: config.url,
+      event,
+      webhookId: config.id,
+    });
+    return;
+  }
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      await deliverWebhook(config, event, body);
+      // Wrap the individual delivery in the breaker. Success resets the
+      // breaker's counter for this webhookId; failure increments it. After
+      // the threshold trips, subsequent `webhookBreaker.isOpen()` checks
+      // short-circuit future calls for this key. Per-key thresholds are
+      // applied on first creation of the breaker for this webhookId.
+      await webhookBreaker.execute(
+        config.id,
+        () => deliverWebhook(config, event, body),
+        breakerOverride ?? undefined,
+      );
       return;
     } catch (err) {
-      if (attempt === WEBHOOK_MAX_RETRIES) {
-        logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: WEBHOOK_MAX_RETRIES + 1, error: (err as Error).message });
+      // If the breaker opened mid-retry, abandon further in-process retries.
+      if (webhookBreaker.isOpen(config.id)) {
+        logger.warn("Webhook circuit opened during retry — abandoning", {
+          url: config.url,
+          event,
+          webhookId: config.id,
+          attempts: attempt + 1,
+        });
+        return;
+      }
+      if (attempt === maxRetries) {
+        const totalAttempts = initialAttempts + maxRetries + 1;
+        logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: totalAttempts, error: (err as Error).message });
+        // Persistent retry: hand off to the durable job queue if available.
+        // The job queue has its own retry/dead-letter semantics (3 attempts),
+        // so we get ~5x the delivery durability vs. in-process retry alone,
+        // and it survives process restart. Skipped when the breaker is open
+        // (checked above) since queueing more work for a known-down receiver
+        // is counterproductive.
+        if (enqueueWebhookRetry) {
+          try {
+            await enqueueWebhookRetry({ webhookId: config.id, event, body, previousAttempts: totalAttempts });
+            logger.info("Webhook delivery handed off to durable job queue", { url: config.url, event, webhookId: config.id });
+          } catch (enqueueErr) {
+            logger.error("Failed to enqueue webhook retry", { url: config.url, event, webhookId: config.id, error: (enqueueErr as Error).message });
+          }
+        }
         return;
       }
       // Exponential backoff: 2s, 4s, 8s, 16s
@@ -187,6 +309,27 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+}
+
+/**
+ * Redeliver a webhook payload by ID. Called by the durable job-queue handler
+ * when a previously-failed delivery needs another attempt across a restart.
+ * Re-reads the live config so a subsequent config update (URL/secret/active
+ * flag) is picked up; throws on config missing or inactive so the job's
+ * own retry/dead-letter logic handles the terminal outcome.
+ */
+export async function redeliverWebhook(payload: { webhookId: string; event: string; body: string; previousAttempts?: number }): Promise<void> {
+  const config = await getWebhookConfig(payload.webhookId);
+  if (!config) {
+    throw new Error(`Webhook config not found: ${payload.webhookId}`);
+  }
+  if (!config.active) {
+    throw new Error(`Webhook ${payload.webhookId} is no longer active`);
+  }
+  if (!config.events.includes(payload.event)) {
+    throw new Error(`Webhook ${payload.webhookId} no longer subscribes to event ${payload.event}`);
+  }
+  await deliverWithRetry(config, payload.event, payload.body, payload.previousAttempts ?? 0);
 }
 
 async function deliverWebhook(config: WebhookConfig, event: string, body: string): Promise<void> {

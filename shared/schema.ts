@@ -456,12 +456,25 @@ export type InsertABTest = z.infer<typeof insertABTestSchema>;
 export type ABTest = z.infer<typeof abTestSchema>;
 
 // --- WEBHOOK CONFIG SCHEMAS ---
+// Retry policy override per webhook. All fields optional; undefined values
+// fall back to the service-level defaults (4 in-process retries, circuit
+// breaker opens at 5 consecutive failures for 5 minutes). Mission-critical
+// consumers (CRM hooks) can raise the retry count; low-priority consumers
+// (Slack alerts) can lower the circuit threshold so flaky receivers get
+// skipped sooner. Clamps keep operator error from creating DoS vectors.
+export const webhookRetryPolicySchema = z.object({
+  maxInProcessRetries: z.number().int().min(0).max(10).optional(),
+  circuitThreshold: z.number().int().min(1).max(50).optional(),
+  circuitResetMs: z.number().int().min(10_000).max(60 * 60_000).optional(),
+}).strict();
+
 export const webhookConfigSchema = z.object({
   id: z.string(),
   url: z.string().url(),
   events: z.array(z.string()).min(1),
   secret: z.string().min(1),
   active: z.boolean().default(true),
+  retryPolicy: webhookRetryPolicySchema.optional(),
   createdBy: z.string(),
   createdAt: z.string(),
 }).strict();
@@ -475,8 +488,10 @@ export const updateWebhookConfigSchema = z.object({
   events: z.array(z.string()).min(1).optional(),
   secret: z.string().min(1).optional(),
   active: z.boolean().optional(),
+  retryPolicy: webhookRetryPolicySchema.nullable().optional(),
 }).strict().refine(o => Object.keys(o).length > 0, { message: "At least one field must be updated" });
 
+export type WebhookRetryPolicy = z.infer<typeof webhookRetryPolicySchema>;
 export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
 export type InsertWebhookConfig = z.infer<typeof insertWebhookConfigSchema>;
 

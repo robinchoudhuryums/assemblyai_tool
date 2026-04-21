@@ -43,6 +43,17 @@ export default function SearchPage() {
   const [minScore, setMinScore] = useState(urlParams.get("minScore") || "");
   const [maxScore, setMaxScore] = useState(urlParams.get("maxScore") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(urlParams.get("q") || "");
+  // Search mode: keyword (default — full-text via /api/search), semantic
+  // (embedding cosine via /api/search/semantic), or hybrid (both, weighted).
+  // Persisted to URL so toggles survive bookmarks/refresh.
+  const initialMode = (urlParams.get("mode") as "keyword" | "semantic" | "hybrid" | null) ?? "keyword";
+  const [searchMode, setSearchMode] = useState<"keyword" | "semantic" | "hybrid">(
+    initialMode === "semantic" || initialMode === "hybrid" ? initialMode : "keyword",
+  );
+  const initialAlpha = parseFloat(urlParams.get("alpha") || "0.5");
+  const [hybridAlpha, setHybridAlpha] = useState<number>(
+    Number.isFinite(initialAlpha) ? Math.max(0, Math.min(1, initialAlpha)) : 0.5,
+  );
   const [showAdvanced, setShowAdvanced] = useState(
     !!(
       urlParams.get("sentiment") ||
@@ -70,10 +81,12 @@ export default function SearchPage() {
     if (dateTo) params.set("to", dateTo);
     if (minScore) params.set("minScore", minScore);
     if (maxScore) params.set("maxScore", maxScore);
+    if (searchMode !== "keyword") params.set("mode", searchMode);
+    if (searchMode === "hybrid") params.set("alpha", hybridAlpha.toFixed(2));
     const qs = params.toString();
     const newPath = qs ? `/search?${qs}` : "/search";
     window.history.replaceState(null, "", newPath);
-  }, [searchQuery, sentimentFilter, statusFilter, employeeFilter, dateFrom, dateTo, minScore, maxScore]);
+  }, [searchQuery, sentimentFilter, statusFilter, employeeFilter, dateFrom, dateTo, minScore, maxScore, searchMode, hybridAlpha]);
 
   // F-19: All filters that affect results must live in the query key so
   // toggling them invalidates the cache.
@@ -86,9 +99,38 @@ export default function SearchPage() {
   if (dateFrom) searchQueryParams.from = dateFrom;
   if (dateTo) searchQueryParams.to = dateTo;
 
+  // Keyword path is the existing /api/search route — only enabled in
+  // keyword mode. Semantic + hybrid use /api/search/semantic below.
   const { data: searchResults, isLoading: isLoadingSearch, error: searchError } = useQuery<CallWithDetails[]>({
     queryKey: ["/api/search", searchQueryParams],
-    enabled: debouncedQuery.length > 2,
+    enabled: debouncedQuery.length > 2 && searchMode === "keyword",
+  });
+
+  // Semantic/hybrid path — server returns { mode, backend, results, coverage,
+  // threshold, alpha? }. Results carry an extra `similarity` (and
+  // `keywordScore`/`score` in hybrid mode) we surface as a badge.
+  const semanticParams: Record<string, string> = { q: debouncedQuery };
+  if (searchMode === "hybrid") {
+    semanticParams.mode = "hybrid";
+    semanticParams.alpha = hybridAlpha.toFixed(2);
+  }
+  if (sentimentFilter !== "all") semanticParams.sentiment = sentimentFilter;
+  if (employeeFilter !== "all") semanticParams.employeeId = employeeFilter;
+  if (dateFrom) semanticParams.from = dateFrom;
+  if (dateTo) semanticParams.to = dateTo;
+
+  type SemanticResult = CallWithDetails & { similarity?: number; keywordScore?: number; score?: number };
+  type SemanticResponse = {
+    mode: "semantic" | "hybrid" | "keyword-fallback";
+    backend?: "pgvector" | "in-memory";
+    alpha?: number;
+    threshold?: number;
+    results: SemanticResult[];
+    coverage?: { totalAccessible: number; withEmbeddings: number };
+  };
+  const { data: semanticData, isLoading: isLoadingSemantic, error: semanticError } = useQuery<SemanticResponse>({
+    queryKey: ["/api/search/semantic", semanticParams],
+    enabled: debouncedQuery.length > 2 && searchMode !== "keyword",
   });
 
   useEffect(() => {
@@ -100,6 +142,16 @@ export default function SearchPage() {
       });
     }
   }, [searchError, toast]);
+
+  useEffect(() => {
+    if (semanticError) {
+      toast({
+        title: "Semantic search failed",
+        description: semanticError.message,
+        variant: "destructive",
+      });
+    }
+  }, [semanticError, toast]);
 
   // CLAUDE.md A14: omit empty-string sentinels from the /api/calls key
   // so this matches the ["/api/calls"] invalidation pattern used by
@@ -121,9 +173,18 @@ export default function SearchPage() {
     queryKey: ["/api/employees"],
   });
 
-  let displayCalls: CallWithDetails[] =
-    (debouncedQuery.length > 2 ? searchResults : allCallsResponse?.calls) ?? [];
-  const isLoading = isLoadingSearch || isLoadingCalls;
+  // Resolve which result set to display:
+  //   - keyword search:   /api/search results
+  //   - semantic/hybrid:  /api/search/semantic results
+  //   - browse (no query): /api/calls list
+  // Semantic results carry an extra `similarity` we keep on each row for
+  // the badge column. Keyword results are CallWithDetails as before.
+  type DisplayCall = CallWithDetails & { similarity?: number; keywordScore?: number; score?: number };
+  const semanticActive = debouncedQuery.length > 2 && searchMode !== "keyword";
+  let displayCalls: DisplayCall[] = semanticActive
+    ? (semanticData?.results ?? [])
+    : ((debouncedQuery.length > 2 ? searchResults : allCallsResponse?.calls) ?? []);
+  const isLoading = isLoadingSearch || isLoadingCalls || isLoadingSemantic;
 
   // Browse-mode client-side filtering (F-19).
   if (debouncedQuery.length === 0) {
@@ -160,6 +221,8 @@ export default function SearchPage() {
     setMinScore("");
     setMaxScore("");
     setDebouncedQuery("");
+    setSearchMode("keyword");
+    setHybridAlpha(0.5);
     window.history.replaceState(null, "", "/search");
   };
 
@@ -283,6 +346,81 @@ export default function SearchPage() {
 
       {/* Filter bar */}
       <div className="px-7 py-4 bg-background border-b border-border flex flex-col gap-3">
+        {/* Search mode toggle — only meaningful when there's a query. */}
+        <div className="flex items-center gap-2 flex-wrap" data-testid="search-mode-toggle">
+          <span
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            Mode
+          </span>
+          {(["keyword", "semantic", "hybrid"] as const).map((mode) => {
+            const active = searchMode === mode;
+            const label = mode === "keyword" ? "Keywords" : mode === "semantic" ? "Meaning" : "Hybrid";
+            return (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setSearchMode(mode)}
+                aria-pressed={active}
+                className="font-mono uppercase border rounded-sm px-2.5 py-1 transition-colors"
+                style={{
+                  fontSize: 10,
+                  letterSpacing: "0.1em",
+                  borderColor: active ? "var(--accent)" : "var(--border)",
+                  background: active ? "var(--copper-soft)" : "transparent",
+                  color: active ? "var(--foreground)" : "var(--muted-foreground)",
+                  fontWeight: active ? 500 : 400,
+                }}
+                data-testid={`mode-${mode}`}
+              >
+                {label}
+              </button>
+            );
+          })}
+          {searchMode === "hybrid" && (
+            <label className="flex items-center gap-2 ml-2">
+              <span
+                className="font-mono uppercase text-muted-foreground"
+                style={{ fontSize: 10, letterSpacing: "0.14em" }}
+              >
+                Mix
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={hybridAlpha}
+                onChange={(e) => setHybridAlpha(parseFloat(e.target.value))}
+                className="w-32"
+                aria-label="Hybrid mix: lower favors keyword, higher favors meaning"
+                data-testid="hybrid-alpha-slider"
+              />
+              <span
+                className="font-mono tabular-nums text-muted-foreground"
+                style={{ fontSize: 10 }}
+              >
+                kw {(1 - hybridAlpha).toFixed(2)} · sem {hybridAlpha.toFixed(2)}
+              </span>
+            </label>
+          )}
+          {semanticActive && semanticData?.coverage && (
+            <span
+              className="font-mono text-muted-foreground ml-2"
+              style={{ fontSize: 10 }}
+              data-testid="semantic-coverage"
+            >
+              coverage {semanticData.coverage.withEmbeddings}/{semanticData.coverage.totalAccessible}
+              {semanticData.coverage.totalAccessible > 0 &&
+                semanticData.coverage.withEmbeddings / semanticData.coverage.totalAccessible < 0.5 && (
+                  <span style={{ color: "var(--amber)", marginLeft: 6 }}>
+                    · low — run npm run backfill-embeddings
+                  </span>
+                )}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           <label className="relative flex-1 min-w-[260px]">
             <MagnifyingGlass
@@ -503,7 +641,7 @@ export default function SearchPage() {
         ) : displayCalls.length === 0 ? (
           <EmptyState hasQuery={debouncedQuery.length > 0} onClear={clearFilters} />
         ) : (
-          <ResultsTable calls={displayCalls} />
+          <ResultsTable calls={displayCalls} showMatch={semanticActive} />
         )}
       </div>
     </div>
@@ -592,7 +730,13 @@ function EmptyState({ hasQuery, onClear }: { hasQuery: boolean; onClear: () => v
   );
 }
 
-function ResultsTable({ calls }: { calls: CallWithDetails[] }) {
+function ResultsTable({
+  calls,
+  showMatch,
+}: {
+  calls: Array<CallWithDetails & { similarity?: number; keywordScore?: number; score?: number }>;
+  showMatch?: boolean;
+}) {
   return (
     <div className="overflow-x-auto bg-card border border-border">
       <table className="w-full" style={{ borderCollapse: "collapse", fontSize: 13 }}>
@@ -604,11 +748,12 @@ function ResultsTable({ calls }: { calls: CallWithDetails[] }) {
             <ResultHeader label="Sentiment" />
             <ResultHeader label="Score" numeric />
             <ResultHeader label="Duration" numeric />
+            {showMatch && <ResultHeader label="Match" numeric />}
           </tr>
         </thead>
         <tbody>
           {calls.map((call) => (
-            <ResultRow key={call.id} call={call} />
+            <ResultRow key={call.id} call={call} showMatch={showMatch} />
           ))}
         </tbody>
       </table>
@@ -634,7 +779,13 @@ function ResultHeader({ label, numeric }: { label: string; numeric?: boolean }) 
   );
 }
 
-function ResultRow({ call }: { call: CallWithDetails }) {
+function ResultRow({
+  call,
+  showMatch,
+}: {
+  call: CallWithDetails & { similarity?: number; keywordScore?: number; score?: number };
+  showMatch?: boolean;
+}) {
   const [, navigate] = useLocation();
   const score = call.analysis?.performanceScore ? Number(call.analysis.performanceScore) : null;
   const scoreColor =
@@ -724,6 +875,19 @@ function ResultRow({ call }: { call: CallWithDetails }) {
       >
         {durationStr}
       </td>
+      {showMatch && (
+        <td
+          className="py-3 px-3 font-mono tabular-nums"
+          style={{ textAlign: "right", fontSize: 12, color: "var(--accent)" }}
+          title={
+            call.keywordScore !== undefined
+              ? `Combined ${call.score?.toFixed(3) ?? "—"} = sim ${call.similarity?.toFixed(3) ?? "—"} + kw ${call.keywordScore.toFixed(3)}`
+              : `Cosine similarity ${call.similarity?.toFixed(3) ?? "—"}`
+          }
+        >
+          {(call.score ?? call.similarity ?? 0).toFixed(2)}
+        </td>
+      )}
     </tr>
   );
 }

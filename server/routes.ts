@@ -31,6 +31,7 @@ import { registerSimulatedCallRoutes } from "./routes/simulated-calls";
 // Pipeline
 import { processAudioFile, shouldUseBatchMode } from "./routes/pipeline";
 import { handleAssemblyAIWebhook, isWebhookModeEnabled } from "./services/assemblyai";
+import { setWebhookRetryEnqueuer, redeliverWebhook } from "./services/webhooks";
 
 // Batch scheduler (extracted for testability)
 import { startBatchScheduler } from "./services/batch-scheduler";
@@ -156,6 +157,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       broadcastCallUpdate(jobId, "failed", { deadLetter: true, reason, attempts });
     };
 
+    // Wire the persistent-retry handoff for webhooks. When a webhook delivery
+    // exhausts its in-process retries, the webhook service enqueues a
+    // `deliver_webhook` job here so the attempt survives process restart.
+    //
+    // Delay the first job-level retry by 60s to give the receiver room to
+    // recover from whatever caused the in-process retries (4 attempts over
+    // ~30s) to exhaust. If the job itself fails, JobQueue.failJob applies
+    // its own exponential backoff (10s, 30s, 60s) before dead-letter, so
+    // total delivery budget is ~5 minutes across all retry layers before
+    // the payload is declared undeliverable. Hammering a down receiver
+    // every 5s (poll interval) is specifically what this guards against.
+    setWebhookRetryEnqueuer(async (payload) => {
+      if (!jobQueue) return;
+      await jobQueue.enqueue("deliver_webhook", payload, { delayMs: 60_000 });
+    });
+
     jobQueue.start(async (job: Job) => {
       if (job.type === "process_audio") {
         const { callId, filePath, originalName, mimeType, callCategory, uploadedBy, processingMode, language } = job.payload as {
@@ -248,6 +265,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           broadcastSimulatedCallUpdate(simulatedCallId, "failed", { error: message });
           throw err; // let the JobQueue apply retry/dead-letter semantics
         }
+      } else if (job.type === "deliver_webhook") {
+        // Persistent webhook retry. The webhook service's in-process retries
+        // already exhausted (4 attempts with exponential backoff). The job
+        // queue adds 3 more attempts with its own retry/dead-letter logic so
+        // transient receiver outages across a deploy are survivable.
+        const { webhookId, event, body, previousAttempts } = job.payload as {
+          webhookId: string; event: string; body: string; previousAttempts?: number;
+        };
+        await redeliverWebhook({ webhookId, event, body, previousAttempts });
       } else if (job.type === "batch_snapshots") {
         // A8/F18: batch snapshot generation runs as a background job so the
         // request that triggers it doesn't sit waiting for minutes. Results

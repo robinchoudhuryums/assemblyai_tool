@@ -135,6 +135,480 @@ export function escapeCsvValue(val: unknown): string {
   return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/** One section of a multi-section CSV — a labelled table with headers + rows. */
+export interface CsvSection {
+  /** Optional blank-line separator from the previous section. Default true. */
+  separator?: boolean;
+  /** Column headers. */
+  headers: string[];
+  /** Rows. Each cell is CSV-escaped via escapeCsvValue. */
+  rows: unknown[][];
+  /**
+   * PDF-only: optional chart rendered ABOVE the table (or standalone when
+   * headers/rows are empty). Ignored by `buildCsv`. `line` renders each
+   * series as a polyline; `bar` renders horizontal bars labelled on the
+   * left. Values may be null — nulls are skipped, not drawn at zero.
+   */
+  chart?: PdfChartSpec;
+}
+
+/** PDF chart spec — supports two shapes rendered via pdfkit paths. */
+export type PdfChartSpec =
+  | {
+      type: "line";
+      title?: string;
+      /** Each series = one polyline. Multiple series share the same axes. */
+      series: Array<{ label: string; points: Array<{ x: string | number; y: number | null }> }>;
+      height?: number;
+      valueRange?: { min?: number; max?: number };
+    }
+  | {
+      type: "bar";
+      title?: string;
+      /** Single-series horizontal bars, top-down. */
+      bars: Array<{ label: string; value: number | null }>;
+      height?: number;
+      valueRange?: { min?: number; max?: number };
+    };
+
+/**
+ * Build a multi-section CSV body from a list of `CsvSection`s. Sections are
+ * separated by a blank line. Every cell is escaped via `escapeCsvValue` so
+ * callers can pass raw values. Used by all server-side report export routes
+ * (agent profile, filtered report, team analytics, etc.) so the output
+ * format and formula-injection protection stay consistent.
+ */
+export function buildCsv(sections: CsvSection[]): string {
+  const lines: string[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    if (i > 0 && section.separator !== false) lines.push("");
+    lines.push(section.headers.map(h => escapeCsvValue(h)).join(","));
+    for (const row of section.rows) {
+      lines.push(row.map(cell => escapeCsvValue(cell)).join(","));
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Write a CSV response with the HIPAA export audit entry, consistent
+ * filename quoting, and the correct content-type header. The `audit`
+ * callback is invoked after all headers are set but before the body is
+ * sent; callers use it to run `logPhiAccess` with the export-specific
+ * detail string.
+ */
+export function writeCsvResponse(
+  res: import("express").Response,
+  csv: string,
+  filename: string,
+  audit?: () => void,
+): void {
+  if (audit) {
+    try { audit(); } catch (err) {
+      // Audit failure must not prevent the caller from receiving the
+      // export — but log it so the gap is observable.
+      // eslint-disable-next-line no-console
+      console.warn("[csv-export] audit logger threw", err);
+    }
+  }
+  // Sanitize filename to prevent header injection via newline or quote.
+  const safe = filename.replace(/[\r\n"\\]/g, "_");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${safe}"`);
+  res.send(csv);
+}
+
+/**
+ * PDF report metadata — rendered as the document header before the first
+ * section. `title` is the display-font page title; `kicker` is the small
+ * mono-uppercase label above it (typically report type + period).
+ */
+export interface PdfReportMetadata {
+  title: string;
+  kicker?: string;
+  companyName?: string;
+  period?: string;
+  generatedAt?: Date;
+}
+
+/**
+ * Render an inline chart inside a PDF document. Uses pdfkit's path
+ * primitives (moveTo / lineTo / rect / stroke / fill) so no new
+ * dependency is needed. Coordinates are in PDF points; the caller passes
+ * `pageWidth` (the usable width between the margins) and this function
+ * draws the chart starting at the current `doc.y` and advances `doc.y`
+ * past the bottom of the chart when done.
+ *
+ * Line chart:  timeseries with a dashed zero baseline, one polyline per
+ *              series. Y-axis auto-ranges (min/max from data, padded).
+ * Bar chart:   horizontal bars with labels on the left, values on the
+ *              right. Bar width scales by the max absolute value.
+ *
+ * Null/NaN points are skipped for line charts and rendered as blanks
+ * (no bar) for bar charts — same convention the on-screen analytics use.
+ */
+// Typed against pdfkit's doc without importing the types at module scope
+// (pdfkit is lazy-loaded in buildPdfBuffer to avoid the font load cost on
+// tests that never touch PDFs).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function renderChart(doc: any, chart: PdfChartSpec, pageWidth: number): void {
+  const startY = doc.y;
+  const leftX = doc.page.margins.left;
+  const rightX = leftX + pageWidth;
+
+  // Optional title above the chart, left-aligned.
+  if (chart.title) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#2a2420");
+    doc.text(chart.title, leftX, startY);
+    doc.moveDown(0.2);
+  }
+  const plotTop = doc.y + 4;
+  const plotHeight = chart.height ?? 90;
+
+  if (chart.type === "line") {
+    // Flatten all points across series to compute the shared Y range.
+    const allY: number[] = [];
+    for (const s of chart.series) {
+      for (const p of s.points) if (p.y !== null && Number.isFinite(p.y)) allY.push(p.y);
+    }
+    if (allY.length === 0) {
+      // Render an empty plot with just the zero baseline so the caller
+      // still gets a visual placeholder instead of a silent blank.
+      doc.strokeColor("#d9cfc4").lineWidth(0.5).dash(2, { space: 2 })
+        .moveTo(leftX, plotTop + plotHeight / 2)
+        .lineTo(rightX, plotTop + plotHeight / 2)
+        .stroke()
+        .undash();
+      doc.y = plotTop + plotHeight + 4;
+      return;
+    }
+    const dataMin = chart.valueRange?.min ?? Math.min(0, ...allY);
+    const dataMax = chart.valueRange?.max ?? Math.max(0, ...allY);
+    const span = (dataMax - dataMin) || 1;
+
+    // Assume all series share the same X points (our callers do). Use the
+    // longest series as the X axis count.
+    const maxPoints = Math.max(...chart.series.map(s => s.points.length), 1);
+    const plotWidth = pageWidth;
+    const xForIdx = (idx: number) =>
+      leftX + (idx / Math.max(maxPoints - 1, 1)) * plotWidth;
+    const yForVal = (v: number) =>
+      plotTop + plotHeight - ((v - dataMin) / span) * plotHeight;
+
+    // Dashed zero baseline, but only if zero is within the visible range.
+    if (dataMin <= 0 && dataMax >= 0) {
+      const zeroY = yForVal(0);
+      doc.strokeColor("#d9cfc4").lineWidth(0.5).dash(2, { space: 2 })
+        .moveTo(leftX, zeroY).lineTo(rightX, zeroY).stroke().undash();
+    }
+
+    // Per-series rendering. First series = accent color; subsequent series
+    // share a muted palette. Keeping it simple — callers typically use
+    // one series.
+    const palette = ["#b8733f", "#7a6b5a", "#8fa68a", "#a85533"];
+    for (let si = 0; si < chart.series.length; si++) {
+      const s = chart.series[si];
+      const color = palette[si % palette.length];
+      doc.strokeColor(color).lineWidth(1.5);
+      let started = false;
+      for (let pi = 0; pi < s.points.length; pi++) {
+        const p = s.points[pi];
+        if (p.y === null || !Number.isFinite(p.y)) continue;
+        const x = xForIdx(pi);
+        const y = yForVal(p.y);
+        if (!started) {
+          doc.moveTo(x, y);
+          started = true;
+        } else {
+          doc.lineTo(x, y);
+        }
+      }
+      if (started) doc.stroke();
+      // Point dots for visibility at chart scale.
+      doc.fillColor(color);
+      for (let pi = 0; pi < s.points.length; pi++) {
+        const p = s.points[pi];
+        if (p.y === null || !Number.isFinite(p.y)) continue;
+        doc.circle(xForIdx(pi), yForVal(p.y), 1.5).fill();
+      }
+    }
+    doc.y = plotTop + plotHeight + 6;
+    return;
+  }
+
+  // Bar chart
+  const bars = chart.bars;
+  const labelColW = 140;
+  const valueColW = 50;
+  const barsLeft = leftX + labelColW;
+  const barsWidth = pageWidth - labelColW - valueColW;
+  const rowHeight = 16;
+  const barRowTop = plotTop;
+  const allValues = bars.map(b => b.value).filter((v): v is number => v !== null && Number.isFinite(v));
+  const maxAbs = allValues.length > 0 ? Math.max(...allValues.map(v => Math.abs(v)), 0) : 1;
+  const scale = maxAbs > 0 ? barsWidth / maxAbs : 0;
+
+  for (let bi = 0; bi < bars.length; bi++) {
+    const y = barRowTop + bi * rowHeight;
+    // Page-break guard — push to next page if we'd overflow.
+    if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 20) {
+      doc.addPage();
+      // Reset plotTop-equivalent to the top of the new page.
+      return renderChart(doc, { ...chart, bars: bars.slice(bi) }, pageWidth);
+    }
+    const b = bars[bi];
+    // Label on left.
+    doc.font("Helvetica").fontSize(9).fillColor("#2a2420");
+    doc.text(String(b.label), leftX, y + 3, { width: labelColW - 6, ellipsis: true });
+    if (b.value !== null && Number.isFinite(b.value) && scale > 0) {
+      const w = Math.max(1, Math.abs(b.value) * scale);
+      doc.rect(barsLeft, y + 3, w, rowHeight - 8)
+        .fill(b.value >= 0 ? "#b8733f" : "#a85533");
+      // Value label on right.
+      doc.fillColor("#2a2420").font("Helvetica").fontSize(9);
+      doc.text(b.value.toFixed(2), barsLeft + barsWidth + 4, y + 3, {
+        width: valueColW - 4,
+      });
+    } else {
+      doc.fillColor("#7a6b5a").font("Helvetica").fontSize(9);
+      doc.text("—", barsLeft + barsWidth + 4, y + 3, { width: valueColW - 4 });
+    }
+  }
+  doc.y = barRowTop + bars.length * rowHeight + 6;
+}
+
+/**
+ * Build a PDF buffer from the same CsvSection shape `buildCsv` accepts.
+ * Produces a tabular PDF: a title page header, then each section as a
+ * labelled table. Uses pdfkit's synchronous row rendering + wraps long
+ * cells. Returned as a Promise<Buffer> rather than a stream because
+ * aggregating the entire buffer keeps error semantics predictable:
+ * if PDF generation throws after headers are sent, the client would
+ * see a truncated file. Buffering up front lets us catch failures and
+ * 500 cleanly.
+ *
+ * Typical exports (filtered reports, agent profiles) are <100 KB, so
+ * buffering is cheap. If a very large export arrives, switch to
+ * `pdf.pipe(res)` at the route level.
+ */
+export async function buildPdfBuffer(
+  sections: CsvSection[],
+  metadata: PdfReportMetadata,
+): Promise<Buffer> {
+  // Lazy-load pdfkit so Node test runs that never touch PDF exports
+  // don't pay the startup cost. The package initializes font lookups
+  // on require, which would add ~80ms to every test run.
+  const PDFDocumentMod = await import("pdfkit");
+  const PDFDocument = (PDFDocumentMod as unknown as { default: typeof import("pdfkit") }).default;
+
+  return new Promise<Buffer>((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        size: "LETTER",
+        margin: 54,  // 0.75"
+        info: {
+          Title: metadata.title,
+          Author: metadata.companyName ?? "CallAnalyzer",
+          Subject: metadata.kicker ?? "Call analytics report",
+        },
+      });
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      // --- Header ---
+      if (metadata.kicker) {
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(8)
+          .fillColor("#7a6b5a")
+          .text(metadata.kicker.toUpperCase(), { characterSpacing: 1.4 });
+        doc.moveDown(0.3);
+      }
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(22)
+        .fillColor("#2a2420")
+        .text(metadata.title);
+      const metaLine = [
+        metadata.companyName,
+        metadata.period,
+        metadata.generatedAt
+          ? `Generated ${metadata.generatedAt.toISOString().slice(0, 10)}`
+          : null,
+      ].filter(Boolean).join("  ·  ");
+      if (metaLine) {
+        doc.moveDown(0.3);
+        doc.font("Helvetica").fontSize(10).fillColor("#7a6b5a").text(metaLine);
+      }
+      doc.moveDown(1.2);
+
+      // --- Sections ---
+      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (i > 0) doc.moveDown(0.8);
+
+        // Optional chart rendered above the table (or standalone when the
+        // section has no headers/rows). Kept inline rather than extracted
+        // so it reads top-to-bottom with the table rendering below.
+        if (section.chart) {
+          renderChart(doc, section.chart, pageWidth);
+          doc.moveDown(0.4);
+        }
+
+        // If headers are empty, this was a chart-only section — skip the
+        // table rendering entirely.
+        if (section.headers.length === 0) continue;
+
+        // Approximate column widths: divide the page width evenly. pdfkit
+        // doesn't have a real table primitive so we lay out row-by-row.
+        const cols = section.headers.length;
+        const colW = pageWidth / cols;
+
+        // Header row
+        const rowY = doc.y;
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#2a2420");
+        for (let c = 0; c < cols; c++) {
+          doc.text(String(section.headers[c]), doc.page.margins.left + c * colW, rowY, {
+            width: colW - 6,
+            ellipsis: true,
+          });
+        }
+        // Compute the tallest cell height so the underline sits below everything.
+        const headerHeight = Math.max(14, doc.y - rowY);
+        doc
+          .strokeColor("#d9cfc4")
+          .lineWidth(0.75)
+          .moveTo(doc.page.margins.left, rowY + headerHeight + 2)
+          .lineTo(doc.page.margins.left + pageWidth, rowY + headerHeight + 2)
+          .stroke();
+        doc.y = rowY + headerHeight + 8;
+
+        // Data rows
+        doc.font("Helvetica").fontSize(9).fillColor("#2a2420");
+        for (const row of section.rows) {
+          // Add a new page if we'd overflow.
+          if (doc.y > doc.page.height - doc.page.margins.bottom - 30) {
+            doc.addPage();
+          }
+          const rY = doc.y;
+          let tallest = 0;
+          for (let c = 0; c < cols; c++) {
+            const cellText = row[c] === undefined || row[c] === null ? "" : String(row[c]);
+            doc.text(cellText, doc.page.margins.left + c * colW, rY, {
+              width: colW - 6,
+              ellipsis: true,
+            });
+            tallest = Math.max(tallest, doc.y - rY);
+          }
+          doc.y = rY + Math.max(tallest, 12) + 4;
+        }
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Write a PDF response with the HIPAA export audit entry, consistent
+ * filename quoting, and the correct content-type header. Mirrors
+ * `writeCsvResponse` — audit fires first, then the buffer is sent.
+ * Callers pass an already-built Buffer (from `buildPdfBuffer`) so
+ * synchronous generation errors surface before response headers are
+ * written.
+ */
+export function writePdfResponse(
+  res: import("express").Response,
+  pdf: Buffer,
+  filename: string,
+  audit?: () => void,
+): void {
+  if (audit) {
+    try { audit(); } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[pdf-export] audit logger threw", err);
+    }
+  }
+  const safe = filename.replace(/[\r\n"\\]/g, "_");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${safe}"`);
+  res.setHeader("Content-Length", String(pdf.byteLength));
+  res.send(pdf);
+}
+
+// ---------------------------------------------------------------------------
+// Fuzzy string matching (Levenshtein distance + simple normalization)
+// ---------------------------------------------------------------------------
+//
+// Used by the unlinked-users admin flow (Phase E) to suggest employee
+// candidates when a user's username/displayName doesn't match any employee
+// exactly. Cheap enough to run at request time over the full employee list
+// (~50–500 rows typical) because the algorithm is O(n*m) per pair and names
+// are short; a 500-employee × 10-unlinked computation finishes in well under
+// 100ms on modern hardware.
+
+/** Levenshtein distance between two strings (0 = identical). */
+export function levenshtein(a: string, b: string): number {
+  const al = a.length, bl = b.length;
+  if (al === 0) return bl;
+  if (bl === 0) return al;
+  // Use two rolling rows instead of a full matrix — bounded memory.
+  let prev = new Array<number>(bl + 1);
+  let curr = new Array<number>(bl + 1);
+  for (let j = 0; j <= bl; j++) prev[j] = j;
+  for (let i = 1; i <= al; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= bl; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1] + 1,      // insertion
+        prev[j] + 1,          // deletion
+        prev[j - 1] + cost,   // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[bl];
+}
+
+/**
+ * Normalize a string for fuzzy comparison: lowercase, collapse whitespace,
+ * strip common email separators ("alice.smith@x.com" → "alice smith"),
+ * strip punctuation. Intentionally liberal — we want "alice.smith@x.com"
+ * to fuzzy-match "Alice Smith" and "Bob J" to match "Bob Jones".
+ */
+export function normalizeForFuzzy(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/@.*$/, "")                // drop email domain
+    .replace(/[._\-+]/g, " ")           // separators → space
+    .replace(/[^a-z0-9\s]/g, "")        // strip remaining punctuation
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Score (0–1) of how similar `a` and `b` are. 1 = identical after
+ * normalization. Returns 0 when normalized forms share no prefix and are
+ * very different lengths. Uses Levenshtein distance over the normalized
+ * forms; score = 1 - distance / max(len).
+ */
+export function fuzzySimilarity(a: string, b: string): number {
+  const na = normalizeForFuzzy(a);
+  const nb = normalizeForFuzzy(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const dist = levenshtein(na, nb);
+  const maxLen = Math.max(na.length, nb.length);
+  return Math.max(0, 1 - dist / maxLen);
+}
+
 /**
  * Filter calls by date range (in-memory). Adjusts `to` date to end-of-day.
  * Used by reports, snapshots, and search — the single source of truth for date filtering.

@@ -9,6 +9,7 @@ import {
   Cloud,
   Database,
   Heartbeat,
+  LinkBreak,
   ShieldCheck,
   Warning,
   XCircle,
@@ -39,6 +40,10 @@ interface SubsystemHealth {
   };
   calibration: { lastSnapshot: string | null; driftDetected: boolean };
   telephony8x8: { enabled: boolean };
+  onboarding?: {
+    chronicallyUnlinkedLast7d: number | null;
+    healthy: boolean;
+  };
 }
 
 interface HealthResponse {
@@ -321,6 +326,36 @@ export default function SystemHealthPage() {
                   isText
                   alert={data.subsystems.calibration.driftDetected}
                   success={!data.subsystems.calibration.driftDetected}
+                />
+              </SubsystemCard>
+
+              {/* Phase E follow-on: chronic-unlinked signal. Fires the
+                  `user_employee_link_unresolved` audit event once per
+                  user per UTC day at login; card counts distinct users
+                  over the last 7 days. Shows "—" when DB unavailable. */}
+              <SubsystemCard
+                icon={LinkBreak}
+                title="Onboarding"
+                statusPill={
+                  <StatusPill
+                    status={data.subsystems.onboarding?.healthy ?? true}
+                  />
+                }
+              >
+                <MetricRow
+                  label="Chronically unlinked (7d)"
+                  value={
+                    data.subsystems.onboarding?.chronicallyUnlinkedLast7d ?? "—"
+                  }
+                  alert={
+                    (data.subsystems.onboarding?.chronicallyUnlinkedLast7d ?? 0) >= 3
+                  }
+                  success={data.subsystems.onboarding?.chronicallyUnlinkedLast7d === 0}
+                />
+                <MetricRow
+                  label="Resolve via"
+                  value="/admin Users · Onboarding banner"
+                  isText
                 />
               </SubsystemCard>
             </div>

@@ -62,6 +62,26 @@ export interface InsightsCallData {
   detectedAgentName: string | null;
 }
 
+/** Per-session before/after aggregate for /api/coaching/outcomes-summary. */
+export interface CoachingOutcomeWindowAgg {
+  count: number;
+  avgScore: number | null;
+  avgSubScores: {
+    compliance: number | null;
+    customerExperience: number | null;
+    communication: number | null;
+    resolution: number | null;
+  };
+}
+export interface CoachingOutcomeSessionAgg {
+  sessionId: string;
+  employeeId: string;
+  assignedBy: string | null;
+  sessionAt: string;  // ISO timestamp
+  before: CoachingOutcomeWindowAgg | null;
+  after: CoachingOutcomeWindowAgg | null;
+}
+
 /** Common interface for S3 object storage client */
 export interface ObjectStorageClient {
   uploadJson(objectName: string, data: unknown): Promise<void>;
@@ -174,6 +194,19 @@ export interface IStorage {
    * the full call universe to filter by date in JS.
    */
   getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]>;
+
+  /**
+   * Bulk-hydrate a specific set of calls with employee + transcript +
+   * sentiment + analysis joined. Used by the semantic search fast path
+   * (`/api/search/semantic`) which identifies candidate IDs via pgvector
+   * cosine similarity, then needs full CallWithDetails for just those IDs
+   * rather than scanning the full completed-calls table. Order of the
+   * returned array is NOT guaranteed to match the input `ids` — the caller
+   * should re-sort by whatever criterion it cares about (pgvector's
+   * similarity, typically).
+   */
+  getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]>;
+
   getCallsPaginated(options: {
     filters?: { status?: string; sentiment?: string; employee?: string };
     cursor?: string; // ISO timestamp:id cursor
@@ -254,6 +287,28 @@ export interface IStorage {
   getCoachingSessionsByEmployee(employeeId: string): Promise<CoachingSession[]>;
   updateCoachingSession(id: string, updates: Partial<CoachingSession>): Promise<CoachingSession | undefined>;
 
+  /**
+   * Bulk aggregation for /api/coaching/outcomes-summary. Returns per-session
+   * before/after windows with avgScore + avgSubScores already computed — the
+   * route just does the pure-JS rollup (group by manager/employee, weekly
+   * time bucket, delta calculation) on the result.
+   *
+   * PostgresStorage implementation uses a single SQL query with
+   * ROW_NUMBER window functions to partition top-N calls per session per
+   * bucket. MemStorage + CloudStorage fall back to the prior N+1 pattern
+   * (acceptable — dev/legacy backends only). Only sessions with at least
+   * one matching call appear in the result; the route is responsible for
+   * treating missing sessions as "insufficient data".
+   *
+   * INV-23: sub-scores read via camelCase JSONB keys (compliance,
+   * customerExperience, communication, resolution). INV-34: synthetic
+   * calls excluded.
+   */
+  getCoachingOutcomes(
+    windowStart: Date,
+    perSessionN?: number,
+  ): Promise<CoachingOutcomeSessionAgg[]>;
+
   // A/B model test operations
   createABTest(test: InsertABTest): Promise<ABTest>;
   getABTest(id: string): Promise<ABTest | undefined>;
@@ -277,6 +332,91 @@ export interface IStorage {
   // Object storage access (for batch inference, webhooks, admin operations)
   // Returns the underlying S3 client, or undefined if not configured.
   getObjectStorageClient(): ObjectStorageClient | undefined;
+}
+
+/**
+ * Shared helper for MemStorage + CloudStorage's getCoachingOutcomes.
+ * PostgresStorage uses a single SQL query instead — see storage-postgres.ts.
+ * This mirrors the prior inline route implementation: for each unique
+ * employee in the windowed sessions, load their completed calls, then
+ * slice the before/after top-N per session and compute averages.
+ *
+ * Preserved as a standalone helper rather than a shared mixin so the two
+ * non-SQL backends can share logic without tangling class hierarchies.
+ */
+async function computeCoachingOutcomesInMemory(
+  storage: Pick<IStorage, "getAllCoachingSessions" | "getCallsWithDetails">,
+  windowStart: Date,
+  perSessionN: number,
+): Promise<CoachingOutcomeSessionAgg[]> {
+  const cutoff = windowStart.getTime();
+  const sessions = await storage.getAllCoachingSessions();
+  const windowed = sessions.filter(s => {
+    const t = new Date(s.createdAt || 0).getTime();
+    return Number.isFinite(t) && t > 0 && t >= cutoff;
+  });
+  // Cache per-employee call list so we don't re-query inside the loop.
+  const byEmployee = new Map<string, Array<{ uploadedAt: number; score: number | null; sub: Record<string, number | null> }>>();
+  const subKeys = ["compliance", "customerExperience", "communication", "resolution"] as const;
+  for (const s of windowed) {
+    if (byEmployee.has(s.employeeId)) continue;
+    const calls = await storage.getCallsWithDetails({ status: "completed", employee: s.employeeId });
+    const rows = calls
+      .map(c => {
+        const scoreRaw = c.analysis?.performanceScore;
+        const score = scoreRaw !== undefined && scoreRaw !== null && String(scoreRaw) !== ""
+          ? parseFloat(String(scoreRaw)) : NaN;
+        const subRaw = c.analysis?.subScores as Record<string, unknown> | undefined;
+        const sub: Record<string, number | null> = {};
+        for (const k of subKeys) {
+          const v = subRaw?.[k];
+          const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+          sub[k] = Number.isFinite(n) ? n : null;
+        }
+        return {
+          uploadedAt: new Date(c.uploadedAt || 0).getTime(),
+          score: Number.isFinite(score) ? score : null,
+          sub,
+        };
+      })
+      .filter(r => Number.isFinite(r.uploadedAt) && r.uploadedAt > 0)
+      .sort((a, b) => a.uploadedAt - b.uploadedAt);
+    byEmployee.set(s.employeeId, rows);
+  }
+  const aggregateWindow = (rows: Array<{ score: number | null; sub: Record<string, number | null> }>): CoachingOutcomeWindowAgg | null => {
+    if (rows.length === 0) return null;
+    const scores = rows.map(r => r.score).filter((v): v is number => v !== null);
+    const avgOf = (key: string) => {
+      const vs = rows.map(r => r.sub[key]).filter((v): v is number => v !== null);
+      return vs.length > 0 ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+    };
+    return {
+      count: rows.length,
+      avgScore: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
+      avgSubScores: {
+        compliance: avgOf("compliance"),
+        customerExperience: avgOf("customerExperience"),
+        communication: avgOf("communication"),
+        resolution: avgOf("resolution"),
+      },
+    };
+  };
+  const result: CoachingOutcomeSessionAgg[] = [];
+  for (const s of windowed) {
+    const sessionTs = new Date(s.createdAt || 0).getTime();
+    const rows = byEmployee.get(s.employeeId) || [];
+    const before = rows.filter(r => r.uploadedAt < sessionTs).slice(-perSessionN);
+    const after = rows.filter(r => r.uploadedAt >= sessionTs).slice(0, perSessionN);
+    result.push({
+      sessionId: s.id,
+      employeeId: s.employeeId,
+      assignedBy: s.assignedBy || null,
+      sessionAt: typeof s.createdAt === "string" ? s.createdAt : new Date(s.createdAt || 0).toISOString(),
+      before: aggregateWindow(before),
+      after: aggregateWindow(after),
+    });
+  }
+  return result;
 }
 
 /**
@@ -543,6 +683,21 @@ export class MemStorage implements IStorage {
     const calls = [...this.calls.values()]
       .filter(c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .filter(c => !employeeId || c.employeeId === employeeId);
+    return Promise.all(calls.map(async (call) => {
+      const [employee, transcript, sentiment, analysis] = await Promise.all([
+        call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
+        this.getTranscript(call.id),
+        this.getSentimentAnalysis(call.id),
+        this.getCallAnalysis(call.id),
+      ]);
+      return { ...call, employee, transcript, sentiment, analysis } as CallWithDetails;
+    }));
+  }
+
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    const calls = [...this.calls.values()].filter(c => !c.synthetic && idSet.has(c.id));
     return Promise.all(calls.map(async (call) => {
       const [employee, transcript, sentiment, analysis] = await Promise.all([
         call.employeeId ? this.getEmployee(call.employeeId) : Promise.resolve(undefined),
@@ -898,6 +1053,13 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async getCoachingOutcomes(
+    windowStart: Date,
+    perSessionN = 10,
+  ): Promise<CoachingOutcomeSessionAgg[]> {
+    return computeCoachingOutcomesInMemory(this, windowStart, perSessionN);
+  }
+
   // A/B test operations
   async createABTest(test: InsertABTest): Promise<ABTest> {
     const id = randomUUID();
@@ -1251,6 +1413,16 @@ export class CloudStorage implements IStorage {
     const all = await this.getCallsWithDetails(filters);
     const sinceMs = since.getTime();
     return all.filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs);
+  }
+
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    // S3-only backend has no secondary index — defer to the full scan
+    // and filter by ID. The semantic-search hot path only uses this
+    // backend in dev; production uses PostgresStorage's SQL IN-clause.
+    const all = await this.getCallsWithDetails();
+    const idSet = new Set(ids);
+    return all.filter(c => idSet.has(c.id));
   }
 
   async getCallsPaginated(options: {
@@ -1617,6 +1789,13 @@ export class CloudStorage implements IStorage {
     const updated = { ...session, ...updates };
     await this.client.uploadJson(`coaching/${id}.json`, updated);
     return updated;
+  }
+
+  async getCoachingOutcomes(
+    windowStart: Date,
+    perSessionN = 10,
+  ): Promise<CoachingOutcomeSessionAgg[]> {
+    return computeCoachingOutcomesInMemory(this, windowStart, perSessionN);
   }
 
   // --- A/B Model Test Methods ---

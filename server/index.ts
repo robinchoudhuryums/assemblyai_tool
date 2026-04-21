@@ -1,5 +1,16 @@
 import "dotenv/config";
 
+// E2E mock server — activated only when `E2E_MOCKS=true` is set. Intercepts
+// outbound fetch to AssemblyAI / Bedrock / S3 so Playwright tests can drive
+// the full audio pipeline without live external services. Zero production
+// effect: the import is gated behind the env flag and the whole module is
+// tree-shaken / never loaded in normal runs.
+if (process.env.E2E_MOCKS === "true") {
+  // Dynamic import so the msw/node dependency tree isn't loaded in prod.
+  const { startMockServer } = await import("./test-mocks/setup");
+  startMockServer();
+}
+
 // OpenTelemetry must be initialized before any other imports so auto-instrumentation
 // hooks are registered before Express, HTTP, and AWS SDK modules load.
 import "./services/tracing";
@@ -617,10 +628,14 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           const { getJobQueue } = await import("./routes");
           const jq = getJobQueue();
           if (jq) {
+            // 20s gives in-flight audio pipeline jobs more drain time than the
+            // prior 15s cap. Scheduler stops preceding this are all synchronous
+            // clearInterval calls so they consume ~no budget; the 30s outer
+            // hard-exit backstops the worst case.
             await Promise.race([
               jq.stop(),
               new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error("jobQueue.stop timed out after 15s")), 15_000)
+                setTimeout(() => reject(new Error("jobQueue.stop timed out after 20s")), 20_000)
               ),
             ]);
             log("Job queue stopped.");

@@ -4,11 +4,12 @@
  */
 import { Router } from "express";
 import { storage } from "../storage";
-import { requireAuth, requireSelfOrManager } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, requireSelfOrManager } from "../auth";
 import { getLeaderboard, computePoints } from "../services/gamification";
 import { BADGE_TYPES } from "@shared/schema";
 import { STREAK_SCORE_THRESHOLD } from "../constants";
-import { validateParams } from "./utils";
+import { validateParams, buildCsv, writeCsvResponse } from "./utils";
+import { logPhiAccess, auditContext } from "../services/audit-log";
 import { logger } from "../services/logger";
 
 export function registerGamificationRoutes(router: Router): void {
@@ -23,6 +24,47 @@ export function registerGamificationRoutes(router: Router): void {
     } catch (error) {
       logger.error("leaderboard error", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to compute leaderboard" });
+    }
+  });
+
+  // Server-side CSV export of the leaderboard — manager+ only (exports are
+  // MFA-gated + audited). Format is one row per ranked employee with rank,
+  // name, points, avg score, calls, streak, and badge count.
+  router.get("/api/gamification/leaderboard/export.csv", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
+    try {
+      const period = (req.query.period as string) || "all";
+      const validPeriods = ["week", "month", "all"];
+      const selectedPeriod = validPeriods.includes(period) ? period as "week" | "month" | "all" : "all";
+      const leaderboard = await getLeaderboard(selectedPeriod);
+
+      const csv = buildCsv([
+        {
+          headers: ["Rank", "Employee", "Sub-Team", "Points", "Avg Score", "Call Count", "Streak", "Badges"],
+          rows: leaderboard.map(row => [
+            row.rank,
+            row.employeeName,
+            row.subTeam || "",
+            row.totalPoints,
+            row.avgScore ?? "",
+            row.totalCalls,
+            row.currentStreak,
+            row.badges.length,
+          ]),
+        },
+      ]);
+
+      writeCsvResponse(res, csv, `leaderboard-${selectedPeriod}.csv`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=csv; reportType=leaderboard; period=${selectedPeriod}; rowCount=${leaderboard.length}`,
+        });
+      });
+    } catch (error) {
+      logger.error("leaderboard export error", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export leaderboard" });
     }
   });
 

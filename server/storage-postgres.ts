@@ -7,6 +7,7 @@
 import type pg from "pg";
 import { randomUUID } from "crypto";
 import { logger } from "./services/logger";
+import { isPgvectorAvailable } from "./db/pool";
 import type {
   User, InsertUser, DbUser, Employee, InsertEmployee,
   Call, InsertCall, Transcript, InsertTranscript,
@@ -19,7 +20,7 @@ import type {
   PerformerSummary, ABTest, InsertABTest, UsageRecord,
   Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
-import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData } from "./storage";
+import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData, CoachingOutcomeSessionAgg, CoachingOutcomeWindowAgg } from "./storage";
 import { safeFloat } from "./routes/utils";
 import { logPhiAccess } from "./services/audit-log";
 
@@ -884,6 +885,17 @@ export class PostgresStorage implements IStorage {
       fields.push(`${def.column} = $${++idx}`);
       values.push(def.coerce(value));
     }
+
+    // pgvector dual-write: when embedding is updated and the native vector
+    // column is available, also populate embedding_vec. This unlocks SQL-
+    // native cosine similarity (O(log N) with the ivfflat index) for
+    // /api/search/semantic instead of the in-memory O(N) fallback.
+    if (updates.embedding !== undefined && isPgvectorAvailable() && Array.isArray(updates.embedding)) {
+      fields.push(`embedding_vec = $${++idx}::vector`);
+      // pgvector accepts '[0.1,0.2,...]' literal via cast.
+      values.push(`[${updates.embedding.join(",")}]`);
+    }
+
     if (fields.length === 0) return;
     values.push(callId);
     await this.db.query(
@@ -1114,6 +1126,37 @@ export class PostgresStorage implements IStorage {
   }
 
   // ── Search ────────────────────────────────────────────────
+  /**
+   * Bulk-hydrate by ID list. Single SQL round trip joining employees +
+   * transcripts + sentiment + analysis. Synthetic calls excluded (INV-34);
+   * semantic search is the primary caller and it already filters synthetic
+   * in the pgvector SELECT, but excluding here too is defense-in-depth.
+   * Returns an empty array when `ids` is empty — no pointless SELECT.
+   */
+  async getCallsWithDetailsByIds(ids: string[]): Promise<CallWithDetails[]> {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(",");
+    const { rows } = await this.db.query(`
+      SELECT c.*,
+        e.id AS e_id, e.name AS e_name, e.role AS e_role, e.email AS e_email,
+        e.initials AS e_initials, e.status AS e_status, e.sub_team AS e_sub_team, e.created_at AS e_created_at,
+        t.id AS t_id, t.text AS t_text, t.confidence AS t_confidence, t.words AS t_words, t.created_at AS t_created_at,
+        s.id AS s_id, s.overall_sentiment, s.overall_score, s.segments AS s_segments, s.created_at AS s_created_at,
+        a.id AS a_id, a.performance_score, a.talk_time_ratio, a.response_time,
+        a.keywords, a.topics, a.summary, a.action_items, a.feedback,
+        a.lemur_response, a.call_party_type, a.flags, a.manual_edits,
+        a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
+      FROM calls c
+      LEFT JOIN employees e ON c.employee_id = e.id
+      LEFT JOIN transcripts t ON t.call_id = c.id
+      LEFT JOIN sentiment_analyses s ON s.call_id = c.id
+      LEFT JOIN call_analyses a ON a.call_id = c.id
+      WHERE c.id IN (${placeholders})
+        AND c.synthetic = FALSE
+    `, ids);
+    return rows.map(mapCallWithDetailsRow);
+  }
+
   async searchCalls(query: string, limit = 50): Promise<CallWithDetails[]> {
     // Single query: join transcript search with full call details (no N+1)
     const { rows } = await this.db.query(`
@@ -1271,6 +1314,109 @@ export class PostgresStorage implements IStorage {
        merged.status, merged.dueDate, completedAt],
     );
     return rows[0] ? mapCoachingSession(rows[0]) : undefined;
+  }
+
+  /**
+   * SQL-native aggregation for /api/coaching/outcomes-summary. Replaces the
+   * prior per-employee N+1 pattern (one call-history load per unique
+   * employee in the windowed sessions) with a single query using
+   * ROW_NUMBER to rank the top-N calls on each side of each session.
+   *
+   * Approach:
+   * 1. Windowed sessions → CTE.
+   * 2. Cartesian of each session × its employee's completed non-synthetic
+   *    calls, tagged with bucket = 'before' | 'after' per session_at.
+   * 3. ROW_NUMBER over (session_id, bucket) ordered so the N most recent
+   *    before the session and the N earliest after come first.
+   * 4. Filter rn <= N, aggregate counts + score + per-sub-score averages.
+   *
+   * Returns only sessions with at least one matching call. The route
+   * combines this with `getAllCoachingSessions()` to identify sessions
+   * with zero calls and treat them as "insufficient".
+   *
+   * INV-23: sub-scores stored camelCase in analysis.sub_scores JSONB.
+   * INV-34: synthetic calls excluded.
+   */
+  async getCoachingOutcomes(
+    windowStart: Date,
+    perSessionN = 10,
+  ): Promise<CoachingOutcomeSessionAgg[]> {
+    const { rows } = await this.db.query(`
+      WITH windowed AS (
+        SELECT id, employee_id, assigned_by, created_at AS session_at
+        FROM coaching_sessions
+        WHERE created_at >= $1
+      ),
+      ranked AS (
+        SELECT
+          w.id AS session_id,
+          w.employee_id,
+          w.assigned_by,
+          w.session_at,
+          (CASE WHEN c.uploaded_at < w.session_at THEN 'before' ELSE 'after' END) AS bucket,
+          CAST(NULLIF(a.performance_score, '') AS NUMERIC) AS score,
+          CAST(NULLIF(a.sub_scores->>'compliance', '') AS NUMERIC) AS compliance,
+          CAST(NULLIF(a.sub_scores->>'customerExperience', '') AS NUMERIC) AS cx,
+          CAST(NULLIF(a.sub_scores->>'communication', '') AS NUMERIC) AS communication,
+          CAST(NULLIF(a.sub_scores->>'resolution', '') AS NUMERIC) AS resolution,
+          ROW_NUMBER() OVER (
+            PARTITION BY w.id,
+              (CASE WHEN c.uploaded_at < w.session_at THEN 0 ELSE 1 END)
+            ORDER BY
+              CASE WHEN c.uploaded_at < w.session_at THEN c.uploaded_at END DESC,
+              CASE WHEN c.uploaded_at >= w.session_at THEN c.uploaded_at END ASC
+          ) AS rn
+        FROM windowed w
+        JOIN calls c ON c.employee_id = w.employee_id
+                    AND c.status = 'completed'
+                    AND c.synthetic = FALSE
+        JOIN call_analyses a ON a.call_id = c.id
+      ),
+      limited AS (
+        SELECT * FROM ranked WHERE rn <= $2
+      )
+      SELECT
+        session_id, employee_id, assigned_by, session_at, bucket,
+        COUNT(*)::int                                 AS n,
+        ROUND(AVG(score)::numeric, 4)::float          AS avg_score,
+        ROUND(AVG(compliance)::numeric, 4)::float     AS avg_compliance,
+        ROUND(AVG(cx)::numeric, 4)::float             AS avg_cx,
+        ROUND(AVG(communication)::numeric, 4)::float  AS avg_communication,
+        ROUND(AVG(resolution)::numeric, 4)::float     AS avg_resolution
+      FROM limited
+      GROUP BY session_id, employee_id, assigned_by, session_at, bucket
+    `, [windowStart, perSessionN]);
+
+    // Pivot: rows of (session_id, bucket) → per-session {before, after}.
+    const bySession = new Map<string, CoachingOutcomeSessionAgg>();
+    for (const r of rows) {
+      const sessionAt = r.session_at?.toISOString?.() ?? String(r.session_at);
+      let agg = bySession.get(r.session_id);
+      if (!agg) {
+        agg = {
+          sessionId: r.session_id,
+          employeeId: r.employee_id,
+          assignedBy: r.assigned_by ?? null,
+          sessionAt,
+          before: null,
+          after: null,
+        };
+        bySession.set(r.session_id, agg);
+      }
+      const windowAgg: CoachingOutcomeWindowAgg = {
+        count: r.n,
+        avgScore: r.avg_score,
+        avgSubScores: {
+          compliance: r.avg_compliance,
+          customerExperience: r.avg_cx,
+          communication: r.avg_communication,
+          resolution: r.avg_resolution,
+        },
+      };
+      if (r.bucket === "before") agg.before = windowAgg;
+      else agg.after = windowAgg;
+    }
+    return Array.from(bySession.values());
   }
 
   // ── A/B Tests ─────────────────────────────────────────────

@@ -34,6 +34,8 @@ export interface AIAnalysisProvider {
   readonly modelId?: string;
   analyzeCallTranscript(transcriptText: string, callId: string, callCategory?: string, promptTemplate?: PromptTemplateConfig, language?: string, callDurationSeconds?: number, hasFlags?: boolean, ragContext?: string): Promise<CallAnalysis>;
   generateText?(prompt: string, modelIdOverride?: string, maxTokensOverride?: number): Promise<string>;
+  /** Generate an embedding vector for the given text (nullable if provider fails or is not configured). Optional. */
+  generateEmbedding?(text: string): Promise<number[] | null>;
   /** Swap the underlying model at runtime (A/B test promotion). Optional — not all providers support runtime swap. */
   setModel?(modelId: string): void;
 }
@@ -310,9 +312,15 @@ function validateTimestamps(analysis: CallAnalysis, callDurationSeconds?: number
     // Use the same `output_anomaly:` prefix that prompt-guard.ts uses for
     // downstream flag-filtering consistency. UI / scoring dashboards already
     // classify `output_anomaly:*` as a quality-warning badge.
-    if (!existingFlags.some(f => f.startsWith("output_anomaly:invalid_feedback_timestamps"))) {
-      validated.flags = [...existingFlags, `output_anomaly:invalid_feedback_timestamps:${strippedCount}`];
-    }
+    // Consolidate counts on re-validation: strip any pre-existing
+    // invalid_feedback_timestamps flag and emit a single fresh flag with the
+    // current strippedCount, rather than accumulating duplicate flags with
+    // different suffix counts.
+    const prefix = "output_anomaly:invalid_feedback_timestamps:";
+    validated.flags = [
+      ...existingFlags.filter(f => !f.startsWith(prefix)),
+      `${prefix}${strippedCount}`,
+    ];
   }
 
   return validated;

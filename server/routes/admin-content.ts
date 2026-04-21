@@ -19,9 +19,12 @@ import {
   updateWebhookConfig,
   deleteWebhookConfig,
   triggerWebhook,
+  getWebhookBreakerSnapshot,
+  webhookBreaker,
   WEBHOOK_EVENTS,
   type WebhookConfig,
 } from "../services/webhooks";
+import { getPool } from "../db/pool";
 
 export function registerContentRoutes(
   router: Router,
@@ -604,6 +607,14 @@ export function registerContentRoutes(
         res.status(404).json({ message: "Webhook config not found" });
         return;
       }
+      // If the retry policy was updated, reset the per-webhook circuit
+      // breaker so the new thresholds take effect on the next delivery.
+      // Without this, an admin who tightens the threshold to "open faster"
+      // would keep getting the old (looser) behavior until the LRU evicts
+      // the breaker (effectively never, for a small webhook fleet).
+      if ("retryPolicy" in parsed.data) {
+        webhookBreaker.reset(req.params.id);
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update webhook config" });
@@ -640,6 +651,203 @@ export function registerContentRoutes(
       res.json({ message: `Test event "${testEvent}" sent to ${config.url}` });
     } catch (error) {
       res.status(500).json({ message: "Failed to send test webhook" });
+    }
+  });
+
+  // =====================================================================
+  // WEBHOOK OBSERVABILITY + DEAD-LETTER MANAGEMENT (Phase C — admin only)
+  // =====================================================================
+
+  // GET /api/admin/webhooks/stats — per-webhook delivery health.
+  // Queries the `jobs` table filtered to `type='deliver_webhook'` and
+  // aggregates inFlight / scheduledRetries / deadLettered / delivered24h /
+  // avgLatencyMs per webhookId. Also surfaces the in-memory circuit-breaker
+  // state so an admin can tell at a glance whether a receiver is tripping.
+  // Degrades to empty stats when no DATABASE_URL (persistent retry isn't
+  // wired anyway, so there are no jobs to count).
+  router.get("/api/admin/webhooks/stats", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const pool = getPool();
+      const configs = await getAllWebhookConfigs();
+      const breakerByKey = new Map(getWebhookBreakerSnapshot().map(s => [s.key, s]));
+
+      type Stats = {
+        webhookId: string;
+        url: string;
+        active: boolean;
+        inFlight: number;
+        scheduledRetries: number;
+        deadLettered: number;
+        delivered24h: number;
+        avgLatencyMs: number | null;
+        circuit: { state: string; failureCount: number; lastFailureTime: number };
+      };
+      const statsByWebhook = new Map<string, Stats>();
+      for (const cfg of configs) {
+        const br = breakerByKey.get(cfg.id);
+        statsByWebhook.set(cfg.id, {
+          webhookId: cfg.id,
+          url: cfg.url,
+          active: cfg.active,
+          inFlight: 0,
+          scheduledRetries: 0,
+          deadLettered: 0,
+          delivered24h: 0,
+          avgLatencyMs: null,
+          circuit: {
+            state: br?.state ?? "closed",
+            failureCount: br?.failureCount ?? 0,
+            lastFailureTime: br?.lastFailureTime ?? 0,
+          },
+        });
+      }
+
+      if (pool) {
+        // inFlight = running + pending-now. scheduledRetries = pending-with-future-locked_at.
+        const { rows: statusRows } = await pool.query<{
+          webhook_id: string; status: string; is_future: boolean; cnt: string;
+        }>(
+          `SELECT
+             payload->>'webhookId' AS webhook_id,
+             status,
+             (locked_at IS NOT NULL AND locked_at > NOW()) AS is_future,
+             COUNT(*)::text AS cnt
+           FROM jobs
+           WHERE type = 'deliver_webhook'
+             AND status IN ('pending', 'running', 'dead')
+           GROUP BY 1, 2, 3`,
+        );
+        for (const row of statusRows) {
+          const s = statsByWebhook.get(row.webhook_id);
+          if (!s) continue;
+          const cnt = parseInt(row.cnt, 10);
+          if (row.status === "dead") s.deadLettered += cnt;
+          else if (row.status === "running") s.inFlight += cnt;
+          else if (row.status === "pending") {
+            if (row.is_future) s.scheduledRetries += cnt;
+            else s.inFlight += cnt;
+          }
+        }
+        // Delivered + latency in last 24h.
+        const { rows: deliveredRows } = await pool.query<{
+          webhook_id: string; cnt: string; avg_ms: string | null;
+        }>(
+          `SELECT
+             payload->>'webhookId' AS webhook_id,
+             COUNT(*)::text AS cnt,
+             AVG(EXTRACT(EPOCH FROM (completed_at - created_at)) * 1000)::text AS avg_ms
+           FROM jobs
+           WHERE type = 'deliver_webhook'
+             AND status = 'completed'
+             AND completed_at >= NOW() - INTERVAL '24 hours'
+           GROUP BY 1`,
+        );
+        for (const row of deliveredRows) {
+          const s = statsByWebhook.get(row.webhook_id);
+          if (!s) continue;
+          s.delivered24h = parseInt(row.cnt, 10);
+          s.avgLatencyMs = row.avg_ms ? Math.round(parseFloat(row.avg_ms)) : null;
+        }
+      }
+
+      res.json({
+        webhooks: Array.from(statsByWebhook.values()),
+        backendAvailable: Boolean(pool),
+      });
+    } catch (error) {
+      logger.error("webhook stats failed", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to fetch webhook stats" });
+    }
+  });
+
+  // GET /api/admin/webhooks/dead-letter — list dead-lettered webhook jobs
+  // with enough detail for an admin to decide whether to manually retry.
+  // Scoped to `type='deliver_webhook'`; the generic /api/admin/dead-jobs
+  // covers everything else.
+  router.get("/api/admin/webhooks/dead-letter", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        res.json({ jobs: [] });
+        return;
+      }
+      const limitRaw = parseInt((req.query.limit as string) || "50", 10);
+      const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 200));
+      const { rows } = await pool.query<{
+        id: string;
+        webhook_id: string;
+        event: string;
+        body_preview: string;
+        attempts: number;
+        max_attempts: number;
+        failed_reason: string | null;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT
+           id,
+           payload->>'webhookId' AS webhook_id,
+           payload->>'event' AS event,
+           LEFT(COALESCE(payload->>'body', ''), 500) AS body_preview,
+           attempts, max_attempts,
+           failed_reason,
+           created_at, updated_at
+         FROM jobs
+         WHERE type = 'deliver_webhook' AND status = 'dead'
+         ORDER BY updated_at DESC
+         LIMIT $1`,
+        [limit],
+      );
+      res.json({
+        jobs: rows.map(r => ({
+          id: r.id,
+          webhookId: r.webhook_id,
+          event: r.event,
+          bodyPreview: r.body_preview,
+          attempts: r.attempts,
+          maxAttempts: r.max_attempts,
+          failedReason: r.failed_reason,
+          createdAt: r.created_at?.toISOString?.() ?? r.created_at,
+          updatedAt: r.updated_at?.toISOString?.() ?? r.updated_at,
+        })),
+      });
+    } catch (error) {
+      logger.error("webhook dead-letter list failed", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to fetch dead-lettered webhooks" });
+    }
+  });
+
+  // POST /api/admin/webhooks/dead-letter/:jobId/retry — manually re-queue a
+  // dead-lettered webhook delivery. Resets status to 'pending', zeroes
+  // attempts, clears lock — the job queue's main loop picks it up on the
+  // next poll cycle (default 5s). Does NOT reset the circuit breaker; if
+  // the receiver is still failing, the redelivery will fail fast.
+  router.post("/api/admin/webhooks/dead-letter/:jobId/retry", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        res.status(503).json({ message: "Job queue unavailable (no DATABASE_URL)" });
+        return;
+      }
+      const { rowCount } = await pool.query(
+        `UPDATE jobs
+         SET status = 'pending',
+             attempts = 0,
+             locked_at = NULL,
+             locked_by = NULL,
+             failed_reason = NULL,
+             updated_at = NOW()
+         WHERE id = $1 AND type = 'deliver_webhook' AND status = 'dead'`,
+        [req.params.jobId],
+      );
+      if (rowCount === 0) {
+        res.status(404).json({ message: "Dead-lettered webhook job not found" });
+        return;
+      }
+      res.json({ message: "Webhook delivery re-queued" });
+    } catch (error) {
+      logger.error("webhook dead-letter retry failed", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to retry webhook delivery" });
     }
   });
 

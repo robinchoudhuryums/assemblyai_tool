@@ -8,7 +8,7 @@ import {
   resetPasswordSchema,
   changePasswordSchema,
 } from "@shared/schema";
-import { validateIdParam, sendError, sendValidationError } from "./utils";
+import { validateIdParam, sendError, sendValidationError, fuzzySimilarity } from "./utils";
 import { getPool } from "../db/pool";
 import { logger } from "../services/logger";
 
@@ -30,6 +30,124 @@ export function registerUserRoutes(router: Router) {
     } catch (error) {
       logger.error("error fetching users", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // ==================== LINK USER TO EMPLOYEE (admin only) ====================
+  // Admin clicks "Link to employee" on the unlinked-users banner → this
+  // endpoint updates the user's displayName to match the selected employee's
+  // name so getUserEmployeeId() resolves on subsequent requests. Intentionally
+  // writes the user side (not the employee side) because the user record is
+  // auth-only and changing displayName is safer than changing employee email
+  // (which may be consumed by other downstream joins). Employee email
+  // edits, if needed, remain available via the existing PATCH /api/employees.
+  // Writes a HIPAA audit entry `user_employee_link_created`.
+  router.post("/api/users/:id/link-employee", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
+    try {
+      const { employeeId } = (req.body ?? {}) as { employeeId?: string };
+      if (!employeeId || typeof employeeId !== "string") {
+        return sendError(res, 400, "employeeId is required");
+      }
+
+      const [user, employee] = await Promise.all([
+        storage.getDbUser(req.params.id),
+        storage.getEmployee(employeeId),
+      ]);
+      if (!user) return sendError(res, 404, "User not found");
+      if (employee === undefined) return sendError(res, 404, "Employee not found");
+
+      const updated = await storage.updateDbUser(user.id, { displayName: employee.name });
+      if (!updated) return sendError(res, 500, "Failed to update user");
+
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "user_employee_link_created",
+        username: req.user?.username,
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+        resourceType: "user",
+        resourceId: user.id,
+        detail: `linked user=${user.username} to employee=${employee.id} via displayName=${employee.name}`,
+      });
+
+      res.json(sanitizeUser(updated));
+    } catch (error) {
+      logger.error("error linking user to employee", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to link user to employee" });
+    }
+  });
+
+  // ==================== UNLINKED USERS (admin only) ====================
+  // Returns active viewer- AND manager-role users whose username (email) and
+  // display name don't match any employee row. These users see empty data
+  // + 403s with no error — the single most common "looks authenticated but
+  // sees nothing" production puzzle. Mirror of getUserEmployeeId()'s matching
+  // logic (email → name).
+  //
+  // Phase E: extended from viewer-only to viewer+manager (both roles hit
+  // the per-employee RBAC paths like /snapshots/employee/:id). Admins are
+  // excluded because admins are platform-level — they don't need an employee
+  // link and there's no signal value in listing them.
+  //
+  // Each returned user carries a `candidates` array of up to 3 fuzzy-matched
+  // employees (similarity > 0.5, sorted desc) so the admin UI can render a
+  // "Did you mean Alice Smith?" suggestion above the full-list dropdown.
+  router.get("/api/users/unlinked", requireAuth, requireMFASetup, requireRole("admin"), async (_req, res) => {
+    try {
+      const [users, employees] = await Promise.all([
+        storage.getAllDbUsers(),
+        storage.getAllEmployees(),
+      ]);
+      const emailMap = new Map<string, string>();
+      const nameMap = new Map<string, string>();
+      for (const emp of employees) {
+        if (emp.email) emailMap.set(emp.email.toLowerCase(), emp.id);
+        nameMap.set(emp.name.toLowerCase(), emp.id);
+      }
+
+      // Fuzzy candidates: for a given (username, displayName) pair, find the
+      // top-3 employees with similarity > 0.5 against EITHER field. This is
+      // the "Did you mean?" hint — the existing full-list dropdown stays as
+      // a fallback for picks that don't fuzzy-match.
+      const activeEmployees = employees.filter(e => e.status !== "Inactive");
+      const suggestCandidates = (username: string | undefined, displayName: string | undefined) => {
+        if (!username && !displayName) return [];
+        const scored = activeEmployees.map(e => {
+          const fromUsername = username ? Math.max(
+            fuzzySimilarity(username, e.name),
+            e.email ? fuzzySimilarity(username, e.email) : 0,
+          ) : 0;
+          const fromName = displayName ? Math.max(
+            fuzzySimilarity(displayName, e.name),
+            e.email ? fuzzySimilarity(displayName, e.email) : 0,
+          ) : 0;
+          return { id: e.id, name: e.name, email: e.email ?? null, similarity: Math.max(fromUsername, fromName) };
+        });
+        return scored
+          .filter(x => x.similarity > 0.5)
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 3)
+          .map(x => ({ id: x.id, name: x.name, email: x.email, similarity: Math.round(x.similarity * 100) / 100 }));
+      };
+
+      const unlinked = users
+        .filter(u => u.active !== false)
+        .filter(u => u.role === "viewer" || u.role === "manager")
+        .map(sanitizeUser)
+        .filter((u: any) => {
+          const byEmail = u.username ? emailMap.get(u.username.toLowerCase()) : undefined;
+          if (byEmail) return false;
+          const byName = u.name ? nameMap.get(u.name.toLowerCase()) : undefined;
+          return !byName;
+        })
+        .map((u: any) => ({
+          ...u,
+          candidates: suggestCandidates(u.username, u.name),
+        }));
+      res.json({ count: unlinked.length, users: unlinked });
+    } catch (error) {
+      logger.error("error fetching unlinked users", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to fetch unlinked users" });
     }
   });
 
@@ -77,7 +195,44 @@ export function registerUserRoutes(router: Router) {
         detail: `Created user "${username}" with role "${role}"`,
       });
 
-      res.status(201).json(sanitizeUser(newUser));
+      // Phase E: prevent-at-creation hint. For viewer/manager roles (who
+      // depend on an employee link to see any data), check whether the new
+      // account has a matching employee. If not, attach fuzzy candidates to
+      // the response so the admin UI can immediately prompt "Did you mean
+      // Alice Smith?" and one-click link. Purely additive — existing
+      // consumers reading the base user fields are unaffected.
+      const response: Record<string, unknown> = sanitizeUser(newUser);
+      if (role === "viewer" || role === "manager") {
+        const employees = await storage.getAllEmployees();
+        const matchByEmail = employees.find(e => e.email?.toLowerCase() === username.toLowerCase());
+        const matchByName = employees.find(e => e.name.toLowerCase() === displayName.toLowerCase());
+        if (!matchByEmail && !matchByName) {
+          const active = employees.filter(e => e.status !== "Inactive");
+          const scored = active.map(e => {
+            const fromUsername = Math.max(
+              fuzzySimilarity(username, e.name),
+              e.email ? fuzzySimilarity(username, e.email) : 0,
+            );
+            const fromName = Math.max(
+              fuzzySimilarity(displayName, e.name),
+              e.email ? fuzzySimilarity(displayName, e.email) : 0,
+            );
+            return { id: e.id, name: e.name, email: e.email ?? null, similarity: Math.max(fromUsername, fromName) };
+          });
+          const candidates = scored
+            .filter(x => x.similarity > 0.5)
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, 3)
+            .map(x => ({ id: x.id, name: x.name, email: x.email, similarity: Math.round(x.similarity * 100) / 100 }));
+          response.warning = {
+            code: "no_matching_employee",
+            message: "User has no matching employee row — they will see empty data until linked.",
+            candidates,
+          };
+        }
+      }
+
+      res.status(201).json(response);
     } catch (error) {
       logger.error("error creating user", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to create user" });

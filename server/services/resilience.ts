@@ -93,3 +93,115 @@ export class CircuitBreaker {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PerKeyCircuitBreaker
+// ---------------------------------------------------------------------------
+//
+// Keyed variant of CircuitBreaker — holds an independent state machine per
+// key so one failing target (e.g. one webhook URL) doesn't brownout the rest.
+// Used by `webhooks.ts` to open a circuit per `webhookId` when a receiver is
+// consistently failing, so the app stops queueing new deliveries (and new
+// retries) for that specific receiver until the cooldown passes.
+//
+// Bounded to MAX_KEYS entries with LRU eviction to prevent unbounded growth
+// under pathological key churn (e.g. if keys aren't actually stable). 1,000
+// is far beyond any realistic number of webhook configs.
+
+export type CircuitSnapshot = {
+  key: string;
+  state: CircuitState;
+  failureCount: number;
+  lastFailureTime: number;
+};
+
+export class PerKeyCircuitBreaker {
+  private breakers = new Map<string, CircuitBreaker>();
+  private readonly MAX_KEYS = 1_000;
+
+  constructor(
+    private readonly labelPrefix: string,
+    private readonly failureThreshold: number = 5,
+    private readonly resetTimeoutMs: number = 30_000,
+  ) {}
+
+  private getOrCreate(key: string, override?: { threshold?: number; resetMs?: number }): CircuitBreaker {
+    let b = this.breakers.get(key);
+    if (b) {
+      // LRU touch: delete-then-set to move to the most-recently-used end.
+      this.breakers.delete(key);
+      this.breakers.set(key, b);
+      return b;
+    }
+    if (this.breakers.size >= this.MAX_KEYS) {
+      const oldest = this.breakers.keys().next().value;
+      if (oldest !== undefined) this.breakers.delete(oldest);
+    }
+    // Per-key override is applied only on first creation. A later policy
+    // change by the caller won't retroactively update the breaker — the
+    // caller must `reset(key)` to recreate with new thresholds.
+    const threshold = override?.threshold ?? this.failureThreshold;
+    const resetMs = override?.resetMs ?? this.resetTimeoutMs;
+    b = new CircuitBreaker(`${this.labelPrefix}:${key}`, threshold, resetMs);
+    this.breakers.set(key, b);
+    return b;
+  }
+
+  /**
+   * Execute `fn` under the per-key circuit. Throws immediately if the key's
+   * circuit is open. Optional `override.threshold` / `override.resetMs` are
+   * applied only when first creating a breaker for this key; subsequent
+   * policy changes require an explicit `reset(key)` to take effect.
+   */
+  async execute<T>(
+    key: string,
+    fn: () => Promise<T>,
+    isFailureOrOptions?: ((err: unknown) => boolean) | { isFailure?: (err: unknown) => boolean; threshold?: number; resetMs?: number },
+  ): Promise<T> {
+    // Back-compat: allow the third arg to be a plain isFailure predicate OR
+    // an options object carrying threshold/resetMs overrides.
+    const opts = typeof isFailureOrOptions === "function"
+      ? { isFailure: isFailureOrOptions }
+      : (isFailureOrOptions ?? {});
+    const override = opts.threshold !== undefined || opts.resetMs !== undefined
+      ? { threshold: opts.threshold, resetMs: opts.resetMs }
+      : undefined;
+    return this.getOrCreate(key, override).execute(fn, opts.isFailure);
+  }
+
+  /** Current state for a specific key — "closed" for unknown keys. */
+  getState(key: string): CircuitState {
+    const b = this.breakers.get(key);
+    return b ? b.getState() : "closed";
+  }
+
+  /** True when the key's breaker is currently open. Cheap read; no state transition. */
+  isOpen(key: string): boolean {
+    return this.getState(key) === "open";
+  }
+
+  /** Snapshot of all currently-tracked breakers, sorted by most-recently-failed. */
+  snapshot(): CircuitSnapshot[] {
+    const out: CircuitSnapshot[] = [];
+    for (const [key, b] of this.breakers) {
+      out.push({
+        key,
+        state: b.getState(),
+        // CircuitBreaker doesn't expose these directly; use accessor methods.
+        failureCount: (b as unknown as { failureCount: number }).failureCount,
+        lastFailureTime: (b as unknown as { lastFailureTime: number }).lastFailureTime,
+      });
+    }
+    return out.sort((a, b) => b.lastFailureTime - a.lastFailureTime);
+  }
+
+  /** Test seam — reset a specific key's breaker. */
+  reset(key: string): void {
+    this.breakers.delete(key);
+  }
+
+  /** Test seam — reset all breakers. */
+  resetAll(): void {
+    this.breakers.clear();
+  }
+}
+
