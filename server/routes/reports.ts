@@ -12,6 +12,7 @@ import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, 
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 import { embeddingCosineSimilarity } from "../services/call-clustering";
 import { getPool, isPgvectorAvailable } from "../db/pool";
+import type { CallWithDetails } from "@shared/schema";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -64,6 +65,33 @@ export function registerReportRoutes(router: Router) {
     }
   });
 
+  // Query embedding LFU-ish cache. Repeated queries (e.g. user refining
+  // filters on the same q) reuse the embedding instead of re-paying Bedrock
+  // cost. Bounded to 200 entries, 5-minute TTL — same conservative bounds
+  // the call-embedding cache uses in bedrock.ts. Insertion-order Map +
+  // delete-then-set on hit gives true LRU semantics.
+  const QUERY_EMBED_CACHE_MAX = 200;
+  const QUERY_EMBED_CACHE_TTL_MS = 5 * 60_000;
+  const queryEmbedCache = new Map<string, { vec: number[]; expiresAt: number }>();
+  function getCachedQueryEmbedding(query: string): number[] | null {
+    const entry = queryEmbedCache.get(query);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      queryEmbedCache.delete(query);
+      return null;
+    }
+    queryEmbedCache.delete(query);
+    queryEmbedCache.set(query, entry);
+    return entry.vec;
+  }
+  function setCachedQueryEmbedding(query: string, vec: number[]): void {
+    if (queryEmbedCache.size >= QUERY_EMBED_CACHE_MAX && !queryEmbedCache.has(query)) {
+      const oldest = queryEmbedCache.keys().next().value;
+      if (oldest !== undefined) queryEmbedCache.delete(oldest);
+    }
+    queryEmbedCache.set(query, { vec, expiresAt: Date.now() + QUERY_EMBED_CACHE_TTL_MS });
+  }
+
   // Semantic search — embedding-based similarity over completed calls.
   // Complements the keyword-based /api/search by matching meaning rather than
   // exact word overlap. Reuses the same embedding model that call-clustering
@@ -79,43 +107,141 @@ export function registerReportRoutes(router: Router) {
         res.status(400).json({ message: "Search query too long (max 500 characters)" });
         return;
       }
+
+      // Mode: "semantic" (embedding only), "hybrid" (semantic + keyword
+      // weighted), or "keyword-fallback" (auto-selected when embedding fails).
+      // Default semantic. Anything unrecognized clamps to semantic.
+      const mode: "semantic" | "hybrid" = req.query.mode === "hybrid" ? "hybrid" : "semantic";
+      // Hybrid mix: alpha = weight of semantic (cosine), 1-alpha = weight of
+      // keyword (BM25-ish rank). Clamped to [0, 1]. Default 0.5.
+      const alphaRaw = parseFloat((req.query.alpha as string) || "0.5");
+      const alpha = Number.isFinite(alphaRaw) ? Math.max(0, Math.min(1, alphaRaw)) : 0.5;
+      // Relevance threshold on the FINAL score (semantic similarity in
+      // [0,1] or hybrid combined score in [0,1]). Default 0.25 — drops
+      // the long tail of weak matches that pad the top-N. Set to 0 to
+      // disable. Clamped to [0, 1].
+      const thresholdRaw = parseFloat((req.query.threshold as string) || "0.25");
+      const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.min(1, thresholdRaw)) : 0.25;
       const limit = clampInt(req.query.limit as string | undefined, 20, 1, 100);
 
-      // Embed the query. If embedding is unavailable (Bedrock unreachable or
-      // not configured), fall through to keyword search for graceful degrade.
-      let queryEmbedding: number[] | null = null;
-      try {
-        queryEmbedding = aiProvider.generateEmbedding
-          ? await aiProvider.generateEmbedding(query)
-          : null;
-      } catch (err) {
-        logger.warn("semantic search: embedding failed, falling back to keyword", {
-          error: (err as Error).message,
-        });
+      // Optional layered filters — applied AFTER scoring + viewer scoping
+      // so that semantic ranking still operates on the full candidate pool.
+      // Cheap to apply in JS at this point; date/employee/sentiment are
+      // pre-existing filter dimensions on the keyword search route.
+      const dateFrom = (req.query.from as string | undefined)?.trim();
+      const dateTo = (req.query.to as string | undefined)?.trim();
+      const filterSentiment = (req.query.sentiment as string | undefined)?.trim();
+      const filterEmployeeId = (req.query.employeeId as string | undefined)?.trim();
+
+      const applyClientFilters = (calls: CallWithDetails[]): CallWithDetails[] => {
+        let out = calls;
+        if (dateFrom) {
+          const from = new Date(dateFrom).getTime();
+          if (Number.isFinite(from)) {
+            out = out.filter(c => new Date(c.uploadedAt || 0).getTime() >= from);
+          }
+        }
+        if (dateTo) {
+          const toDate = new Date(dateTo);
+          toDate.setUTCHours(23, 59, 59, 999);
+          const toMs = toDate.getTime();
+          if (Number.isFinite(toMs)) {
+            out = out.filter(c => new Date(c.uploadedAt || 0).getTime() <= toMs);
+          }
+        }
+        if (filterSentiment && filterSentiment !== "all") {
+          out = out.filter(c => c.sentiment?.overallSentiment === filterSentiment);
+        }
+        if (filterEmployeeId) {
+          out = out.filter(c => c.employeeId === filterEmployeeId);
+        }
+        return out;
+      };
+
+      // Embed the query (with cache). If embedding is unavailable (Bedrock
+      // unreachable or not configured), fall through to keyword search for
+      // graceful degrade — applies to both semantic and hybrid modes.
+      let queryEmbedding: number[] | null = getCachedQueryEmbedding(query);
+      if (!queryEmbedding) {
+        try {
+          queryEmbedding = aiProvider.generateEmbedding
+            ? await aiProvider.generateEmbedding(query)
+            : null;
+          if (queryEmbedding) setCachedQueryEmbedding(query, queryEmbedding);
+        } catch (err) {
+          logger.warn("semantic search: embedding failed, falling back to keyword", {
+            error: (err as Error).message,
+          });
+        }
       }
 
       if (!queryEmbedding) {
         const fallback = await storage.searchCalls(expandMedicalSynonyms(query), limit);
-        res.json({ mode: "keyword-fallback", results: fallback });
+        const filtered = applyClientFilters(fallback);
+        res.json({ mode: "keyword-fallback", results: filtered });
         return;
       }
 
+      // For hybrid mode, also pull keyword results so we can fuse rankings.
+      // Limit larger so the fusion has more candidates to consider.
+      const keywordResults = mode === "hybrid"
+        ? await storage.searchCalls(expandMedicalSynonyms(query), Math.max(limit * 2, 40))
+        : [];
+      // Build a [0..1] rank-based keyword score: top hit = 1.0, last = 1/N.
+      // Reciprocal-rank rather than absolute BM25 lets us combine cleanly
+      // with the cosine similarity scale.
+      const keywordScores = new Map<string, number>();
+      keywordResults.forEach((c, i) => {
+        keywordScores.set(c.id, 1 - i / Math.max(keywordResults.length, 1));
+      });
+
       // pgvector fast path: SQL-native cosine similarity with ivfflat index.
-      // Scales to millions of calls; in-memory fallback is O(N) and grows
-      // linearly with the dataset. We fetch `limit * 3` candidates via
-      // pgvector then do viewer-access filtering in JS; that keeps the SQL
-      // side simple (no role-aware where clause) while covering the common
-      // case where most accessible calls have embeddings.
       const pool = getPool();
       const pgvectorReady = pool && isPgvectorAvailable();
       const userRole = req.user?.role || "viewer";
 
+      // Common scoring + return path: takes a map of callId -> semantic similarity
+      // plus the candidate hydrated calls, fuses with keyword scores when in
+      // hybrid mode, applies the relevance threshold, sorts, slices.
+      const scoreAndRespond = (
+        backend: "pgvector" | "in-memory",
+        simByCallId: Map<string, number>,
+        accessible: CallWithDetails[],
+        coverage: { totalAccessible: number; withEmbeddings: number },
+      ) => {
+        const filtered = applyClientFilters(accessible);
+        const scored = filtered
+          .map(c => {
+            const sim = simByCallId.get(c.id);
+            if (sim === undefined) return null;
+            const kw = keywordScores.get(c.id) ?? 0;
+            const combined = mode === "hybrid"
+              ? alpha * sim + (1 - alpha) * kw
+              : sim;
+            return { call: c, similarity: sim, keyword: kw, score: combined };
+          })
+          .filter((x): x is { call: CallWithDetails; similarity: number; keyword: number; score: number } => x !== null)
+          .filter(x => x.score >= threshold)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+
+        res.json({
+          mode,
+          backend,
+          alpha: mode === "hybrid" ? alpha : undefined,
+          threshold,
+          results: scored.map(x => ({
+            ...x.call,
+            similarity: Math.round(x.similarity * 1000) / 1000,
+            keywordScore: mode === "hybrid" ? Math.round(x.keyword * 1000) / 1000 : undefined,
+            score: Math.round(x.score * 1000) / 1000,
+          })),
+          coverage,
+        });
+      };
+
       if (pgvectorReady) {
         const candidateLimit = Math.max(limit * 3, limit + 20);
-        // `<=>` is pgvector's cosine distance operator — smaller = more similar.
-        // `1 - distance` gives cosine similarity in [0, 1]. We also pull a
-        // coverage estimate via COUNT in a separate cheap query so the client
-        // can warn about sparse embeddings.
         const { rows } = await pool.query(
           `SELECT c.id, 1 - (a.embedding_vec <=> $1::vector) AS similarity
            FROM call_analyses a
@@ -134,33 +260,28 @@ export function registerReportRoutes(router: Router) {
              (SELECT COUNT(*)::int FROM call_analyses a JOIN calls c ON c.id = a.call_id
               WHERE c.status = 'completed' AND c.synthetic = FALSE AND a.embedding_vec IS NOT NULL) AS with_embeddings`,
         );
-        // Hydrate full CallWithDetails for each candidate, filter for viewer
-        // access, and cap at `limit`. Note: this still reads all completed
-        // calls from storage, but the pgvector win is we only SCORE ~60 of
-        // them instead of scoring all N embeddings in memory. The hydration
-        // scan is O(N) row reads (no embedding math), which is orders of
-        // magnitude cheaper than the in-memory fallback's O(N) cosine loop.
         const simByCallId = new Map<string, number>(rows.map(r => [r.id, parseFloat(r.similarity)]));
+        // For hybrid, also include keyword-only hits (which may have different
+        // candidate IDs than pgvector returned). Hydrate the union.
+        const candidateIds = new Set<string>(simByCallId.keys());
+        if (mode === "hybrid") {
+          for (const c of keywordResults) candidateIds.add(c.id);
+        }
         const allDetails = await storage.getCallsWithDetails({ status: "completed" });
-        const hydrated = allDetails.filter(c => simByCallId.has(c.id));
-        let filtered = hydrated;
+        let hydrated = allDetails.filter(c => candidateIds.has(c.id));
+        // Synthesize a default similarity for keyword-only hits so they
+        // can still pass through the pipeline. Reuse a low floor so they
+        // can only win via keyword weight.
+        for (const c of hydrated) {
+          if (!simByCallId.has(c.id)) simByCallId.set(c.id, 0);
+        }
         if (userRole === "viewer") {
           const checks = await Promise.all(hydrated.map(c => canViewerAccessCall(req, c)));
-          filtered = hydrated.filter((_, i) => checks[i]);
+          hydrated = hydrated.filter((_, i) => checks[i]);
         }
-        const results = filtered
-          .map(c => ({ ...c, similarity: Math.round((simByCallId.get(c.id) ?? 0) * 1000) / 1000 }))
-          .sort((a, b) => b.similarity - a.similarity)
-          .slice(0, limit);
-
-        res.json({
-          mode: "semantic",
-          backend: "pgvector",
-          results,
-          coverage: {
-            totalAccessible: coverageRows[0]?.total_accessible ?? 0,
-            withEmbeddings: coverageRows[0]?.with_embeddings ?? 0,
-          },
+        scoreAndRespond("pgvector", simByCallId, hydrated, {
+          totalAccessible: coverageRows[0]?.total_accessible ?? 0,
+          withEmbeddings: coverageRows[0]?.with_embeddings ?? 0,
         });
         return;
       }
@@ -174,21 +295,20 @@ export function registerReportRoutes(router: Router) {
         accessible = all.filter((_, i) => checks[i]);
       }
 
-      const scored = accessible
-        .map(c => {
-          const emb = (c.analysis as { embedding?: number[] } | undefined)?.embedding;
-          if (!emb || !Array.isArray(emb) || emb.length === 0) return null;
-          return { call: c, similarity: embeddingCosineSimilarity(queryEmbedding!, emb) };
-        })
-        .filter((x): x is { call: typeof all[number]; similarity: number } => x !== null)
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, limit);
-
-      res.json({
-        mode: "semantic",
-        backend: "in-memory",
-        results: scored.map(x => ({ ...x.call, similarity: Math.round(x.similarity * 1000) / 1000 })),
-        coverage: { totalAccessible: accessible.length, withEmbeddings: scored.length },
+      const simByCallIdInMem = new Map<string, number>();
+      for (const c of accessible) {
+        const emb = (c.analysis as { embedding?: number[] } | undefined)?.embedding;
+        if (emb && Array.isArray(emb) && emb.length > 0) {
+          simByCallIdInMem.set(c.id, embeddingCosineSimilarity(queryEmbedding, emb));
+        } else if (mode === "hybrid" && keywordScores.has(c.id)) {
+          // Keyword-only hit: include with similarity 0 so it can still
+          // win on keyword weight.
+          simByCallIdInMem.set(c.id, 0);
+        }
+      }
+      scoreAndRespond("in-memory", simByCallIdInMem, accessible, {
+        totalAccessible: accessible.length,
+        withEmbeddings: Array.from(simByCallIdInMem.values()).filter(v => v > 0).length,
       });
     } catch (error) {
       logger.error("semantic search failed", { error: (error as Error).message });

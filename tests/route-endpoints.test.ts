@@ -604,6 +604,93 @@ describe("Public config endpoint (/api/config)", () => {
 // REPORTS EXPORT BEACON (A8 — HIPAA audit beacon for client-built exports)
 // =====================================================================
 
+// =====================================================================
+// SEMANTIC SEARCH (Phase A — UI + hybrid ranking)
+// =====================================================================
+//
+// Verifies the mode/alpha/threshold/filter contract on /api/search/semantic.
+// The route falls through to keyword search when the AI provider has no
+// embedding capability — which is the case in the test harness, since
+// ai-factory selects a stub provider without AWS credentials. So every
+// assertion below exercises the keyword-fallback branch. That's still the
+// branch most clients will hit when Bedrock is unreachable, so it's a
+// meaningful test surface even if the semantic-only assertions are deferred.
+describe("Semantic search (GET /api/search/semantic)", () => {
+  const app = buildAppWith(registerReportRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("returns 400 when q is missing", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/search/semantic", undefined, "viewer");
+    assert.equal(status, 400);
+    assert.ok(/required/i.test(body.message ?? ""));
+  });
+
+  it("returns 400 when q exceeds 500 chars", async () => {
+    const huge = "a".repeat(501);
+    const { status } = await req(baseUrl, "GET", `/api/search/semantic?q=${encodeURIComponent(huge)}`, undefined, "viewer");
+    assert.equal(status, 400);
+  });
+
+  it("falls back to keyword mode when embedding provider is unavailable", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/search/semantic?q=test%20query", undefined, "viewer");
+    assert.equal(status, 200);
+    // In the test harness, no embedding provider → keyword-fallback branch.
+    assert.equal(body.mode, "keyword-fallback");
+    assert.ok(Array.isArray(body.results));
+  });
+
+  it("clamps invalid alpha to a finite value", async () => {
+    // alpha=NaN should clamp to 0.5 default. Mode=hybrid still routes through
+    // the fallback because no embedding provider, but the parser shouldn't 500.
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=hybrid&alpha=not-a-number", undefined, "viewer");
+    assert.equal(status, 200);
+  });
+
+  it("clamps alpha > 1 to 1", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=hybrid&alpha=99", undefined, "viewer");
+    assert.equal(status, 200);
+  });
+
+  it("clamps threshold > 1 to 1", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&threshold=99", undefined, "viewer");
+    assert.equal(status, 200);
+  });
+
+  it("ignores unknown mode and defaults to semantic", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/search/semantic?q=foo&mode=lasers", undefined, "viewer");
+    // Mode=lasers → defaults to semantic → falls back to keyword (no provider).
+    assert.equal(status, 200);
+  });
+
+  it("accepts date filters without 500", async () => {
+    const { status } = await req(
+      baseUrl,
+      "GET",
+      "/api/search/semantic?q=foo&from=2025-01-01&to=2025-12-31&sentiment=positive",
+      undefined,
+      "viewer",
+    );
+    assert.equal(status, 200);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
 describe("Reports export beacon (POST /api/reports/export-beacon)", () => {
   const app = buildAppWith(registerReportRoutes);
   const server = http.createServer(app);

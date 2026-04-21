@@ -103,4 +103,34 @@ describe("SearchPage", () => {
     await user.type(input, "billing");
     expect(input).toHaveValue("billing");
   });
+
+  // Phase A: search mode toggle
+  it("renders the keyword/semantic/hybrid mode toggle", () => {
+    render(<SearchPage />);
+    expect(screen.getByTestId("mode-keyword")).toBeInTheDocument();
+    expect(screen.getByTestId("mode-semantic")).toBeInTheDocument();
+    expect(screen.getByTestId("mode-hybrid")).toBeInTheDocument();
+  });
+
+  it("starts with keyword mode marked aria-pressed", () => {
+    render(<SearchPage />);
+    expect(screen.getByTestId("mode-keyword")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("mode-semantic")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("switches to semantic mode on click and toggles aria-pressed", async () => {
+    const user = userEvent.setup();
+    render(<SearchPage />);
+    await user.click(screen.getByTestId("mode-semantic"));
+    expect(screen.getByTestId("mode-semantic")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("mode-keyword")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("reveals the alpha slider only in hybrid mode", async () => {
+    const user = userEvent.setup();
+    render(<SearchPage />);
+    expect(screen.queryByTestId("hybrid-alpha-slider")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("mode-hybrid"));
+    expect(screen.getByTestId("hybrid-alpha-slider")).toBeInTheDocument();
+  });
 });
