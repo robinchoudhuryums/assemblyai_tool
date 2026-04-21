@@ -33,6 +33,50 @@ export function registerUserRoutes(router: Router) {
     }
   });
 
+  // ==================== LINK USER TO EMPLOYEE (admin only) ====================
+  // Admin clicks "Link to employee" on the unlinked-users banner → this
+  // endpoint updates the user's displayName to match the selected employee's
+  // name so getUserEmployeeId() resolves on subsequent requests. Intentionally
+  // writes the user side (not the employee side) because the user record is
+  // auth-only and changing displayName is safer than changing employee email
+  // (which may be consumed by other downstream joins). Employee email
+  // edits, if needed, remain available via the existing PATCH /api/employees.
+  // Writes a HIPAA audit entry `user_employee_link_created`.
+  router.post("/api/users/:id/link-employee", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
+    try {
+      const { employeeId } = (req.body ?? {}) as { employeeId?: string };
+      if (!employeeId || typeof employeeId !== "string") {
+        return sendError(res, 400, "employeeId is required");
+      }
+
+      const [user, employee] = await Promise.all([
+        storage.getDbUser(req.params.id),
+        storage.getEmployee(employeeId),
+      ]);
+      if (!user) return sendError(res, 404, "User not found");
+      if (employee === undefined) return sendError(res, 404, "Employee not found");
+
+      const updated = await storage.updateDbUser(user.id, { displayName: employee.name });
+      if (!updated) return sendError(res, 500, "Failed to update user");
+
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "user_employee_link_created",
+        username: req.user?.username,
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+        resourceType: "user",
+        resourceId: user.id,
+        detail: `linked user=${user.username} to employee=${employee.id} via displayName=${employee.name}`,
+      });
+
+      res.json(sanitizeUser(updated));
+    } catch (error) {
+      logger.error("error linking user to employee", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to link user to employee" });
+    }
+  });
+
   // ==================== UNLINKED USERS (admin only) ====================
   // Returns viewer-role users whose username (email) and display name don't
   // match any employee row. These users see empty data + 403s with no error —

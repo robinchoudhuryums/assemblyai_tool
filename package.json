@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "check": "tsc",
     "seed": "tsx seed.ts",
-    "seed-admin": "tsx seed-admin.ts"
+    "seed-admin": "tsx seed-admin.ts",
+    "backfill-embeddings": "tsx scripts/backfill-embeddings.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

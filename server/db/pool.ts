@@ -144,6 +144,16 @@ export async function initializeDatabase(): Promise<void> {
  * Run lightweight ALTER TABLE migrations for new columns added after initial schema.
  * Each migration is idempotent (IF NOT EXISTS / catches "already exists" errors).
  */
+/**
+ * Whether pgvector was successfully installed during migration. Consulted by
+ * PostgresStorage and the semantic-search route to decide between SQL-native
+ * cosine similarity (O(log N) with HNSW/IVFFlat) and the in-memory fallback.
+ */
+let pgvectorAvailable = false;
+export function isPgvectorAvailable(): boolean {
+  return pgvectorAvailable;
+}
+
 async function runMigrations(db: import("pg").Pool): Promise<void> {
   const migrations = [
     "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pseudonym VARCHAR(500)",
@@ -290,9 +300,11 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // Add native vector column alongside the existing JSONB embedding column
     await db.query("ALTER TABLE call_analyses ADD COLUMN IF NOT EXISTS embedding_vec vector(256)");
     await db.query("CREATE INDEX IF NOT EXISTS idx_call_analyses_embedding ON call_analyses USING ivfflat (embedding_vec vector_cosine_ops) WITH (lists = 50)");
+    pgvectorAvailable = true;
     logger.info("pgvector extension enabled — native vector similarity search available");
   } catch {
     // pgvector not available — JSONB embedding column is the fallback (already exists)
+    pgvectorAvailable = false;
   }
   for (const sql of migrations) {
     try {

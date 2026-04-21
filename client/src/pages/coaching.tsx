@@ -60,6 +60,36 @@ export default function CoachingPage() {
     queryKey: ["/api/coaching/outcomes-summary"],
   });
 
+  // Per-manager breakdown — top N managers ranked by delta. Only the groups
+  // array + overall metadata are needed; the response shape is wider but the
+  // summary strip above already consumes the flat aggregate so this second
+  // query stays purely for the ranked table.
+  const { data: outcomesByManager } = useQuery<{
+    windowDays: number;
+    groupBy: "manager";
+    overall: { measured: number; avgOverallDelta: number | null };
+    groups: Array<{
+      key: string;
+      label: string;
+      totalSessions: number;
+      measured: number;
+      insufficientData: number;
+      positiveCount: number;
+      neutralCount: number;
+      negativeCount: number;
+      avgOverallDelta: number | null;
+    }>;
+  }>({
+    queryKey: ["/api/coaching/outcomes-summary", "groupBy=manager"],
+    queryFn: async () => {
+      const res = await fetch("/api/coaching/outcomes-summary?groupBy=manager", {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load manager breakdown");
+      return res.json();
+    },
+  });
+
   const { data: sessions, isLoading, error: sessionsError } = useQuery<CoachingSession[]>({
     queryKey: ["/api/coaching"],
   });
@@ -187,6 +217,65 @@ export default function CoachingPage() {
                   : ""}
               </span>
             </div>
+          </div>
+        </div>
+      )}
+      {outcomesByManager && outcomesByManager.groups.some((g) => g.measured > 0) && (
+        <div
+          className="mx-6 md:mx-10 mt-4 border bg-card"
+          style={{ borderRadius: "var(--radius)", padding: "16px 20px" }}
+          data-testid="coaching-outcomes-by-manager"
+        >
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            By manager · last {outcomesByManager.windowDays} days
+          </div>
+          <div className="mt-3 space-y-1">
+            <div
+              className="grid grid-cols-[1fr_80px_80px_100px] gap-3 font-mono uppercase text-muted-foreground pb-2 border-b"
+              style={{ fontSize: 10, letterSpacing: "0.08em" }}
+            >
+              <span>Manager</span>
+              <span className="text-right">Sessions</span>
+              <span className="text-right">Measured</span>
+              <span className="text-right">Avg delta</span>
+            </div>
+            {outcomesByManager.groups
+              .filter((g) => g.totalSessions > 0)
+              .slice(0, 10)
+              .map((g) => (
+                <div
+                  key={g.key}
+                  className="grid grid-cols-[1fr_80px_80px_100px] gap-3 py-2 text-sm border-b last:border-b-0"
+                >
+                  <span className="text-foreground truncate" title={g.label}>{g.label}</span>
+                  <span className="text-right font-mono tabular-nums text-muted-foreground">
+                    {g.totalSessions}
+                  </span>
+                  <span className="text-right font-mono tabular-nums text-muted-foreground">
+                    {g.measured}
+                  </span>
+                  <span
+                    className="text-right font-mono tabular-nums"
+                    style={{
+                      color:
+                        g.avgOverallDelta === null
+                          ? "var(--muted-foreground)"
+                          : g.avgOverallDelta > 0
+                          ? "var(--sage)"
+                          : g.avgOverallDelta < 0
+                          ? "var(--destructive)"
+                          : "var(--foreground)",
+                    }}
+                  >
+                    {g.avgOverallDelta === null
+                      ? "—"
+                      : `${g.avgOverallDelta > 0 ? "+" : ""}${g.avgOverallDelta.toFixed(2)}`}
+                  </span>
+                </div>
+              ))}
           </div>
         </div>
       )}

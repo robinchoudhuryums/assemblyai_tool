@@ -7,6 +7,7 @@
 import type pg from "pg";
 import { randomUUID } from "crypto";
 import { logger } from "./services/logger";
+import { isPgvectorAvailable } from "./db/pool";
 import type {
   User, InsertUser, DbUser, Employee, InsertEmployee,
   Call, InsertCall, Transcript, InsertTranscript,
@@ -884,6 +885,17 @@ export class PostgresStorage implements IStorage {
       fields.push(`${def.column} = $${++idx}`);
       values.push(def.coerce(value));
     }
+
+    // pgvector dual-write: when embedding is updated and the native vector
+    // column is available, also populate embedding_vec. This unlocks SQL-
+    // native cosine similarity (O(log N) with the ivfflat index) for
+    // /api/search/semantic instead of the in-memory O(N) fallback.
+    if (updates.embedding !== undefined && isPgvectorAvailable() && Array.isArray(updates.embedding)) {
+      fields.push(`embedding_vec = $${++idx}::vector`);
+      // pgvector accepts '[0.1,0.2,...]' literal via cast.
+      values.push(`[${updates.embedding.join(",")}]`);
+    }
+
     if (fields.length === 0) return;
     values.push(callId);
     await this.db.query(

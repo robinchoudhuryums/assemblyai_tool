@@ -50,14 +50,40 @@ export class JobQueue {
 
   /**
    * Enqueue a new job. Returns the job ID.
+   *
+   * `delayMs` (optional) defers the job's first pickup by the given number of
+   * milliseconds. Used for scheduled retries (e.g., webhook redelivery with
+   * exponential backoff) so a consistently-failing receiver isn't hammered
+   * at the poll interval (default 5s). Implementation detail: the delay sets
+   * `locked_at = NOW() + interval`, and `claimJob()` skips jobs whose
+   * `locked_at` is in the future (same mechanism `failJob` uses for retry
+   * backoff). `priority` is unchanged — delayed jobs still respect priority
+   * once their scheduled time arrives.
    */
-  async enqueue(type: string, payload: Record<string, unknown>, priority = 0): Promise<string> {
+  async enqueue(
+    type: string,
+    payload: Record<string, unknown>,
+    options: { priority?: number; delayMs?: number } | number = 0,
+  ): Promise<string> {
+    // Back-compat: old callers pass priority as a number.
+    const opts = typeof options === "number" ? { priority: options } : options;
+    const priority = opts.priority ?? 0;
+    const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 0));
+
     const id = randomUUID();
-    await this.db.query(
-      `INSERT INTO jobs (id, type, status, payload, priority)
-       VALUES ($1, $2, 'pending', $3, $4)`,
-      [id, type, JSON.stringify(payload), priority],
-    );
+    if (delayMs > 0) {
+      await this.db.query(
+        `INSERT INTO jobs (id, type, status, payload, priority, locked_at)
+         VALUES ($1, $2, 'pending', $3, $4, NOW() + ($5 || ' milliseconds')::interval)`,
+        [id, type, JSON.stringify(payload), priority, String(delayMs)],
+      );
+    } else {
+      await this.db.query(
+        `INSERT INTO jobs (id, type, status, payload, priority)
+         VALUES ($1, $2, 'pending', $3, $4)`,
+        [id, type, JSON.stringify(payload), priority],
+      );
+    }
     return id;
   }
 

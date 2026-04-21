@@ -8,9 +8,10 @@ import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
 import { getRecentCorrectionsByUser, getUserCorrectionStats } from "../services/scoring-feedback";
-import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, escapeCsvValue } from "./utils";
+import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, type CsvSection } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 import { embeddingCosineSimilarity } from "../services/call-clustering";
+import { getPool, isPgvectorAvailable } from "../db/pool";
 
 export function registerReportRoutes(router: Router) {
   // Search calls
@@ -99,11 +100,74 @@ export function registerReportRoutes(router: Router) {
         return;
       }
 
-      // Pull completed calls + apply viewer scoping. Embeddings live on the
-      // analysis record; skip calls without one rather than re-embedding here
-      // (re-embedding on every search would be hot-path wasteful).
-      const all = await storage.getCallsWithDetails({ status: "completed" });
+      // pgvector fast path: SQL-native cosine similarity with ivfflat index.
+      // Scales to millions of calls; in-memory fallback is O(N) and grows
+      // linearly with the dataset. We fetch `limit * 3` candidates via
+      // pgvector then do viewer-access filtering in JS; that keeps the SQL
+      // side simple (no role-aware where clause) while covering the common
+      // case where most accessible calls have embeddings.
+      const pool = getPool();
+      const pgvectorReady = pool && isPgvectorAvailable();
       const userRole = req.user?.role || "viewer";
+
+      if (pgvectorReady) {
+        const candidateLimit = Math.max(limit * 3, limit + 20);
+        // `<=>` is pgvector's cosine distance operator — smaller = more similar.
+        // `1 - distance` gives cosine similarity in [0, 1]. We also pull a
+        // coverage estimate via COUNT in a separate cheap query so the client
+        // can warn about sparse embeddings.
+        const { rows } = await pool.query(
+          `SELECT c.id, 1 - (a.embedding_vec <=> $1::vector) AS similarity
+           FROM call_analyses a
+           JOIN calls c ON c.id = a.call_id
+           WHERE a.embedding_vec IS NOT NULL
+             AND c.status = 'completed'
+             AND c.synthetic = FALSE
+           ORDER BY a.embedding_vec <=> $1::vector
+           LIMIT $2`,
+          [`[${queryEmbedding.join(",")}]`, candidateLimit],
+        );
+        const { rows: coverageRows } = await pool.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM call_analyses a JOIN calls c ON c.id = a.call_id
+              WHERE c.status = 'completed' AND c.synthetic = FALSE) AS total_accessible,
+             (SELECT COUNT(*)::int FROM call_analyses a JOIN calls c ON c.id = a.call_id
+              WHERE c.status = 'completed' AND c.synthetic = FALSE AND a.embedding_vec IS NOT NULL) AS with_embeddings`,
+        );
+        // Hydrate full CallWithDetails for each candidate, filter for viewer
+        // access, and cap at `limit`. Note: this still reads all completed
+        // calls from storage, but the pgvector win is we only SCORE ~60 of
+        // them instead of scoring all N embeddings in memory. The hydration
+        // scan is O(N) row reads (no embedding math), which is orders of
+        // magnitude cheaper than the in-memory fallback's O(N) cosine loop.
+        const simByCallId = new Map<string, number>(rows.map(r => [r.id, parseFloat(r.similarity)]));
+        const allDetails = await storage.getCallsWithDetails({ status: "completed" });
+        const hydrated = allDetails.filter(c => simByCallId.has(c.id));
+        let filtered = hydrated;
+        if (userRole === "viewer") {
+          const checks = await Promise.all(hydrated.map(c => canViewerAccessCall(req, c)));
+          filtered = hydrated.filter((_, i) => checks[i]);
+        }
+        const results = filtered
+          .map(c => ({ ...c, similarity: Math.round((simByCallId.get(c.id) ?? 0) * 1000) / 1000 }))
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, limit);
+
+        res.json({
+          mode: "semantic",
+          backend: "pgvector",
+          results,
+          coverage: {
+            totalAccessible: coverageRows[0]?.total_accessible ?? 0,
+            withEmbeddings: coverageRows[0]?.with_embeddings ?? 0,
+          },
+        });
+        return;
+      }
+
+      // In-memory fallback: pulls all completed calls. Works for small
+      // deployments (< 10k calls); pgvector path is required for scale.
+      const all = await storage.getCallsWithDetails({ status: "completed" });
       let accessible = all;
       if (userRole === "viewer") {
         const checks = await Promise.all(all.map(c => canViewerAccessCall(req, c)));
@@ -122,6 +186,7 @@ export function registerReportRoutes(router: Router) {
 
       res.json({
         mode: "semantic",
+        backend: "in-memory",
         results: scored.map(x => ({ ...x.call, similarity: Math.round(x.similarity * 1000) / 1000 })),
         coverage: { totalAccessible: accessible.length, withEmbeddings: scored.length },
       });
@@ -243,60 +308,46 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         callPartyType: callPartyType as string | undefined,
       });
 
-      const lines: string[] = [];
-      lines.push("Section,Field,Value");
-      lines.push(`Summary,Total Calls,${escapeCsvValue(result.metrics.totalCalls)}`);
-      lines.push(`Summary,Average Performance Score,${escapeCsvValue(result.metrics.avgPerformanceScore.toFixed(2))}`);
-      lines.push(`Summary,Average Sentiment,${escapeCsvValue(result.metrics.avgSentiment.toFixed(2))}`);
-      lines.push(`Summary,Auto-assigned Calls,${escapeCsvValue(result.autoAssignedCount)}`);
-      lines.push(`Sentiment,Positive,${escapeCsvValue(result.sentiment.positive)}`);
-      lines.push(`Sentiment,Neutral,${escapeCsvValue(result.sentiment.neutral)}`);
-      lines.push(`Sentiment,Negative,${escapeCsvValue(result.sentiment.negative)}`);
+      const summaryRows: unknown[][] = [
+        ["Summary", "Total Calls", result.metrics.totalCalls],
+        ["Summary", "Average Performance Score", result.metrics.avgPerformanceScore.toFixed(2)],
+        ["Summary", "Average Sentiment", result.metrics.avgSentiment.toFixed(2)],
+        ["Summary", "Auto-assigned Calls", result.autoAssignedCount],
+        ["Sentiment", "Positive", result.sentiment.positive],
+        ["Sentiment", "Neutral", result.sentiment.neutral],
+        ["Sentiment", "Negative", result.sentiment.negative],
+      ];
       if (result.avgSubScores) {
-        lines.push(`Sub-Scores,Compliance,${escapeCsvValue(result.avgSubScores.compliance)}`);
-        lines.push(`Sub-Scores,Customer Experience,${escapeCsvValue(result.avgSubScores.customerExperience)}`);
-        lines.push(`Sub-Scores,Communication,${escapeCsvValue(result.avgSubScores.communication)}`);
-        lines.push(`Sub-Scores,Resolution,${escapeCsvValue(result.avgSubScores.resolution)}`);
-      }
-      lines.push("");
-      lines.push("Performer,Role,Call Count,Average Score");
-      for (const p of result.performers) {
-        lines.push([
-          escapeCsvValue(p.name),
-          escapeCsvValue(p.role),
-          escapeCsvValue(p.totalCalls),
-          escapeCsvValue(p.avgPerformanceScore ?? ""),
-        ].join(","));
-      }
-      lines.push("");
-      lines.push("Month,Calls,Avg Score,Positive,Neutral,Negative");
-      for (const t of result.trends) {
-        lines.push([
-          escapeCsvValue(t.month),
-          escapeCsvValue(t.calls),
-          escapeCsvValue(t.avgScore ?? ""),
-          escapeCsvValue(t.positive),
-          escapeCsvValue(t.neutral),
-          escapeCsvValue(t.negative),
-        ].join(","));
+        summaryRows.push(["Sub-Scores", "Compliance", result.avgSubScores.compliance]);
+        summaryRows.push(["Sub-Scores", "Customer Experience", result.avgSubScores.customerExperience]);
+        summaryRows.push(["Sub-Scores", "Communication", result.avgSubScores.communication]);
+        summaryRows.push(["Sub-Scores", "Resolution", result.avgSubScores.resolution]);
       }
 
-      // HIPAA: first-class audit entry for this export (replaces the
-      // client-fire-and-forget beacon pattern for this endpoint).
-      logPhiAccess({
-        ...auditContext(req),
-        timestamp: new Date().toISOString(),
-        event: "export_report",
-        resourceType: "report",
-        detail: `format=csv; reportType=filtered; from=${from ?? ""}; to=${to ?? ""}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
-      });
+      const csv = buildCsv([
+        { headers: ["Section", "Field", "Value"], rows: summaryRows },
+        {
+          headers: ["Performer", "Role", "Call Count", "Average Score"],
+          rows: result.performers.map(p => [p.name, p.role, p.totalCalls, p.avgPerformanceScore ?? ""]),
+        },
+        {
+          headers: ["Month", "Calls", "Avg Score", "Positive", "Neutral", "Negative"],
+          rows: result.trends.map(t => [t.month, t.calls, t.avgScore ?? "", t.positive, t.neutral, t.negative]),
+        },
+      ]);
 
       const fromStr = (from as string | undefined) || "all";
       const toStr = (to as string | undefined) || "all";
-      const filename = `filtered-report-${fromStr}-to-${toStr}.csv`;
-      res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.send(lines.join("\n"));
+      writeCsvResponse(res, csv, `filtered-report-${fromStr}-to-${toStr}.csv`, () => {
+        // HIPAA: first-class audit entry (replaces client beacon for this surface).
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          detail: `format=csv; reportType=filtered; from=${from ?? ""}; to=${toStr}; employeeId=${employeeId ?? ""}; role=${role ?? ""}`,
+        });
+      });
     } catch (error) {
       logger.error("failed to export filtered report", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to export filtered report" });
@@ -427,6 +478,96 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
     } catch (error) {
       logger.error("failed to generate agent profile", { error });
       res.status(500).json({ message: "Failed to generate agent profile" });
+    }
+  });
+
+  // Server-side CSV export of an agent profile — summary, call history,
+  // sub-scores, flagged calls, and topic frequencies. Written as a first-
+  // class export_report HIPAA audit entry so no client beacon is required.
+  router.get("/api/reports/agent-profile/:employeeId/export.csv", requireAuth, requireMFASetup, validateParams({ employeeId: "uuid" }), requireSelfOrManager(req => req.params.employeeId), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const { from, to } = req.query;
+
+      const employee = await storage.getEmployee(employeeId);
+      if (!employee) return res.status(404).json({ message: "Employee not found" });
+
+      const allCalls = await storage.getCallsWithDetails({ status: "completed", employee: employeeId });
+      const filtered = filterCallsByDateRange(allCalls, from as string | undefined, to as string | undefined);
+
+      const scores: number[] = [];
+      const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
+      const topicFreq: Record<string, number> = {};
+      const callRows: unknown[][] = [];
+      for (const call of filtered) {
+        const score = call.analysis?.performanceScore ? safeFloat(call.analysis.performanceScore) : null;
+        if (score !== null && Number.isFinite(score)) scores.push(score);
+        const s = call.sentiment?.overallSentiment;
+        if (s === "positive" || s === "neutral" || s === "negative") sentimentCounts[s]++;
+        for (const topic of call.analysis?.topics || []) {
+          const t = typeof topic === "string" ? topic : (topic as { name?: string })?.name;
+          if (t) topicFreq[t] = (topicFreq[t] || 0) + 1;
+        }
+        callRows.push([
+          call.id,
+          call.uploadedAt || "",
+          call.fileName || "",
+          call.duration ?? "",
+          score ?? "",
+          s ?? "",
+          (call.analysis?.summary || "").replace(/\s+/g, " ").slice(0, 300),
+          (call.analysis?.flags || []).join("|"),
+        ]);
+      }
+      const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+      const topicRows = Object.entries(topicFreq)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 50)
+        .map(([topic, count]) => [topic, count]);
+
+      const csv = buildCsv([
+        {
+          headers: ["Field", "Value"],
+          rows: [
+            ["Employee", employee.name],
+            ["Email", employee.email || ""],
+            ["Role", employee.role || ""],
+            ["Sub-Team", employee.subTeam || ""],
+            ["Window From", (from as string | undefined) || "all"],
+            ["Window To", (to as string | undefined) || "all"],
+            ["Call Count", filtered.length],
+            ["Average Score", avgScore === null ? "" : avgScore.toFixed(2)],
+            ["Positive Sentiment", sentimentCounts.positive],
+            ["Neutral Sentiment", sentimentCounts.neutral],
+            ["Negative Sentiment", sentimentCounts.negative],
+          ],
+        },
+        {
+          headers: ["Call ID", "Uploaded At", "File Name", "Duration (s)", "Score", "Sentiment", "Summary", "Flags"],
+          rows: callRows,
+        },
+        {
+          headers: ["Topic", "Count"],
+          rows: topicRows,
+        },
+      ]);
+
+      const fromStr = (from as string | undefined) || "all";
+      const toStr = (to as string | undefined) || "all";
+      const safeName = (employee.name || employeeId).replace(/[^a-zA-Z0-9-_]/g, "_");
+      writeCsvResponse(res, csv, `agent-profile-${safeName}-${fromStr}-to-${toStr}.csv`, () => {
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "export_report",
+          resourceType: "report",
+          resourceId: employeeId,
+          detail: `format=csv; reportType=agent-profile; employeeId=${employeeId}; from=${fromStr}; to=${toStr}; callCount=${filtered.length}`,
+        });
+      });
+    } catch (error) {
+      logger.error("failed to export agent profile", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to export agent profile" });
     }
   });
 

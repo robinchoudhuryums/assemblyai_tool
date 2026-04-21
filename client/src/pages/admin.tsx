@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient as sharedQueryClient } from "@/lib/queryClient";
 import { USER_ROLES } from "@shared/schema";
-import type { AccessRequest } from "@shared/schema";
+import type { AccessRequest, Employee } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 
 type TabView = "users" | "requests" | "roles" | "pipeline" | "models";
@@ -65,6 +65,40 @@ export default function AdminPage() {
   // I see anything?" support puzzle. The endpoint is admin-scoped.
   const { data: unlinked } = useQuery<{ count: number; users: DbUser[] }>({
     queryKey: ["/api/users/unlinked"],
+  });
+
+  // Employee list feeds the "Link to employee" dropdown on each unlinked row.
+  // The same query is used elsewhere in admin; TanStack Query dedupes.
+  const { data: allEmployees } = useQuery<Employee[]>({
+    queryKey: ["/api/employees"],
+    enabled: Boolean(unlinked && unlinked.count > 0),
+  });
+
+  // Per-row state: which employee the admin chose to link each user to.
+  const [linkSelections, setLinkSelections] = useState<Record<string, string>>({});
+
+  const linkEmployeeMutation = useMutation({
+    mutationFn: async ({ userId, employeeId }: { userId: string; employeeId: string }) => {
+      const res = await apiRequest("POST", `/api/users/${userId}/link-employee`, { employeeId });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || body.error?.message || "Failed to link user");
+      }
+      return res.json();
+    },
+    onSuccess: (_updated, { userId }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/unlinked"] });
+      setLinkSelections(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      toast({ title: "User linked", description: "Display name updated to match employee." });
+    },
+    onError: (error) => {
+      toast({ title: "Link failed", description: (error as Error).message, variant: "destructive" });
+    },
   });
 
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -258,20 +292,55 @@ export default function AdminPage() {
                       match any employee row. Update the corresponding employee's email to match the user's
                       login, or rename the user's display name to match an employee.
                     </p>
-                    <div className="mt-3 space-y-1.5">
-                      {unlinked.users.slice(0, 5).map((u: any) => (
-                        <div
-                          key={u.id}
-                          className="font-mono text-xs flex items-center gap-3"
-                          style={{ color: "var(--foreground)" }}
-                        >
-                          <span style={{ color: "var(--muted-foreground)" }}>{u.username}</span>
-                          <span style={{ color: "var(--muted-foreground)" }}>·</span>
-                          <span>{u.name}</span>
-                        </div>
-                      ))}
+                    <div className="mt-3 space-y-2">
+                      {unlinked.users.slice(0, 5).map((u: any) => {
+                        const selectedId = linkSelections[u.id] || "";
+                        const isLinking = linkEmployeeMutation.isPending && linkEmployeeMutation.variables?.userId === u.id;
+                        return (
+                          <div
+                            key={u.id}
+                            className="flex flex-wrap items-center gap-2 py-2 border-t first:border-t-0"
+                            data-testid={`unlinked-row-${u.id}`}
+                          >
+                            <div className="font-mono text-xs flex items-center gap-2 flex-1 min-w-[220px]">
+                              <span style={{ color: "var(--muted-foreground)" }}>{u.username}</span>
+                              <span style={{ color: "var(--muted-foreground)" }}>·</span>
+                              <span className="text-foreground">{u.name}</span>
+                            </div>
+                            <select
+                              value={selectedId}
+                              onChange={(e) => setLinkSelections(prev => ({ ...prev, [u.id]: e.target.value }))}
+                              className="h-8 min-w-[180px] border bg-background text-foreground font-mono text-xs px-2"
+                              style={{ borderRadius: "calc(var(--radius) - 2px)" }}
+                              disabled={isLinking || !allEmployees}
+                              data-testid={`unlinked-select-${u.id}`}
+                            >
+                              <option value="">Link to employee…</option>
+                              {(allEmployees || [])
+                                .filter((e) => e.status !== "Inactive")
+                                .map((e) => (
+                                  <option key={e.id} value={e.id}>
+                                    {e.name} {e.email ? `(${e.email})` : ""}
+                                  </option>
+                                ))}
+                            </select>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!selectedId || isLinking}
+                              onClick={() => {
+                                if (!selectedId) return;
+                                linkEmployeeMutation.mutate({ userId: u.id, employeeId: selectedId });
+                              }}
+                              data-testid={`unlinked-link-${u.id}`}
+                            >
+                              {isLinking ? "Linking…" : "Link"}
+                            </Button>
+                          </div>
+                        );
+                      })}
                       {unlinked.users.length > 5 && (
-                        <div className="font-mono text-xs text-muted-foreground">
+                        <div className="font-mono text-xs text-muted-foreground pt-1">
                           + {unlinked.users.length - 5} more
                         </div>
                       )}

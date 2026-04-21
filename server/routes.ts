@@ -160,9 +160,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Wire the persistent-retry handoff for webhooks. When a webhook delivery
     // exhausts its in-process retries, the webhook service enqueues a
     // `deliver_webhook` job here so the attempt survives process restart.
+    //
+    // Delay the first job-level retry by 60s to give the receiver room to
+    // recover from whatever caused the in-process retries (4 attempts over
+    // ~30s) to exhaust. If the job itself fails, JobQueue.failJob applies
+    // its own exponential backoff (10s, 30s, 60s) before dead-letter, so
+    // total delivery budget is ~5 minutes across all retry layers before
+    // the payload is declared undeliverable. Hammering a down receiver
+    // every 5s (poll interval) is specifically what this guards against.
     setWebhookRetryEnqueuer(async (payload) => {
       if (!jobQueue) return;
-      await jobQueue.enqueue("deliver_webhook", payload);
+      await jobQueue.enqueue("deliver_webhook", payload, { delayMs: 60_000 });
     });
 
     jobQueue.start(async (job: Job) => {

@@ -135,6 +135,64 @@ export function escapeCsvValue(val: unknown): string {
   return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/** One section of a multi-section CSV — a labelled table with headers + rows. */
+export interface CsvSection {
+  /** Optional blank-line separator from the previous section. Default true. */
+  separator?: boolean;
+  /** Column headers. */
+  headers: string[];
+  /** Rows. Each cell is CSV-escaped via escapeCsvValue. */
+  rows: unknown[][];
+}
+
+/**
+ * Build a multi-section CSV body from a list of `CsvSection`s. Sections are
+ * separated by a blank line. Every cell is escaped via `escapeCsvValue` so
+ * callers can pass raw values. Used by all server-side report export routes
+ * (agent profile, filtered report, team analytics, etc.) so the output
+ * format and formula-injection protection stay consistent.
+ */
+export function buildCsv(sections: CsvSection[]): string {
+  const lines: string[] = [];
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    if (i > 0 && section.separator !== false) lines.push("");
+    lines.push(section.headers.map(h => escapeCsvValue(h)).join(","));
+    for (const row of section.rows) {
+      lines.push(row.map(cell => escapeCsvValue(cell)).join(","));
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Write a CSV response with the HIPAA export audit entry, consistent
+ * filename quoting, and the correct content-type header. The `audit`
+ * callback is invoked after all headers are set but before the body is
+ * sent; callers use it to run `logPhiAccess` with the export-specific
+ * detail string.
+ */
+export function writeCsvResponse(
+  res: import("express").Response,
+  csv: string,
+  filename: string,
+  audit?: () => void,
+): void {
+  if (audit) {
+    try { audit(); } catch (err) {
+      // Audit failure must not prevent the caller from receiving the
+      // export — but log it so the gap is observable.
+      // eslint-disable-next-line no-console
+      console.warn("[csv-export] audit logger threw", err);
+    }
+  }
+  // Sanitize filename to prevent header injection via newline or quote.
+  const safe = filename.replace(/[\r\n"\\]/g, "_");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${safe}"`);
+  res.send(csv);
+}
+
 /**
  * Filter calls by date range (in-memory). Adjusts `to` date to end-of-day.
  * Used by reports, snapshots, and search — the single source of truth for date filtering.
