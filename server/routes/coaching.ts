@@ -214,10 +214,19 @@ export function register(router: Router) {
       }
 
       // Load all completed calls for the employee, ordered by uploadedAt.
-      const allCalls = await storage.getCallsWithDetails({
+      // Tier B #5: `getCallsWithDetails` deliberately does NOT filter
+      // `excludedFromMetrics` (those calls stay visible in list/search views
+      // so managers can un-flag them). For coaching-outcome aggregates,
+      // excluded calls MUST be filtered — a manager-flagged bad call
+      // otherwise distorts the before/after delta. Matches the filter
+      // behavior of the program-wide `/api/coaching/outcomes-summary`
+      // (SQL path via storage.getCoachingOutcomes) and the MemStorage
+      // fallback (computeCoachingOutcomesInMemory) so per-session and
+      // program-wide outcomes agree.
+      const allCalls = (await storage.getCallsWithDetails({
         status: "completed",
         employee: session.employeeId,
-      });
+      })).filter(c => !c.excludedFromMetrics);
       // Split into before/after buckets by session creation time.
       const withTs = allCalls
         .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))

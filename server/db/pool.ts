@@ -277,6 +277,14 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     // Complements the statistical before/after outcome with causal judgment.
     "ALTER TABLE coaching_sessions ADD COLUMN IF NOT EXISTS effectiveness_rating VARCHAR(20)",
     "ALTER TABLE coaching_sessions ADD COLUMN IF NOT EXISTS effectiveness_note TEXT",
+    // Agent-decline-alert dedup persistence (Tier A #2). Crash-safe alternative
+    // to the prior in-memory Set — a process restart no longer re-fires alerts
+    // for every currently-declining agent. Idempotent CREATE; existing deploys
+    // pick it up on next boot.
+    `CREATE TABLE IF NOT EXISTS agent_decline_alert_history (
+      employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+      last_alerted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS simulated_calls (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       title VARCHAR(500) NOT NULL,

@@ -19,6 +19,24 @@ import { logger } from "./logger";
 
 export type CircuitState = "closed" | "open" | "half-open";
 
+/**
+ * Thrown by `CircuitBreaker.execute()` when the breaker is open at the time
+ * of the call. F5 (Tier C #10): callers that check `isOpen()` before calling
+ * `execute()` race on the open→half-open transition. Using an instanceof
+ * check against this class lets callers cleanly detect "rejected by open
+ * circuit" vs. "upstream returned an error" without string-matching.
+ */
+export class CircuitBreakerOpenError extends Error {
+  readonly label: string;
+  readonly failureCount: number;
+  constructor(label: string, failureCount: number) {
+    super(`Circuit breaker [${label}] is open — call rejected (${failureCount} consecutive failures, cooling down)`);
+    this.name = "CircuitBreakerOpenError";
+    this.label = label;
+    this.failureCount = failureCount;
+  }
+}
+
 export class CircuitBreaker {
   private state: CircuitState = "closed";
   private failureCount = 0;
@@ -47,12 +65,15 @@ export class CircuitBreaker {
    * prompts) from tripping the breaker and brownout-ing healthy traffic.
    * Default behavior (no `isFailure`) treats every error as a failure to
    * preserve existing semantics for other callers.
+   *
+   * Open-circuit rejection now throws `CircuitBreakerOpenError` (F5) so
+   * callers can distinguish "rejected by policy" from "fn threw".
    */
   async execute<T>(fn: () => Promise<T>, isFailure?: (err: unknown) => boolean): Promise<T> {
     const currentState = this.getState();
 
     if (currentState === "open") {
-      throw new Error(`Circuit breaker [${this.label}] is open — call rejected (${this.failureCount} consecutive failures, cooling down)`);
+      throw new CircuitBreakerOpenError(this.label, this.failureCount);
     }
 
     try {

@@ -693,6 +693,19 @@ export async function processAudioFile(
 
       if (isSynthetic) {
         logger.info("pipeline: synthetic call — skipping coaching / badges / KB ingest", { callId });
+        // Tier C #9: calibration assertion hook — check whether the fresh
+        // score lands inside the preset's expectedScoreRange. Fire-and-forget;
+        // emits `alert: "calibration_drift"` logger.warn on mismatch so
+        // CloudWatch alarms can catch prompt/model regressions automatically.
+        // Only synthetic calls get this check; non-synthetic paths skip.
+        import("../services/calibration-assertions").then(({ checkCalibrationAssertion }) => {
+          checkCalibrationAssertion({ callId, performanceScore: performanceScoreNum }).catch(err => {
+            logger.debug("pipeline: calibration assertion check threw (non-blocking)", {
+              callId,
+              error: (err as Error).message,
+            });
+          });
+        }).catch(() => { /* dynamic import failure is non-critical */ });
       } else {
         // A12/F11/F21: pass the freshly-built analysis through so the
         // coaching service doesn't re-fetch it from storage.

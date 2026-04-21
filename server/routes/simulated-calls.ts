@@ -23,6 +23,7 @@ import {
   getSimulatedCall,
   listSimulatedCalls,
   listCalibrationPresets,
+  updateSimulatedCall,
   deleteSimulatedCall,
   countSimulatedCallsToday,
   isSimulatedCallsAvailable,
@@ -216,6 +217,118 @@ export function registerSimulatedCallRoutes(
           error: (err as Error).message,
         });
         sendError(res, 500, "Failed to build calibration suite report");
+      }
+    },
+  );
+
+  // ── Calibration suite runner (Tier A #1) ──────────────────
+  // Re-analyzes every preset with an expectedScoreRange against the CURRENT
+  // prompt template + AI model. Does NOT regenerate audio (TTS cost + 15min
+  // per preset would make the feature too slow to be useful); the existing
+  // audioS3Key is reused. Operators run this after prompt template edits or
+  // model promotions to detect scoring drift before it affects real agents.
+  //
+  // Strategy per preset:
+  //   1. Delete the prior analyzed call row (if any) so externalId
+  //      "sim:<presetId>" can be re-used. Transcript / sentiment / analysis
+  //      rows cascade via FK ON DELETE CASCADE. Previous analyses are NOT
+  //      retained — calibration is always "latest prompt vs latest run".
+  //   2. Clear preset.sentToAnalysisCallId.
+  //   3. Call sendSimulatedCallToAnalysis() which creates a fresh calls row
+  //      and enqueues process_audio. The audio file in S3 stays put and is
+  //      re-analyzed with the current pipeline configuration.
+  //
+  // Returns immediately with counts; the analyses complete asynchronously
+  // over the next few minutes. Operators refresh the calibration report
+  // to see updated pass/fail results.
+  router.post(
+    "/api/admin/simulated-calls/calibration-suite/run",
+    requireAuth,
+    requireRole("admin"),
+    requireMFASetup,
+    async (req, res) => {
+      if (!isSimulatedCallsAvailable()) {
+        return sendError(res, 503, "Simulated calls require DATABASE_URL");
+      }
+      const jobQueue = getJobQueue();
+      if (!jobQueue) {
+        return sendError(res, 503, "Job queue is not running");
+      }
+
+      try {
+        const presets = await listCalibrationPresets();
+        const eligible = presets.filter(p => p.audioS3Key && p.status === "ready");
+
+        let queued = 0;
+        let skipped = 0;
+        const skippedReasons: Array<{ id: string; title: string; reason: string }> = [];
+
+        for (const preset of eligible) {
+          try {
+            // Delete prior analyzed call (if any) — required so we can reuse
+            // externalId "sim:<presetId>" without tripping the unique index.
+            if (preset.sentToAnalysisCallId) {
+              try {
+                await storage.deleteCall(preset.sentToAnalysisCallId);
+              } catch (delErr) {
+                logger.warn("calibration-suite: failed to delete prior call (continuing)", {
+                  presetId: preset.id,
+                  callId: preset.sentToAnalysisCallId,
+                  error: (delErr as Error).message,
+                });
+              }
+            }
+            // Also check for orphaned calls with the same externalId (defensive
+            // against a prior run that crashed mid-sequence).
+            const orphan = await storage.findCallByExternalId(`sim:${preset.id}`);
+            if (orphan && orphan.id !== preset.sentToAnalysisCallId) {
+              try {
+                await storage.deleteCall(orphan.id);
+              } catch {
+                /* best effort */
+              }
+            }
+            await updateSimulatedCall(preset.id, { sentToAnalysisCallId: null });
+
+            await sendSimulatedCallToAnalysis({
+              simulatedCallId: preset.id,
+              uploadedBy: req.user!.username,
+              jobQueue,
+              storage,
+            });
+            queued++;
+          } catch (err) {
+            skipped++;
+            const reason = err instanceof SendToAnalysisError ? err.code : (err as Error).message;
+            skippedReasons.push({ id: preset.id, title: preset.title, reason });
+            logger.warn("calibration-suite: skipped preset", {
+              presetId: preset.id,
+              title: preset.title,
+              reason,
+            });
+          }
+        }
+
+        logPhiAccess({
+          ...auditContext(req),
+          timestamp: new Date().toISOString(),
+          event: "calibration_suite_run",
+          resourceType: "simulated_call",
+          detail: `presetsEnqueued=${queued} skipped=${skipped}`,
+        });
+
+        res.status(202).json({
+          presetsTotal: presets.length,
+          presetsEligible: eligible.length,
+          queued,
+          skipped,
+          skippedReasons,
+        });
+      } catch (err) {
+        logger.error("calibration-suite: runner failed", {
+          error: (err as Error).message,
+        });
+        sendError(res, 500, "Failed to run calibration suite");
       }
     },
   );

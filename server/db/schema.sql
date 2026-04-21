@@ -166,6 +166,20 @@ CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates (ca
 -- ============================================================
 -- Coaching Sessions
 -- ============================================================
+-- ============================================================
+-- Agent Decline Alert Dedup (Tier A #2)
+-- ============================================================
+-- Crash-safe persistence for the agent-decline-alert scheduler's dedup set.
+-- Previously in-memory only — a process restart would re-fire alerts for
+-- every currently-declining agent. Now: scheduler loads last-alerted
+-- employees from this table at cycle start and dedup's within a cool-off
+-- window (default 2x the scheduler interval). Cool-off expired rows are
+-- pruned opportunistically during cycles.
+CREATE TABLE IF NOT EXISTS agent_decline_alert_history (
+  employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  last_alerted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS coaching_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,

@@ -9,7 +9,7 @@
 import { createHmac } from "crypto";
 import { isUrlSafe } from "./url-validator";
 import { logger } from "./logger";
-import { PerKeyCircuitBreaker, type CircuitSnapshot } from "./resilience";
+import { PerKeyCircuitBreaker, CircuitBreakerOpenError, type CircuitSnapshot } from "./resilience";
 import type { ObjectStorageClient } from "../storage";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
@@ -274,8 +274,13 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
       );
       return;
     } catch (err) {
-      // If the breaker opened mid-retry, abandon further in-process retries.
-      if (webhookBreaker.isOpen(config.id)) {
+      // F5 (Tier C #10): use typed CircuitBreakerOpenError instead of a
+      // second `isOpen()` query. Previously a TOCTTOU window existed between
+      // the pre-loop isOpen check and execute, and again between a failure
+      // and the post-catch isOpen check. Matching on the error class is
+      // race-free — execute() throws this class iff it rejected the call
+      // due to open state at the time of the call.
+      if (err instanceof CircuitBreakerOpenError) {
         logger.warn("Webhook circuit opened during retry — abandoning", {
           url: config.url,
           event,
