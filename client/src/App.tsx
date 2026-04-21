@@ -15,12 +15,7 @@ import { LoadingIndicator } from "@/components/ui/loading";
 import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
 import { useIdleTimeout } from "@/hooks/use-idle-timeout";
 import { AnimatePresence, motion } from "framer-motion";
-import { useAppearance } from "@/components/appearance-provider";
 import { useTranslation } from "@/lib/i18n";
-import HexBackground from "@/components/hex-background";
-import SoftWavesBackground from "@/components/bg-soft-waves";
-import NeonFlowBackground from "@/components/bg-neon-flow";
-import TopoMeshBackground from "@/components/bg-topo-mesh";
 
 // Route-level code splitting — each page loads on demand
 const Dashboard = lazy(() => import("@/pages/dashboard"));
@@ -77,7 +72,7 @@ const pageTransition = {
 
 function AnimatedPage({ children }: { children: React.ReactNode }) {
   return (
-    <motion.div className="relative z-10" {...pageTransition}>
+    <motion.div {...pageTransition}>
       {children}
     </motion.div>
   );
@@ -150,17 +145,6 @@ function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   );
 }
 
-function BackgroundLayer() {
-  const { background } = useAppearance();
-  switch (background) {
-    case "hexagons": return <HexBackground />;
-    case "softWaves": return <SoftWavesBackground />;
-    case "neonFlow": return <NeonFlowBackground />;
-    case "topoMesh": return <TopoMeshBackground />;
-    default: return null;
-  }
-}
-
 function Router() {
   const [location, navigate] = useLocation();
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -230,8 +214,6 @@ function Router() {
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
       <main id="main-content" className="flex-1 overflow-auto bg-background relative">
-        {/* Background pattern (selected via Settings page) */}
-        <BackgroundLayer />
         {/* Mobile hamburger button */}
         <button
           className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-md bg-card border border-border shadow-sm"
