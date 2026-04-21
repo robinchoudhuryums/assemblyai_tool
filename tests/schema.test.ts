@@ -123,6 +123,59 @@ describe("insertCoachingSessionSchema", () => {
     });
     assert.ok(!result.success);
   });
+
+  it("accepts optional effectivenessRating helpful/neutral/not_helpful", () => {
+    for (const rating of ["helpful", "neutral", "not_helpful"] as const) {
+      const result = insertCoachingSessionSchema.safeParse({
+        employeeId: "emp-1",
+        assignedBy: "mgr-1",
+        title: "Rated session",
+        effectivenessRating: rating,
+      });
+      assert.ok(result.success, `${rating} should be accepted`);
+    }
+  });
+
+  it("rejects unknown effectivenessRating values", () => {
+    const result = insertCoachingSessionSchema.safeParse({
+      employeeId: "emp-1",
+      assignedBy: "mgr-1",
+      title: "Test",
+      effectivenessRating: "very_helpful",
+    });
+    assert.ok(!result.success);
+  });
+
+  it("accepts effectivenessNote up to 1000 chars", () => {
+    const ok = insertCoachingSessionSchema.safeParse({
+      employeeId: "emp-1",
+      assignedBy: "mgr-1",
+      title: "Test",
+      effectivenessNote: "a".repeat(1000),
+    });
+    assert.ok(ok.success);
+
+    const tooLong = insertCoachingSessionSchema.safeParse({
+      employeeId: "emp-1",
+      assignedBy: "mgr-1",
+      title: "Test",
+      effectivenessNote: "a".repeat(1001),
+    });
+    assert.ok(!tooLong.success);
+  });
+
+  it("accepts session without effectiveness fields (backward-compatible)", () => {
+    const result = insertCoachingSessionSchema.safeParse({
+      employeeId: "emp-1",
+      assignedBy: "mgr-1",
+      title: "Pre-Tier-2 session",
+    });
+    assert.ok(result.success);
+    if (result.success) {
+      assert.equal(result.data.effectivenessRating, undefined);
+      assert.equal(result.data.effectivenessNote, undefined);
+    }
+  });
 });
 
 describe("insertAccessRequestSchema", () => {

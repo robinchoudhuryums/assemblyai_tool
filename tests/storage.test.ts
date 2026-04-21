@@ -321,6 +321,39 @@ describe("MemStorage — Coaching sessions", () => {
     assert.equal(updated?.status, "completed");
   });
 
+  it("persists effectiveness rating + note across update round-trip", async () => {
+    // Tier 2 #8: manager-supplied effectiveness rating captured at session
+    // close. Covers the new effectiveness_rating + effectiveness_note fields
+    // for MemStorage (Postgres uses a dedicated UPDATE statement exercised
+    // only in integration tests).
+    const session = await storage.createCoachingSession({
+      employeeId: "emp-eff",
+      assignedBy: "manager",
+      title: "Effectiveness test",
+    });
+    assert.equal(session.effectivenessRating, undefined);
+    assert.equal(session.effectivenessNote, undefined);
+
+    const rated = await storage.updateCoachingSession(session.id, {
+      status: "completed",
+      effectivenessRating: "helpful",
+      effectivenessNote: "Clearly improved customer-handling confidence.",
+    });
+    assert.equal(rated?.effectivenessRating, "helpful");
+    assert.equal(rated?.effectivenessNote, "Clearly improved customer-handling confidence.");
+
+    // Round-trip through getCoachingSession to prove persistence.
+    const fetched = await storage.getCoachingSession(session.id);
+    assert.equal(fetched?.effectivenessRating, "helpful");
+    assert.equal(fetched?.effectivenessNote, "Clearly improved customer-handling confidence.");
+
+    // Overwriting to a different rating should stick.
+    const changed = await storage.updateCoachingSession(session.id, {
+      effectivenessRating: "not_helpful",
+    });
+    assert.equal(changed?.effectivenessRating, "not_helpful");
+  });
+
   // getCoachingOutcomes — the MemStorage path uses the shared
   // computeCoachingOutcomesInMemory helper. These tests lock its contract
   // end-to-end (empty, no-calls, before/after split).
