@@ -28,8 +28,12 @@ echo ""
 
 cd "$APP_DIR"
 
-# Prevent OOM on memory-constrained EC2 instances (applies to tsc, tests, and build)
-export NODE_OPTIONS="--max-old-space-size=1024"
+# Cap Node heap to fit alongside the running pm2 process (~217MB) on a 1GB
+# t3.nano. Tests no longer run here (see rationale in step [3/5] below), so
+# 768MB leaves ~440MB headroom for tsc + the esbuild bundler, both of which
+# peak well under that. The build step's package.json command sets a higher
+# 1536MB limit which overrides this export for that one invocation.
+export NODE_OPTIONS="--max-old-space-size=768"
 
 # Save current commit for rollback
 PREV_COMMIT=$(git rev-parse HEAD)
@@ -85,14 +89,30 @@ if ! npm install --production=false; then
   rollback "npm install failed"
 fi
 
-# [3/5] Type check + unit tests
-echo "[3/5] Running type check and tests..."
+# [3/5] Type check (cheap) — unit tests run in CI before deploy triggers, not here.
+#
+# Why no `npm run test` here:
+# The production EC2 instance is a 1GB-RAM t3.nano. The test suite grew to
+# 966 tests, which at NODE_OPTIONS=--max-old-space-size=1024 plus pm2 holding
+# ~217MB for the running app consistently OOMs on this box (seen in deploy
+# #142, 2026-04-21). GitHub Actions CI already runs the full suite as a merge
+# gate before the deploy workflow triggers via workflow_run on CI success —
+# re-running them on the constrained EC2 host is redundant AND unstable. tsc
+# stays because it's cheap and catches build-breaking syntax/type errors that
+# could slip past CI via dependency updates.
+#
+# If you need to re-run tests on EC2 for a specific debugging reason, set
+# DEPLOY_RUN_TESTS=true before invoking this script. Default: skipped.
+echo "[3/5] Running type check..."
 if ! npm run check; then
   rollback "TypeScript type check failed"
 fi
 
-if ! npm run test; then
-  rollback "Unit tests failed"
+if [ "${DEPLOY_RUN_TESTS:-false}" = "true" ]; then
+  echo "  DEPLOY_RUN_TESTS=true — running unit tests (may OOM on <2GB RAM hosts)"
+  if ! npm run test; then
+    rollback "Unit tests failed"
+  fi
 fi
 
 # [4/5] Build

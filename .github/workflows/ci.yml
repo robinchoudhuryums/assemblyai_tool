@@ -28,12 +28,12 @@ jobs:
     name: Test & Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Temporarily non-blocking. Tests/tsc/build all pass locally but CI has
-    # been failing in ways the workflow output doesn't surface (CI logs
-    # require authenticated access). Underlying cause to be investigated
-    # post-demo. Job still runs and reports for visibility but doesn't
-    # block PR merges. Dependency Audit (security gate) remains blocking.
-    continue-on-error: true
+    # Blocking gate. deploy.sh on the EC2 box no longer runs `npm run test`
+    # (the 1GB t3.nano OOMs on a 966-test suite — see deploy #142 post-mortem
+    # 2026-04-21 and the rationale comment in deploy.sh [3/5]). CI is now the
+    # sole merge gate for type check + backend tests + frontend tests + build,
+    # so `continue-on-error` cannot stay here — a failure must block the PR
+    # instead of letting a broken main trigger the deploy workflow.
 
     steps:
       - name: Checkout code
