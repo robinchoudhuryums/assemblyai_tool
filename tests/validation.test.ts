@@ -257,6 +257,34 @@ describe("insertCallSchema contentHash", () => {
   });
 });
 
+describe("insertCallSchema excludedFromMetrics", () => {
+  it("accepts excludedFromMetrics = true", () => {
+    const result = insertCallSchema.safeParse({
+      fileName: "call.mp3",
+      excludedFromMetrics: true,
+    });
+    assert.ok(result.success);
+    if (result.success) assert.equal(result.data.excludedFromMetrics, true);
+  });
+
+  it("accepts excludedFromMetrics = false", () => {
+    const result = insertCallSchema.safeParse({
+      fileName: "call.mp3",
+      excludedFromMetrics: false,
+    });
+    assert.ok(result.success);
+    if (result.success) assert.equal(result.data.excludedFromMetrics, false);
+  });
+
+  it("accepts call without excludedFromMetrics (optional field)", () => {
+    const result = insertCallSchema.safeParse({
+      fileName: "call.mp3",
+    });
+    assert.ok(result.success);
+    if (result.success) assert.equal(result.data.excludedFromMetrics, undefined);
+  });
+});
+
 describe("insertAccessRequestSchema email validation", () => {
   it("accepts valid email", () => {
     const result = insertAccessRequestSchema.safeParse({

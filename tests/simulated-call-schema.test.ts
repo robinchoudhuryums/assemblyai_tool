@@ -130,6 +130,50 @@ describe("SimulatedCallConfig schema", () => {
     const res = simulatedCallConfigSchema.parse({});
     assert.equal(res.analyzeAfterGeneration, false);
   });
+
+  it("expectedScoreRange is optional and absent by default", () => {
+    const res = simulatedCallConfigSchema.parse({});
+    assert.equal(res.expectedScoreRange, undefined);
+  });
+
+  it("expectedScoreRange accepts valid { min, max } bounds", () => {
+    const res = simulatedCallConfigSchema.safeParse({
+      expectedScoreRange: { min: 8.0, max: 10.0 },
+    });
+    assert.ok(res.success);
+    if (res.success) {
+      assert.equal(res.data.expectedScoreRange?.min, 8.0);
+      assert.equal(res.data.expectedScoreRange?.max, 10.0);
+    }
+  });
+
+  it("expectedScoreRange rejects max < min", () => {
+    const res = simulatedCallConfigSchema.safeParse({
+      expectedScoreRange: { min: 9.0, max: 5.0 },
+    });
+    assert.equal(res.success, false);
+  });
+
+  it("expectedScoreRange rejects out-of-range values (< 0)", () => {
+    const res = simulatedCallConfigSchema.safeParse({
+      expectedScoreRange: { min: -1, max: 5 },
+    });
+    assert.equal(res.success, false);
+  });
+
+  it("expectedScoreRange rejects out-of-range values (> 10)", () => {
+    const res = simulatedCallConfigSchema.safeParse({
+      expectedScoreRange: { min: 5, max: 11 },
+    });
+    assert.equal(res.success, false);
+  });
+
+  it("expectedScoreRange accepts equal min and max (exact score preset)", () => {
+    const res = simulatedCallConfigSchema.safeParse({
+      expectedScoreRange: { min: 7.0, max: 7.0 },
+    });
+    assert.ok(res.success);
+  });
 });
 
 describe("GenerateSimulatedCallRequest schema", () => {
