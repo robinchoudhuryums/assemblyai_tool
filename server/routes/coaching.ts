@@ -7,6 +7,92 @@ import { triggerWebhook } from "../services/webhooks";
 import { validateIdParam, validateParams, sendValidationError, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse } from "./utils";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 
+// Shared helper powering both the CSV + PDF export of the per-manager
+// coaching-outcomes breakdown. Delegates to `storage.getCoachingOutcomes`
+// (SQL-native on PostgresStorage, JS-loop fallback on MemStorage/CloudStorage)
+// and buckets the per-session aggregates by `assigned_by` into per-manager
+// rows. Kept in module scope rather than inside `register` so both export
+// routes can call it without duplicating 100 lines of aggregation code.
+async function computeManagerOutcomeRows(windowDays: number): Promise<Array<{
+  manager: string;
+  totalSessions: number;
+  measured: number;
+  insufficient: number;
+  positive: number;
+  neutral: number;
+  negative: number;
+  avgDelta: number | null;
+}>> {
+  const perSessionN = 10;
+  const MIN_WINDOW = 3;
+  const cutoff = Date.now() - windowDays * 86400000;
+
+  const sessions = await storage.getAllCoachingSessions();
+  const windowedSessions = sessions.filter(s => {
+    const t = new Date(s.createdAt || 0).getTime();
+    return Number.isFinite(t) && t > 0 && t >= cutoff;
+  });
+  const outcomes = await storage.getCoachingOutcomes(new Date(cutoff), perSessionN);
+  const outcomeBySession = new Map(outcomes.map(o => [o.sessionId, o]));
+
+  type Bucket = {
+    key: string;
+    totalSessions: number;
+    measured: number;
+    insufficient: number;
+    positive: number;
+    neutral: number;
+    negative: number;
+    deltaSum: number;
+    deltaCount: number;
+  };
+  const managerBuckets = new Map<string, Bucket>();
+  const newBucket = (key: string): Bucket => ({
+    key, totalSessions: 0, measured: 0, insufficient: 0,
+    positive: 0, neutral: 0, negative: 0, deltaSum: 0, deltaCount: 0,
+  });
+
+  for (const s of windowedSessions) {
+    const key = s.assignedBy || "unknown";
+    const b = managerBuckets.get(key) || newBucket(key);
+    b.totalSessions++;
+    const agg = outcomeBySession.get(s.id);
+    const beforeCount = agg?.before?.count ?? 0;
+    const afterCount = agg?.after?.count ?? 0;
+    if (beforeCount < MIN_WINDOW || afterCount < MIN_WINDOW) {
+      b.insufficient++;
+    } else {
+      const bAvg = agg?.before?.avgScore ?? null;
+      const aAvg = agg?.after?.avgScore ?? null;
+      if (bAvg === null || aAvg === null) {
+        b.insufficient++;
+      } else {
+        b.measured++;
+        const d = aAvg - bAvg;
+        b.deltaSum += d;
+        b.deltaCount++;
+        if (d >= 0.5) b.positive++;
+        else if (d <= -0.5) b.negative++;
+        else b.neutral++;
+      }
+    }
+    managerBuckets.set(key, b);
+  }
+
+  return Array.from(managerBuckets.values())
+    .map(b => ({
+      manager: b.key,
+      totalSessions: b.totalSessions,
+      measured: b.measured,
+      insufficient: b.insufficient,
+      positive: b.positive,
+      neutral: b.neutral,
+      negative: b.negative,
+      avgDelta: b.deltaCount > 0 ? Math.round((b.deltaSum / b.deltaCount) * 100) / 100 : null,
+    }))
+    .sort((a, b) => (b.avgDelta ?? -Infinity) - (a.avgDelta ?? -Infinity));
+}
+
 export function register(router: Router) {
   // ==================== COACHING ROUTES ====================
 
@@ -220,49 +306,18 @@ export function register(router: Router) {
       // sessions didn't have enough calls and why.
       const includeSkipped = req.query.includeSkipped === "true";
 
+      // SQL-native aggregation: fetches per-session before/after windows
+      // with avgs already computed. PostgresStorage uses one SQL round
+      // trip; MemStorage + CloudStorage fall back to the prior N+1 loop
+      // via the shared computeCoachingOutcomesInMemory helper. Either way
+      // the route body stays O(sessions) JS work from here down.
       const sessions = await storage.getAllCoachingSessions();
       const windowedSessions = sessions.filter(s => {
         const t = new Date(s.createdAt || 0).getTime();
         return Number.isFinite(t) && t > 0 && t >= cutoff;
       });
-
-      // Group completed calls per employee so we don't re-query inside the loop.
-      const byEmployee = new Map<string, { call: any; ts: number }[]>();
-      for (const s of windowedSessions) {
-        if (byEmployee.has(s.employeeId)) continue;
-        const empCalls = await storage.getCallsWithDetails({
-          status: "completed",
-          employee: s.employeeId,
-        });
-        const withTs = empCalls
-          .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
-          .filter(x => Number.isFinite(x.ts) && x.ts > 0)
-          .sort((a, b) => a.ts - b.ts);
-        byEmployee.set(s.employeeId, withTs);
-      }
-
-      const avgScore = (window: { call: any }[]): number | null => {
-        const vals = window
-          .map(x => parseFloat(x.call.analysis?.performanceScore || ""))
-          .filter((v): v is number => Number.isFinite(v));
-        if (vals.length === 0) return null;
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      };
-
-      // Per-sub-score average. Returns null only when the window has zero
-      // calls carrying that sub-score. INV-23: sub-scores are camelCase in
-      // storage (pipeline normalizes from snake_case at the AI boundary).
-      const avgSub = (window: { call: any }[], key: "compliance" | "customerExperience" | "communication" | "resolution"): number | null => {
-        const vals = window
-          .map(x => {
-            const sub = x.call.analysis?.subScores as Record<string, unknown> | undefined;
-            const v = sub?.[key];
-            return typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
-          })
-          .filter(v => Number.isFinite(v));
-        if (vals.length === 0) return null;
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      };
+      const outcomes = await storage.getCoachingOutcomes(new Date(cutoff), perSessionN);
+      const outcomeBySession = new Map(outcomes.map(o => [o.sessionId, o]));
 
       type SubScoreDelta = {
         compliance: number | null;
@@ -284,20 +339,24 @@ export function register(router: Router) {
 
       const emptySub: SubScoreDelta = { compliance: null, customerExperience: null, communication: null, resolution: null };
 
+      // Build the PerSession list from the storage-level aggregates. Sessions
+      // not present in `outcomes` had no matching calls at all — they count
+      // as "insufficient" just like sessions with too few calls. This keeps
+      // the rollup logic below (unchanged) working on the same shape.
       for (const s of windowedSessions) {
-        const sessionTs = new Date(s.createdAt || 0).getTime();
-        const empCalls = byEmployee.get(s.employeeId) || [];
-        const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
-        const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
-        if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
+        const agg = outcomeBySession.get(s.id);
+        const beforeCount = agg?.before?.count ?? 0;
+        const afterCount = agg?.after?.count ?? 0;
+
+        if (beforeCount < MIN_WINDOW || afterCount < MIN_WINDOW) {
           perSession.push({
             session: s, delta: null, subDeltas: emptySub, outcome: "insufficient",
-            skipReason: `before=${before.length}, after=${after.length}; need ≥${MIN_WINDOW} each`,
+            skipReason: `before=${beforeCount}, after=${afterCount}; need ≥${MIN_WINDOW} each`,
           });
           continue;
         }
-        const bAvg = avgScore(before);
-        const aAvg = avgScore(after);
+        const bAvg = agg?.before?.avgScore ?? null;
+        const aAvg = agg?.after?.avgScore ?? null;
         if (bAvg === null || aAvg === null) {
           perSession.push({
             session: s, delta: null, subDeltas: emptySub, outcome: "insufficient",
@@ -307,11 +366,9 @@ export function register(router: Router) {
         }
         const d = aAvg - bAvg;
         const outcome: Outcome = d >= 0.5 ? "positive" : d <= -0.5 ? "negative" : "neutral";
-        // Per-sub-score delta — null when either before or after has no
-        // calls with that sub-score populated.
         const subDeltaFor = (key: "compliance" | "customerExperience" | "communication" | "resolution"): number | null => {
-          const b = avgSub(before, key);
-          const a = avgSub(after, key);
+          const b = agg?.before?.avgSubScores[key] ?? null;
+          const a = agg?.after?.avgSubScores[key] ?? null;
           return b === null || a === null ? null : a - b;
         };
         perSession.push({
@@ -468,97 +525,9 @@ export function register(router: Router) {
   // export is first-class auditable (no reliance on a client beacon).
   router.get("/api/coaching/outcomes-summary/export.csv", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
-      // Delegate to the main route's internal logic by re-issuing the same
-      // query against our own route — but rather than spawning an HTTP round
-      // trip, recompute inline. Keep the shape in sync with the JSON route.
       const windowDaysRaw = parseInt((req.query.days as string) || "90", 10);
       const windowDays = Math.max(7, Math.min(Number.isFinite(windowDaysRaw) ? windowDaysRaw : 90, 365));
-      const perSessionN = 10;
-      const MIN_WINDOW = 3;
-      const cutoff = Date.now() - windowDays * 86400000;
-
-      const sessions = await storage.getAllCoachingSessions();
-      const windowedSessions = sessions.filter(s => {
-        const t = new Date(s.createdAt || 0).getTime();
-        return Number.isFinite(t) && t > 0 && t >= cutoff;
-      });
-      const byEmployee = new Map<string, { call: any; ts: number }[]>();
-      for (const s of windowedSessions) {
-        if (byEmployee.has(s.employeeId)) continue;
-        const empCalls = await storage.getCallsWithDetails({
-          status: "completed",
-          employee: s.employeeId,
-        });
-        byEmployee.set(s.employeeId, empCalls
-          .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
-          .filter(x => Number.isFinite(x.ts) && x.ts > 0)
-          .sort((a, b) => a.ts - b.ts));
-      }
-      const avgScore = (window: { call: any }[]): number | null => {
-        const vals = window
-          .map(x => parseFloat(x.call.analysis?.performanceScore || ""))
-          .filter((v): v is number => Number.isFinite(v));
-        if (vals.length === 0) return null;
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      };
-
-      type Bucket = {
-        key: string;
-        totalSessions: number;
-        measured: number;
-        insufficientData: number;
-        positive: number;
-        neutral: number;
-        negative: number;
-        deltaSum: number;
-        deltaCount: number;
-      };
-      const managerBuckets = new Map<string, Bucket>();
-      const newBucket = (key: string): Bucket => ({
-        key, totalSessions: 0, measured: 0, insufficientData: 0,
-        positive: 0, neutral: 0, negative: 0, deltaSum: 0, deltaCount: 0,
-      });
-
-      for (const s of windowedSessions) {
-        const key = s.assignedBy || "unknown";
-        const b = managerBuckets.get(key) || newBucket(key);
-        b.totalSessions++;
-        const sessionTs = new Date(s.createdAt || 0).getTime();
-        const empCalls = byEmployee.get(s.employeeId) || [];
-        const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
-        const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
-        if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
-          b.insufficientData++;
-        } else {
-          const bAvg = avgScore(before);
-          const aAvg = avgScore(after);
-          if (bAvg === null || aAvg === null) {
-            b.insufficientData++;
-          } else {
-            b.measured++;
-            const d = aAvg - bAvg;
-            b.deltaSum += d;
-            b.deltaCount++;
-            if (d >= 0.5) b.positive++;
-            else if (d <= -0.5) b.negative++;
-            else b.neutral++;
-          }
-        }
-        managerBuckets.set(key, b);
-      }
-
-      const rows = Array.from(managerBuckets.values())
-        .map(b => ({
-          manager: b.key,
-          totalSessions: b.totalSessions,
-          measured: b.measured,
-          insufficient: b.insufficientData,
-          positive: b.positive,
-          neutral: b.neutral,
-          negative: b.negative,
-          avgDelta: b.deltaCount > 0 ? Math.round((b.deltaSum / b.deltaCount) * 100) / 100 : null,
-        }))
-        .sort((a, b) => (b.avgDelta ?? -Infinity) - (a.avgDelta ?? -Infinity));
+      const rows = await computeManagerOutcomeRows(windowDays);
 
       const csv = buildCsv([
         {
@@ -581,99 +550,14 @@ export function register(router: Router) {
     }
   });
 
-  // PDF export of the per-manager coaching-effectiveness breakdown. Mirrors
-  // the CSV route's aggregation; audit event format=pdf. Duplicating the
-  // aggregation (rather than extracting a shared helper) keeps Phase D's
-  // diff narrowly scoped to PDF addition — a future cleanup can extract
-  // `aggregateOutcomesByManager(windowDays)` once three consumers exist.
+  // PDF export of the per-manager coaching-effectiveness breakdown. Shares
+  // the SQL-native aggregation path with the CSV export + JSON endpoint via
+  // `computeManagerOutcomeRows`. `format=pdf` audit event.
   router.get("/api/coaching/outcomes-summary/export.pdf", requireAuth, requireMFASetup, requireRole("manager", "admin"), async (req, res) => {
     try {
       const windowDaysRaw = parseInt((req.query.days as string) || "90", 10);
       const windowDays = Math.max(7, Math.min(Number.isFinite(windowDaysRaw) ? windowDaysRaw : 90, 365));
-      const perSessionN = 10;
-      const MIN_WINDOW = 3;
-      const cutoff = Date.now() - windowDays * 86400000;
-
-      const sessions = await storage.getAllCoachingSessions();
-      const windowedSessions = sessions.filter(s => {
-        const t = new Date(s.createdAt || 0).getTime();
-        return Number.isFinite(t) && t > 0 && t >= cutoff;
-      });
-      const byEmployee = new Map<string, { call: any; ts: number }[]>();
-      for (const s of windowedSessions) {
-        if (byEmployee.has(s.employeeId)) continue;
-        const empCalls = await storage.getCallsWithDetails({
-          status: "completed",
-          employee: s.employeeId,
-        });
-        byEmployee.set(s.employeeId, empCalls
-          .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
-          .filter(x => Number.isFinite(x.ts) && x.ts > 0)
-          .sort((a, b) => a.ts - b.ts));
-      }
-      const avgScore = (window: { call: any }[]): number | null => {
-        const vals = window
-          .map(x => parseFloat(x.call.analysis?.performanceScore || ""))
-          .filter((v): v is number => Number.isFinite(v));
-        if (vals.length === 0) return null;
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      };
-
-      type Bucket = {
-        key: string;
-        totalSessions: number;
-        measured: number;
-        insufficientData: number;
-        positive: number;
-        neutral: number;
-        negative: number;
-        deltaSum: number;
-        deltaCount: number;
-      };
-      const managerBuckets = new Map<string, Bucket>();
-      const newBucket = (key: string): Bucket => ({
-        key, totalSessions: 0, measured: 0, insufficientData: 0,
-        positive: 0, neutral: 0, negative: 0, deltaSum: 0, deltaCount: 0,
-      });
-      for (const s of windowedSessions) {
-        const key = s.assignedBy || "unknown";
-        const b = managerBuckets.get(key) || newBucket(key);
-        b.totalSessions++;
-        const sessionTs = new Date(s.createdAt || 0).getTime();
-        const empCalls = byEmployee.get(s.employeeId) || [];
-        const before = empCalls.filter(x => x.ts < sessionTs).slice(-perSessionN);
-        const after = empCalls.filter(x => x.ts >= sessionTs).slice(0, perSessionN);
-        if (before.length < MIN_WINDOW || after.length < MIN_WINDOW) {
-          b.insufficientData++;
-        } else {
-          const bAvg = avgScore(before);
-          const aAvg = avgScore(after);
-          if (bAvg === null || aAvg === null) {
-            b.insufficientData++;
-          } else {
-            b.measured++;
-            const d = aAvg - bAvg;
-            b.deltaSum += d;
-            b.deltaCount++;
-            if (d >= 0.5) b.positive++;
-            else if (d <= -0.5) b.negative++;
-            else b.neutral++;
-          }
-        }
-        managerBuckets.set(key, b);
-      }
-      const rows = Array.from(managerBuckets.values())
-        .map(b => ({
-          manager: b.key,
-          totalSessions: b.totalSessions,
-          measured: b.measured,
-          insufficient: b.insufficientData,
-          positive: b.positive,
-          neutral: b.neutral,
-          negative: b.negative,
-          avgDelta: b.deltaCount > 0 ? Math.round((b.deltaSum / b.deltaCount) * 100) / 100 : null,
-        }))
-        .sort((a, b) => (b.avgDelta ?? -Infinity) - (a.avgDelta ?? -Infinity));
+      const rows = await computeManagerOutcomeRows(windowDays);
 
       // Compute rollup for the summary panel.
       const totalMeasured = rows.reduce((s, r) => s + r.measured, 0);

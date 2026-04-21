@@ -20,7 +20,7 @@ import type {
   PerformerSummary, ABTest, InsertABTest, UsageRecord,
   Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
-import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData } from "./storage";
+import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData, CoachingOutcomeSessionAgg, CoachingOutcomeWindowAgg } from "./storage";
 import { safeFloat } from "./routes/utils";
 import { logPhiAccess } from "./services/audit-log";
 
@@ -1314,6 +1314,109 @@ export class PostgresStorage implements IStorage {
        merged.status, merged.dueDate, completedAt],
     );
     return rows[0] ? mapCoachingSession(rows[0]) : undefined;
+  }
+
+  /**
+   * SQL-native aggregation for /api/coaching/outcomes-summary. Replaces the
+   * prior per-employee N+1 pattern (one call-history load per unique
+   * employee in the windowed sessions) with a single query using
+   * ROW_NUMBER to rank the top-N calls on each side of each session.
+   *
+   * Approach:
+   * 1. Windowed sessions → CTE.
+   * 2. Cartesian of each session × its employee's completed non-synthetic
+   *    calls, tagged with bucket = 'before' | 'after' per session_at.
+   * 3. ROW_NUMBER over (session_id, bucket) ordered so the N most recent
+   *    before the session and the N earliest after come first.
+   * 4. Filter rn <= N, aggregate counts + score + per-sub-score averages.
+   *
+   * Returns only sessions with at least one matching call. The route
+   * combines this with `getAllCoachingSessions()` to identify sessions
+   * with zero calls and treat them as "insufficient".
+   *
+   * INV-23: sub-scores stored camelCase in analysis.sub_scores JSONB.
+   * INV-34: synthetic calls excluded.
+   */
+  async getCoachingOutcomes(
+    windowStart: Date,
+    perSessionN = 10,
+  ): Promise<CoachingOutcomeSessionAgg[]> {
+    const { rows } = await this.db.query(`
+      WITH windowed AS (
+        SELECT id, employee_id, assigned_by, created_at AS session_at
+        FROM coaching_sessions
+        WHERE created_at >= $1
+      ),
+      ranked AS (
+        SELECT
+          w.id AS session_id,
+          w.employee_id,
+          w.assigned_by,
+          w.session_at,
+          (CASE WHEN c.uploaded_at < w.session_at THEN 'before' ELSE 'after' END) AS bucket,
+          CAST(NULLIF(a.performance_score, '') AS NUMERIC) AS score,
+          CAST(NULLIF(a.sub_scores->>'compliance', '') AS NUMERIC) AS compliance,
+          CAST(NULLIF(a.sub_scores->>'customerExperience', '') AS NUMERIC) AS cx,
+          CAST(NULLIF(a.sub_scores->>'communication', '') AS NUMERIC) AS communication,
+          CAST(NULLIF(a.sub_scores->>'resolution', '') AS NUMERIC) AS resolution,
+          ROW_NUMBER() OVER (
+            PARTITION BY w.id,
+              (CASE WHEN c.uploaded_at < w.session_at THEN 0 ELSE 1 END)
+            ORDER BY
+              CASE WHEN c.uploaded_at < w.session_at THEN c.uploaded_at END DESC,
+              CASE WHEN c.uploaded_at >= w.session_at THEN c.uploaded_at END ASC
+          ) AS rn
+        FROM windowed w
+        JOIN calls c ON c.employee_id = w.employee_id
+                    AND c.status = 'completed'
+                    AND c.synthetic = FALSE
+        JOIN call_analyses a ON a.call_id = c.id
+      ),
+      limited AS (
+        SELECT * FROM ranked WHERE rn <= $2
+      )
+      SELECT
+        session_id, employee_id, assigned_by, session_at, bucket,
+        COUNT(*)::int                                 AS n,
+        ROUND(AVG(score)::numeric, 4)::float          AS avg_score,
+        ROUND(AVG(compliance)::numeric, 4)::float     AS avg_compliance,
+        ROUND(AVG(cx)::numeric, 4)::float             AS avg_cx,
+        ROUND(AVG(communication)::numeric, 4)::float  AS avg_communication,
+        ROUND(AVG(resolution)::numeric, 4)::float     AS avg_resolution
+      FROM limited
+      GROUP BY session_id, employee_id, assigned_by, session_at, bucket
+    `, [windowStart, perSessionN]);
+
+    // Pivot: rows of (session_id, bucket) → per-session {before, after}.
+    const bySession = new Map<string, CoachingOutcomeSessionAgg>();
+    for (const r of rows) {
+      const sessionAt = r.session_at?.toISOString?.() ?? String(r.session_at);
+      let agg = bySession.get(r.session_id);
+      if (!agg) {
+        agg = {
+          sessionId: r.session_id,
+          employeeId: r.employee_id,
+          assignedBy: r.assigned_by ?? null,
+          sessionAt,
+          before: null,
+          after: null,
+        };
+        bySession.set(r.session_id, agg);
+      }
+      const windowAgg: CoachingOutcomeWindowAgg = {
+        count: r.n,
+        avgScore: r.avg_score,
+        avgSubScores: {
+          compliance: r.avg_compliance,
+          customerExperience: r.avg_cx,
+          communication: r.avg_communication,
+          resolution: r.avg_resolution,
+        },
+      };
+      if (r.bucket === "before") agg.before = windowAgg;
+      else agg.after = windowAgg;
+    }
+    return Array.from(bySession.values());
   }
 
   // ── A/B Tests ─────────────────────────────────────────────

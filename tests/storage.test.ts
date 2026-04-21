@@ -320,6 +320,82 @@ describe("MemStorage — Coaching sessions", () => {
     const updated = await storage.updateCoachingSession(session.id, { status: "completed" });
     assert.equal(updated?.status, "completed");
   });
+
+  // getCoachingOutcomes — the MemStorage path uses the shared
+  // computeCoachingOutcomesInMemory helper. These tests lock its contract
+  // end-to-end (empty, no-calls, before/after split).
+  it("getCoachingOutcomes returns empty array when no sessions in window", async () => {
+    const rows = await storage.getCoachingOutcomes(new Date());
+    assert.equal(rows.length, 0);
+  });
+
+  it("getCoachingOutcomes returns sessions with before=null / after=null when the employee has no calls", async () => {
+    const session = await storage.createCoachingSession({
+      employeeId: "emp-no-calls",
+      assignedBy: "manager",
+      title: "Session without calls",
+    });
+    const rows = await storage.getCoachingOutcomes(new Date(Date.now() - 86400000));
+    const target = rows.find(r => r.sessionId === session.id);
+    assert.ok(target);
+    assert.equal(target.before, null);
+    assert.equal(target.after, null);
+    assert.equal(target.employeeId, "emp-no-calls");
+    assert.equal(target.assignedBy, "manager");
+  });
+
+  it("getCoachingOutcomes splits before/after around session creation time", async () => {
+    // Seed 3 "before" calls and 3 "after" calls for an employee, then a
+    // session created between them. The outcomes should partition correctly.
+    const empId = "emp-split";
+    const now = Date.now();
+    const earlier = new Date(now - 10 * 86400000);
+    const later = new Date(now - 3 * 86400000);
+
+    for (let i = 0; i < 3; i++) {
+      const call = await storage.createCall({
+        fileName: `before-${i}.mp3`,
+        mimeType: "audio/mp3",
+        fileSize: 1,
+        status: "completed",
+        contentHash: `gco-before-${i}`,
+      });
+      // Force uploadedAt + employeeId via setCallEmployee + updateCall.
+      await storage.setCallEmployee(call.id, empId);
+      await storage.updateCall(call.id, { uploadedAt: new Date(earlier.getTime() + i * 86400000).toISOString() });
+      await storage.createCallAnalysis({ callId: call.id, performanceScore: "6.0" });
+    }
+    for (let i = 0; i < 3; i++) {
+      const call = await storage.createCall({
+        fileName: `after-${i}.mp3`,
+        mimeType: "audio/mp3",
+        fileSize: 1,
+        status: "completed",
+        contentHash: `gco-after-${i}`,
+      });
+      await storage.setCallEmployee(call.id, empId);
+      await storage.updateCall(call.id, { uploadedAt: new Date(later.getTime() + i * 86400000).toISOString() });
+      await storage.createCallAnalysis({ callId: call.id, performanceScore: "8.0" });
+    }
+    // Session created in between.
+    const session = await storage.createCoachingSession({
+      employeeId: empId,
+      assignedBy: "manager",
+      title: "Midpoint session",
+    });
+    // Manually set session.createdAt to 5 days ago so the 3 earlier calls
+    // are "before" and the 3 later calls are "after".
+    const midpoint = new Date(now - 5 * 86400000);
+    await storage.updateCoachingSession(session.id, { createdAt: midpoint.toISOString() });
+
+    const rows = await storage.getCoachingOutcomes(new Date(now - 30 * 86400000), 10);
+    const target = rows.find(r => r.sessionId === session.id);
+    assert.ok(target);
+    assert.equal(target.before?.count, 3);
+    assert.equal(target.after?.count, 3);
+    assert.equal(target.before?.avgScore, 6.0);
+    assert.equal(target.after?.avgScore, 8.0);
+  });
 });
 
 describe("MemStorage — A/B tests", () => {
