@@ -123,6 +123,22 @@ export async function listSimulatedCalls(options: {
   return rows.map(mapRow);
 }
 
+/**
+ * List simulated calls whose `config.expectedScoreRange` is set. Used by the
+ * calibration-suite runner — these are the presets that assert an expected
+ * performance score, so the suite can compare actual vs expected and flag
+ * scoring regressions. Returns newest-first, unbounded (there are never many).
+ */
+export async function listCalibrationPresets(): Promise<SimulatedCall[]> {
+  const pool = requirePool();
+  const { rows } = await pool.query(
+    `SELECT * FROM simulated_calls
+     WHERE config ? 'expectedScoreRange'
+     ORDER BY created_at DESC`,
+  );
+  return rows.map(mapRow);
+}
+
 export interface UpdateSimulatedCallPatch {
   status?: SimulatedCallStatus;
   audioS3Key?: string | null;

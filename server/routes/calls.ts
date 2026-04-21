@@ -135,6 +135,20 @@ export function registerCallRoutes(
       const sentiment = await storage.getSentimentAnalysis(call.id);
       const rawAnalysis = await storage.getCallAnalysis(call.id);
 
+      // When the call is still awaiting batch inference, include queue
+      // position + batch interval so the UI can show "your call is #3 of 12
+      // in the next batch submission (every 15 min)". Best-effort — failures
+      // fall back to omitting the field so the normal response still returns.
+      let batchStatus: Awaited<ReturnType<typeof import("../services/batch-scheduler").getBatchQueueStatus>> | null = null;
+      if (call.status === "awaiting_analysis") {
+        try {
+          const { getBatchQueueStatus } = await import("../services/batch-scheduler");
+          batchStatus = await getBatchQueueStatus(call.id);
+        } catch (batchErr) {
+          logger.warn("calls: failed to compute batch queue status", { callId: call.id, error: (batchErr as Error).message });
+        }
+      }
+
       const analysis = rawAnalysis ? {
         ...rawAnalysis,
         topics: Array.isArray(rawAnalysis.topics) ? rawAnalysis.topics : [],
@@ -146,7 +160,7 @@ export function registerCallRoutes(
         summary: typeof rawAnalysis.summary === "string" ? rawAnalysis.summary : "",
       } : undefined;
 
-      res.json({ ...call, employee, transcript, sentiment, analysis });
+      res.json({ ...call, employee, transcript, sentiment, analysis, batchStatus });
     } catch (error) {
       res.status(500).json({ message: "Failed to get call" });
     }
@@ -567,6 +581,37 @@ export function registerCallRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to assign employee to call" });
+    }
+  });
+
+  // Toggle excluded-from-metrics flag on a call. Flagged calls stay visible in
+  // lists and detail views but are omitted from aggregate metrics (leaderboards,
+  // dashboards, filtered reports, badge evaluation, coaching outcomes). Used
+  // for noisy recordings, roleplay/training calls, or known outliers.
+  router.patch("/api/calls/:id/exclude-from-metrics", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+    try {
+      const { excluded } = (req.body ?? {}) as { excluded?: unknown };
+      if (typeof excluded !== "boolean") {
+        sendError(res, 400, "Body must include { excluded: boolean }");
+        return;
+      }
+      const call = await storage.getCall(req.params.id);
+      if (!call) {
+        sendError(res, 404, "Call not found");
+        return;
+      }
+      const updated = await storage.updateCall(req.params.id, { excludedFromMetrics: excluded });
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: excluded ? "call_excluded_from_metrics" : "call_included_in_metrics",
+        resourceType: "call",
+        resourceId: req.params.id,
+      });
+      res.json(updated);
+    } catch (error) {
+      logger.error("failed to toggle excluded-from-metrics flag", { callId: req.params.id, error: (error as Error).message });
+      sendError(res, 500, "Failed to update call");
     }
   });
 

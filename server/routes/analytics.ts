@@ -77,7 +77,7 @@ export function register(router: Router) {
            ROUND(AVG(c.duration), 0) as avg_duration,
            jsonb_agg(DISTINCT e.name) FILTER (WHERE e.name IS NOT NULL) as employee_names
          FROM employees e
-         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE ${dateFilter}
+         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE ${dateFilter}
          LEFT JOIN call_analyses ca ON ca.call_id = c.id
          WHERE e.status = 'Active'
          GROUP BY COALESCE(e.sub_team, 'Unassigned')
@@ -129,7 +129,7 @@ export function register(router: Router) {
            ROUND(AVG(c.duration), 0) as avg_duration,
            MAX(c.uploaded_at) as last_call_date
          FROM employees e
-         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE ${dateFilter}
+         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE ${dateFilter}
          LEFT JOIN call_analyses ca ON ca.call_id = c.id
          WHERE ${teamCondition} AND e.status = 'Active'
          GROUP BY e.id, e.name, e.email, e.initials, e.pseudonym
@@ -175,7 +175,7 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.synthetic = FALSE
+             WHERE c.status = 'completed' AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
                AND c.uploaded_at >= NOW() - make_interval(months => $1)
              GROUP BY date_trunc('month', c.uploaded_at)
              ORDER BY period_start`,
@@ -194,7 +194,7 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.synthetic = FALSE
+             WHERE c.status = 'completed' AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
                AND c.uploaded_at >= NOW() - make_interval(weeks => $1)
              GROUP BY date_trunc('week', c.uploaded_at)
              ORDER BY period_start`,
@@ -243,7 +243,7 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.synthetic = FALSE
+             WHERE c.status = 'completed' AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
                AND c.employee_id = $1
                AND c.uploaded_at >= NOW() - make_interval(months => $2)
              GROUP BY date_trunc('month', c.uploaded_at)
@@ -258,7 +258,7 @@ export function register(router: Router) {
              FROM calls c
              LEFT JOIN call_analyses ca ON ca.call_id = c.id
              LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
-             WHERE c.status = 'completed' AND c.synthetic = FALSE
+             WHERE c.status = 'completed' AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
                AND c.employee_id = $1
                AND c.uploaded_at >= NOW() - make_interval(weeks => $2)
              GROUP BY date_trunc('week', c.uploaded_at)
@@ -295,7 +295,7 @@ export function register(router: Router) {
       if (pool) {
         const params: any[] = [];
         // Synthetic-call isolation: CSV export excludes simulated calls.
-        let where = "WHERE c.synthetic = FALSE";
+        let where = "WHERE c.synthetic = FALSE AND c.excluded_from_metrics = FALSE";
         if (dateFrom) { params.push(dateFrom); where += ` AND c.uploaded_at >= $${params.length}`; }
         if (dateTo) { params.push(dateTo); where += ` AND c.uploaded_at <= $${params.length}`; }
         if (employeeId) { params.push(employeeId); where += ` AND c.employee_id = $${params.length}`; }
@@ -361,7 +361,7 @@ export function register(router: Router) {
            ROUND(AVG(c.duration), 0) as avg_duration
          FROM employees e
          -- Synthetic-call isolation: exclude simulated calls from team export.
-         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE
+         LEFT JOIN calls c ON c.employee_id = e.id AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
          LEFT JOIN call_analyses ca ON ca.call_id = c.id
          WHERE e.status = 'Active'
          GROUP BY COALESCE(e.sub_team, 'Unassigned'), e.name
@@ -434,7 +434,7 @@ export function register(router: Router) {
             'resolution', ROUND(AVG(NULLIF((ca.sub_scores->>'resolution')::numeric, 0)), 1)
           ) as avg_sub_scores
         FROM employees e
-        LEFT JOIN calls c ON c.employee_id = e.id AND c.status = 'completed' AND c.synthetic = FALSE
+        LEFT JOIN calls c ON c.employee_id = e.id AND c.status = 'completed' AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
         LEFT JOIN call_analyses ca ON ca.call_id = c.id
         LEFT JOIN sentiment_analyses sa ON sa.call_id = c.id
         WHERE e.id = ANY($1)
@@ -757,7 +757,7 @@ export function registerHeatmapRoutes(router: Router) {
           LEFT JOIN call_analyses a ON a.call_id = c.id
           WHERE c.uploaded_at >= NOW() - INTERVAL '1 day' * $1
             AND c.status = 'completed'
-            AND c.synthetic = FALSE
+            AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
         `;
         const params: (string | number)[] = [days];
         let idx = 2;

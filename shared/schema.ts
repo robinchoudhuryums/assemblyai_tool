@@ -122,6 +122,10 @@ export const insertCallSchema = z.object({
   // Synthetic flag: set to TRUE only for calls promoted from the Simulated
   // Call Generator. These rows are excluded from all aggregate/learning paths.
   synthetic: z.boolean().optional(),
+  // Manager-set exclusion flag. When TRUE, the call is omitted from aggregate
+  // metrics (leaderboards, dashboards, filtered reports, badge evaluation,
+  // coaching outcomes) but still visible in lists / search / detail views.
+  excludedFromMetrics: z.boolean().optional(),
 });
 
 export const callSchema = insertCallSchema.extend({

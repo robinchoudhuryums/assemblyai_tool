@@ -466,6 +466,9 @@ export default function SimulatedCallsPage() {
           <ToolbarTab active={tab === "generate"} onClick={() => setTab("generate")}>
             Generate New
           </ToolbarTab>
+          <ToolbarTab active={tab === "calibration"} onClick={() => setTab("calibration")}>
+            Calibration
+          </ToolbarTab>
         </div>
         {tab === "library" ? (
           <LibraryTable
@@ -474,8 +477,10 @@ export default function SimulatedCallsPage() {
             playingId={playingId}
             onPlay={setPlayingId}
           />
-        ) : (
+        ) : tab === "generate" ? (
           <GenerateForm voices={voices} capFull={capFull} onSuccess={() => setTab("library")} />
+        ) : (
+          <CalibrationSuitePanel />
         )}
       </div>
       </div>
@@ -1857,5 +1862,174 @@ function VoicePicker({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Calibration suite panel (#1 roadmap).
+//
+// Read-only report of presets with `config.expectedScoreRange`.
+// Each preset's actual score (from the linked analyzed call) is compared
+// against the expected range. Pass = green, fail = destructive, not-run =
+// muted. Operators use this after prompt template edits or model swaps
+// to detect scoring regressions before they hit production agents.
+// ─────────────────────────────────────────────────────────────
+interface CalibrationPreset {
+  id: string;
+  title: string;
+  qualityTier: string | null | undefined;
+  expectedMin: number;
+  expectedMax: number;
+  actualScore: number | null;
+  sentToAnalysisCallId: string | null | undefined;
+  analyzedAt: string | null;
+  status: "pass" | "fail" | "not_run";
+  delta: number | null;
+}
+interface CalibrationSuiteResponse {
+  presets: CalibrationPreset[];
+  summary: { total: number; passed: number; failed: number; notRun: number };
+}
+
+function CalibrationSuitePanel() {
+  const { data, isLoading, refetch, isFetching } = useQuery<CalibrationSuiteResponse>({
+    queryKey: ["/api/admin/simulated-calls/calibration-suite"],
+    refetchOnWindowFocus: true,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="text-sm text-muted-foreground p-8 border border-border">
+        Loading calibration report…
+      </div>
+    );
+  }
+
+  const presets = data?.presets ?? [];
+  const summary = data?.summary ?? { total: 0, passed: 0, failed: 0, notRun: 0 };
+
+  if (presets.length === 0) {
+    return (
+      <div
+        className="border border-border p-6 text-sm"
+        style={{ backgroundColor: "var(--card)" }}
+      >
+        <div className="font-medium text-foreground mb-2">No calibration presets configured</div>
+        <div className="text-muted-foreground">
+          To enable the calibration suite, add{" "}
+          <code className="font-mono text-xs">expectedScoreRange: {"{ min, max }"}</code>{" "}
+          to a simulated call preset's <code className="font-mono text-xs">config</code> JSON.
+          Presets with an expected range will appear here after they've been analyzed via the
+          "Send to Analysis" action.
+        </div>
+      </div>
+    );
+  }
+
+  const tone = (s: CalibrationPreset["status"]) => {
+    if (s === "pass") return { color: "var(--sage)", label: "PASS" };
+    if (s === "fail") return { color: "var(--destructive)", label: "FAIL" };
+    return { color: "var(--muted-foreground)", label: "NOT RUN" };
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Summary strip */}
+      <div
+        className="grid grid-cols-4 gap-px border border-border"
+        style={{ backgroundColor: "var(--border)" }}
+      >
+        <SummaryCell label="Total" value={summary.total} tone="var(--foreground)" />
+        <SummaryCell label="Passed" value={summary.passed} tone="var(--sage)" />
+        <SummaryCell label="Failed" value={summary.failed} tone="var(--destructive)" />
+        <SummaryCell label="Not run" value={summary.notRun} tone="var(--muted-foreground)" />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">
+          Each preset with an expected score range is compared against its most recently analyzed score.
+          Click "Send to Analysis" on a preset in the Library to refresh its actual score.
+        </div>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50"
+        >
+          {isFetching ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {/* Preset rows */}
+      <div className="border border-border" style={{ backgroundColor: "var(--card)" }}>
+        {presets.map((p, i) => {
+          const t = tone(p.status);
+          return (
+            <div
+              key={p.id}
+              className="px-4 py-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4"
+              style={{
+                borderTop: i === 0 ? "none" : "1px solid var(--border)",
+                boxShadow: p.status === "fail" ? "inset 3px 0 0 var(--destructive)" : undefined,
+              }}
+            >
+              <span
+                className="font-mono text-xs"
+                style={{
+                  color: t.color,
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  minWidth: 60,
+                }}
+              >
+                {t.label}
+              </span>
+              <div className="min-w-0">
+                <div className="font-medium text-foreground truncate">{p.title}</div>
+                <div className="text-xs text-muted-foreground">
+                  Expected {p.expectedMin.toFixed(1)}–{p.expectedMax.toFixed(1)}
+                  {p.qualityTier ? ` · ${p.qualityTier}` : ""}
+                  {p.analyzedAt ? ` · last analyzed ${new Date(p.analyzedAt).toLocaleDateString()}` : ""}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="font-display text-lg tabular-nums" style={{ color: t.color }}>
+                  {p.actualScore === null ? "—" : p.actualScore.toFixed(1)}
+                </div>
+                <div className="text-xs text-muted-foreground">actual</div>
+              </div>
+              {p.delta !== null && p.status === "fail" && (
+                <div
+                  className="font-mono text-xs tabular-nums"
+                  style={{ color: "var(--destructive)", minWidth: 40, textAlign: "right" }}
+                >
+                  {p.delta > 0 ? "+" : ""}
+                  {p.delta.toFixed(1)}
+                </div>
+              )}
+              {(p.status === "pass" || p.status === "not_run") && (
+                <div style={{ minWidth: 40 }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SummaryCell({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="p-4" style={{ backgroundColor: "var(--card)" }}>
+      <div
+        className="font-mono text-xs text-muted-foreground uppercase"
+        style={{ letterSpacing: "0.08em" }}
+      >
+        {label}
+      </div>
+      <div className="font-display text-2xl mt-1 tabular-nums" style={{ color: tone }}>
+        {value}
+      </div>
+    </div>
   );
 }

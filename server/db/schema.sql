@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS calls (
   -- alerts). See "Synthetic call isolation" in CLAUDE.md — this flag is the
   -- integrity gate between synthetic QA data and real-call learning systems.
   synthetic BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Manager-set flag to exclude a real call from aggregate metrics (leaderboards,
+  -- dashboards, filtered reports, badge evaluation, coaching outcomes). The call
+  -- still appears in lists, search, and detail views so users can see + unflag it.
+  -- Used for noisy recordings, roleplay/training calls, or known outliers that
+  -- would otherwise skew an agent's rolling averages.
+  excluded_from_metrics BOOLEAN NOT NULL DEFAULT FALSE,
   uploaded_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls (status);

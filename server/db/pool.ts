@@ -267,6 +267,12 @@ async function runMigrations(db: import("pg").Pool): Promise<void> {
     "UPDATE calls SET synthetic = FALSE WHERE synthetic IS NULL",
     "ALTER TABLE calls ALTER COLUMN synthetic SET NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_calls_synthetic_false ON calls (uploaded_at DESC) WHERE synthetic = FALSE",
+    // Manager-set exclusion flag for real calls. Same 3-step ADD/UPDATE/SET NOT NULL
+    // pattern as synthetic. Aggregate queries (leaderboards, dashboards, reports,
+    // badge eval, coaching outcomes) filter on this alongside synthetic.
+    "ALTER TABLE calls ADD COLUMN IF NOT EXISTS excluded_from_metrics BOOLEAN DEFAULT FALSE",
+    "UPDATE calls SET excluded_from_metrics = FALSE WHERE excluded_from_metrics IS NULL",
+    "ALTER TABLE calls ALTER COLUMN excluded_from_metrics SET NOT NULL",
     `CREATE TABLE IF NOT EXISTS simulated_calls (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       title VARCHAR(500) NOT NULL,

@@ -717,7 +717,27 @@ export async function processAudioFile(
         // Best practice auto-ingestion: send exceptional calls (≥9.0) to the KB.
         // CRITICAL: a synthetic "perfect" call reaching this branch would become
         // a real reference document that the AI grounds future analyses on.
-        if (performanceScore >= 9.0) {
+        //
+        // F11: Defense-in-depth against prompt-injection-poisoned KB. Even
+        // though `buildAnalysisPrompt` wraps RAG content in
+        // `<<<UNTRUSTED_KNOWLEDGE_BASE>>>` delimiters (F-16), we should not
+        // knowingly ingest transcripts flagged for prompt injection or output
+        // anomaly. A high-score call whose score was inflated by a successful
+        // injection payload would otherwise land in the KB and steer future
+        // analyses, even if the model ignores the embedded instructions.
+        const analysisFlags = Array.isArray(analysis.flags) ? (analysis.flags as string[]) : [];
+        const hasInjectionOrAnomalyFlag = analysisFlags.some(f =>
+          f === "prompt_injection_detected" ||
+          f.startsWith("prompt_injection") ||
+          f.startsWith("output_anomaly"),
+        );
+        if (performanceScore >= 9.0 && hasInjectionOrAnomalyFlag) {
+          logger.warn("pipeline: skipping best-practice ingest — injection/anomaly flag present", {
+            callId,
+            flags: analysisFlags.filter(f => f.startsWith("prompt_injection") || f.startsWith("output_anomaly")),
+          });
+        }
+        if (performanceScore >= 9.0 && !hasInjectionOrAnomalyFlag) {
           import("../services/best-practice-ingest").then(({ ingestBestPractice }) => {
             const feedback = analysis.feedback as { strengths?: Array<string | { text: string }> } | undefined;
             const strengths = (feedback?.strengths || []).map(s => typeof s === "string" ? s : (s as { text: string }).text);

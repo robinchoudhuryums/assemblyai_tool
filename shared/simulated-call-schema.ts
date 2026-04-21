@@ -181,6 +181,22 @@ export const simulatedCallConfigSchema = z.object({
   // script already reflects those changes and this array documents what
   // was applied. Default [] so existing presets generate unchanged.
   circumstances: z.array(circumstanceSchema).default([]),
+
+  // Calibration suite (roadmap #1): when this simulated call is used as a
+  // regression-test preset, operators can assert an expected performance
+  // score range. The calibration-suite runner (POST /api/admin/simulated-
+  // calls/calibration-suite/run) compares each preset's actual analyzed
+  // score against its range and returns pass/fail. `min`/`max` are both
+  // 0–10 inclusive. Leaving this unset means "no assertion" — the preset
+  // is excluded from the suite. Pure metadata; never forwarded to the
+  // generation pipeline itself.
+  expectedScoreRange: z
+    .object({
+      min: z.number().min(0).max(10),
+      max: z.number().min(0).max(10),
+    })
+    .refine(r => r.max >= r.min, { message: "expectedScoreRange.max must be >= min" })
+    .optional(),
 });
 
 // ── Generation request (what the API accepts) ────────────────
