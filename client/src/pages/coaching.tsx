@@ -397,12 +397,19 @@ export default function CoachingPage() {
         employeeName={openedSessionEmployeeName}
         canManage
         togglePending={updateMutation.isPending || toggleActionItemMutation.isPending}
+        ratePending={updateMutation.isPending}
         onClose={() => setOpenedSessionId(null)}
         onUpdateStatus={(sessionId, status) =>
           updateMutation.mutate({ id: sessionId, updates: { status } })
         }
         onToggleActionItem={(sessionId, index) =>
           toggleActionItemMutation.mutate({ id: sessionId, index })
+        }
+        onRateEffectiveness={(sessionId, rating, note) =>
+          updateMutation.mutate({
+            id: sessionId,
+            updates: { effectivenessRating: rating, effectivenessNote: note },
+          })
         }
       />
 

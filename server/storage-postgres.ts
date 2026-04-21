@@ -45,6 +45,7 @@ function mapCall(row: any): Call {
     contentHash: row.content_hash,
     externalId: row.external_id ?? undefined,
     synthetic: row.synthetic === true,
+    excludedFromMetrics: row.excluded_from_metrics === true,
     uploadedAt: row.uploaded_at?.toISOString?.() ?? row.uploaded_at,
   };
 }
@@ -108,6 +109,8 @@ function mapCoachingSession(row: any): CoachingSession {
     assignedBy: row.assigned_by, category: row.category, title: row.title,
     notes: row.notes, actionPlan: row.action_plan, status: row.status,
     dueDate: row.due_date?.toISOString?.() ?? row.due_date,
+    effectivenessRating: row.effectiveness_rating ?? undefined,
+    effectivenessNote: row.effectiveness_note ?? undefined,
     createdAt: row.created_at?.toISOString?.() ?? row.created_at,
     completedAt: row.completed_at?.toISOString?.() ?? row.completed_at,
   };
@@ -415,6 +418,7 @@ export class PostgresStorage implements IStorage {
       assemblyAiId: "assembly_ai_id",
       callCategory: "call_category",
       contentHash: "content_hash",
+      excludedFromMetrics: "excluded_from_metrics",
       uploadedAt: "uploaded_at",
     };
     const fields: string[] = [];
@@ -479,8 +483,11 @@ export class PostgresStorage implements IStorage {
     return rows.map(mapCall);
   }
   async getCallsSince(since: Date): Promise<Call[]> {
+    // Aggregate-path helper: excludes synthetic AND manager-excluded calls so
+    // calibration, regression detection, and scoring-quality checks operate
+    // on the clean metrics set only.
     const { rows } = await this.db.query(
-      "SELECT * FROM calls WHERE uploaded_at >= $1 AND synthetic = FALSE ORDER BY uploaded_at DESC",
+      "SELECT * FROM calls WHERE uploaded_at >= $1 AND synthetic = FALSE AND excluded_from_metrics = FALSE ORDER BY uploaded_at DESC",
       [since],
     );
     return rows.map(mapCall);
@@ -503,9 +510,12 @@ export class PostgresStorage implements IStorage {
   // ── A4/F03/F13/F15: hot-path helpers ──────────────────────
   async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
     // Synthetic-call isolation: badge milestones must not count simulated calls.
+    // Also skip excluded-from-metrics calls so a manager-flagged noisy call
+    // doesn't accidentally trip the next milestone badge.
     const { rows } = await this.db.query(
       `SELECT COUNT(*)::int AS c FROM calls
-       WHERE employee_id = $1 AND status = 'completed' AND synthetic = FALSE`,
+       WHERE employee_id = $1 AND status = 'completed'
+         AND synthetic = FALSE AND excluded_from_metrics = FALSE`,
       [employeeId],
     );
     return rows[0]?.c ?? 0;
@@ -523,7 +533,8 @@ export class PostgresStorage implements IStorage {
         a.confidence_score, a.confidence_factors, a.sub_scores, a.detected_agent_name, a.created_at AS a_created_at
        FROM calls c
        LEFT JOIN call_analyses a ON a.call_id = c.id
-       WHERE c.employee_id = $1 AND c.status = 'completed' AND c.synthetic = FALSE
+       WHERE c.employee_id = $1 AND c.status = 'completed'
+         AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
        ORDER BY c.uploaded_at DESC
        LIMIT $2`,
       [employeeId, cappedLimit],
@@ -553,6 +564,7 @@ export class PostgresStorage implements IStorage {
          WHERE c.status = 'completed'
            AND c.employee_id IS NOT NULL
            AND c.synthetic = FALSE
+           AND c.excluded_from_metrics = FALSE
            AND a.performance_score IS NOT NULL
            AND a.performance_score <> ''
            ${sinceClause}
@@ -612,7 +624,7 @@ export class PostgresStorage implements IStorage {
        LEFT JOIN transcripts t ON t.call_id = c.id
        LEFT JOIN sentiment_analyses s ON s.call_id = c.id
        LEFT JOIN call_analyses a ON a.call_id = c.id
-       WHERE c.uploaded_at >= $1 AND c.synthetic = FALSE${extra}
+       WHERE c.uploaded_at >= $1 AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE${extra}
        ORDER BY c.uploaded_at DESC`,
       params,
     );
@@ -930,17 +942,18 @@ export class PostgresStorage implements IStorage {
     // Synthetic-call isolation: aggregate queries must join back to calls to
     // filter out synthetic rows. The sentiment_analyses / call_analyses tables
     // don't have a synthetic column, so we filter via the call_id join.
+    // Also excludes manager-flagged excluded_from_metrics rows.
     const { rows } = await this.db.query(`
       SELECT
-        (SELECT COUNT(*) FROM calls WHERE synthetic = FALSE)::int AS total_calls,
+        (SELECT COUNT(*) FROM calls WHERE synthetic = FALSE AND excluded_from_metrics = FALSE)::int AS total_calls,
         (SELECT COALESCE(AVG(CAST(s.overall_score AS NUMERIC)) * 10, 0)
            FROM sentiment_analyses s
            JOIN calls c ON c.id = s.call_id
-           WHERE c.synthetic = FALSE) AS avg_sentiment,
+           WHERE c.synthetic = FALSE AND c.excluded_from_metrics = FALSE) AS avg_sentiment,
         (SELECT COALESCE(AVG(CAST(a.performance_score AS NUMERIC)), 0)
            FROM call_analyses a
            JOIN calls c ON c.id = a.call_id
-           WHERE c.synthetic = FALSE) AS avg_performance
+           WHERE c.synthetic = FALSE AND c.excluded_from_metrics = FALSE) AS avg_performance
     `);
     const r = rows[0];
     return {
@@ -952,12 +965,14 @@ export class PostgresStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
-    // Synthetic-call isolation via join to calls.
+    // Synthetic-call isolation via join to calls. Also excludes manager-
+    // flagged excluded_from_metrics rows.
     const { rows } = await this.db.query(`
       SELECT s.overall_sentiment, COUNT(*)::int AS count
       FROM sentiment_analyses s
       JOIN calls c ON c.id = s.call_id
-      WHERE s.overall_sentiment IS NOT NULL AND c.synthetic = FALSE
+      WHERE s.overall_sentiment IS NOT NULL
+        AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
       GROUP BY s.overall_sentiment
     `);
     const dist: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
@@ -977,7 +992,7 @@ export class PostgresStorage implements IStorage {
       FROM employees e
       JOIN calls c ON c.employee_id = e.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
-      WHERE c.synthetic = FALSE
+      WHERE c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
       GROUP BY e.id, e.name, e.role
       HAVING COUNT(c.id) > 0
       ORDER BY avg_score DESC NULLS LAST
@@ -995,8 +1010,9 @@ export class PostgresStorage implements IStorage {
     from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
   }): Promise<FilteredReportResult> {
     // Build shared WHERE clause for all sub-queries.
-    // Synthetic-call isolation: reports never include simulated calls.
-    const where: string[] = ["c.status = 'completed'", "c.synthetic = FALSE"];
+    // Synthetic-call isolation + manager-excluded isolation: reports never
+    // include simulated calls or calls flagged excluded_from_metrics.
+    const where: string[] = ["c.status = 'completed'", "c.synthetic = FALSE", "c.excluded_from_metrics = FALSE"];
     const params: unknown[] = [];
     let idx = 1;
     if (filters.from) { where.push(`c.uploaded_at >= $${idx++}`); params.push(filters.from); }
@@ -1108,7 +1124,7 @@ export class PostgresStorage implements IStorage {
       LEFT JOIN sentiment_analyses s ON s.call_id = c.id
       LEFT JOIN call_analyses a ON a.call_id = c.id
       WHERE c.status = 'completed' AND a.id IS NOT NULL AND c.uploaded_at >= $1
-        AND c.synthetic = FALSE
+        AND c.synthetic = FALSE AND c.excluded_from_metrics = FALSE
       ORDER BY c.uploaded_at DESC
     `, [since]);
     return rows.map(r => ({
@@ -1307,11 +1323,13 @@ export class PostgresStorage implements IStorage {
     const completedAt = merged.status === "completed" && !current.completedAt ? new Date().toISOString() : merged.completedAt;
     const { rows } = await this.db.query(
       `UPDATE coaching_sessions SET employee_id=$2, call_id=$3, assigned_by=$4, category=$5,
-       title=$6, notes=$7, action_plan=$8, status=$9, due_date=$10, completed_at=$11
+       title=$6, notes=$7, action_plan=$8, status=$9, due_date=$10, completed_at=$11,
+       effectiveness_rating=$12, effectiveness_note=$13
        WHERE id=$1 RETURNING *`,
       [id, merged.employeeId, merged.callId, merged.assignedBy, merged.category,
        merged.title, merged.notes, JSON.stringify(merged.actionPlan ?? null),
-       merged.status, merged.dueDate, completedAt],
+       merged.status, merged.dueDate, completedAt,
+       merged.effectivenessRating ?? null, merged.effectivenessNote ?? null],
     );
     return rows[0] ? mapCoachingSession(rows[0]) : undefined;
   }
@@ -1370,6 +1388,7 @@ export class PostgresStorage implements IStorage {
         JOIN calls c ON c.employee_id = w.employee_id
                     AND c.status = 'completed'
                     AND c.synthetic = FALSE
+                    AND c.excluded_from_metrics = FALSE
         JOIN call_analyses a ON a.call_id = c.id
       ),
       limited AS (

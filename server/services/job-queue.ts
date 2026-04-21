@@ -146,8 +146,14 @@ export class JobQueue {
     // Atomically increment attempts and read back (A18/F22 — was incremented
     // on claim, which meant crashes burned attempts; now the increment is
     // explicit on failure).
+    //
+    // Status guard: only act on jobs still in 'running' state. Without this,
+    // a race between reapStaleJobs (which SELECTs stale running rows without
+    // FOR UPDATE and then calls failJob) and the worker's completeJob can
+    // flip a just-completed job back to 'pending' or 'dead', causing a
+    // duplicate run of the audio pipeline and double-billing Bedrock.
     const { rows } = await this.db.query(
-      "UPDATE jobs SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1 RETURNING attempts, max_attempts",
+      "UPDATE jobs SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1 AND status = 'running' RETURNING attempts, max_attempts",
       [jobId],
     );
     if (rows.length === 0) return;

@@ -106,7 +106,19 @@ async function seedSimulatedCallPresets() {
         continue;
       }
       // Sensible default config: natural gap timing, phone codec, no noise.
-      const config = simulatedCallConfigSchema.parse({});
+      // Also attach a tier-based expectedScoreRange so these seeded presets
+      // immediately appear in the calibration suite (#1 roadmap). Ranges are
+      // deliberately conservative — they'll catch large regressions (1+ point
+      // drift) without false-positive-ing on normal model variance.
+      const tier = scriptParsed.data.qualityTier;
+      const expectedScoreRange =
+        tier === "excellent" ? { min: 8.0, max: 10.0 } :
+        tier === "acceptable" ? { min: 5.5, max: 7.5 } :
+        tier === "poor" ? { min: 2.0, max: 4.5 } :
+        undefined;
+      const config = simulatedCallConfigSchema.parse({
+        ...(expectedScoreRange ? { expectedScoreRange } : {}),
+      });
       await createSimulatedCall({
         title: scriptParsed.data.title,
         scenario: scriptParsed.data.scenario,

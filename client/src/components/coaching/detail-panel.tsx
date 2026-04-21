@@ -19,7 +19,7 @@
  *    Reopen) instead of "Move to next stage" because we don't track a
  *    real stage. Maps to the existing PATCH /api/coaching/:id endpoint.
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { X } from "@phosphor-icons/react";
@@ -84,6 +84,13 @@ export interface DetailPanelProps {
   togglePending?: boolean;
   onUpdateStatus?: (sessionId: string, status: CoachingSession["status"]) => void;
   onToggleActionItem?: (sessionId: string, index: number) => void;
+  /** Submit the manager's effectiveness rating at session close. Manager+ only. */
+  onRateEffectiveness?: (
+    sessionId: string,
+    rating: "helpful" | "neutral" | "not_helpful" | null,
+    note: string,
+  ) => void;
+  ratePending?: boolean;
 }
 
 export default function DetailPanel(props: DetailPanelProps) {
@@ -279,6 +286,20 @@ export default function DetailPanel(props: DetailPanelProps) {
           <EvidenceSection
             outcome={outcomeQuery.data}
             num={computeSectionNum(session, 3)}
+          />
+        )}
+
+        {/* Manager-supplied effectiveness rating — shown for completed
+            sessions so managers can capture the causal judgment that the
+            statistical outcome metric can't: "did this actually help?". */}
+        {props.canManage && session.status === "completed" && props.onRateEffectiveness && (
+          <EffectivenessSection
+            sessionId={session.id}
+            currentRating={session.effectivenessRating ?? null}
+            currentNote={session.effectivenessNote ?? ""}
+            onRate={props.onRateEffectiveness}
+            pending={props.ratePending ?? false}
+            num={computeSectionNum(session, 4)}
           />
         )}
 
@@ -480,3 +501,98 @@ function StatusTransitionButtons({
     </div>
   );
 }
+
+// Section rendered only on completed sessions. Manager rates effectiveness
+// (helpful / neutral / not_helpful) with an optional free-text note.
+// Complements the statistical outcome metric (which only measures
+// before/after score delta) with causal judgment.
+function EffectivenessSection({
+  sessionId,
+  currentRating,
+  currentNote,
+  onRate,
+  pending,
+  num,
+}: {
+  sessionId: string;
+  currentRating: "helpful" | "neutral" | "not_helpful" | null;
+  currentNote: string;
+  onRate: (id: string, rating: "helpful" | "neutral" | "not_helpful" | null, note: string) => void;
+  pending: boolean;
+  num: string;
+}) {
+  const [note, setNote] = useState(currentNote);
+  const [selectedRating, setSelectedRating] = useState<typeof currentRating>(currentRating);
+  // Reset local state when the panel switches to a different session.
+  useEffect(() => {
+    setNote(currentNote);
+    setSelectedRating(currentRating);
+  }, [sessionId, currentNote, currentRating]);
+
+  const ratingOptions: Array<{
+    value: "helpful" | "neutral" | "not_helpful";
+    label: string;
+    tone: string;
+  }> = [
+    { value: "helpful", label: "Helpful", tone: "var(--sage)" },
+    { value: "neutral", label: "Neutral", tone: "var(--muted-foreground)" },
+    { value: "not_helpful", label: "Not helpful", tone: "var(--destructive)" },
+  ];
+
+  const hasChanges = selectedRating !== currentRating || note !== currentNote;
+
+  return (
+    <DetailSection num={num} title="Effectiveness rating">
+      <div className="text-xs text-muted-foreground mb-3" style={{ lineHeight: 1.5 }}>
+        Did this coaching session actually help? Your rating complements the
+        before/after score delta with a causal judgment.
+      </div>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {ratingOptions.map((opt) => {
+          const active = selectedRating === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setSelectedRating(active ? null : opt.value)}
+              disabled={pending}
+              className="font-mono uppercase rounded-sm px-3 py-2 transition-colors disabled:opacity-60"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.1em",
+                backgroundColor: active ? opt.tone : "var(--card)",
+                color: active ? "var(--paper)" : "var(--foreground)",
+                border: `1px solid ${active ? opt.tone : "var(--border)"}`,
+              }}
+              data-testid={`effectiveness-${opt.value}`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value.slice(0, 1000))}
+        placeholder="Optional: what specifically changed, or why not?"
+        className="w-full min-h-[70px] rounded-sm border border-input bg-background px-3 py-2 text-sm"
+        maxLength={1000}
+        disabled={pending}
+        data-testid="effectiveness-note"
+      />
+      <div className="flex justify-end mt-2">
+        <button
+          type="button"
+          onClick={() => onRate(sessionId, selectedRating, note)}
+          disabled={pending || !hasChanges}
+          className="font-mono uppercase rounded-sm px-3 py-2 bg-primary text-[var(--paper)] border border-primary disabled:opacity-60"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+          data-testid="effectiveness-save"
+        >
+          {pending ? "Saving…" : currentRating === null ? "Submit" : "Update"}
+        </button>
+      </div>
+    </DetailSection>
+  );
+}
+

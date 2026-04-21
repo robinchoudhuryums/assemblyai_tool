@@ -17,7 +17,7 @@
  */
 import { useEffect, useState } from "react";
 import type { CallWithDetails } from "@shared/schema";
-import { Clock, FloppyDisk, PencilSimple, X } from "@phosphor-icons/react";
+import { Clock, FloppyDisk, PencilSimple, X, ProhibitInset } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,9 @@ interface SideRailProps {
   onChangeEditSummary: (v: string) => void;
   onChangeEditReason: (v: string) => void;
   onSave: () => void;
+  // Exclude-from-metrics toggle (manager+; backend enforces role).
+  onToggleExcluded: (next: boolean) => void;
+  excludedPending: boolean;
 }
 
 export default function SideRail(props: SideRailProps) {
@@ -122,6 +125,39 @@ export default function SideRail(props: SideRailProps) {
             </button>
           )}
         </div>
+
+        {/* Excluded-from-metrics banner + toggle. Visible to everyone when the
+            flag is set (so users can see the state); toggle button click is
+            accepted by the server only for manager/admin — viewers get a 403. */}
+        {call.excludedFromMetrics && (
+          <div
+            className="mt-3 px-3 py-2 rounded-sm flex items-center gap-2 text-xs"
+            style={{
+              backgroundColor: "var(--amber-soft, var(--secondary))",
+              boxShadow: "inset 2px 0 0 var(--amber, var(--muted-foreground))",
+            }}
+            data-testid="excluded-from-metrics-banner"
+          >
+            <ProhibitInset style={{ width: 14, height: 14 }} />
+            <span className="font-medium">Excluded from metrics</span>
+            <span className="text-muted-foreground">
+              — this call is hidden from leaderboards, dashboards, and reports.
+            </span>
+          </div>
+        )}
+        {!props.isEditing && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => props.onToggleExcluded(!call.excludedFromMetrics)}
+              disabled={props.excludedPending}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 disabled:opacity-50"
+              data-testid="side-rail-toggle-excluded"
+            >
+              {call.excludedFromMetrics ? "Include in metrics" : "Exclude from metrics"}
+            </button>
+          </div>
+        )}
 
         {props.isEditing ? (
           <div
@@ -278,7 +314,98 @@ export default function SideRail(props: SideRailProps) {
             </div>
           </Panel>
         )}
+
+      {/* Panel 6 — RAG sources that grounded the AI analysis (#3).
+          Stored server-side in analysis.confidenceFactors.ragSources for
+          reviewer visibility. Surfacing these turns RAG from an invisible
+          grounding layer into an audit-friendly transparency feature. */}
+      <RagSourcesPanel call={call} />
     </aside>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// RAG Sources panel — lists the knowledge-base documents that
+// influenced the AI's analysis. Each source is pulled from the
+// `confidenceFactors.ragSources` array captured at analysis time
+// (server/services/rag-client.ts → pipeline.ts store path).
+// ─────────────────────────────────────────────────────────────
+function RagSourcesPanel({ call }: { call: CallWithDetails }) {
+  const factors = call.analysis?.confidenceFactors as
+    | { ragSources?: Array<{
+        documentName?: string;
+        pageNumber?: number;
+        sectionHeader?: string;
+        score?: number;
+        text?: string;
+      }> }
+    | undefined;
+  const sources = Array.isArray(factors?.ragSources) ? factors.ragSources : [];
+  if (sources.length === 0) return null;
+
+  return (
+    <Panel>
+      <SectionLabel>
+        Why this score? <AIChip />
+      </SectionLabel>
+      <div
+        className="text-xs text-muted-foreground mt-1 mb-3"
+        style={{ lineHeight: 1.5 }}
+      >
+        Company knowledge base excerpts that grounded the AI's analysis of this call.
+      </div>
+      <div className="flex flex-col gap-3">
+        {sources.map((s, i) => (
+          <div
+            key={i}
+            className="border-l-2 pl-3"
+            style={{ borderColor: "var(--accent)" }}
+          >
+            <div
+              className="font-medium text-foreground"
+              style={{ fontSize: 12 }}
+            >
+              {toDisplayString(s.documentName || "Untitled reference")}
+              {s.pageNumber != null && (
+                <span
+                  className="font-mono text-muted-foreground ml-2"
+                  style={{ fontSize: 10 }}
+                >
+                  p.{s.pageNumber}
+                </span>
+              )}
+              {typeof s.score === "number" && (
+                <span
+                  className="font-mono ml-2"
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted-foreground)",
+                  }}
+                >
+                  · {(s.score * 100).toFixed(0)}% match
+                </span>
+              )}
+            </div>
+            {s.sectionHeader && (
+              <div
+                className="text-muted-foreground mt-0.5"
+                style={{ fontSize: 11, fontStyle: "italic" }}
+              >
+                {toDisplayString(s.sectionHeader)}
+              </div>
+            )}
+            {s.text && (
+              <div
+                className="text-foreground mt-1"
+                style={{ fontSize: 12, lineHeight: 1.5 }}
+              >
+                {toDisplayString(s.text)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 

@@ -135,6 +135,20 @@ export function registerCallRoutes(
       const sentiment = await storage.getSentimentAnalysis(call.id);
       const rawAnalysis = await storage.getCallAnalysis(call.id);
 
+      // When the call is still awaiting batch inference, include queue
+      // position + batch interval so the UI can show "your call is #3 of 12
+      // in the next batch submission (every 15 min)". Best-effort — failures
+      // fall back to omitting the field so the normal response still returns.
+      let batchStatus: Awaited<ReturnType<typeof import("../services/batch-scheduler").getBatchQueueStatus>> | null = null;
+      if (call.status === "awaiting_analysis") {
+        try {
+          const { getBatchQueueStatus } = await import("../services/batch-scheduler");
+          batchStatus = await getBatchQueueStatus(call.id);
+        } catch (batchErr) {
+          logger.warn("calls: failed to compute batch queue status", { callId: call.id, error: (batchErr as Error).message });
+        }
+      }
+
       const analysis = rawAnalysis ? {
         ...rawAnalysis,
         topics: Array.isArray(rawAnalysis.topics) ? rawAnalysis.topics : [],
@@ -146,7 +160,7 @@ export function registerCallRoutes(
         summary: typeof rawAnalysis.summary === "string" ? rawAnalysis.summary : "",
       } : undefined;
 
-      res.json({ ...call, employee, transcript, sentiment, analysis });
+      res.json({ ...call, employee, transcript, sentiment, analysis, batchStatus });
     } catch (error) {
       res.status(500).json({ message: "Failed to get call" });
     }
@@ -570,6 +584,37 @@ export function registerCallRoutes(
     }
   });
 
+  // Toggle excluded-from-metrics flag on a call. Flagged calls stay visible in
+  // lists and detail views but are omitted from aggregate metrics (leaderboards,
+  // dashboards, filtered reports, badge evaluation, coaching outcomes). Used
+  // for noisy recordings, roleplay/training calls, or known outliers.
+  router.patch("/api/calls/:id/exclude-from-metrics", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+    try {
+      const { excluded } = (req.body ?? {}) as { excluded?: unknown };
+      if (typeof excluded !== "boolean") {
+        sendError(res, 400, "Body must include { excluded: boolean }");
+        return;
+      }
+      const call = await storage.getCall(req.params.id);
+      if (!call) {
+        sendError(res, 404, "Call not found");
+        return;
+      }
+      const updated = await storage.updateCall(req.params.id, { excludedFromMetrics: excluded });
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: excluded ? "call_excluded_from_metrics" : "call_included_in_metrics",
+        resourceType: "call",
+        resourceId: req.params.id,
+      });
+      res.json(updated);
+    } catch (error) {
+      logger.error("failed to toggle excluded-from-metrics flag", { callId: req.params.id, error: (error as Error).message });
+      sendError(res, 500, "Failed to update call");
+    }
+  });
+
   router.delete("/api/calls/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
     try {
       const callId = req.params.id;
@@ -601,17 +646,64 @@ export function registerCallRoutes(
   });
 
   // ==================== BULK RE-ANALYSIS (admin only) ====================
+  // Two request shapes:
+  //  1. Explicit: { callIds: [uuid, ...] } — user selected calls in the UI.
+  //  2. Filter:   { filter: { callCategory?, from?, to?, employeeId?, limit? } }
+  //     — resolves to the N most recent completed calls matching the
+  //     filters and re-enqueues them. Useful after prompt template edits
+  //     or model swaps to refresh historical scores. Synthetic calls are
+  //     always excluded. Limit default 20, cap 100 to bound spend.
   router.post("/api/calls/bulk-reanalyze", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
-      const bulkSchema = z.object({
-        callIds: z.array(z.string().uuid()).min(1).max(50),
-      }).strict();
+      const bulkSchema = z.union([
+        z.object({
+          callIds: z.array(z.string().uuid()).min(1).max(50),
+        }).strict(),
+        z.object({
+          filter: z.object({
+            callCategory: z.enum(["inbound", "outbound", "internal", "vendor"]).optional(),
+            from: z.string().optional(),
+            to: z.string().optional(),
+            employeeId: z.string().uuid().optional(),
+            limit: z.number().int().min(1).max(100).default(20),
+          }),
+        }).strict(),
+      ]);
       const parsed = bulkSchema.safeParse(req.body);
       if (!parsed.success) {
         sendValidationError(res, "Invalid bulk-reanalyze payload", parsed.error);
         return;
       }
-      const { callIds } = parsed.data;
+
+      // Resolve callIds from either payload variant.
+      let callIds: string[];
+      if ("callIds" in parsed.data) {
+        callIds = parsed.data.callIds;
+      } else {
+        const { callCategory, from, to, employeeId, limit } = parsed.data.filter;
+        // Use the existing getCallsWithDetails filter surface. Filter to
+        // completed status so we only re-run calls that have audio and
+        // finished a prior pipeline cycle.
+        const candidates = await storage.getCallsWithDetails({
+          status: "completed",
+          employee: employeeId,
+        });
+        const fromMs = from ? new Date(from).getTime() : 0;
+        const toMs = to ? new Date(to).getTime() : Infinity;
+        const filtered = candidates
+          .filter(c => !callCategory || c.callCategory === callCategory)
+          .filter(c => {
+            const t = new Date(c.uploadedAt || 0).getTime();
+            return Number.isFinite(t) && t >= fromMs && t <= toMs;
+          })
+          .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+          .slice(0, limit);
+        callIds = filtered.map(c => c.id);
+        if (callIds.length === 0) {
+          res.json({ message: "No calls matched the filter", results: [] });
+          return;
+        }
+      }
 
       const jobQueue = getJobQueue();
       const results: { callId: string; status: string }[] = [];
@@ -671,7 +763,11 @@ export function registerCallRoutes(
         timestamp: new Date().toISOString(),
         event: "bulk_reanalyze",
         resourceType: "calls",
-        resourceId: callIds.join(","),
+        // Cap resourceId at the first 10 IDs + a count suffix so the audit
+        // log row doesn't balloon when filter mode resolves 100 calls.
+        resourceId: callIds.length <= 10
+          ? callIds.join(",")
+          : `${callIds.slice(0, 10).join(",")},+${callIds.length - 10} more`,
         detail: `Bulk re-analysis of ${callIds.length} calls`,
       });
 

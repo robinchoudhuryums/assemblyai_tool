@@ -111,6 +111,32 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     },
   });
 
+  // Toggle excluded-from-metrics flag. Server enforces manager/admin role;
+  // viewers clicking the button will see a 403. The mutation invalidates all
+  // aggregate query keys that could change: dashboards, leaderboards, reports.
+  const excludeMutation = useMutation({
+    mutationFn: async (excluded: boolean) => {
+      const { getCsrfToken } = await import("@/lib/queryClient");
+      const res = await fetch(`/api/calls/${callId}/exclude-from-metrics`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(getCsrfToken() ? { "x-csrf-token": getCsrfToken()! } : {}) },
+        credentials: "include",
+        body: JSON.stringify({ excluded }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to update exclusion flag");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calls", callId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calls"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/gamification/leaderboard"] });
+    },
+  });
+
   const startEditing = () => {
     setEditScore(call?.analysis?.performanceScore?.toString() || "");
     setEditSummary(toDisplayString(call?.analysis?.summary) || "");
@@ -613,8 +639,62 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     }
   );
 
+  // Batch queue status banner — shown when the call is deferred to batch
+  // inference. Tells the user "your call is #N of M in the next submission"
+  // instead of letting them think the upload failed. Backend populates
+  // `call.batchStatus` (best-effort) only when status === "awaiting_analysis".
+  const batchStatus = (call as CallWithDetails & {
+    batchStatus?: {
+      state: "pending" | "submitted";
+      position?: number;
+      totalPending?: number;
+      batchIntervalMinutes?: number;
+      jobId?: string;
+      submittedAt?: string;
+    } | null;
+  }).batchStatus;
+
   return (
     <div data-testid="transcript-viewer">
+      {/* Batch-inference progress banner (F#4). Visible only when the call is
+          waiting on batch analysis — closes the "did my upload fail?" UX gap
+          introduced by BEDROCK_BATCH_MODE=true (results delayed up to 24h). */}
+      {call.status === "awaiting_analysis" && batchStatus && (
+        <div
+          className="mb-3 px-4 py-3 rounded-sm text-sm flex items-start gap-3"
+          style={{
+            backgroundColor: "var(--amber-soft, var(--secondary))",
+            boxShadow: "inset 2px 0 0 var(--amber, var(--muted-foreground))",
+          }}
+          data-testid="batch-status-banner"
+          role="status"
+        >
+          <div className="flex-1">
+            <div className="font-medium">
+              {batchStatus.state === "submitted"
+                ? "Submitted to batch analysis"
+                : "Waiting for next batch submission"}
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {batchStatus.state === "pending" && batchStatus.position != null && batchStatus.totalPending != null ? (
+                <>
+                  #{batchStatus.position} of {batchStatus.totalPending} pending
+                  {batchStatus.batchIntervalMinutes
+                    ? ` — next submission window is every ${batchStatus.batchIntervalMinutes} min`
+                    : ""}
+                </>
+              ) : batchStatus.state === "submitted" && batchStatus.submittedAt ? (
+                <>
+                  Submitted {new Date(batchStatus.submittedAt).toLocaleString()} — results
+                  typically arrive within 24 hours. Refresh this page periodically.
+                </>
+              ) : (
+                "Awaiting AWS Bedrock batch processing (typically within 24 hours)."
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Compact secondary toolbar — only controls that aren't already in
           the ViewerHeader (search/export/download) or the Scrubber
           (play/rate). Kept here because these are functional shortcuts
@@ -895,6 +975,8 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             onChangeEditSummary={setEditSummary}
             onChangeEditReason={setEditReason}
             onSave={handleSaveEdit}
+            onToggleExcluded={(next) => excludeMutation.mutate(next)}
+            excludedPending={excludeMutation.isPending}
           />
 
           {/* AI Analysis Skipped banner — surfaced prominently when the

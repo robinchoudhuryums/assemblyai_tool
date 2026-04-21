@@ -216,6 +216,47 @@ async function processBatchResults(
       }
     }
 
+    // F2: Walk the submitted callIds and mark any NOT present in `results` as
+    // failed. A batch can complete with a subset of records (Bedrock dropped a
+    // record, output parsing failed on a single line, or the output file was
+    // truncated). Previously these calls stayed in `awaiting_analysis` with
+    // their pending S3 item still around and were only recovered by the 2-hour
+    // orphan reaper. Fail them explicitly so the UI updates immediately, the
+    // pending item is cleaned up, and operators can see the failure in the
+    // admin dashboard without waiting two hours.
+    const processedIds = new Set(results.keys());
+    for (const callId of job.callIds) {
+      if (processedIds.has(callId)) continue;
+      logger.warn("Batch: submitted callId missing from batch output, marking failed", {
+        callId,
+        jobId: job.jobId,
+      });
+      try {
+        const existingCall = await storage.getCall(callId).catch(() => null);
+        // If the call was already moved to a terminal state (completed via
+        // on-demand re-run / manager edit, or already failed), don't clobber.
+        if (existingCall && (existingCall.status === "completed" || existingCall.status === "failed")) {
+          // Still clean up the pending item so orphan recovery doesn't pick it up.
+        } else {
+          await storage.updateCall(callId, { status: "failed" });
+          broadcastCallUpdate(callId, "failed", { label: "Batch: result missing from output" });
+        }
+      } catch (markErr) {
+        logger.warn("Batch: failed to mark missing-output call as failed", {
+          callId,
+          error: (markErr as Error).message,
+        });
+      }
+      try {
+        await s3Client.deleteObject(`batch-inference/pending/${callId}.json`);
+      } catch (delErr) {
+        logger.warn("Batch: failed to delete pending item for missing-output call", {
+          callId,
+          error: (delErr as Error).message,
+        });
+      }
+    }
+
     await s3Client.deleteObject(jobKey);
   } else if (status.status === "Failed" || status.status === "Stopped" || status.status === "Expired") {
     logger.error("Batch job failed", { jobId: job.jobId, reason: status.message || status.status });
@@ -430,6 +471,73 @@ async function promoteOrphanedSubmissions(s3Client: ReturnType<NonNullable<typeo
     }
   } catch (err) {
     logger.warn("Batch: failed to list orphaned-submissions prefix", { error: (err as Error).message });
+  }
+}
+
+/**
+ * Compute the batch-queue status for a single call (for UI progress display).
+ *
+ * Returns the call's position in the pending queue (1-indexed, oldest first),
+ * the total pending count, the batch cycle interval in minutes, and whether
+ * the call was found in any active batch job. Returns `null` when the call is
+ * not in any pending/active batch state or when S3 is unavailable.
+ *
+ * Ordering follows the batch-scheduler's submission order: pending items are
+ * collected in listObjects() order (alphanumeric by key), which matches the
+ * callId-based key scheme. This is the same order used by the submission
+ * loop, so the position returned here is a faithful representation of where
+ * the call sits in the next submission.
+ */
+export async function getBatchQueueStatus(callId: string): Promise<
+  | {
+      state: "pending" | "submitted";
+      position?: number;
+      totalPending?: number;
+      batchIntervalMinutes?: number;
+      jobId?: string;
+      submittedAt?: string;
+    }
+  | null
+> {
+  try {
+    const s3Client = storage.getObjectStorageClient();
+    if (!s3Client) return null;
+
+    // 1. Check if the call has an in-flight batch job (tracked under active-jobs/).
+    const activeJobKeys = await s3Client.listObjects("batch-inference/active-jobs/");
+    for (const jobKey of activeJobKeys) {
+      try {
+        const job = await s3Client.downloadJson<BatchJob>(jobKey);
+        if (job?.callIds?.includes(callId)) {
+          return {
+            state: "submitted",
+            jobId: job.jobId,
+            submittedAt: job.createdAt,
+          };
+        }
+      } catch {
+        /* skip unreadable job file */
+      }
+    }
+
+    // 2. Check the pending queue. Position is 1-indexed from the head.
+    const pendingKeys = await s3Client.listObjects("batch-inference/pending/");
+    const pendingCount = pendingKeys.length;
+    const thisKey = `batch-inference/pending/${callId}.json`;
+    const idx = pendingKeys.indexOf(thisKey);
+    if (idx !== -1) {
+      return {
+        state: "pending",
+        position: idx + 1,
+        totalPending: pendingCount,
+        batchIntervalMinutes: parseInt(process.env.BATCH_INTERVAL_MINUTES || "15", 10),
+      };
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn("Batch: failed to compute queue status", { callId, error: (err as Error).message });
+    return null;
   }
 }
 

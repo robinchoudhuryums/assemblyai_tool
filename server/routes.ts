@@ -40,6 +40,7 @@ import { startTranscribingReaper } from "./services/transcribing-reaper";
 // Auto-calibration and telephony
 import { startCalibrationScheduler } from "./services/auto-calibration";
 import { startTelephonyScheduler } from "./services/telephony-8x8";
+import { startAgentDeclineScheduler } from "./services/agent-decline-alert";
 
 // Ensure uploads directory exists. A42/F63: absolute path — cwd-relative
 // "uploads" broke when pm2 or dev scripts ran from a different directory.
@@ -353,6 +354,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Start 8x8 telephony auto-ingestion (if configured)
   startTelephonyScheduler(processAudioFile);
+
+  // Start agent-decline alert scheduler (if AGENT_DECLINE_CHECK_ENABLED=true)
+  startAgentDeclineScheduler();
 
   const httpServer = createServer(app);
   return httpServer;

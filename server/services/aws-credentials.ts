@@ -48,7 +48,9 @@ export async function getAwsCredentials(): Promise<AwsCredentials | null> {
     if (now < cachedExpiration - REFRESH_BUFFER_MS) {
       return cachedCredentials;
     }
-    // Credentials are expiring soon — refresh below
+    // Credentials are expiring soon — refresh below. If refresh fails but
+    // the cached creds haven't actually expired yet, we'll fall back to the
+    // cache rather than returning null (F4 fix).
   }
 
   // 3. Try IMDSv2
@@ -67,6 +69,17 @@ export async function getAwsCredentials(): Promise<AwsCredentials | null> {
     } else if (imdsAvailable === true) {
       // We had working IMDS before; this is a refresh failure — surface it.
       logger.warn("IMDS credential refresh failed", { error: errMsg });
+      // F4: if refresh failed during the 5-min pre-expiration buffer but the
+      // cached credentials haven't actually expired yet, keep using them.
+      // Previously this path returned null, causing brief AWS outages during
+      // transient IMDS flaps even though valid creds were in hand. Once
+      // Date.now() >= cachedExpiration, the cached creds are truly expired
+      // and we fall through to return null. Note: imdsAvailable stays true
+      // while we're still serving from the cache, so a subsequent refresh
+      // failure continues to log at warn (not debug).
+      if (cachedCredentials && cachedExpiration && Date.now() < cachedExpiration) {
+        return cachedCredentials;
+      }
     } else {
       logger.debug("IMDS still unavailable", { error: errMsg });
     }

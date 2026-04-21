@@ -22,6 +22,7 @@ import {
   createSimulatedCall,
   getSimulatedCall,
   listSimulatedCalls,
+  listCalibrationPresets,
   deleteSimulatedCall,
   countSimulatedCallsToday,
   isSimulatedCallsAvailable,
@@ -108,6 +109,113 @@ export function registerSimulatedCallRoutes(
           error: (err as Error).message,
         });
         sendError(res, 500, "Failed to list simulated calls");
+      }
+    },
+  );
+
+  // ── Calibration suite (#1 roadmap) ─────────────────────────
+  // Read-only report: lists every simulated-call preset that has an
+  // `expectedScoreRange` in its config, pulls each preset's most-recently
+  // analyzed score (from calls.analyses via simulated_calls.sent_to_analysis_call_id),
+  // and reports pass/fail + summary counts. Operators use this as a
+  // regression-detection dashboard after prompt template edits or model
+  // swaps: if the model drifted, presets that previously passed now fail.
+  //
+  // This endpoint is deliberately read-only. Regenerating + re-analyzing
+  // all presets is an expensive async operation (~30 min for 12 presets);
+  // operators can manually re-run individual presets via the existing
+  // /analyze endpoint and then refresh this report.
+  router.get(
+    "/api/admin/simulated-calls/calibration-suite",
+    requireAuth,
+    requireRole("admin"),
+    async (_req, res) => {
+      if (!isSimulatedCallsAvailable()) {
+        return res.json({ presets: [], summary: { total: 0, passed: 0, failed: 0, notRun: 0 } });
+      }
+      try {
+        const presets = await listCalibrationPresets();
+        const report: Array<{
+          id: string;
+          title: string;
+          qualityTier: string | null | undefined;
+          expectedMin: number;
+          expectedMax: number;
+          actualScore: number | null;
+          sentToAnalysisCallId: string | null | undefined;
+          analyzedAt: string | null;
+          status: "pass" | "fail" | "not_run";
+          /** Score delta vs. nearest range boundary (0 when in range). */
+          delta: number | null;
+        }> = [];
+
+        let passed = 0;
+        let failed = 0;
+        let notRun = 0;
+
+        for (const preset of presets) {
+          const range = preset.config.expectedScoreRange;
+          if (!range) continue; // Shouldn't happen given the listCalibrationPresets filter, but defensive.
+          let actualScore: number | null = null;
+          let analyzedAt: string | null = null;
+
+          if (preset.sentToAnalysisCallId) {
+            try {
+              const analysis = await storage.getCallAnalysis(preset.sentToAnalysisCallId);
+              if (analysis?.performanceScore) {
+                const parsed = parseFloat(String(analysis.performanceScore));
+                if (Number.isFinite(parsed)) {
+                  actualScore = parsed;
+                  analyzedAt = analysis.createdAt ?? null;
+                }
+              }
+            } catch (lookupErr) {
+              logger.warn("calibration-suite: failed to load analysis", {
+                presetId: preset.id,
+                callId: preset.sentToAnalysisCallId,
+                error: (lookupErr as Error).message,
+              });
+            }
+          }
+
+          let status: "pass" | "fail" | "not_run";
+          let delta: number | null = null;
+          if (actualScore === null) {
+            status = "not_run";
+            notRun++;
+          } else if (actualScore >= range.min && actualScore <= range.max) {
+            status = "pass";
+            delta = 0;
+            passed++;
+          } else {
+            status = "fail";
+            delta = actualScore < range.min ? actualScore - range.min : actualScore - range.max;
+            failed++;
+          }
+
+          report.push({
+            id: preset.id,
+            title: preset.title,
+            qualityTier: preset.qualityTier,
+            expectedMin: range.min,
+            expectedMax: range.max,
+            actualScore,
+            sentToAnalysisCallId: preset.sentToAnalysisCallId,
+            analyzedAt,
+            status,
+            delta,
+          });
+        }
+
+        res.json({
+          presets: report,
+          summary: { total: report.length, passed, failed, notRun },
+        });
+      } catch (err) {
+        logger.error("calibration-suite: failed to build report", {
+          error: (err as Error).message,
+        });
+        sendError(res, 500, "Failed to build calibration suite report");
       }
     },
   );

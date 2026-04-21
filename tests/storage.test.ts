@@ -321,6 +321,39 @@ describe("MemStorage — Coaching sessions", () => {
     assert.equal(updated?.status, "completed");
   });
 
+  it("persists effectiveness rating + note across update round-trip", async () => {
+    // Tier 2 #8: manager-supplied effectiveness rating captured at session
+    // close. Covers the new effectiveness_rating + effectiveness_note fields
+    // for MemStorage (Postgres uses a dedicated UPDATE statement exercised
+    // only in integration tests).
+    const session = await storage.createCoachingSession({
+      employeeId: "emp-eff",
+      assignedBy: "manager",
+      title: "Effectiveness test",
+    });
+    assert.equal(session.effectivenessRating, undefined);
+    assert.equal(session.effectivenessNote, undefined);
+
+    const rated = await storage.updateCoachingSession(session.id, {
+      status: "completed",
+      effectivenessRating: "helpful",
+      effectivenessNote: "Clearly improved customer-handling confidence.",
+    });
+    assert.equal(rated?.effectivenessRating, "helpful");
+    assert.equal(rated?.effectivenessNote, "Clearly improved customer-handling confidence.");
+
+    // Round-trip through getCoachingSession to prove persistence.
+    const fetched = await storage.getCoachingSession(session.id);
+    assert.equal(fetched?.effectivenessRating, "helpful");
+    assert.equal(fetched?.effectivenessNote, "Clearly improved customer-handling confidence.");
+
+    // Overwriting to a different rating should stick.
+    const changed = await storage.updateCoachingSession(session.id, {
+      effectivenessRating: "not_helpful",
+    });
+    assert.equal(changed?.effectivenessRating, "not_helpful");
+  });
+
   // getCoachingOutcomes — the MemStorage path uses the shared
   // computeCoachingOutcomesInMemory helper. These tests lock its contract
   // end-to-end (empty, no-calls, before/after split).
@@ -395,6 +428,88 @@ describe("MemStorage — Coaching sessions", () => {
     assert.equal(target.after?.count, 3);
     assert.equal(target.before?.avgScore, 6.0);
     assert.equal(target.after?.avgScore, 8.0);
+  });
+
+  it("getCoachingOutcomes excludes manager-flagged calls from before/after windows", async () => {
+    // Regression guard for the excludedFromMetrics filter in
+    // computeCoachingOutcomesInMemory. If a manager flags a noisy call as
+    // excluded_from_metrics AFTER a coaching session has completed, the
+    // outcome delta must not be distorted by that noisy score.
+    const empId = "emp-excluded";
+    const now = Date.now();
+    const earlier = new Date(now - 10 * 86400000);
+    const later = new Date(now - 3 * 86400000);
+
+    // 2 normal "before" calls at score 5.0
+    for (let i = 0; i < 2; i++) {
+      const call = await storage.createCall({
+        fileName: `exb-before-${i}.mp3`,
+        mimeType: "audio/mp3",
+        fileSize: 1,
+        status: "completed",
+        contentHash: `exb-before-${i}`,
+      });
+      await storage.setCallEmployee(call.id, empId);
+      await storage.updateCall(call.id, { uploadedAt: new Date(earlier.getTime() + i * 86400000).toISOString() });
+      await storage.createCallAnalysis({ callId: call.id, performanceScore: "5.0" });
+    }
+    // 1 "before" call that's flagged as excluded — high score that would
+    // otherwise boost the before-window average.
+    const flaggedBefore = await storage.createCall({
+      fileName: "exb-before-flagged.mp3",
+      mimeType: "audio/mp3",
+      fileSize: 1,
+      status: "completed",
+      contentHash: "exb-before-flagged",
+      excludedFromMetrics: true,
+    });
+    await storage.setCallEmployee(flaggedBefore.id, empId);
+    await storage.updateCall(flaggedBefore.id, { uploadedAt: new Date(earlier.getTime() + 2 * 86400000).toISOString() });
+    await storage.createCallAnalysis({ callId: flaggedBefore.id, performanceScore: "10.0" });
+
+    // 2 normal "after" calls at score 8.0
+    for (let i = 0; i < 2; i++) {
+      const call = await storage.createCall({
+        fileName: `exb-after-${i}.mp3`,
+        mimeType: "audio/mp3",
+        fileSize: 1,
+        status: "completed",
+        contentHash: `exb-after-${i}`,
+      });
+      await storage.setCallEmployee(call.id, empId);
+      await storage.updateCall(call.id, { uploadedAt: new Date(later.getTime() + i * 86400000).toISOString() });
+      await storage.createCallAnalysis({ callId: call.id, performanceScore: "8.0" });
+    }
+    // 1 "after" call that's flagged — low score that would otherwise drag
+    // the after-window average down.
+    const flaggedAfter = await storage.createCall({
+      fileName: "exb-after-flagged.mp3",
+      mimeType: "audio/mp3",
+      fileSize: 1,
+      status: "completed",
+      contentHash: "exb-after-flagged",
+      excludedFromMetrics: true,
+    });
+    await storage.setCallEmployee(flaggedAfter.id, empId);
+    await storage.updateCall(flaggedAfter.id, { uploadedAt: new Date(later.getTime() + 2 * 86400000).toISOString() });
+    await storage.createCallAnalysis({ callId: flaggedAfter.id, performanceScore: "1.0" });
+
+    const session = await storage.createCoachingSession({
+      employeeId: empId,
+      assignedBy: "manager",
+      title: "Midpoint session",
+    });
+    const midpoint = new Date(now - 5 * 86400000);
+    await storage.updateCoachingSession(session.id, { createdAt: midpoint.toISOString() });
+
+    const rows = await storage.getCoachingOutcomes(new Date(now - 30 * 86400000), 10);
+    const target = rows.find(r => r.sessionId === session.id);
+    assert.ok(target);
+    // Flagged calls must NOT appear in either window.
+    assert.equal(target.before?.count, 2, "before-window should exclude flagged call");
+    assert.equal(target.after?.count, 2, "after-window should exclude flagged call");
+    assert.equal(target.before?.avgScore, 5.0, "flagged 10.0 must not inflate before-avg");
+    assert.equal(target.after?.avgScore, 8.0, "flagged 1.0 must not drag after-avg down");
   });
 });
 

@@ -361,7 +361,11 @@ async function computeCoachingOutcomesInMemory(
   for (const s of windowed) {
     if (byEmployee.has(s.employeeId)) continue;
     const calls = await storage.getCallsWithDetails({ status: "completed", employee: s.employeeId });
+    // Exclude manager-flagged calls from the coaching outcome window (mirrors
+    // the Postgres-native getCoachingOutcomes filter). getCallsWithDetails
+    // intentionally returns excluded calls for UI paths, so filter here.
     const rows = calls
+      .filter(c => !c.excludedFromMetrics)
       .map(c => {
         const scoreRaw = c.analysis?.performanceScore;
         const score = scoreRaw !== undefined && scoreRaw !== null && String(scoreRaw) !== ""
@@ -522,6 +526,7 @@ export class MemStorage implements IStorage {
       ...call,
       id,
       synthetic: call.synthetic === true,
+      excludedFromMetrics: call.excludedFromMetrics === true,
       uploadedAt: new Date().toISOString(),
     };
     this.calls.set(id, newCall);
@@ -579,7 +584,7 @@ export class MemStorage implements IStorage {
   async getCallsSince(since: Date): Promise<Call[]> {
     const sinceMs = since.getTime();
     return [...this.calls.values()].filter(
-      c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs,
+      c => !c.synthetic && !c.excludedFromMetrics && new Date(c.uploadedAt || 0).getTime() >= sinceMs,
     );
   }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
@@ -626,14 +631,14 @@ export class MemStorage implements IStorage {
     // Synthetic-call isolation: badge milestones must not count simulated calls.
     let count = 0;
     for (const call of this.calls.values()) {
-      if (!call.synthetic && call.employeeId === employeeId && call.status === "completed") count++;
+      if (!call.synthetic && !call.excludedFromMetrics && call.employeeId === employeeId && call.status === "completed") count++;
     }
     return count;
   }
 
   async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
     const calls = [...this.calls.values()]
-      .filter(c => !c.synthetic && c.employeeId === employeeId && c.status === "completed")
+      .filter(c => !c.synthetic && !c.excludedFromMetrics && c.employeeId === employeeId && c.status === "completed")
       .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
       .slice(0, Math.max(1, Math.min(limit, 200)));
     return Promise.all(calls.map(async (call) => {
@@ -646,7 +651,7 @@ export class MemStorage implements IStorage {
     const sinceMs = options.since ? options.since.getTime() : 0;
     const byEmployee = new Map<string, LeaderboardRow>();
     const sortedCalls = [...this.calls.values()]
-      .filter(c => !c.synthetic && c.status === "completed" && c.employeeId)
+      .filter(c => !c.synthetic && !c.excludedFromMetrics && c.status === "completed" && c.employeeId)
       .filter(c => new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
     for (const call of sortedCalls) {
@@ -681,7 +686,7 @@ export class MemStorage implements IStorage {
   async getCallsSinceWithDetails(since: Date, employeeId?: string): Promise<CallWithDetails[]> {
     const sinceMs = since.getTime();
     const calls = [...this.calls.values()]
-      .filter(c => !c.synthetic && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
+      .filter(c => !c.synthetic && !c.excludedFromMetrics && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
       .filter(c => !employeeId || c.employeeId === employeeId);
     return Promise.all(calls.map(async (call) => {
       const [employee, transcript, sentiment, analysis] = await Promise.all([
@@ -809,16 +814,17 @@ export class MemStorage implements IStorage {
   }
 
   async getDashboardMetrics(): Promise<DashboardMetrics> {
-    // Synthetic-call isolation — build an excluded-call-id set and skip those
-    // transcripts/sentiments/analyses when aggregating.
-    const syntheticCallIds = new Set<string>();
+    // Synthetic-call isolation + manager-excluded isolation — build an
+    // excluded-call-id set and skip those transcripts/sentiments/analyses
+    // when aggregating.
+    const excludedCallIds = new Set<string>();
     let totalCalls = 0;
     for (const c of this.calls.values()) {
-      if (c.synthetic) syntheticCallIds.add(c.id);
+      if (c.synthetic || c.excludedFromMetrics) excludedCallIds.add(c.id);
       else totalCalls++;
     }
-    const sentiments = [...this.sentiments.values()].filter(s => !syntheticCallIds.has(s.callId));
-    const analyses = [...this.analyses.values()].filter(a => !syntheticCallIds.has(a.callId));
+    const sentiments = [...this.sentiments.values()].filter(s => !excludedCallIds.has(s.callId));
+    const analyses = [...this.analyses.values()].filter(a => !excludedCallIds.has(a.callId));
     const avgSentiment = sentiments.length > 0
       ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) / sentiments.length) * 10
       : 0;
@@ -834,12 +840,12 @@ export class MemStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
-    // Synthetic-call isolation.
-    const syntheticCallIds = new Set<string>();
-    for (const c of this.calls.values()) if (c.synthetic) syntheticCallIds.add(c.id);
+    // Synthetic + manager-excluded isolation.
+    const excludedCallIds = new Set<string>();
+    for (const c of this.calls.values()) if (c.synthetic || c.excludedFromMetrics) excludedCallIds.add(c.id);
     const distribution: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
     for (const s of this.sentiments.values()) {
-      if (syntheticCallIds.has(s.callId)) continue;
+      if (excludedCallIds.has(s.callId)) continue;
       const key = s.overallSentiment as keyof SentimentDistribution;
       if (key in distribution) distribution[key]++;
     }
@@ -847,8 +853,8 @@ export class MemStorage implements IStorage {
   }
 
   async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
-    // Synthetic-call isolation: skip simulated calls when rolling up per-employee averages.
-    const calls = [...this.calls.values()].filter(c => !c.synthetic);
+    // Synthetic + manager-excluded isolation: skip these when rolling up per-employee averages.
+    const calls = [...this.calls.values()].filter(c => !c.synthetic && !c.excludedFromMetrics);
     const employeeStats = new Map<string, { totalScore: number; callCount: number }>();
     for (const call of calls) {
       if (!call.employeeId) continue;
@@ -875,8 +881,9 @@ export class MemStorage implements IStorage {
   async getFilteredReportMetrics(filters: {
     from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
   }): Promise<FilteredReportResult> {
-    // Synthetic-call isolation — reports never include simulated calls.
-    let calls = [...this.calls.values()].filter(c => !c.synthetic && c.status === "completed");
+    // Synthetic + manager-excluded isolation — reports never include
+    // simulated calls or calls flagged excluded_from_metrics.
+    let calls = [...this.calls.values()].filter(c => !c.synthetic && !c.excludedFromMetrics && c.status === "completed");
     if (filters.from) { const d = new Date(filters.from).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() >= d); }
     if (filters.to) { const d = new Date(filters.to).getTime(); calls = calls.filter(c => new Date(c.uploadedAt || 0).getTime() <= d); }
     if (filters.employeeId) calls = calls.filter(c => c.employeeId === filters.employeeId);
@@ -947,8 +954,8 @@ export class MemStorage implements IStorage {
     const sinceMs = since.getTime();
     const result: InsightsCallData[] = [];
     for (const c of this.calls.values()) {
-      // Synthetic-call isolation.
-      if (c.synthetic) continue;
+      // Synthetic + manager-excluded isolation.
+      if (c.synthetic || c.excludedFromMetrics) continue;
       if (c.status !== "completed") continue;
       if (new Date(c.uploadedAt || 0).getTime() < sinceMs) continue;
       const a = this.analyses.get(c.id);

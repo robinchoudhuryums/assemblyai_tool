@@ -168,6 +168,10 @@ export function register(router: Router) {
     title: z.string().min(1).optional(),
     category: z.string().optional(),
     dueDate: z.string().optional(),
+    // Manager-supplied subjective effectiveness rating captured at session
+    // close. Complements the statistical before/after outcome metric.
+    effectivenessRating: z.enum(["helpful", "neutral", "not_helpful"]).nullable().optional(),
+    effectivenessNote: z.string().max(1000).optional(),
   }).strict();
 
   router.patch("/api/coaching/:id", requireAuth, requireMFASetup, requireRole("manager", "admin"), validateIdParam, async (req, res) => {

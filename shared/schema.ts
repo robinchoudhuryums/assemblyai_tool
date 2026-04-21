@@ -122,6 +122,10 @@ export const insertCallSchema = z.object({
   // Synthetic flag: set to TRUE only for calls promoted from the Simulated
   // Call Generator. These rows are excluded from all aggregate/learning paths.
   synthetic: z.boolean().optional(),
+  // Manager-set exclusion flag. When TRUE, the call is omitted from aggregate
+  // metrics (leaderboards, dashboards, filtered reports, badge evaluation,
+  // coaching outcomes) but still visible in lists / search / detail views.
+  excludedFromMetrics: z.boolean().optional(),
 });
 
 export const callSchema = insertCallSchema.extend({
@@ -412,6 +416,12 @@ export const insertCoachingSessionSchema = z.object({
   })).optional(),
   status: z.enum(["pending", "in_progress", "completed", "dismissed"]).default("pending"),
   dueDate: z.string().optional(),
+  // Manager-supplied subjective effectiveness rating captured at session
+  // close. Complements the statistical before/after outcome metric with
+  // causal judgment — "did this coaching actually help this agent?".
+  // Optional so existing sessions don't need backfill.
+  effectivenessRating: z.enum(["helpful", "neutral", "not_helpful"]).optional(),
+  effectivenessNote: z.string().max(1000).optional(),
 });
 
 export const coachingSessionSchema = insertCoachingSessionSchema.extend({

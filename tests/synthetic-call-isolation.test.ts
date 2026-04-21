@@ -223,3 +223,270 @@ describe("Synthetic call isolation — dashboards / reports / insights", () => {
     assert.equal(r.performers[0].avgPerformanceScore, 8);
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// excludedFromMetrics isolation regression test.
+//
+// Manager-set flag that omits a real call from aggregate metrics
+// (leaderboards, dashboards, filtered reports, badge evaluation,
+// coaching outcomes) without hiding it from lists / search / detail.
+// Follows the same pattern as synthetic but diverges in one important
+// way: excluded calls MUST still appear in list/search views so users
+// can see they're flagged and optionally un-flag them.
+// ──────────────────────────────────────────────────────────────
+
+let flaggedEmpId: string;
+
+async function seedTwoCallsOneExcluded() {
+  const emp = await storage.createEmployee({
+    name: "Bob Flagged",
+    email: "bob@flagged.com",
+  });
+  flaggedEmpId = emp.id;
+
+  // One normal call, one manager-flagged-excluded call, both real (non-synthetic).
+  const normalCall = await storage.createCall({
+    employeeId: emp.id,
+    fileName: "normal.mp3",
+    status: "completed",
+    contentHash: "normal-hash",
+  });
+  await storage.createCallAnalysis({
+    callId: normalCall.id,
+    performanceScore: "7.0",
+    subScores: { compliance: 7, customerExperience: 7, communication: 7, resolution: 7 } as any,
+  } as any);
+  await storage.createSentimentAnalysis({
+    callId: normalCall.id,
+    overallSentiment: "positive",
+    overallScore: "0.7",
+  } as any);
+
+  const excludedCall = await storage.createCall({
+    employeeId: emp.id,
+    fileName: "excluded.mp3",
+    status: "completed",
+    contentHash: "excluded-hash",
+    excludedFromMetrics: true,
+  });
+  await storage.createCallAnalysis({
+    callId: excludedCall.id,
+    performanceScore: "2.0",
+    subScores: { compliance: 2, customerExperience: 2, communication: 2, resolution: 2 } as any,
+  } as any);
+  await storage.createSentimentAnalysis({
+    callId: excludedCall.id,
+    overallSentiment: "negative",
+    overallScore: "0.1",
+  } as any);
+  return { normalCall, excludedCall };
+}
+
+describe("excludedFromMetrics isolation — createCall + getCall", () => {
+  it("stores excludedFromMetrics = true when requested", async () => {
+    const call = await storage.createCall({
+      fileName: "x.mp3",
+      status: "processing",
+      excludedFromMetrics: true,
+    });
+    assert.equal(call.excludedFromMetrics, true);
+    const found = await storage.getCall(call.id);
+    assert.equal(found?.excludedFromMetrics, true);
+  });
+
+  it("defaults excludedFromMetrics to false when omitted", async () => {
+    const call = await storage.createCall({
+      fileName: "y.mp3",
+      status: "processing",
+    });
+    assert.equal(call.excludedFromMetrics, false);
+  });
+
+  it("getCall returns excluded calls (single-row lookups still work)", async () => {
+    const call = await storage.createCall({
+      fileName: "x.mp3",
+      status: "processing",
+      excludedFromMetrics: true,
+    });
+    const found = await storage.getCall(call.id);
+    assert.ok(found);
+    assert.equal(found.id, call.id);
+  });
+
+  it("updateCall can toggle excludedFromMetrics", async () => {
+    const call = await storage.createCall({
+      fileName: "z.mp3",
+      status: "processing",
+    });
+    assert.equal(call.excludedFromMetrics, false);
+    const updated = await storage.updateCall(call.id, { excludedFromMetrics: true });
+    assert.equal(updated?.excludedFromMetrics, true);
+    const reverted = await storage.updateCall(call.id, { excludedFromMetrics: false });
+    assert.equal(reverted?.excludedFromMetrics, false);
+  });
+});
+
+describe("excludedFromMetrics — list / search queries still include flagged calls", () => {
+  // Contract: excluded calls MUST remain visible to users so they can see the
+  // flag and un-exclude. Divergence from synthetic's "hidden everywhere"
+  // pattern is deliberate — see server/storage-postgres.ts comments near
+  // getCallsWithDetails / getCallsPaginated / searchCalls.
+
+  it("getCallsWithDetails INCLUDES excluded calls (list visibility)", async () => {
+    await seedTwoCallsOneExcluded();
+    const calls = await storage.getCallsWithDetails();
+    assert.equal(calls.length, 2, "excluded calls must stay visible in the list view");
+  });
+
+  it("getCallsPaginated INCLUDES excluded calls (list visibility)", async () => {
+    await seedTwoCallsOneExcluded();
+    const page = await storage.getCallsPaginated({});
+    assert.equal(page.total, 2);
+    assert.equal(page.calls.length, 2);
+  });
+
+  it("getCallsByStatus INCLUDES excluded calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const completed = await storage.getCallsByStatus("completed");
+    assert.equal(completed.length, 2);
+  });
+
+  it("searchCalls INCLUDES excluded calls", async () => {
+    const { normalCall, excludedCall } = await seedTwoCallsOneExcluded();
+    await storage.createTranscript({ callId: normalCall.id, text: "billing dispute" } as any);
+    await storage.createTranscript({ callId: excludedCall.id, text: "billing dispute" } as any);
+
+    const results = await storage.searchCalls("billing");
+    assert.equal(results.length, 2, "excluded calls must remain searchable");
+  });
+});
+
+describe("excludedFromMetrics — aggregate queries exclude flagged calls", () => {
+  it("getCallsSince excludes flagged calls (calibration + scoring-regression feed)", async () => {
+    await seedTwoCallsOneExcluded();
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const since = await storage.getCallsSince(yesterday);
+    assert.equal(since.length, 1);
+    assert.equal(since[0].fileName, "normal.mp3");
+  });
+
+  it("getCallsSinceWithDetails excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const results = await storage.getCallsSinceWithDetails(yesterday);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].fileName, "normal.mp3");
+  });
+});
+
+describe("excludedFromMetrics — gamification / badges", () => {
+  it("countCompletedCallsByEmployee does NOT count flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const count = await storage.countCompletedCallsByEmployee(flaggedEmpId);
+    assert.equal(count, 1, "manager-flagged calls must not trigger milestone badges");
+  });
+
+  it("getRecentCallsForBadgeEval excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const recent = await storage.getRecentCallsForBadgeEval(flaggedEmpId, 25);
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].fileName, "normal.mp3");
+  });
+
+  it("getLeaderboardData excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const rows = await storage.getLeaderboardData({});
+    assert.equal(rows.length, 1);
+    // Normal call scored 7.0; the flagged 2.0 must NOT pull the average down.
+    assert.equal(rows[0].scoreSum, 7);
+    assert.equal(rows[0].scoreCount, 1);
+    assert.deepEqual(rows[0].recentScores, [7]);
+  });
+});
+
+describe("excludedFromMetrics — dashboards / reports / insights", () => {
+  it("getDashboardMetrics excludes flagged calls from total + averages", async () => {
+    await seedTwoCallsOneExcluded();
+    const m = await storage.getDashboardMetrics();
+    assert.equal(m.totalCalls, 1, "flagged calls must not inflate totalCalls");
+    // Normal perf score was 7.0; sentiment 0.7 → 7.0 average.
+    assert.equal(m.avgPerformanceScore, 7);
+    assert.equal(m.avgSentiment, 7);
+  });
+
+  it("getSentimentDistribution excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const dist = await storage.getSentimentDistribution();
+    assert.equal(dist.positive, 1);
+    assert.equal(dist.negative, 0, "flagged-call negative sentiment must not count");
+  });
+
+  it("getTopPerformers avg score excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const top = await storage.getTopPerformers(10);
+    assert.equal(top.length, 1);
+    assert.equal(top[0].totalCalls, 1);
+    assert.equal(top[0].avgPerformanceScore, 7, "flagged low-score must not pull average down");
+  });
+
+  it("getInsightsData excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const rows = await storage.getInsightsData(yesterday);
+    assert.equal(rows.length, 1);
+  });
+
+  it("getFilteredReportMetrics excludes flagged calls", async () => {
+    await seedTwoCallsOneExcluded();
+    const r = await storage.getFilteredReportMetrics({});
+    assert.equal(r.metrics.totalCalls, 1);
+    assert.equal(r.metrics.avgPerformanceScore, 7);
+    assert.equal(r.sentiment.positive, 1);
+    assert.equal(r.performers[0].totalCalls, 1);
+    assert.equal(r.performers[0].avgPerformanceScore, 7);
+  });
+});
+
+describe("excludedFromMetrics + synthetic — both filters compose correctly", () => {
+  it("aggregate queries filter both flags independently", async () => {
+    // Seed: 1 normal, 1 synthetic, 1 manager-excluded. Only the normal one
+    // should appear in aggregate views.
+    const emp = await storage.createEmployee({ name: "Carol", email: "carol@ex.com" });
+    const normal = await storage.createCall({
+      employeeId: emp.id,
+      fileName: "n.mp3",
+      status: "completed",
+      contentHash: "n",
+    });
+    await storage.createCallAnalysis({ callId: normal.id, performanceScore: "6.0" } as any);
+
+    const synth = await storage.createCall({
+      employeeId: emp.id,
+      fileName: "s.mp3",
+      status: "completed",
+      contentHash: "s",
+      synthetic: true,
+    });
+    await storage.createCallAnalysis({ callId: synth.id, performanceScore: "10.0" } as any);
+
+    const flagged = await storage.createCall({
+      employeeId: emp.id,
+      fileName: "f.mp3",
+      status: "completed",
+      contentHash: "f",
+      excludedFromMetrics: true,
+    });
+    await storage.createCallAnalysis({ callId: flagged.id, performanceScore: "1.0" } as any);
+
+    const metrics = await storage.getDashboardMetrics();
+    assert.equal(metrics.totalCalls, 1);
+    assert.equal(metrics.avgPerformanceScore, 6);
+
+    const leaderboard = await storage.getLeaderboardData({});
+    assert.equal(leaderboard[0].scoreCount, 1);
+    assert.equal(leaderboard[0].scoreSum, 6);
+
+    const count = await storage.countCompletedCallsByEmployee(emp.id);
+    assert.equal(count, 1);
+  });
+});

@@ -212,6 +212,102 @@ interface MyPerformanceData {
   weeklyTrend: WeeklyTrend[];
 }
 
+// Manager-only: similar-uncorrected-calls widget. Closes the feedback loop
+// by surfacing calls the AI scored in the same pattern the manager has
+// previously corrected, but that they haven't reviewed yet. Data comes
+// from /api/scoring-corrections/similar-uncorrected; server requires
+// manager+. Viewers get 401 via the default on401:"returnNull" handler
+// and this widget renders nothing.
+interface SimilarUncorrectedResponse {
+  suggestions: Array<{
+    callId: string;
+    aiScore: number;
+    callCategory: string | null | undefined;
+    direction: "upgraded" | "downgraded";
+    centroid: number;
+    uploadedAt: string | undefined;
+    employeeName: string | undefined;
+  }>;
+  groups: Array<{
+    category: string;
+    direction: "upgraded" | "downgraded";
+    centroid: number;
+    count: number;
+  }>;
+}
+
+function SimilarUncorrectedCard() {
+  const { data } = useQuery<SimilarUncorrectedResponse>({
+    queryKey: ["/api/scoring-corrections/similar-uncorrected"],
+  });
+
+  if (!data || data.suggestions.length === 0) return null;
+
+  return (
+    <div>
+      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+        Calls worth a second look
+      </div>
+      <div
+        className="font-display font-medium text-foreground mt-1 mb-2"
+        style={{ fontSize: 24, letterSpacing: "-0.3px" }}
+      >
+        {data.suggestions.length === 1
+          ? "1 call AI may have scored like ones you corrected."
+          : `${data.suggestions.length} calls AI may have scored like ones you corrected.`}
+      </div>
+      <div
+        className="text-xs text-muted-foreground mb-4"
+        style={{ lineHeight: 1.55 }}
+      >
+        Pattern-matched against your recent corrections by category + direction.
+        Each row shows an untouched call where the AI's score lands near your
+        typical correction target. Open to review or re-grade.
+      </div>
+      <div className="bg-card border border-border">
+        {data.suggestions.map((s, i) => (
+          <Link
+            key={s.callId}
+            href={`/transcripts/${s.callId}`}
+            className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
+            style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}
+          >
+            <span
+              className="font-mono uppercase text-[10px]"
+              style={{
+                letterSpacing: "0.1em",
+                color:
+                  s.direction === "upgraded" ? "var(--sage)" : "var(--destructive)",
+                minWidth: 60,
+              }}
+            >
+              {s.direction === "upgraded" ? "↑ low" : "↓ high"}
+            </span>
+            <div className="min-w-0">
+              <div className="font-medium text-foreground truncate">
+                {s.employeeName || "(unassigned)"}
+                {s.callCategory ? ` · ${s.callCategory}` : ""}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono">
+                {s.uploadedAt ? new Date(s.uploadedAt).toLocaleDateString() : "—"}
+              </div>
+            </div>
+            <div className="text-right font-mono text-xs text-muted-foreground">
+              centroid {s.centroid.toFixed(1)}
+            </div>
+            <div
+              className="text-right font-display font-medium tabular-nums"
+              style={{ fontSize: 18 }}
+            >
+              {s.aiScore.toFixed(1)}
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Agent self-service portal.
  * Viewers see their own performance scores, badges, trends, and coaching sessions.
@@ -439,6 +535,11 @@ export default function MyPerformancePage() {
 
             {/* My scoring corrections — feedback loop visibility */}
             <MyCorrectionsCard />
+
+            {/* Similar uncorrected calls (manager+). Renders nothing for
+                viewers because the server returns 401/403 via the default
+                on401:"returnNull" query handler. */}
+            <SimilarUncorrectedCard />
 
             {/* Badges + Week strip — 2-column airy block */}
             {(myData.badges.length > 0 || myData.recentCalls.length > 0) && (
