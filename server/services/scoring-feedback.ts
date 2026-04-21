@@ -281,6 +281,152 @@ export function getRecentCorrectionsByUser(
 }
 
 /**
+ * Pure helpers backing /api/scoring-corrections/similar-uncorrected (Tier C #8).
+ *
+ * Extracted from the route handler so the grouping + scoring logic can be
+ * unit-tested directly without mounting an HTTP route, spinning up a job
+ * queue, or seeding a database. The route remains the composition layer
+ * that combines these helpers with storage + request-scoped input.
+ */
+
+export interface CorrectionGroup {
+  /** "general" matches any call category; any other value requires exact match. */
+  category: string;
+  direction: "upgraded" | "downgraded";
+  /** Mean of `originalScore` across corrections in this group. */
+  centroid: number;
+  count: number;
+}
+
+/**
+ * Group a user's corrections by `(category || "general", direction)`.
+ * Keeps running-mean of `originalScore` as the centroid — this is our
+ * "this is what AI tends to mis-score" signal. Groups with fewer than
+ * `minCount` corrections (default 2) are dropped to suppress single-
+ * outlier false positives. Returns newest-highest-count groups first.
+ */
+export function groupCorrectionsByCategoryDirection(
+  corrections: Pick<ScoringCorrection, "callCategory" | "direction" | "originalScore">[],
+  minCount = 2,
+): CorrectionGroup[] {
+  const groups = new Map<string, CorrectionGroup>();
+  for (const c of corrections) {
+    const category = c.callCategory || "general";
+    const key = `${category}::${c.direction}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.centroid = (existing.centroid * existing.count + c.originalScore) / (existing.count + 1);
+      existing.count += 1;
+    } else {
+      groups.set(key, {
+        category,
+        direction: c.direction,
+        centroid: c.originalScore,
+        count: 1,
+      });
+    }
+  }
+  return [...groups.values()]
+    .filter(g => g.count >= minCount)
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface SimilarCallCandidate {
+  id: string;
+  callCategory?: string | null;
+  uploadedAt?: string;
+  analysis?: {
+    performanceScore?: string | number | null;
+    manualEdits?: Array<{ editedBy?: string } | unknown>;
+  };
+  employee?: { name?: string };
+}
+
+export interface SimilarCallSuggestion {
+  callId: string;
+  aiScore: number;
+  callCategory?: string | null;
+  direction: "upgraded" | "downgraded";
+  centroid: number;
+  uploadedAt?: string;
+  employeeName?: string;
+}
+
+/**
+ * Walk the qualifying groups and find up to `perGroupLimit` candidate calls
+ * per group whose AI score is within `windowScore` of the group's centroid.
+ * Skips calls already in `alreadyCorrectedCallIds` (the user already touched
+ * them) and calls whose `manualEdits` already has an entry by this user.
+ * Stops once `totalCap` suggestions accumulate across all groups.
+ *
+ * Pure function — no I/O. All inputs come from the caller; the route handler
+ * is responsible for loading corrections + calls from storage.
+ */
+export function findSimilarUncorrectedCalls(params: {
+  groups: CorrectionGroup[];
+  calls: SimilarCallCandidate[];
+  username: string;
+  alreadyCorrectedCallIds: ReadonlySet<string>;
+  windowScore?: number;
+  perGroupLimit?: number;
+  totalCap?: number;
+}): SimilarCallSuggestion[] {
+  const {
+    groups,
+    calls,
+    username,
+    alreadyCorrectedCallIds,
+    windowScore = 0.5,
+    perGroupLimit = 5,
+    totalCap = 20,
+  } = params;
+
+  const suggestions: SimilarCallSuggestion[] = [];
+
+  for (const group of groups) {
+    const perGroup: SimilarCallSuggestion[] = [];
+    for (const call of calls) {
+      if (alreadyCorrectedCallIds.has(call.id)) continue;
+      const rawScore = call.analysis?.performanceScore;
+      if (rawScore === undefined || rawScore === null || String(rawScore) === "") continue;
+      const aiScore = parseFloat(String(rawScore));
+      if (!Number.isFinite(aiScore)) continue;
+
+      // Category match: "general" centroid matches any category (global
+      // pattern); otherwise require exact match.
+      const callCat = call.callCategory || "general";
+      if (group.category !== "general" && callCat !== group.category) continue;
+
+      // Score proximity to the group's centroid.
+      if (Math.abs(aiScore - group.centroid) > windowScore) continue;
+
+      // Exclude calls that already have manualEdits entries from this user.
+      const edits = Array.isArray(call.analysis?.manualEdits) ? call.analysis!.manualEdits : [];
+      const userAlreadyEdited = edits.some(
+        (e: unknown) => typeof (e as { editedBy?: unknown })?.editedBy === "string"
+          && (e as { editedBy: string }).editedBy === username,
+      );
+      if (userAlreadyEdited) continue;
+
+      perGroup.push({
+        callId: call.id,
+        aiScore,
+        callCategory: call.callCategory ?? undefined,
+        direction: group.direction,
+        centroid: Math.round(group.centroid * 10) / 10,
+        uploadedAt: call.uploadedAt,
+        employeeName: call.employee?.name,
+      });
+      if (perGroup.length >= perGroupLimit) break;
+    }
+    suggestions.push(...perGroup);
+    if (suggestions.length >= totalCap) break;
+  }
+
+  return suggestions.slice(0, totalCap);
+}
+
+/**
  * Summary stats for a user's corrections over a rolling window, for the
  * manager-facing feedback dashboard. Returns counts, average absolute
  * delta, and direction split.

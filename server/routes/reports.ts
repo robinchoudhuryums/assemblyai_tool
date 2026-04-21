@@ -7,7 +7,7 @@ import { logPhiAccess, auditContext } from "../services/audit-log";
 import { aiProvider } from "../services/ai-factory";
 import { buildAgentSummaryPrompt } from "../services/ai-provider";
 import { getSnapshots } from "../services/performance-snapshots";
-import { getRecentCorrectionsByUser, getUserCorrectionStats, getScoringQualityAlerts, getCorrectionStats } from "../services/scoring-feedback";
+import { getRecentCorrectionsByUser, getUserCorrectionStats, getScoringQualityAlerts, getCorrectionStats, groupCorrectionsByCategoryDirection, findSimilarUncorrectedCalls } from "../services/scoring-feedback";
 import { getLatestCalibrationSnapshot } from "../services/auto-calibration";
 import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, countFrequency, calculateSentimentBreakdown, calculateAvgScore, validateParams, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse, type CsvSection } from "./utils";
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
@@ -1083,33 +1083,10 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         return;
       }
 
-      // Group by (category || 'general', direction). Mean of originalScore is
-      // our "this is what AI tends to mis-score" centroid.
-      type GroupKey = string;
-      const groups = new Map<GroupKey, {
-        category: string;
-        direction: "upgraded" | "downgraded";
-        centroid: number;
-        count: number;
-      }>();
-      for (const c of corrections) {
-        const category = c.callCategory || "general";
-        const key = `${category}::${c.direction}`;
-        const existing = groups.get(key);
-        if (existing) {
-          existing.centroid = (existing.centroid * existing.count + c.originalScore) / (existing.count + 1);
-          existing.count += 1;
-        } else {
-          groups.set(key, { category, direction: c.direction, centroid: c.originalScore, count: 1 });
-        }
-      }
-
-      // Require at least 2 corrections per group so a single outlier doesn't
-      // generate a suggestion surface.
-      const qualifyingGroups = [...groups.values()]
-        .filter(g => g.count >= 2)
-        .sort((a, b) => b.count - a.count);
-
+      // Tier C #8: grouping + scoring logic extracted into pure helpers in
+      // scoring-feedback.ts so they're unit-testable without HTTP route
+      // fixtures. Route is the composition layer only.
+      const qualifyingGroups = groupCorrectionsByCategoryDirection(corrections, 2);
       if (qualifyingGroups.length === 0) {
         res.json({ suggestions: [], groups: [] });
         return;
@@ -1123,58 +1100,27 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
         corrections.filter(c => c.correctedBy === username).map(c => c.callId),
       );
 
-      type Suggestion = {
-        callId: string;
-        aiScore: number;
-        callCategory: string | null | undefined;
-        direction: "upgraded" | "downgraded";
-        centroid: number;
-        uploadedAt: string | undefined;
-        employeeName: string | undefined;
-      };
-      const suggestions: Suggestion[] = [];
-
-      for (const group of qualifyingGroups) {
-        const perGroup: Suggestion[] = [];
-        for (const call of recentCalls) {
-          if (alreadyCorrectedCallIds.has(call.id)) continue;
-          const rawScore = call.analysis?.performanceScore;
-          if (rawScore === undefined || rawScore === null || String(rawScore) === "") continue;
-          const aiScore = parseFloat(String(rawScore));
-          if (!Number.isFinite(aiScore)) continue;
-
-          // Category match: "general" centroid matches any category (global
-          // pattern); otherwise require exact match.
-          const callCat = call.callCategory || "general";
-          if (group.category !== "general" && callCat !== group.category) continue;
-
-          // Score proximity to the group's centroid.
-          if (Math.abs(aiScore - group.centroid) > windowScore) continue;
-
-          // Exclude calls that already have manualEdits entries from this user.
-          const edits = Array.isArray(call.analysis?.manualEdits) ? call.analysis!.manualEdits : [];
-          const userAlreadyEdited = edits.some(
-            (e: any) => typeof e?.editedBy === "string" && e.editedBy === username,
-          );
-          if (userAlreadyEdited) continue;
-
-          perGroup.push({
-            callId: call.id,
-            aiScore,
-            callCategory: call.callCategory,
-            direction: group.direction,
-            centroid: Math.round(group.centroid * 10) / 10,
-            uploadedAt: call.uploadedAt,
-            employeeName: call.employee?.name,
-          });
-          if (perGroup.length >= perGroupLimit) break;
-        }
-        suggestions.push(...perGroup);
-        if (suggestions.length >= totalCap) break;
-      }
+      const suggestions = findSimilarUncorrectedCalls({
+        groups: qualifyingGroups,
+        calls: recentCalls.map(c => ({
+          id: c.id,
+          callCategory: c.callCategory,
+          uploadedAt: c.uploadedAt,
+          analysis: c.analysis ? {
+            performanceScore: c.analysis.performanceScore,
+            manualEdits: c.analysis.manualEdits as Array<unknown> | undefined,
+          } : undefined,
+          employee: c.employee ? { name: c.employee.name } : undefined,
+        })),
+        username,
+        alreadyCorrectedCallIds,
+        windowScore,
+        perGroupLimit,
+        totalCap,
+      });
 
       res.json({
-        suggestions: suggestions.slice(0, totalCap),
+        suggestions,
         groups: qualifyingGroups.map(g => ({
           category: g.category,
           direction: g.direction,

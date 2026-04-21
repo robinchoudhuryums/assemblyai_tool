@@ -635,6 +635,42 @@ export function filterCallsByDateRange<T extends { uploadedAt?: string | null }>
   return result;
 }
 
+/**
+ * Resolve a bulk-reanalyze filter into an ordered list of callIds (Tier C #8).
+ *
+ * Pure helper extracted from `POST /api/calls/bulk-reanalyze` so the filter
+ * semantics (category match + date range + newest-first + limit) can be
+ * unit-tested without mounting the route. Input candidates typically come
+ * from `storage.getCallsWithDetails({ status: "completed", employee })`;
+ * this function doesn't touch storage itself.
+ */
+export function resolveBulkReanalyzeCallIds<T extends {
+  id: string;
+  callCategory?: string | null;
+  uploadedAt?: string;
+}>(
+  candidates: T[],
+  filter: {
+    callCategory?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  },
+): string[] {
+  const fromMs = filter.from ? new Date(filter.from).getTime() : 0;
+  const toMs = filter.to ? new Date(filter.to).getTime() : Infinity;
+  const limit = Math.max(1, Math.min(filter.limit ?? 20, 100));
+  return candidates
+    .filter(c => !filter.callCategory || c.callCategory === filter.callCategory)
+    .filter(c => {
+      const t = new Date(c.uploadedAt || 0).getTime();
+      return Number.isFinite(t) && t >= fromMs && t <= toMs;
+    })
+    .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+    .slice(0, limit)
+    .map(c => c.id);
+}
+
 /** Count frequency of items in a string array. Returns top N entries sorted by count. */
 export function countFrequency(arr: string[], limit = 10): Array<{ text: string; count: number }> {
   const freq = new Map<string, number>();

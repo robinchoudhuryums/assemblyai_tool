@@ -11,7 +11,7 @@ import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
 import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
-import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError } from "./utils";
+import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError, resolveBulkReanalyzeCallIds } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
 // Shared audio processing queue (A11) — single singleton across pipeline.ts,
@@ -675,7 +675,10 @@ export function registerCallRoutes(
         return;
       }
 
-      // Resolve callIds from either payload variant.
+      // Resolve callIds from either payload variant. Tier C #8: filter
+      // resolution extracted to `resolveBulkReanalyzeCallIds` in utils.ts so
+      // the semantics (category match + date range + newest-first + limit)
+      // are unit-testable without mounting the route.
       let callIds: string[];
       if ("callIds" in parsed.data) {
         callIds = parsed.data.callIds;
@@ -688,17 +691,7 @@ export function registerCallRoutes(
           status: "completed",
           employee: employeeId,
         });
-        const fromMs = from ? new Date(from).getTime() : 0;
-        const toMs = to ? new Date(to).getTime() : Infinity;
-        const filtered = candidates
-          .filter(c => !callCategory || c.callCategory === callCategory)
-          .filter(c => {
-            const t = new Date(c.uploadedAt || 0).getTime();
-            return Number.isFinite(t) && t >= fromMs && t <= toMs;
-          })
-          .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
-          .slice(0, limit);
-        callIds = filtered.map(c => c.id);
+        callIds = resolveBulkReanalyzeCallIds(candidates, { callCategory, from, to, limit });
         if (callIds.length === 0) {
           res.json({ message: "No calls matched the filter", results: [] });
           return;

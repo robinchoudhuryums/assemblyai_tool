@@ -262,6 +262,15 @@ Requirements:
   return null;
 }
 
+// F6 (Tier C #11): in-flight dedup for recurring-weakness plan creation.
+// Two concurrent pipeline completions for the same agent previously could
+// both pass the read-then-insert spam guard (line ~320) and both create a
+// duplicate coaching plan. The outer 7-day guard still applies — this set
+// only adds a short-window mutex that closes the concurrent-race gap.
+// TTL is 5 min to recover from a crash between check and insert.
+const recurringWeaknessInFlight = new Map<string, number>();
+const RECURRING_WEAKNESS_INFLIGHT_MS = 5 * 60_000;
+
 /**
  * Analyzes the agent's recent calls for recurring weak sub-scores.
  * If 3+ calls have a sub-score below threshold in the same dimension,
@@ -271,6 +280,20 @@ async function checkRecurringWeaknesses(
   triggerCallId: string,
   employeeId: string,
 ): Promise<void> {
+  // F6: concurrent-race guard. Opportunistic prune of stale entries so the
+  // map stays bounded.
+  const now = Date.now();
+  for (const [id, ts] of recurringWeaknessInFlight) {
+    if (now - ts > RECURRING_WEAKNESS_INFLIGHT_MS) recurringWeaknessInFlight.delete(id);
+  }
+  const existingInFlightTs = recurringWeaknessInFlight.get(employeeId);
+  if (existingInFlightTs !== undefined && now - existingInFlightTs <= RECURRING_WEAKNESS_INFLIGHT_MS) {
+    // Another concurrent pipeline call is already running the weakness
+    // check for this employee. Skip to avoid duplicate plan creation.
+    return;
+  }
+  recurringWeaknessInFlight.set(employeeId, now);
+
   try {
     // A4/F03: indexed lookup of the agent's last N completed calls instead of
     // a full per-employee scan. LOOKBACK_CALLS is the analysis window; we
@@ -401,6 +424,11 @@ async function checkRecurringWeaknesses(
       employeeId,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    // F6: release the in-flight mutex on success OR failure so the NEXT
+    // completion for this agent can run the check. TTL-based expiry is a
+    // safety net if this cleanup somehow misses.
+    recurringWeaknessInFlight.delete(employeeId);
   }
 }
 

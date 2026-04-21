@@ -85,6 +85,25 @@ export async function createSimulatedCall(
   return mapRow(rows[0]);
 }
 
+/**
+ * Look up a simulated-call row by the `calls.id` it was analyzed under
+ * (persisted via `sent_to_analysis_call_id`). Used by the post-analysis
+ * calibration-assertion hook (Tier C #9) to find the preset row + its
+ * expectedScoreRange so the assertion can fire. Returns undefined when no
+ * match or when DB is unavailable.
+ */
+export async function findSimulatedCallBySentToAnalysisCallId(
+  sentToAnalysisCallId: string,
+): Promise<SimulatedCall | undefined> {
+  if (!isSimulatedCallsAvailable()) return undefined;
+  const pool = requirePool();
+  const { rows } = await pool.query(
+    `SELECT * FROM simulated_calls WHERE sent_to_analysis_call_id = $1 LIMIT 1`,
+    [sentToAnalysisCallId],
+  );
+  return rows[0] ? mapRow(rows[0]) : undefined;
+}
+
 export async function getSimulatedCall(id: string): Promise<SimulatedCall | undefined> {
   const pool = requirePool();
   const { rows } = await pool.query(

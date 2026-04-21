@@ -103,7 +103,10 @@ export class ElevenLabsClient {
    * Synthesize one turn of text into MP3 audio. Returns a Buffer + the
    * billed character count for usage tracking.
    *
-   * Retries once on 429 (rate limit) after a 2s wait. Other errors surface
+   * F8 (Tier D #16): retries up to 3 times on 429 (rate limit) with
+   * exponential backoff + jitter (1s/2s/4s ± 20%). Previously a single
+   * 2s retry meant concurrent workers hitting the rate limit simultaneously
+   * all retried at the same T+2s and collided again. Other errors surface
    * to the caller and should fail the job.
    */
   async textToSpeech(options: TextToSpeechOptions): Promise<TtsResult> {
@@ -142,10 +145,21 @@ export class ElevenLabsClient {
       }
     };
 
+    // F8: exponential backoff + jitter on 429. Jitter (±20%) de-correlates
+    // concurrent workers hitting the rate limit simultaneously so they
+    // don't all retry at exactly the same instant and collide again.
+    const RETRY_DELAYS_MS = [1000, 2000, 4000];
     let res = await attempt();
-    if (res.status === 429) {
-      logger.warn("ElevenLabs 429 — retrying after 2s", { voiceId: options.voiceId });
-      await new Promise((r) => setTimeout(r, 2000));
+    for (let i = 0; res.status === 429 && i < RETRY_DELAYS_MS.length; i++) {
+      const base = RETRY_DELAYS_MS[i];
+      const jitter = base * 0.2 * (Math.random() * 2 - 1); // ±20%
+      const delay = Math.max(250, Math.round(base + jitter));
+      logger.warn("ElevenLabs 429 — retrying with backoff", {
+        voiceId: options.voiceId,
+        attempt: i + 1,
+        delayMs: delay,
+      });
+      await new Promise((r) => setTimeout(r, delay));
       res = await attempt();
     }
     if (!res.ok) {
