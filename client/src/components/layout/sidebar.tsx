@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { Link, useLocation } from "wouter";
-import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Microphone, Moon, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning } from "@phosphor-icons/react";
+import { Bell, Buildings, CalendarDots, CaretDown, CaretUp, ChartBarHorizontal, CheckCircle, ClipboardText, CloudArrowUp, CurrencyDollar, FileText, Flask, GearSix, GitDiff, Heart, Heartbeat, Lock, MagnifyingGlass, Microphone, Moon, Plugs, Shield, ShieldWarning, SignOut, Sliders, Stack, Sun, TrendUp, Trophy, UploadSimple, User, UserPlus, Users, UsersThree, Warning } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { MfaSetupDialog } from "@/components/mfa-setup-dialog";
@@ -527,6 +527,19 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                 >
                   <CloudArrowUp className="w-4 h-4 shrink-0" />
                   <span>Batch Status</span>
+                </Link>
+                <Link
+                  href="/admin/webhooks-health"
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
+                    location === "/admin/webhooks-health"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-webhooks-health"
+                >
+                  <Plugs className="w-4 h-4 shrink-0" />
+                  <span>Webhook Health</span>
                 </Link>
                 <Link
                   href="/admin/simulated-calls"

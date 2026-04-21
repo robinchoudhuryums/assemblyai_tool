@@ -9,10 +9,28 @@
 import { createHmac } from "crypto";
 import { isUrlSafe } from "./url-validator";
 import { logger } from "./logger";
+import { PerKeyCircuitBreaker, type CircuitSnapshot } from "./resilience";
 import type { ObjectStorageClient } from "../storage";
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 const WEBHOOK_RETRY_BASE_DELAY_MS = 2_000;
+
+// Per-webhook circuit breaker. Opens after 5 consecutive failures per webhookId
+// for 5 minutes, then transitions to half-open for one test call. Keyed on
+// webhook config ID so one broken receiver doesn't brownout the rest; one open
+// circuit skips both the in-process retries AND the durable-retry enqueue.
+const WEBHOOK_BREAKER_THRESHOLD = 5;
+const WEBHOOK_BREAKER_RESET_MS = 5 * 60_000;
+export const webhookBreaker = new PerKeyCircuitBreaker(
+  "webhook",
+  WEBHOOK_BREAKER_THRESHOLD,
+  WEBHOOK_BREAKER_RESET_MS,
+);
+
+/** Exported for the admin observability endpoint. */
+export function getWebhookBreakerSnapshot(): CircuitSnapshot[] {
+  return webhookBreaker.snapshot();
+}
 const WEBHOOK_MAX_RETRIES = 4;
 
 // --- Types ---
@@ -193,18 +211,47 @@ export async function triggerWebhook(event: string, payload: any): Promise<void>
 }
 
 async function deliverWithRetry(config: WebhookConfig, event: string, body: string, initialAttempts = 0): Promise<void> {
+  // Per-webhook circuit breaker check. When open, skip delivery AND skip the
+  // durable-retry enqueue — the receiver is known-broken, hammering it with
+  // new queue entries is worse than dropping this delivery (the event stays
+  // in the stdout log for operator reconstruction).
+  if (webhookBreaker.isOpen(config.id)) {
+    logger.warn("Webhook circuit open — skipping delivery", {
+      url: config.url,
+      event,
+      webhookId: config.id,
+    });
+    return;
+  }
+
   for (let attempt = 0; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
     try {
-      await deliverWebhook(config, event, body);
+      // Wrap the individual delivery in the breaker. Success resets the
+      // breaker's counter for this webhookId; failure increments it. After
+      // the threshold trips, subsequent `webhookBreaker.isOpen()` checks
+      // short-circuit future calls for this key.
+      await webhookBreaker.execute(config.id, () => deliverWebhook(config, event, body));
       return;
     } catch (err) {
+      // If the breaker opened mid-retry, abandon further in-process retries.
+      if (webhookBreaker.isOpen(config.id)) {
+        logger.warn("Webhook circuit opened during retry — abandoning", {
+          url: config.url,
+          event,
+          webhookId: config.id,
+          attempts: attempt + 1,
+        });
+        return;
+      }
       if (attempt === WEBHOOK_MAX_RETRIES) {
         const totalAttempts = initialAttempts + WEBHOOK_MAX_RETRIES + 1;
         logger.error("All webhook delivery attempts failed", { url: config.url, event, attempts: totalAttempts, error: (err as Error).message });
         // Persistent retry: hand off to the durable job queue if available.
         // The job queue has its own retry/dead-letter semantics (3 attempts),
         // so we get ~5x the delivery durability vs. in-process retry alone,
-        // and it survives process restart.
+        // and it survives process restart. Skipped when the breaker is open
+        // (checked above) since queueing more work for a known-down receiver
+        // is counterproductive.
         if (enqueueWebhookRetry) {
           try {
             await enqueueWebhookRetry({ webhookId: config.id, event, body, previousAttempts: totalAttempts });

@@ -93,3 +93,93 @@ export class CircuitBreaker {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PerKeyCircuitBreaker
+// ---------------------------------------------------------------------------
+//
+// Keyed variant of CircuitBreaker — holds an independent state machine per
+// key so one failing target (e.g. one webhook URL) doesn't brownout the rest.
+// Used by `webhooks.ts` to open a circuit per `webhookId` when a receiver is
+// consistently failing, so the app stops queueing new deliveries (and new
+// retries) for that specific receiver until the cooldown passes.
+//
+// Bounded to MAX_KEYS entries with LRU eviction to prevent unbounded growth
+// under pathological key churn (e.g. if keys aren't actually stable). 1,000
+// is far beyond any realistic number of webhook configs.
+
+export type CircuitSnapshot = {
+  key: string;
+  state: CircuitState;
+  failureCount: number;
+  lastFailureTime: number;
+};
+
+export class PerKeyCircuitBreaker {
+  private breakers = new Map<string, CircuitBreaker>();
+  private readonly MAX_KEYS = 1_000;
+
+  constructor(
+    private readonly labelPrefix: string,
+    private readonly failureThreshold: number = 5,
+    private readonly resetTimeoutMs: number = 30_000,
+  ) {}
+
+  private getOrCreate(key: string): CircuitBreaker {
+    let b = this.breakers.get(key);
+    if (b) {
+      // LRU touch: delete-then-set to move to the most-recently-used end.
+      this.breakers.delete(key);
+      this.breakers.set(key, b);
+      return b;
+    }
+    if (this.breakers.size >= this.MAX_KEYS) {
+      const oldest = this.breakers.keys().next().value;
+      if (oldest !== undefined) this.breakers.delete(oldest);
+    }
+    b = new CircuitBreaker(`${this.labelPrefix}:${key}`, this.failureThreshold, this.resetTimeoutMs);
+    this.breakers.set(key, b);
+    return b;
+  }
+
+  /** Execute `fn` under the per-key circuit. Throws immediately if the key's circuit is open. */
+  async execute<T>(key: string, fn: () => Promise<T>, isFailure?: (err: unknown) => boolean): Promise<T> {
+    return this.getOrCreate(key).execute(fn, isFailure);
+  }
+
+  /** Current state for a specific key — "closed" for unknown keys. */
+  getState(key: string): CircuitState {
+    const b = this.breakers.get(key);
+    return b ? b.getState() : "closed";
+  }
+
+  /** True when the key's breaker is currently open. Cheap read; no state transition. */
+  isOpen(key: string): boolean {
+    return this.getState(key) === "open";
+  }
+
+  /** Snapshot of all currently-tracked breakers, sorted by most-recently-failed. */
+  snapshot(): CircuitSnapshot[] {
+    const out: CircuitSnapshot[] = [];
+    for (const [key, b] of this.breakers) {
+      out.push({
+        key,
+        state: b.getState(),
+        // CircuitBreaker doesn't expose these directly; use accessor methods.
+        failureCount: (b as unknown as { failureCount: number }).failureCount,
+        lastFailureTime: (b as unknown as { lastFailureTime: number }).lastFailureTime,
+      });
+    }
+    return out.sort((a, b) => b.lastFailureTime - a.lastFailureTime);
+  }
+
+  /** Test seam — reset a specific key's breaker. */
+  reset(key: string): void {
+    this.breakers.delete(key);
+  }
+
+  /** Test seam — reset all breakers. */
+  resetAll(): void {
+    this.breakers.clear();
+  }
+}
+
