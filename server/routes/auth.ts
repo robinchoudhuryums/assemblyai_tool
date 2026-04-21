@@ -4,7 +4,7 @@ import { z } from "zod";
 import { sendValidationError } from "./utils";
 import { createHash, randomUUID } from "crypto";
 import { storage } from "../storage";
-import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint } from "../auth";
+import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint, getUserEmployeeId } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
 import { logPhiAccess, auditContext } from "../services/audit-log";
 import { logger } from "../services/logger";
@@ -14,6 +14,49 @@ import { insertAccessRequestSchema } from "@shared/schema";
  *  the same hash is computed at login and verification time (single source of truth). */
 function bindSessionFingerprint(req: import("express").Request): void {
   (req.session as typeof req.session & { fingerprint?: string }).fingerprint = getSessionFingerprint(req);
+}
+
+/**
+ * Phase E: emit `user_employee_link_unresolved` audit event when a viewer or
+ * manager logs in without a matching employee row. Fires at most once per
+ * user per UTC day so the audit log accumulates a time-series signal rather
+ * than getting spammed by every request. Purely observational — does not
+ * block login. Admins are skipped because they don't need employee linkage.
+ *
+ * The dedup set is in-memory; a restart will refire the audit once for each
+ * active unlinked user on their next login that day. Acceptable trade-off
+ * vs. adding a new DB table just for this cheap signal.
+ */
+const unlinkedLoginAuditDedup = new Set<string>();
+// Clean the dedup set daily to prevent unbounded growth.
+setInterval(() => unlinkedLoginAuditDedup.clear(), 24 * 60 * 60 * 1000).unref();
+
+function fireUnlinkedLoginAuditIfNeeded(
+  req: import("express").Request,
+  user: Express.User,
+): void {
+  // Fire-and-forget. No await — must not block login response.
+  void (async () => {
+    try {
+      if (user.role !== "viewer" && user.role !== "manager") return;
+      const employeeId = await getUserEmployeeId(user.username, user.name);
+      if (employeeId) return;
+      const dayKey = `${user.username}:${new Date().toISOString().slice(0, 10)}`;
+      if (unlinkedLoginAuditDedup.has(dayKey)) return;
+      unlinkedLoginAuditDedup.add(dayKey);
+      logPhiAccess({
+        timestamp: new Date().toISOString(),
+        event: "user_employee_link_unresolved",
+        ...auditContext(req),
+        username: user.username,
+        resourceType: "user",
+        resourceId: user.id,
+        detail: `role=${user.role}; displayName="${user.name}"`,
+      });
+    } catch (err) {
+      logger.warn("unlinked-login audit failed", { error: (err as Error).message });
+    }
+  })();
 }
 
 export function registerAuthRoutes(router: Router) {
@@ -123,6 +166,7 @@ export function registerAuthRoutes(router: Router) {
           req.login(pending.user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
+            fireUnlinkedLoginAuditIfNeeded(req, pending.user);
             res.json({ id: pending.user.id, username: pending.user.username, name: pending.user.name, role: pending.user.role });
           });
         } catch (err) {
@@ -162,6 +206,7 @@ export function registerAuthRoutes(router: Router) {
           req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
             if (loginErr) return next(loginErr);
             bindSessionFingerprint(req);
+            fireUnlinkedLoginAuditIfNeeded(req, user);
             res.json({ id: user.id, username: user.username, name: user.name, role: user.role, mfaSetupRequired: true });
           });
           return;
@@ -171,6 +216,7 @@ export function registerAuthRoutes(router: Router) {
         req.login(user, { keepSessionInfo: true } as any /* Passport 0.7 option not in types */, (loginErr) => {
           if (loginErr) return next(loginErr);
           bindSessionFingerprint(req);
+          fireUnlinkedLoginAuditIfNeeded(req, user);
           res.json({ id: user.id, username: user.username, name: user.name, role: user.role });
         });
       } catch (mfaErr) {

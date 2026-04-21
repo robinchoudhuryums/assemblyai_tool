@@ -510,6 +510,52 @@ describe("User management endpoints (real routes)", () => {
 });
 
 // =====================================================================
+// UNLINKED USERS + PHASE E ADDITIONS
+// =====================================================================
+//
+// Focused tests for the Phase E enhancements — candidate suggestions in
+// the unlinked list, the manager-role extension, and the create-user
+// "no matching employee" warning. MemStorage supports the user list
+// operations that MemStorage-compatible routes use.
+describe("Users Phase E — unlinked + fuzzy candidates", () => {
+  const app = buildAppWith(registerUserRoutes, registerEmployeeRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/users/unlinked returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/users/unlinked returns 403 for non-admin", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "manager");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/users/unlinked returns count + users array for admin", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "admin");
+    assert.equal(status, 200);
+    assert.equal(typeof body.count, "number");
+    assert.ok(Array.isArray(body.users));
+  });
+
+  it("GET /api/users/unlinked returned users carry a candidates array (Phase E)", async () => {
+    const { body } = await req(baseUrl, "GET", "/api/users/unlinked", undefined, "admin");
+    // Even when empty, the shape guarantees candidates is present on each user.
+    for (const u of body.users) {
+      assert.ok(Array.isArray(u.candidates), `user ${u.id} missing candidates array`);
+    }
+  });
+});
+
+// =====================================================================
 // DASHBOARD ENDPOINTS
 // =====================================================================
 

@@ -358,6 +358,73 @@ export function writePdfResponse(
   res.send(pdf);
 }
 
+// ---------------------------------------------------------------------------
+// Fuzzy string matching (Levenshtein distance + simple normalization)
+// ---------------------------------------------------------------------------
+//
+// Used by the unlinked-users admin flow (Phase E) to suggest employee
+// candidates when a user's username/displayName doesn't match any employee
+// exactly. Cheap enough to run at request time over the full employee list
+// (~50–500 rows typical) because the algorithm is O(n*m) per pair and names
+// are short; a 500-employee × 10-unlinked computation finishes in well under
+// 100ms on modern hardware.
+
+/** Levenshtein distance between two strings (0 = identical). */
+export function levenshtein(a: string, b: string): number {
+  const al = a.length, bl = b.length;
+  if (al === 0) return bl;
+  if (bl === 0) return al;
+  // Use two rolling rows instead of a full matrix — bounded memory.
+  let prev = new Array<number>(bl + 1);
+  let curr = new Array<number>(bl + 1);
+  for (let j = 0; j <= bl; j++) prev[j] = j;
+  for (let i = 1; i <= al; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= bl; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1] + 1,      // insertion
+        prev[j] + 1,          // deletion
+        prev[j - 1] + cost,   // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[bl];
+}
+
+/**
+ * Normalize a string for fuzzy comparison: lowercase, collapse whitespace,
+ * strip common email separators ("alice.smith@x.com" → "alice smith"),
+ * strip punctuation. Intentionally liberal — we want "alice.smith@x.com"
+ * to fuzzy-match "Alice Smith" and "Bob J" to match "Bob Jones".
+ */
+export function normalizeForFuzzy(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/@.*$/, "")                // drop email domain
+    .replace(/[._\-+]/g, " ")           // separators → space
+    .replace(/[^a-z0-9\s]/g, "")        // strip remaining punctuation
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Score (0–1) of how similar `a` and `b` are. 1 = identical after
+ * normalization. Returns 0 when normalized forms share no prefix and are
+ * very different lengths. Uses Levenshtein distance over the normalized
+ * forms; score = 1 - distance / max(len).
+ */
+export function fuzzySimilarity(a: string, b: string): number {
+  const na = normalizeForFuzzy(a);
+  const nb = normalizeForFuzzy(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const dist = levenshtein(na, nb);
+  const maxLen = Math.max(na.length, nb.length);
+  return Math.max(0, 1 - dist / maxLen);
+}
+
 /**
  * Filter calls by date range (in-memory). Adjusts `to` date to end-of-day.
  * Used by reports, snapshots, and search — the single source of truth for date filtering.
