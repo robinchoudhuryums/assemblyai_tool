@@ -216,13 +216,15 @@ function Router() {
       <ShortcutsDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} wsState={wsState} />
       <main id="main-content" className="flex-1 overflow-auto bg-background relative">
-        {/* Mobile hamburger button */}
+        {/* Mobile hamburger button — min 44×44 touch target per Apple HIG +
+            WCAG 2.5.5. Previously p-2 + w-5 icon = ~36px which is below
+            recommended minimums for one-handed phone use. */}
         <button
-          className="lg:hidden fixed top-3 left-3 z-30 p-2 rounded-md bg-card border border-border shadow-sm"
+          className="lg:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-md bg-card border border-border shadow-sm"
           onClick={() => setSidebarOpen(true)}
           aria-label="Open navigation menu"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>

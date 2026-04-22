@@ -149,24 +149,28 @@ export default function DetailPanel(props: DetailPanelProps) {
       >
         {/* Top bar */}
         <div
-          className="flex items-center gap-3 px-8 py-4 bg-card border-b border-border flex-shrink-0"
+          className="flex items-center gap-3 px-4 sm:px-8 py-4 bg-card border-b border-border flex-shrink-0"
         >
           <StageChip stage={stage} />
           <div className="flex-1" />
+          {/* Tier 1 mobile: enlarged tap target (min 44×44) so the panel
+              closes cleanly on touch devices — the overlay backdrop is
+              invisible on mobile because the panel is full-width. */}
           <button
             type="button"
             onClick={props.onClose}
             aria-label="Close detail panel"
-            className="font-mono uppercase inline-flex items-center gap-1.5 border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+            className="font-mono uppercase inline-flex items-center justify-center gap-1.5 border border-border rounded-sm text-foreground hover:bg-secondary transition-colors min-w-[44px] min-h-[44px] px-3"
             style={{ fontSize: 10, letterSpacing: "0.1em" }}
             data-testid="detail-close"
           >
-            <X style={{ width: 12, height: 12 }} /> esc
+            <X style={{ width: 14, height: 14 }} />
+            <span className="hidden sm:inline">esc</span>
           </button>
         </div>
 
         {/* Hero */}
-        <div className="px-10 pt-8 pb-6 border-b border-border">
+        <div className="px-5 sm:px-10 pt-6 sm:pt-8 pb-6 border-b border-border">
           {growthCopy && (
             <div
               className="text-[var(--accent)] italic mb-2.5 max-w-lg"
@@ -190,7 +194,7 @@ export default function DetailPanel(props: DetailPanelProps) {
         </div>
 
         {/* Stage track */}
-        <div className="px-10 py-6 bg-card border-b border-border">
+        <div className="px-5 sm:px-10 py-6 bg-card border-b border-border">
           <StageTrack stage={stage} width={640} />
         </div>
 
@@ -304,7 +308,7 @@ export default function DetailPanel(props: DetailPanelProps) {
         )}
 
         {/* Footer: avatar + status transitions */}
-        <div className="mt-auto px-10 py-6 border-t border-border bg-card flex items-center gap-3 flex-wrap">
+        <div className="mt-auto px-5 sm:px-10 py-6 border-t border-border bg-card flex items-center gap-3 flex-wrap">
           <Avatar initials={initials} size={32} />
           <div className="flex-1 min-w-0">
             <div
@@ -345,7 +349,7 @@ function DetailSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="px-10 py-6 border-b border-border">
+    <div className="px-5 sm:px-10 py-6 border-b border-border">
       <div className="flex items-baseline gap-3 mb-3.5">
         <div
           className="font-mono text-muted-foreground"
