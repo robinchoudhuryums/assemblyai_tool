@@ -179,6 +179,7 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/auth/login` | Login (rate limited: 5 attempts/15min per IP) |
 | POST | `/api/auth/logout` | Logout & clear session |
 | GET | `/api/auth/me` | Get current user |
+| GET | `/api/auth/sso-verify` | Service-to-service. Introspects the session cookie for the RAG tool (ums-knowledge-reference) in Option-A SSO. Requires `X-Service-Secret` matching `SSO_SHARED_SECRET` (timing-safe). Bypasses the UA+accept-language fingerprint check so RAG's backend UA is accepted. Returns `{user:{id,username,name,role}, mfaVerified:true, source:"callanalyzer"}`. 503 when `SSO_SHARED_SECRET` is unset or <32 chars. |
 
 ### MFA (authenticated)
 | Method | Path | Role | Description |
@@ -448,6 +449,11 @@ Access requests can request "viewer" or "manager" roles (not admin).
 # Required
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
+
+# SSO with the RAG tool (ums-knowledge-reference) — Option A, CA as auth authority
+# Off by default. See the RAG repo's docs/sso-rollout.md for the coordinated cutover.
+SSO_SHARED_SECRET               # ≥32 chars. Shared with RAG; RAG sends it as X-Service-Secret on /sso-verify. Unset = /sso-verify returns 503.
+SHARED_COOKIE_DOMAIN            # Parent domain for session + CSRF cookies, e.g. .umscallanalyzer.com. Unset = host-scoped (default). Flipping this invalidates existing sessions (browsers treat host- and domain-scoped cookies as distinct).
 
 # Simulated Call Generator (admin-only QA tool — optional feature)
 ELEVENLABS_API_KEY              # ElevenLabs TTS API key (required to use the feature)
