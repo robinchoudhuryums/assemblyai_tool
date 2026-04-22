@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Eye, Gear, Key, Shield, SignIn, UserPlus, Waveform } from "@phosphor-icons/react";
 import { apiRequest, SessionExpiredError } from "@/lib/queryClient";
 import { extractErrorMessage } from "@/lib/display-utils";
+import { sanitizeReturnTo } from "@/lib/return-to";
 import { USER_ROLES } from "@shared/schema";
 import { ROLE_CONFIG } from "@/lib/constants";
 import { useConfig } from "@/hooks/use-config";
@@ -39,6 +40,22 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
   const [requestedRole, setRequestedRole] = useState("viewer");
   const [requestSubmitted, setRequestSubmitted] = useState(false);
 
+  /**
+   * If the current URL carries a trusted `?return_to=<url>` (validated
+   * against the `.umscallanalyzer.com` zone), send the user there after
+   * login instead of the default dashboard. Used by RAG's SSO "Sign in
+   * with CallAnalyzer" button so a round-trip lands the user back where
+   * they clicked. Reads `window.location` each call so it works
+   * regardless of wouter's internal routing state.
+   */
+  const redirectToReturnToIfPresent = (): boolean => {
+    const raw = new URLSearchParams(window.location.search).get("return_to");
+    const sanitized = sanitizeReturnTo(raw);
+    if (!sanitized) return false;
+    window.location.href = sanitized;
+    return true;
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -56,6 +73,9 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
       }
 
       onLogin({ mfaSetupRequired: !!data.mfaSetupRequired });
+      // MFA-setup users must enroll in CA before leaving; skip return_to
+      // for that flow so they don't bypass the setup prompt.
+      if (!data.mfaSetupRequired) redirectToReturnToIfPresent();
     } catch (error: unknown) {
       const message = extractErrorMessage(error);
       toast({
@@ -75,6 +95,7 @@ export default function AuthPage({ onLogin, sessionExpired }: AuthPageProps) {
     try {
       await apiRequest("POST", "/api/auth/login", { mfaToken, totpCode });
       onLogin();
+      redirectToReturnToIfPresent();
     } catch (error: unknown) {
       const message = extractErrorMessage(error);
       toast({
