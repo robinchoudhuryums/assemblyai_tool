@@ -67,6 +67,24 @@ export default function AdminPage() {
     queryKey: ["/api/users/unlinked"],
   });
 
+  // RAG SSO coordination — CA users who have been created but have never
+  // landed on RAG. Only renders when the integration is wired up (RAG
+  // reachable) AND there's at least one unseen user. Refetched on focus
+  // so it stays accurate without manual refresh.
+  const { data: unseenByRag } = useQuery<{
+    ragReachable: boolean;
+    unseen: Array<{
+      id: string;
+      username: string;
+      name: string;
+      role: string;
+      createdAt: string | null;
+    }>;
+  }>({
+    queryKey: ["/api/admin/users/unseen-by-rag"],
+    staleTime: 30_000,
+  });
+
   // Employee list feeds the "Link to employee" dropdown on each unlinked row.
   // The same query is used elsewhere in admin; TanStack Query dedupes.
   const { data: allEmployees } = useQuery<Employee[]>({
@@ -483,6 +501,86 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
+
+            {/* Unseen-by-RAG banner — surfaces users who exist on CA but
+                have never visited RAG. Helpful when an admin gets a
+                "can't access KB" report and needs to know whether the
+                user has even gotten that far yet. */}
+            {unseenByRag?.ragReachable && unseenByRag.unseen.length > 0 && (
+              <div
+                className="border bg-card"
+                style={{
+                  borderRadius: "var(--radius)",
+                  boxShadow: "inset 3px 0 0 var(--accent)",
+                  padding: "16px 20px",
+                }}
+                data-testid="unseen-by-rag-banner"
+              >
+                <div className="flex items-start gap-3">
+                  <Brain
+                    style={{
+                      width: 20,
+                      height: 20,
+                      color: "var(--accent)",
+                      flexShrink: 0,
+                      marginTop: 2,
+                    }}
+                  />
+                  <div className="flex-1">
+                    <div
+                      className="font-mono uppercase text-muted-foreground"
+                      style={{ fontSize: 10, letterSpacing: "0.14em" }}
+                    >
+                      Knowledge base
+                    </div>
+                    <div className="font-medium text-foreground mt-1">
+                      {unseenByRag.unseen.length} user
+                      {unseenByRag.unseen.length === 1 ? "" : "s"} haven't
+                      visited the knowledge base yet
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      These users exist in CallAnalyzer but have never
+                      logged into RAG (knowledge.umscallanalyzer.com). If
+                      one reports a KB access issue, this is usually a
+                      "never tried" rather than a permissions problem.
+                    </p>
+                    <div className="mt-3 space-y-1">
+                      {unseenByRag.unseen.slice(0, 10).map((u) => (
+                        <div
+                          key={u.id}
+                          className="font-mono text-xs flex flex-wrap items-center gap-2"
+                          data-testid={`unseen-by-rag-row-${u.id}`}
+                        >
+                          <span style={{ color: "var(--muted-foreground)" }}>
+                            {u.username}
+                          </span>
+                          <span style={{ color: "var(--muted-foreground)" }}>
+                            ·
+                          </span>
+                          <span className="text-foreground">{u.name}</span>
+                          <span
+                            className="uppercase"
+                            style={{
+                              color: "var(--muted-foreground)",
+                              fontSize: 10,
+                              letterSpacing: "0.1em",
+                            }}
+                          >
+                            {u.role}
+                          </span>
+                        </div>
+                      ))}
+                      {unseenByRag.unseen.length > 10 && (
+                        <div className="text-xs text-muted-foreground mt-2">
+                          + {unseenByRag.unseen.length - 10} more…
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Create user inline panel */}
             <AdminPanel>
               <div className="p-6">
