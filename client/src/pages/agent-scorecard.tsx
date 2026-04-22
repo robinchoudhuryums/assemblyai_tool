@@ -325,7 +325,7 @@ export default function AgentScorecard() {
     <div className="min-h-screen bg-background text-foreground" data-testid="agent-scorecard-page">
       {/* Warm-paper app bar (hidden on print) */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border print:hidden"
+        className="flex items-center gap-3 px-4 sm:px-7 py-3 bg-card border-b border-border print:hidden"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -355,7 +355,7 @@ export default function AgentScorecard() {
       </div>
 
       {/* Printable scorecard */}
-      <div ref={printRef} className="px-7 py-6 max-w-5xl mx-auto space-y-6 print:p-4 print:max-w-none print:space-y-4">
+      <div ref={printRef} className="px-4 sm:px-7 py-6 max-w-5xl mx-auto space-y-6 print:p-4 print:max-w-none print:space-y-4">
         {/* Agent hero — copper avatar initials + name + role, overall score on the right */}
         <div
           className="rounded-sm border bg-card px-6 py-6 print:p-4"

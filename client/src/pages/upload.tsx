@@ -15,7 +15,7 @@ export default function Upload() {
     <div className="min-h-screen bg-background text-foreground" data-testid="upload-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 px-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -32,7 +32,7 @@ export default function Upload() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border max-w-3xl">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border max-w-3xl">
         <div
           className="font-mono uppercase text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -54,7 +54,7 @@ export default function Upload() {
         </p>
       </div>
 
-      <div className="px-7 py-6 max-w-5xl">
+      <div className="px-4 sm:px-7 py-6 max-w-5xl">
         <FileUpload />
       </div>
     </div>
