@@ -8,6 +8,7 @@ import ViewerHeader from "@/components/transcripts/viewer-header";
 import CallsTable from "@/components/tables/calls-table";
 import CallsListHeader from "@/components/tables/calls-list-header";
 import CallsPreviewRail, { PreviewRailTab } from "@/components/tables/calls-preview-rail";
+import { KnowledgeTrigger } from "@/components/kb-embed/KnowledgeTrigger";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -51,6 +52,9 @@ export default function Transcripts() {
         <div className="p-6">
           <TranscriptViewer callId={callId} />
         </div>
+        {/* KB chat drawer — floating trigger in the bottom-right, renders
+            nothing when /api/config reports kb.enabled=false. */}
+        <KnowledgeTrigger />
       </div>
     );
   }
