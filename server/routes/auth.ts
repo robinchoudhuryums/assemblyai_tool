@@ -2,7 +2,7 @@ import { Router } from "express";
 import passport from "passport";
 import { z } from "zod";
 import { sendValidationError } from "./utils";
-import { createHash, randomUUID } from "crypto";
+import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint, getUserEmployeeId } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
@@ -259,6 +259,112 @@ export function registerAuthRoutes(router: Router) {
   router.get("/api/auth/me", (req, res) => {
     if (req.isAuthenticated() && req.user) {
       res.json(req.user);
+    } else {
+      res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
+  // Service-to-service SSO logout — called server-side by the RAG tool to
+  // terminate the CA session when a user logs out on the RAG side. Without
+  // this, a user who signs in via SSO and clicks "Log out" on RAG still has
+  // an active CA session, which is surprising + a minor HIPAA concern.
+  //
+  // Mirrors /api/auth/sso-verify: requires X-Service-Secret, bypasses the
+  // UA+accept-language fingerprint check (RAG's backend UA legitimately
+  // differs from the user's browser). On success: destroys the passport
+  // session via req.logout() + req.session.destroy() so the session row
+  // in connect-pg-simple is removed and the cookie is invalid for any
+  // future request.
+  router.post("/api/auth/sso-logout", async (req, res) => {
+    const configured = process.env.SSO_SHARED_SECRET;
+    if (!configured || configured.length < 32) {
+      res.status(503).json({ message: "SSO not configured" });
+      return;
+    }
+    const presented = req.header("x-service-secret") || "";
+    const a = Buffer.from(configured);
+    const b = Buffer.from(presented);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+
+    // If there's no session, nothing to do — 200 so the caller's
+    // fire-and-forget path doesn't log a warning.
+    if (!req.isAuthenticated || !req.isAuthenticated()) {
+      res.json({ message: "No active session", revoked: false });
+      return;
+    }
+
+    const username = (req.user as { username?: string } | undefined)?.username;
+
+    // Passport 0.7: req.logout is async and takes a callback. Errors
+    // here are non-fatal — we still try session.destroy.
+    req.logout((logoutErr) => {
+      if (logoutErr) {
+        logger.warn("sso-logout: req.logout failed", { err: String(logoutErr) });
+      }
+      req.session?.destroy((destroyErr) => {
+        if (destroyErr) {
+          logger.warn("sso-logout: session.destroy failed", { err: String(destroyErr) });
+          res.status(500).json({ message: "Session destroy failed" });
+          return;
+        }
+        if (username) {
+          logPhiAccess({
+            ...auditContext(req),
+            timestamp: new Date().toISOString(),
+            event: "sso_logout",
+            resourceType: "session",
+            resourceId: username,
+            detail: "Session terminated via SSO logout from RAG",
+          });
+        }
+        res.json({ message: "Session terminated", revoked: true });
+      });
+    });
+  });
+
+  // Service-to-service SSO introspection — called server-side by the RAG tool
+  // to resolve a shared `.umscallanalyzer.com` session cookie into a user.
+  //
+  // Differences from /api/auth/me:
+  //   - Requires X-Service-Secret header matching SSO_SHARED_SECRET (timing-safe)
+  //   - Bypasses UA+accept-language fingerprint check (the RAG backend's UA will
+  //     legitimately differ from the user's browser that established the session)
+  //   - Response includes `mfaVerified: true` — the session itself only exists
+  //     post-MFA (see routes/auth.ts login flow), so its presence is proof
+  //
+  // Security: the shared secret ensures only trusted services can introspect.
+  // The cookie still authenticates which USER; the header authenticates which
+  // SERVICE is asking.
+  router.get("/api/auth/sso-verify", (req, res) => {
+    const configured = process.env.SSO_SHARED_SECRET;
+    if (!configured || configured.length < 32) {
+      res.status(503).json({ message: "SSO not configured" });
+      return;
+    }
+    const presented = req.header("x-service-secret") || "";
+    const a = Buffer.from(configured);
+    const b = Buffer.from(presented);
+    // timingSafeEqual requires equal-length buffers; pad/truncate via a
+    // constant-time-ish comparison path.
+    if (a.length !== b.length) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+    if (!timingSafeEqual(a, b)) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+
+    if (req.isAuthenticated() && req.user) {
+      const u = req.user as { id: string; username: string; name: string; role: string };
+      res.json({
+        user: { id: u.id, username: u.username, name: u.name, role: u.role },
+        mfaVerified: true,
+        source: "callanalyzer",
+      });
     } else {
       res.status(401).json({ message: "Not authenticated" });
     }

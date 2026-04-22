@@ -179,6 +179,8 @@ tests/                   # Unit tests (Node test runner)
 | POST | `/api/auth/login` | Login (rate limited: 5 attempts/15min per IP) |
 | POST | `/api/auth/logout` | Logout & clear session |
 | GET | `/api/auth/me` | Get current user |
+| GET | `/api/auth/sso-verify` | Service-to-service. Introspects the session cookie for the RAG tool (ums-knowledge-reference) in Option-A SSO. Requires `X-Service-Secret` matching `SSO_SHARED_SECRET` (timing-safe). Bypasses the UA+accept-language fingerprint check so RAG's backend UA is accepted. Returns `{user:{id,username,name,role}, mfaVerified:true, source:"callanalyzer"}`. 503 when `SSO_SHARED_SECRET` is unset or <32 chars. |
+| POST | `/api/auth/sso-logout` | Service-to-service. Paired with `/sso-verify` — RAG's logoutHandler fires this best-effort when a user logs out on RAG so the CA session is destroyed too. Same `X-Service-Secret` + fingerprint-bypass posture. Calls `req.logout()` + `req.session.destroy()` so the connect-pg-simple row is actually removed, not just cookie-cleared. Returns `{revoked: true}` on kill / `{revoked: false}` when no session existed. Writes a `sso_logout` HIPAA audit entry (resourceType=session). 500 only when session.destroy errors. |
 
 ### MFA (authenticated)
 | Method | Path | Role | Description |
@@ -316,6 +318,7 @@ tests/                   # Unit tests (Node test runner)
 |--------|------|------|-------------|
 | GET | `/api/users` | admin | List all users |
 | GET | `/api/users/unlinked` | admin | List viewer-role users with no matching employee row (username→email or name→name match against employees). Backs the amber-stripe "Onboarding" banner on the admin Users tab so the "authenticated but sees no data" puzzle is self-evident rather than a support ticket. |
+| GET | `/api/admin/users/unseen-by-rag` | admin | List CA users whose IDs haven't appeared in RAG's `ssoSub` table (i.e. they've never logged into the knowledge base). Returns `{ragReachable, unseen[]}` — when RAG is unreachable, unseen is empty and `ragReachable:false` so the admin UI can hide the banner rather than show a misleading alert. Uses `services/rag-sso-client.ts` with `SSO_SHARED_SECRET`. |
 | POST | `/api/users/:id/link-employee` | admin | Link a viewer user to an employee by updating the user's `display_name` to match the selected employee's name. Body: `{ employeeId }`. Writes audit event `user_employee_link_created`. Powers the inline "Link" button + dropdown on each row of the unlinked-users banner. |
 | POST | `/api/users` | admin | Create user |
 | PATCH | `/api/users/:id` | admin | Update user (role, display name, active) |
@@ -448,6 +451,11 @@ Access requests can request "viewer" or "manager" roles (not admin).
 # Required
 ASSEMBLYAI_API_KEY              # Transcription service
 SESSION_SECRET                  # Cookie signing
+
+# SSO with the RAG tool (ums-knowledge-reference) — Option A, CA as auth authority
+# Off by default. See the RAG repo's docs/sso-rollout.md for the coordinated cutover.
+SSO_SHARED_SECRET               # ≥32 chars. Shared with RAG; RAG sends it as X-Service-Secret on /sso-verify. Unset = /sso-verify returns 503.
+SHARED_COOKIE_DOMAIN            # Parent domain for session + CSRF cookies, e.g. .umscallanalyzer.com. Unset = host-scoped (default). Flipping this invalidates existing sessions (browsers treat host- and domain-scoped cookies as distinct).
 
 # Simulated Call Generator (admin-only QA tool — optional feature)
 ELEVENLABS_API_KEY              # ElevenLabs TTS API key (required to use the feature)
@@ -826,6 +834,15 @@ RAG_API_KEY=<64-char-shared-secret>      # Same key as SERVICE_API_KEY on the KB
 BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (optional)
 ```
 
+### Embedded KB chat drawer (Track 3, post-SSO)
+
+When both apps are on shared-cookie SSO and `RAG_ENABLED=true` + `RAG_SERVICE_URL` is set, a floating "Ask KB" button appears on the transcript detail page. Clicking it opens a slide-in right-side drawer that iframes RAG at `${RAG_SERVICE_URL}/?embed=1`. The iframe authenticates via the shared `.umscallanalyzer.com` session cookie — no redirect, no login prompt.
+
+- Frontend: `client/src/components/kb-embed/KnowledgeTrigger.tsx` (trigger + config gate) + `KnowledgeDrawer.tsx` (iframe + postMessage bridge). Mounted once in `pages/transcripts.tsx` on the detail-page branch.
+- Config: `/api/config` returns `kb: { enabled, embedUrl }`. `enabled` is computed from `RAG_ENABLED && RAG_SERVICE_URL`; `embedUrl` = `${RAG_SERVICE_URL}/?embed=1`. The trigger renders nothing when `enabled` is false, so dev instances without a KB see no floating button.
+- PostMessage vocabulary: inbound `embed:ready` (RAG → CA, flips the drawer's loading state off), `embed:close` (RAG → CA, fired on Escape inside the iframe which doesn't bubble — drawer closes via `onClose`), `embed:open-source {url}` (RAG → CA, fired when a source citation anchor is clicked — CA window.open's the url in a new tab so PDFs don't render in the 420px drawer; url is origin-validated against the iframe's origin to prevent redirect-laundering); outbound `embed:clear` (CA → RAG, triggers a ChatInterface remount via the `ArrowCounterClockwise` button). Origin validation on both sides: inbound messages are gated on `event.origin === iframe's origin`; outbound `postMessage` targets that same origin (not `*`).
+- RAG must set `EMBED_ALLOWED_ORIGIN=https://umscallanalyzer.com` for the iframe to load at all (CSP `frame-ancestors` gate).
+
 ## Common Gotchas
 - **Three team-analytics SQL queries now filter `c.synthetic = FALSE`** — `/api/analytics/teams` (`server/routes/analytics.ts:80`), `/api/analytics/team/:teamName` (`:132`), and `/api/analytics/compare` (`:437`) previously leaked synthetic calls into team aggregates, per-member metrics, and the manager-driven agent comparison view. Now patched; strengthens INV-34 coverage. The in-memory fallback paths are already safe because they use `storage.getCallsWithDetails` / `getAllCalls`, which filter synthetic at the storage layer.
 - **`mfaPendingTokens` is LRU-bounded at 10,000** (`server/routes/auth.ts:26-41`) — prevents unbounded growth of the pending-MFA-token map under sustained login pressure (e.g. deploy-day spike) between the 5-minute cleanup ticks. On overflow, the oldest pending token is evicted and that user is forced to re-enter their password for a fresh challenge. The per-token `MFA_MAX_ATTEMPTS=5` cap and 5-minute expiry are unchanged. Adding a new `mfaPendingTokens.set(...)` call outside the private `setMfaPendingToken()` helper bypasses the LRU — always go through the helper.
@@ -1065,6 +1082,8 @@ BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (
 | **Scoring** | `server/services/scoring-calibration.ts`, `server/services/auto-calibration.ts`, `server/services/scoring-feedback.ts` | Score normalization, periodic distribution analysis, manager correction capture for future prompt injection. Correction `reason` text is passed through `sanitizeReasonForPrompt()` at capture AND render time and wrapped in `<<<UNTRUSTED_MANAGER_NOTES>>>` delimiters in `buildCorrectionContext()` — a prompt-injection defense that must be preserved by future edits. Exports `getRecentCorrectionsByUser` / `getUserCorrectionStats` for the self-service corrections dashboard widget. |
 | **AWS Infrastructure** | `server/services/s3.ts`, `server/services/sigv4.ts`, `server/services/aws-credentials.ts` | Custom S3 REST client (single consumer: `storage.ts`), SigV4 signing, credential resolution (env vars + IMDS with caching) |
 | **RAG** | `server/services/rag-client.ts` | Knowledge base integration with LFU cache, confidence filtering, graceful fallback |
+| **RAG SSO client** | `server/services/rag-sso-client.ts` | Narrow service-to-service client for RAG's SSO-coordination endpoints. Uses `SSO_SHARED_SECRET` (distinct from `RAG_API_KEY`). `fetchRagSeenUserIds()` powers the admin "unseen by RAG" panel; returns `{reachable, seen}` so callers distinguish "zero SSO users" from "RAG unreachable". Non-throwing, 3s timeout. |
+| **Login return-to guard** | `client/src/lib/return-to.ts` | SSRF-guarded parser for `?return_to=<url>` on the login page. Accepts only http(s) URLs whose hostname is `umscallanalyzer.com` or a subdomain; rejects open-redirect lookalikes (`umscallanalyzer.com.evil.com`, `fakeumscallanalyzer.com`, `javascript:`/`data:`). Called by `pages/auth.tsx` after login success to round-trip users back to RAG when they clicked "Sign in with CallAnalyzer" there. |
 | **Security** | `server/services/audit-log.ts`, `server/services/security-monitor.ts`, `server/services/vulnerability-scanner.ts`, `server/services/incident-response.ts` | HIPAA audit logging (dual-write, HMAC chain, persistent integrity head), brute-force/credential stuffing detection (wired to client IP via `passReqToCallback`), automated vuln scanning (history retains hollow entries past cap, summary kept), incident lifecycle management (DB-first persist; randomUUID IDs; throws on persist failure) |
 | **MFA** | `server/services/totp.ts` | RFC 6238 TOTP with replay protection (used-token cache, 2-min auto-cleanup). Recovery codes: 10-char alphanumeric, scrypt-hashed, single-use, generated at enable/regenerate; exports `generateRecoveryCodes`, `consumeRecoveryCode`, `countRemainingRecoveryCodes`. `requireMFASetup` (in `server/auth.ts`) is gated on `isMFARequired()` (REQUIRE_MFA env var) — no-op when unset. When active, mounted blanket on `/api/admin/*` and per-route on all manager/admin-gated mutations (calls, employees, users, coaching, exports, snapshots) |
 | **PHI Protection** | `server/services/phi-redactor.ts`, `shared/phi-patterns.ts`, `server/services/prompt-guard.ts` | 14-pattern PHI redaction — single source of truth in `shared/phi-patterns.ts`, imported by `phi-redactor.ts` (server audit logs, logger). `redactPhi()` adds count tracking. 16-pattern prompt injection detection + output anomaly scanning (`prompt-guard.ts`) |

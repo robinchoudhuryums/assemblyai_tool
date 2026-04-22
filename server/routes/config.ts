@@ -33,6 +33,20 @@ export function registerConfigRoutes(router: Router) {
         goodThreshold: 6,
         needsWorkThreshold: 4,
       },
+      // Knowledge-base embed — drives the "Ask KB" drawer on the
+      // transcript detail page. Requires RAG_ENABLED + RAG_SERVICE_URL +
+      // a shared session cookie (SSO Track 2) so the iframe can
+      // authenticate against RAG without a redirect loop.
+      kb: {
+        enabled:
+          process.env.RAG_ENABLED === "true" &&
+          !!process.env.RAG_SERVICE_URL &&
+          process.env.RAG_SERVICE_URL.startsWith("http"),
+        embedUrl:
+          process.env.RAG_ENABLED === "true" && process.env.RAG_SERVICE_URL
+            ? `${process.env.RAG_SERVICE_URL.replace(/\/$/, "")}/?embed=1`
+            : null,
+      },
     });
   });
 }

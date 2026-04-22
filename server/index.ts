@@ -294,12 +294,19 @@ app.use((req, res, next) => {
   if (!csrfToken) {
     csrfToken = crypto.randomBytes(32).toString("hex");
   }
+  // SHARED_COOKIE_DOMAIN (e.g. ".umscallanalyzer.com") scopes the CSRF cookie
+  // to the parent domain so it rides along with the shared session cookie
+  // across subdomains. sameSite:strict still allows same-site cross-subdomain
+  // travel because strict is about cross-SITE (registrable domain), not
+  // cross-ORIGIN. Unset = exact host (current behavior).
+  const sharedCookieDomain = process.env.SHARED_COOKIE_DOMAIN;
   res.cookie(CSRF_COOKIE, csrfToken, {
     httpOnly: false,  // Frontend JS needs to read this
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
     path: "/",
     maxAge: 24 * 60 * 60 * 1000,
+    ...(sharedCookieDomain ? { domain: sharedCookieDomain } : {}),
   });
 
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method) && req.path.startsWith("/api")) {

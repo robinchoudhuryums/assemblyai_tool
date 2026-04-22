@@ -92,6 +92,47 @@ export function registerUserRoutes(router: Router) {
   // Each returned user carries a `candidates` array of up to 3 fuzzy-matched
   // employees (similarity > 0.5, sorted desc) so the admin UI can render a
   // "Did you mean Alice Smith?" suggestion above the full-list dropdown.
+  // CA users that RAG has NEVER seen via SSO. Useful diagnostic when a
+  // user reports "I can't access the knowledge base" — admins can glance
+  // here to see if the user has ever hit RAG at all, which narrows
+  // down whether the issue is SSO cookie scope (never seen), permissions
+  // (seen but blocked), or something else entirely. Degrades to an
+  // empty list when RAG is unreachable so the admin page doesn't
+  // crash during a partial outage.
+  router.get(
+    "/api/admin/users/unseen-by-rag",
+    requireAuth,
+    requireMFASetup,
+    requireRole("admin"),
+    async (_req, res) => {
+      try {
+        const { fetchRagSeenUserIds } = await import("../services/rag-sso-client");
+        const [users, { reachable, seen }] = await Promise.all([
+          storage.getAllDbUsers(),
+          fetchRagSeenUserIds(),
+        ]);
+        const unseen = reachable
+          ? users
+              .filter((u) => !seen.has(u.id))
+              .filter((u) => u.active !== false) // hide deactivated users
+              .map((u) => ({
+                id: u.id,
+                username: u.username,
+                name: u.displayName,
+                role: u.role,
+                createdAt: u.createdAt ?? null,
+              }))
+          : [];
+        res.json({ ragReachable: reachable, unseen });
+      } catch (err) {
+        res.status(500).json({
+          message: "Failed to fetch unseen-by-rag list",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
   router.get("/api/users/unlinked", requireAuth, requireMFASetup, requireRole("admin"), async (_req, res) => {
     try {
       const [users, employees] = await Promise.all([

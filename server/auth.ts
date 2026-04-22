@@ -247,6 +247,12 @@ export async function setupAuth(app: Express) {
     logger.info("auth: using in-memory session store (sessions lost on restart)");
   }
 
+  // When SHARED_COOKIE_DOMAIN is set (e.g. ".umscallanalyzer.com"), the session
+  // cookie is scoped to the parent domain so sibling services (the RAG tool at
+  // knowledge.umscallanalyzer.com) receive it. Same-site + cross-subdomain works
+  // with sameSite:lax already because shared eTLD+1 counts as same-site — we
+  // only add the explicit domain attribute, no sameSite relaxation needed.
+  const sharedCookieDomain = process.env.SHARED_COOKIE_DOMAIN;
   sessionMiddleware = session({
     secret: effectiveSessionSecret,
     resave: false,
@@ -257,6 +263,7 @@ export async function setupAuth(app: Express) {
       httpOnly: true,
       maxAge: SESSION_IDLE_TIMEOUT_MS,
       sameSite: "lax",
+      ...(sharedCookieDomain ? { domain: sharedCookieDomain } : {}),
     },
     // HIPAA: rolling=true resets cookie expiry on each request (acts as idle timeout).
     // maxAge=15min means session expires after 15 minutes of inactivity.
