@@ -5,10 +5,19 @@
  * middleware bootstraps a RAG session the first request the iframe makes.
  *
  * PostMessage bridge:
- *   - Inbound `embed:ready` → flip the `ready` flag so we stop showing
- *     the loading state.
- *   - Outbound `embed:clear` → sent from the "Clear chat" button; RAG's
- *     EmbedShell remounts ChatInterface in response.
+ *   Inbound (RAG → CA):
+ *     - embed:ready                 → flip the `ready` flag so we stop
+ *                                     showing the loading state
+ *     - embed:close                 → user pressed Escape inside the
+ *                                     iframe (keydown doesn't bubble); we
+ *                                     call onClose
+ *     - embed:open-source { url }   → user clicked a source citation;
+ *                                     we window.open() to a new tab so
+ *                                     PDFs / viewers don't render inside
+ *                                     this narrow drawer
+ *   Outbound (CA → RAG):
+ *     - embed:clear                 → the "Clear chat" button; RAG's
+ *                                     EmbedShell remounts ChatInterface
  *
  * Origin validation: we only accept inbound messages whose origin
  * matches the iframe src's origin. Outbound messages are sent with
@@ -41,13 +50,39 @@ export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (!allowedOrigin || event.origin !== allowedOrigin) return;
-      const data = event.data as { type?: string } | null;
+      const data = event.data as {
+        type?: string;
+        url?: unknown;
+      } | null;
       if (!data || typeof data.type !== "string") return;
-      if (data.type === "embed:ready") setReady(true);
+      if (data.type === "embed:ready") {
+        setReady(true);
+        return;
+      }
+      if (data.type === "embed:close") {
+        onClose();
+        return;
+      }
+      if (data.type === "embed:open-source") {
+        // Guard against prototype pollution / unexpected payloads.
+        if (typeof data.url !== "string") return;
+        // Only open URLs that match the iframe's origin (or share our
+        // protocol+eTLD+1). `embed:open-source` is meant for RAG's own
+        // document-serve routes; anything else is suspicious and gets
+        // silently dropped rather than window.open'd.
+        try {
+          const target = new URL(data.url);
+          if (target.origin !== allowedOrigin) return;
+        } catch {
+          return;
+        }
+        window.open(data.url, "_blank", "noopener,noreferrer");
+        return;
+      }
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [allowedOrigin]);
+  }, [allowedOrigin, onClose]);
 
   // Escape key closes the drawer when it has focus in the parent frame.
   // (Escape inside the iframe doesn't bubble here — that's a known

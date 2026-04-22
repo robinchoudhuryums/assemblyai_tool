@@ -197,4 +197,85 @@ describe("KnowledgeDrawer", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("fires onClose when RAG posts `embed:close`", () => {
+    const dispatch = captureMessageListener();
+    const onClose = vi.fn();
+    render(
+      <KnowledgeDrawer
+        open
+        onClose={onClose}
+        embedUrl="https://knowledge.umscallanalyzer.com/?embed=1"
+      />,
+    );
+    dispatch({
+      origin: "https://knowledge.umscallanalyzer.com",
+      data: { type: "embed:close" },
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens same-origin source URLs in a new tab on `embed:open-source`", () => {
+    const dispatch = captureMessageListener();
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <KnowledgeDrawer
+        open
+        onClose={() => {}}
+        embedUrl="https://knowledge.umscallanalyzer.com/?embed=1"
+      />,
+    );
+    dispatch({
+      origin: "https://knowledge.umscallanalyzer.com",
+      data: {
+        type: "embed:open-source",
+        url: "https://knowledge.umscallanalyzer.com/api/documents/abc/download",
+      },
+    });
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://knowledge.umscallanalyzer.com/api/documents/abc/download",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    openSpy.mockRestore();
+  });
+
+  it("refuses to open cross-origin URLs in `embed:open-source` (redirect-laundering guard)", () => {
+    const dispatch = captureMessageListener();
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <KnowledgeDrawer
+        open
+        onClose={() => {}}
+        embedUrl="https://knowledge.umscallanalyzer.com/?embed=1"
+      />,
+    );
+    dispatch({
+      origin: "https://knowledge.umscallanalyzer.com",
+      data: {
+        type: "embed:open-source",
+        url: "https://evil.example.com/attack.pdf",
+      },
+    });
+    expect(openSpy).not.toHaveBeenCalled();
+    openSpy.mockRestore();
+  });
+
+  it("refuses `embed:open-source` with a non-string url", () => {
+    const dispatch = captureMessageListener();
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <KnowledgeDrawer
+        open
+        onClose={() => {}}
+        embedUrl="https://knowledge.umscallanalyzer.com/?embed=1"
+      />,
+    );
+    dispatch({
+      origin: "https://knowledge.umscallanalyzer.com",
+      data: { type: "embed:open-source", url: 42 },
+    });
+    expect(openSpy).not.toHaveBeenCalled();
+    openSpy.mockRestore();
+  });
 });
