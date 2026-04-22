@@ -2,7 +2,7 @@ import { Router } from "express";
 import passport from "passport";
 import { z } from "zod";
 import { sendValidationError } from "./utils";
-import { createHash, randomUUID } from "crypto";
+import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, getSessionFingerprint, getUserEmployeeId } from "../auth";
 import { getMFASecret, saveMFASecret, enableMFA, disableMFA, generateSecret, generateOTPAuthURI, verifyTOTP, isMFARequired, isMFARoleRequired, listMFAUsers, generateRecoveryCodes, countRemainingRecoveryCodes } from "../services/totp";
@@ -259,6 +259,51 @@ export function registerAuthRoutes(router: Router) {
   router.get("/api/auth/me", (req, res) => {
     if (req.isAuthenticated() && req.user) {
       res.json(req.user);
+    } else {
+      res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
+  // Service-to-service SSO introspection — called server-side by the RAG tool
+  // to resolve a shared `.umscallanalyzer.com` session cookie into a user.
+  //
+  // Differences from /api/auth/me:
+  //   - Requires X-Service-Secret header matching SSO_SHARED_SECRET (timing-safe)
+  //   - Bypasses UA+accept-language fingerprint check (the RAG backend's UA will
+  //     legitimately differ from the user's browser that established the session)
+  //   - Response includes `mfaVerified: true` — the session itself only exists
+  //     post-MFA (see routes/auth.ts login flow), so its presence is proof
+  //
+  // Security: the shared secret ensures only trusted services can introspect.
+  // The cookie still authenticates which USER; the header authenticates which
+  // SERVICE is asking.
+  router.get("/api/auth/sso-verify", (req, res) => {
+    const configured = process.env.SSO_SHARED_SECRET;
+    if (!configured || configured.length < 32) {
+      res.status(503).json({ message: "SSO not configured" });
+      return;
+    }
+    const presented = req.header("x-service-secret") || "";
+    const a = Buffer.from(configured);
+    const b = Buffer.from(presented);
+    // timingSafeEqual requires equal-length buffers; pad/truncate via a
+    // constant-time-ish comparison path.
+    if (a.length !== b.length) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+    if (!timingSafeEqual(a, b)) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+
+    if (req.isAuthenticated() && req.user) {
+      const u = req.user as { id: string; username: string; name: string; role: string };
+      res.json({
+        user: { id: u.id, username: u.username, name: u.name, role: u.role },
+        mfaVerified: true,
+        source: "callanalyzer",
+      });
     } else {
       res.status(401).json({ message: "Not authenticated" });
     }
