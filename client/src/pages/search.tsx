@@ -291,7 +291,7 @@ export default function SearchPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="search-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -327,7 +327,7 @@ export default function SearchPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -345,7 +345,7 @@ export default function SearchPage() {
       </div>
 
       {/* Filter bar */}
-      <div className="px-7 py-4 bg-background border-b border-border flex flex-col gap-3">
+      <div className="px-4 sm:px-7 py-4 bg-background border-b border-border flex flex-col gap-3">
         {/* Search mode toggle — only meaningful when there's a query. */}
         <div className="flex items-center gap-2 flex-wrap" data-testid="search-mode-toggle">
           <span
@@ -630,7 +630,7 @@ export default function SearchPage() {
       </div>
 
       {/* Results */}
-      <div className="px-7 py-6">
+      <div className="px-4 sm:px-7 py-6">
         {isLoading ? (
           <div
             className="py-16 text-center text-muted-foreground"

@@ -234,7 +234,7 @@ export default function TeamAnalyticsPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="team-analytics-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -255,7 +255,7 @@ export default function TeamAnalyticsPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <div
@@ -282,7 +282,7 @@ export default function TeamAnalyticsPage() {
       </div>
 
       {/* Filter row */}
-      <div className="px-7 py-4 border-b border-border bg-background">
+      <div className="px-4 sm:px-7 py-4 border-b border-border bg-background">
         <div className="flex items-end gap-4">
           <div>
             <div
@@ -327,7 +327,7 @@ export default function TeamAnalyticsPage() {
         </div>
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {isError && (
           <ErrorBanner message={(error as Error)?.message ?? "Failed to load team analytics."} />
         )}

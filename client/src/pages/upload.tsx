@@ -15,7 +15,7 @@ export default function Upload() {
     <div className="min-h-screen bg-background text-foreground" data-testid="upload-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-4 sm:px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav

@@ -119,7 +119,7 @@ export default function ABTestingPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="ab-testing-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -136,7 +136,7 @@ export default function ABTestingPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -161,7 +161,7 @@ export default function ABTestingPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-2 px-7 py-3 bg-background border-b border-border flex-wrap">
+      <div className="flex gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border flex-wrap">
         <ABTab active={tab === "new"} onClick={() => setTab("new")} label="New test" />
         <ABTab
           active={tab === "results"}
@@ -176,7 +176,7 @@ export default function ABTestingPage() {
         />
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {tab === "new" && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

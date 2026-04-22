@@ -195,7 +195,7 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="settings-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -212,7 +212,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <SectionKicker>Appearance</SectionKicker>
         <div
           className="font-display font-medium text-foreground mt-1"
@@ -226,7 +226,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="px-7 py-6 max-w-4xl space-y-6">
+      <div className="px-4 sm:px-7 py-6 max-w-4xl space-y-6">
         {/* Theme */}
         <SettingsPanel
           kicker="Theme"

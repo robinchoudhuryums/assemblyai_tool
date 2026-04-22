@@ -90,7 +90,7 @@ export default function HeatmapCalendar() {
     <div className="min-h-screen bg-background text-foreground" data-testid="heatmap-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -107,7 +107,7 @@ export default function HeatmapCalendar() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -127,7 +127,7 @@ export default function HeatmapCalendar() {
       </div>
 
       {/* Filter row */}
-      <div className="px-7 py-4 border-b border-border bg-background">
+      <div className="px-4 sm:px-7 py-4 border-b border-border bg-background">
         <div className="flex flex-wrap items-end gap-4">
           <FilterBlock label="Window">
             <Select value={days} onValueChange={setDays}>
@@ -174,7 +174,7 @@ export default function HeatmapCalendar() {
         </div>
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* Summary tiles */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatTile label="Total calls" value={totalCalls.toLocaleString()} />

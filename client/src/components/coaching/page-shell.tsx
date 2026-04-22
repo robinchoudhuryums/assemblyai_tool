@@ -49,7 +49,7 @@ function CoachingAppBar({
   const [, navigate] = useLocation();
   return (
     <div
-      className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+      className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
       style={{ fontSize: 12 }}
     >
       <nav

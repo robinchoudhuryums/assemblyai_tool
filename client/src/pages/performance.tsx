@@ -113,7 +113,7 @@ export default function PerformancePage() {
       <div className="min-h-screen bg-background text-foreground" data-testid="performance-page">
         <PerformanceAppBar />
         <PerformancePageHeader total={null} overallAvg={null} />
-        <div className="px-7 py-6">
+        <div className="px-4 sm:px-7 py-6">
           <div
             role="alert"
             className="flex items-start gap-2 rounded-sm"
@@ -151,7 +151,7 @@ export default function PerformancePage() {
       <PerformancePageHeader total={filteredPerformers.length} overallAvg={overallAvg} />
 
       {/* Filter row */}
-      <div className="px-7 py-4 border-b border-border bg-background">
+      <div className="px-4 sm:px-7 py-4 border-b border-border bg-background">
         <div className="flex items-center justify-between gap-4">
           <div>
             <div
@@ -191,7 +191,7 @@ export default function PerformancePage() {
         </div>
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* Score overview — top-10 horizontal bars, tier-tinted via scoreTierColor */}
         {chartData.length > 0 && (
           <PerfPanel kicker={`Top ${chartData.length}`} icon={TrendUp} title="Score overview">
@@ -371,7 +371,7 @@ export default function PerformancePage() {
 function PerformanceAppBar() {
   return (
     <div
-      className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+      className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
       style={{ fontSize: 12 }}
     >
       <nav
@@ -400,7 +400,7 @@ function PerformancePageHeader({
   overallAvg: number | null;
 }) {
   return (
-    <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+    <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div

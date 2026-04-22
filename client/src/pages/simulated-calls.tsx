@@ -388,7 +388,7 @@ export default function SimulatedCallsPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="simulated-calls-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -409,7 +409,7 @@ export default function SimulatedCallsPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div className="flex items-end justify-between gap-8">
           <div className="min-w-0">
             <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
@@ -439,7 +439,7 @@ export default function SimulatedCallsPage() {
         </div>
       </div>
 
-      <div className="px-7 py-6 max-w-7xl mx-auto space-y-6">
+      <div className="px-4 sm:px-7 py-6 max-w-7xl mx-auto space-y-6">
 
       <div
         className="border border-[color-mix(in_oklch,var(--amber),transparent_50%)] border-l-[3px] border-l-[var(--amber)] bg-[var(--amber-soft)] text-foreground text-sm leading-relaxed px-5 py-3"

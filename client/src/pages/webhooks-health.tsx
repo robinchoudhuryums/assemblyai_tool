@@ -126,7 +126,7 @@ export default function WebhooksHealthPage() {
   return (
     <div className="min-h-screen bg-background text-foreground" data-testid="webhooks-health-page">
       {/* App bar */}
-      <div className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border" style={{ fontSize: 12 }}>
+      <div className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border" style={{ fontSize: 12 }}>
         <nav
           className="flex items-center gap-2 font-mono uppercase"
           style={{ fontSize: 11, letterSpacing: "0.04em" }}
@@ -150,7 +150,7 @@ export default function WebhooksHealthPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -194,7 +194,7 @@ export default function WebhooksHealthPage() {
       )}
 
       {/* Summary strip */}
-      <div className="px-7 pt-5 pb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="px-4 sm:px-7 pt-5 pb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatTile
           kicker="In flight"
           value={totalInFlight}
@@ -222,7 +222,7 @@ export default function WebhooksHealthPage() {
       </div>
 
       {/* Per-webhook table */}
-      <div className="px-7 py-4">
+      <div className="px-4 sm:px-7 py-4">
         <div
           className="border bg-card"
           style={{ borderRadius: "var(--radius)", padding: "16px 20px" }}
@@ -286,7 +286,7 @@ export default function WebhooksHealthPage() {
       </div>
 
       {/* Dead-letter list */}
-      <div className="px-7 pb-10">
+      <div className="px-4 sm:px-7 pb-10">
         <div
           className="border bg-card"
           style={{ borderRadius: "var(--radius)", padding: "16px 20px" }}

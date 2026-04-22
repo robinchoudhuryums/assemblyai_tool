@@ -126,7 +126,7 @@ export default function AssignModal(props: AssignModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top */}
-        <div className="flex items-center gap-3 px-7 py-5 border-b border-border">
+        <div className="flex items-center gap-3 px-4 sm:px-7 py-5 border-b border-border">
           <div
             className="font-mono uppercase text-muted-foreground"
             style={{ fontSize: 10, letterSpacing: "0.14em" }}
@@ -148,7 +148,7 @@ export default function AssignModal(props: AssignModalProps) {
         {/* Attached transcript banner */}
         {attachCall && props.prefillCallId && (
           <div
-            className="px-7 py-4 border-b border-border flex items-center gap-3.5"
+            className="px-4 sm:px-7 py-4 border-b border-border flex items-center gap-3.5"
             style={{ background: "var(--accent-soft)" }}
           >
             <div style={{ fontSize: 20, color: "var(--accent)" }}>⎘</div>
@@ -178,7 +178,7 @@ export default function AssignModal(props: AssignModalProps) {
         )}
 
         {/* Form */}
-        <div className="px-7 py-6 flex flex-col gap-5">
+        <div className="px-4 sm:px-7 py-6 flex flex-col gap-5">
           <FieldRow label="Assign to">
             <select
               value={employeeId}
@@ -264,7 +264,7 @@ export default function AssignModal(props: AssignModalProps) {
 
         {/* Footer */}
         <div
-          className="px-7 py-5 border-t border-border flex items-center gap-2.5 flex-wrap"
+          className="px-4 sm:px-7 py-5 border-t border-border flex items-center gap-2.5 flex-wrap"
           style={{ background: "var(--secondary)" }}
         >
           {props.submitError ? (

@@ -215,7 +215,7 @@ export default function AdminPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="admin-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -247,7 +247,7 @@ export default function AdminPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -269,7 +269,7 @@ export default function AdminPage() {
 
       {/* Tab bar */}
       <div
-        className="flex gap-2 px-7 py-3 bg-background border-b border-border flex-wrap"
+        className="flex gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border flex-wrap"
       >
         <AdminTab icon={Users} label="Users" active={tab === "users"} onClick={() => setTab("users")} />
         <AdminTab
@@ -285,7 +285,7 @@ export default function AdminPage() {
         <AdminTab icon={ArrowCounterClockwise} label="Bulk Re-analysis" active={tab === "reanalyze"} onClick={() => setTab("reanalyze")} />
       </div>
 
-      <div className="px-7 py-6 space-y-6">
+      <div className="px-4 sm:px-7 py-6 space-y-6">
         {/* ════════════════ USERS TAB ════════════════ */}
         {tab === "users" && (
           <div className="space-y-8">

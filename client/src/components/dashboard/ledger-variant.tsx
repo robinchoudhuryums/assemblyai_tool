@@ -167,12 +167,7 @@ export default function LedgerVariant() {
       </div>
 
       <div
-        style={{
-          padding: "28px 44px",
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) 380px",
-          gap: 40,
-        }}
+        className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] p-4 sm:p-8 lg:p-[28px_44px] gap-6 lg:gap-10"
       >
         {/* LEFT — main content */}
         <div>
@@ -181,11 +176,10 @@ export default function LedgerVariant() {
               <FlaggedAlertRibbons badCalls={ribbon.bad} goodCalls={ribbon.good} />
             </div>
           )}
-          {/* Four stats across */}
+          {/* Four stats across (stacks 2x2 on mobile, 4x1 on md+) */}
           <div
+            className="grid grid-cols-2 md:grid-cols-4"
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
               gap: 32,
               paddingBottom: 24,
               borderBottom: "1px solid var(--border)",

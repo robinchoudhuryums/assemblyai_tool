@@ -142,6 +142,29 @@
     font-family: var(--font-sans);
   }
 
+  /* Mobile: prevent iOS Safari from zooming the viewport when users tap into
+     a text input whose computed font-size is below 16px. iOS Safari's zoom
+     behavior is triggered per-input, so a global floor applied only on
+     narrow viewports keeps desktop typography unchanged while making mobile
+     forms usable. Covers the common <input>, <textarea>, and <select>
+     elements; shadcn/ui primitives inherit via type-attribute matching. */
+  @media (max-width: 640px) {
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="search"],
+    input[type="number"],
+    input[type="tel"],
+    input[type="url"],
+    input[type="date"],
+    input[type="datetime-local"],
+    input:not([type]),
+    textarea,
+    select {
+      font-size: 16px;
+    }
+  }
+
   /* Accessibility: respect prefers-reduced-motion. Users who've opted in to
      the OS-level "reduce motion" setting (motion sensitivity, vestibular
      disorders) get near-instant transitions instead of the app's pulses,

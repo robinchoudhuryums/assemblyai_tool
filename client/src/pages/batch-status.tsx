@@ -73,7 +73,7 @@ export default function BatchStatusPage() {
       >
         <BatchAppBar />
         <BatchPageHeader subtitle="AWS Bedrock batch mode for cost-optimized AI analysis." />
-        <div className="px-7 py-6">
+        <div className="px-4 sm:px-7 py-6">
           <ErrorBanner message={(error as Error).message || "Unknown error"} />
         </div>
       </div>
@@ -91,7 +91,7 @@ export default function BatchStatusPage() {
       >
         <BatchAppBar />
         <BatchPageHeader subtitle="AWS Bedrock batch mode for cost-optimized AI analysis." />
-        <main className="px-7 py-6">
+        <main className="px-4 sm:px-7 py-6">
           <div
             className="rounded-sm"
             style={{
@@ -143,7 +143,7 @@ export default function BatchStatusPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="batch-status-page">
       {/* App bar with refresh button */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -168,7 +168,7 @@ export default function BatchStatusPage() {
 
       <BatchPageHeader subtitle={`AWS Bedrock batch jobs · ${data.costSavings || "50% cost savings"}`} />
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* Mode + stats tile strip */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <ModeTile data={data} />
@@ -297,7 +297,7 @@ export default function BatchStatusPage() {
 function BatchAppBar() {
   return (
     <div
-      className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+      className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
       style={{ fontSize: 12 }}
     >
       <nav
@@ -317,7 +317,7 @@ function BatchAppBar() {
 
 function BatchPageHeader({ subtitle }: { subtitle: string }) {
   return (
-    <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+    <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
       <div
         className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
         style={{ fontSize: 10, letterSpacing: "0.18em" }}
