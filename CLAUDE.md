@@ -832,6 +832,15 @@ RAG_API_KEY=<64-char-shared-secret>      # Same key as SERVICE_API_KEY on the KB
 BEST_PRACTICE_INGEST_ENABLED=true        # Auto-ingest exceptional calls to KB (optional)
 ```
 
+### Embedded KB chat drawer (Track 3, post-SSO)
+
+When both apps are on shared-cookie SSO and `RAG_ENABLED=true` + `RAG_SERVICE_URL` is set, a floating "Ask KB" button appears on the transcript detail page. Clicking it opens a slide-in right-side drawer that iframes RAG at `${RAG_SERVICE_URL}/?embed=1`. The iframe authenticates via the shared `.umscallanalyzer.com` session cookie — no redirect, no login prompt.
+
+- Frontend: `client/src/components/kb-embed/KnowledgeTrigger.tsx` (trigger + config gate) + `KnowledgeDrawer.tsx` (iframe + postMessage bridge). Mounted once in `pages/transcripts.tsx` on the detail-page branch.
+- Config: `/api/config` returns `kb: { enabled, embedUrl }`. `enabled` is computed from `RAG_ENABLED && RAG_SERVICE_URL`; `embedUrl` = `${RAG_SERVICE_URL}/?embed=1`. The trigger renders nothing when `enabled` is false, so dev instances without a KB see no floating button.
+- PostMessage vocabulary: inbound `embed:ready` (RAG → CA, flips the drawer's loading state off); outbound `embed:clear` (CA → RAG, triggers a ChatInterface remount via the `ArrowCounterClockwise` button). Origin validation on both sides: inbound messages are gated on `event.origin === iframe's origin`; outbound `postMessage` targets that same origin (not `*`).
+- RAG must set `EMBED_ALLOWED_ORIGIN=https://umscallanalyzer.com` for the iframe to load at all (CSP `frame-ancestors` gate).
+
 ## Common Gotchas
 - **Three team-analytics SQL queries now filter `c.synthetic = FALSE`** — `/api/analytics/teams` (`server/routes/analytics.ts:80`), `/api/analytics/team/:teamName` (`:132`), and `/api/analytics/compare` (`:437`) previously leaked synthetic calls into team aggregates, per-member metrics, and the manager-driven agent comparison view. Now patched; strengthens INV-34 coverage. The in-memory fallback paths are already safe because they use `storage.getCallsWithDetails` / `getAllCalls`, which filter synthetic at the storage layer.
 - **`mfaPendingTokens` is LRU-bounded at 10,000** (`server/routes/auth.ts:26-41`) — prevents unbounded growth of the pending-MFA-token map under sustained login pressure (e.g. deploy-day spike) between the 5-minute cleanup ticks. On overflow, the oldest pending token is evicted and that user is forced to re-enter their password for a fresh challenge. The per-token `MFA_MAX_ATTEMPTS=5` cap and 5-minute expiry are unchanged. Adding a new `mfaPendingTokens.set(...)` call outside the private `setMfaPendingToken()` helper bypasses the LRU — always go through the helper.
