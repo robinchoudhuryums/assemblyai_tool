@@ -264,6 +264,67 @@ export function registerAuthRoutes(router: Router) {
     }
   });
 
+  // Service-to-service SSO logout — called server-side by the RAG tool to
+  // terminate the CA session when a user logs out on the RAG side. Without
+  // this, a user who signs in via SSO and clicks "Log out" on RAG still has
+  // an active CA session, which is surprising + a minor HIPAA concern.
+  //
+  // Mirrors /api/auth/sso-verify: requires X-Service-Secret, bypasses the
+  // UA+accept-language fingerprint check (RAG's backend UA legitimately
+  // differs from the user's browser). On success: destroys the passport
+  // session via req.logout() + req.session.destroy() so the session row
+  // in connect-pg-simple is removed and the cookie is invalid for any
+  // future request.
+  router.post("/api/auth/sso-logout", async (req, res) => {
+    const configured = process.env.SSO_SHARED_SECRET;
+    if (!configured || configured.length < 32) {
+      res.status(503).json({ message: "SSO not configured" });
+      return;
+    }
+    const presented = req.header("x-service-secret") || "";
+    const a = Buffer.from(configured);
+    const b = Buffer.from(presented);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      res.status(401).json({ message: "Invalid service credential" });
+      return;
+    }
+
+    // If there's no session, nothing to do — 200 so the caller's
+    // fire-and-forget path doesn't log a warning.
+    if (!req.isAuthenticated || !req.isAuthenticated()) {
+      res.json({ message: "No active session", revoked: false });
+      return;
+    }
+
+    const username = (req.user as { username?: string } | undefined)?.username;
+
+    // Passport 0.7: req.logout is async and takes a callback. Errors
+    // here are non-fatal — we still try session.destroy.
+    req.logout((logoutErr) => {
+      if (logoutErr) {
+        logger.warn("sso-logout: req.logout failed", { err: String(logoutErr) });
+      }
+      req.session?.destroy((destroyErr) => {
+        if (destroyErr) {
+          logger.warn("sso-logout: session.destroy failed", { err: String(destroyErr) });
+          res.status(500).json({ message: "Session destroy failed" });
+          return;
+        }
+        if (username) {
+          logPhiAccess({
+            ...auditContext(req),
+            timestamp: new Date().toISOString(),
+            event: "sso_logout",
+            resourceType: "session",
+            resourceId: username,
+            detail: "Session terminated via SSO logout from RAG",
+          });
+        }
+        res.json({ message: "Session terminated", revoked: true });
+      });
+    });
+  });
+
   // Service-to-service SSO introspection — called server-side by the RAG tool
   // to resolve a shared `.umscallanalyzer.com` session cookie into a user.
   //
