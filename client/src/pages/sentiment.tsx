@@ -136,7 +136,7 @@ export default function SentimentPage() {
       <div className="min-h-screen bg-background text-foreground" data-testid="sentiment-page">
         <SentimentAppBar />
         <SentimentPageHeader />
-        <div className="px-7 py-6">
+        <div className="px-4 sm:px-7 py-6">
           <div
             role="alert"
             className="flex items-start gap-2 rounded-sm"
@@ -182,7 +182,7 @@ export default function SentimentPage() {
       <SentimentAppBar />
       <SentimentPageHeader />
 
-      <main className="px-7 py-6 space-y-8">
+      <main className="px-4 sm:px-7 py-6 space-y-8">
         {/* Summary tiles */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <SentimentTile
@@ -330,7 +330,7 @@ export default function SentimentPage() {
 function SentimentAppBar() {
   return (
     <div
-      className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+      className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
       style={{ fontSize: 12 }}
     >
       <nav
@@ -350,7 +350,7 @@ function SentimentAppBar() {
 
 function SentimentPageHeader() {
   return (
-    <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+    <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
       <div
         className="font-mono uppercase text-muted-foreground"
         style={{ fontSize: 10, letterSpacing: "0.18em" }}

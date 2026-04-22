@@ -82,7 +82,7 @@ export default function Leaderboard() {
       <LeaderboardPageHeader />
 
       {/* Period tabs — warm-paper mono uppercase */}
-      <div className="flex gap-2 px-7 py-3 bg-background border-b border-border">
+      <div className="flex gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border">
         {(
           [
             { value: "week", label: "This week" },
@@ -99,7 +99,7 @@ export default function Leaderboard() {
         ))}
       </div>
 
-      <main className="px-7 py-6 space-y-6 max-w-6xl mx-auto">
+      <main className="px-4 sm:px-7 py-6 space-y-6 max-w-6xl mx-auto">
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <LoadingIndicator text="Loading leaderboard..." />
@@ -174,7 +174,7 @@ export default function Leaderboard() {
 function LeaderboardAppBar() {
   return (
     <div
-      className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+      className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
       style={{ fontSize: 12 }}
     >
       <nav
@@ -194,7 +194,7 @@ function LeaderboardAppBar() {
 
 function LeaderboardPageHeader() {
   return (
-    <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+    <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
       <div
         className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
         style={{ fontSize: 10, letterSpacing: "0.18em" }}

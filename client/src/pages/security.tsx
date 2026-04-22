@@ -169,7 +169,7 @@ export default function SecurityPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="security-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -186,7 +186,7 @@ export default function SecurityPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -206,7 +206,7 @@ export default function SecurityPage() {
       </div>
 
       {/* Summary tiles */}
-      <div className="px-7 py-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="px-4 sm:px-7 py-6 grid grid-cols-1 md:grid-cols-4 gap-4">
         <SecurityTile
           icon={Bell}
           label="Unacknowledged alerts"
@@ -240,7 +240,7 @@ export default function SecurityPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-2 px-7 py-3 bg-background border-b border-border">
+      <div className="flex gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border">
         <SecurityTab
           active={tab === "alerts"}
           onClick={() => setTab("alerts")}
@@ -256,7 +256,7 @@ export default function SecurityPage() {
         <SecurityTab active={tab === "mfa"} onClick={() => setTab("mfa")} label="MFA status" />
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* ALERTS TAB */}
         {tab === "alerts" && (
           <>

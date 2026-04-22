@@ -67,7 +67,7 @@ export default function SystemHealthPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="system-health-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -84,7 +84,7 @@ export default function SystemHealthPage() {
       </div>
 
       {/* Page header with overall status pill */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <div
@@ -116,7 +116,7 @@ export default function SystemHealthPage() {
         </div>
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array.from({ length: 6 }).map((_, i) => (

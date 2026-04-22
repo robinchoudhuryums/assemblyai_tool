@@ -63,10 +63,9 @@ export default function PulseVariant() {
             <FlaggedAlertRibbons badCalls={ribbon.bad} goodCalls={ribbon.good} />
           </div>
         )}
-        {/* Hero: score + sentiment curve */}
+        {/* Hero: score + sentiment curve — stacks on mobile, 320px+flex at md+ */}
         <div
-          className="grid gap-14 items-center pb-10 border-b border-border"
-          style={{ gridTemplateColumns: "320px 1fr" }}
+          className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-6 md:gap-14 items-center pb-10 border-b border-border"
         >
           {/* Left: hero score */}
           <div>
@@ -163,8 +162,8 @@ export default function PulseVariant() {
           </div>
         </div>
 
-        {/* 3-card row */}
-        <div className="grid gap-8 mt-8" style={{ gridTemplateColumns: "1.1fr 1fr 1fr" }}>
+        {/* 3-card row — single column on mobile, 3 across at md+ */}
+        <div className="grid grid-cols-1 md:grid-cols-[1.1fr_1fr_1fr] gap-6 md:gap-8 mt-8">
           <PulseCard title="Rubric breakdown" kicker={`Averaged · ${metrics?.totalCalls ?? 0} calls`}>
             <RubricRack rubric={rubric} />
           </PulseCard>

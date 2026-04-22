@@ -965,3 +965,475 @@ describe("Report PDF exports (Phase D)", () => {
     server.close(done);
   });
 });
+
+// =====================================================================
+// DASHBOARD SEEDED-DATA TESTS (#10) — exercises the aggregation code paths
+// in routes/dashboard.ts. The earlier "Dashboard endpoints" describe block
+// only hits empty-MemStorage paths; this one seeds 2 employees + 4 calls +
+// analyses + sentiment rows and verifies the aggregate shapes.
+// =====================================================================
+describe("Dashboard endpoints — seeded data (#10)", () => {
+  const app = buildAppWith(registerDashboardRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  const seededCallIds: string[] = [];
+  let empAliceId = "";
+  let empBobId = "";
+
+  it("setup + seed", async () => {
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        baseUrl = `http://localhost:${(server.address() as any).port}`;
+        resolve();
+      });
+    });
+
+    const alice = await storage.createEmployee({
+      name: "Dashboard Alice",
+      email: "dash-alice@test.com",
+      role: "Agent",
+      status: "Active",
+    });
+    empAliceId = alice.id;
+    const bob = await storage.createEmployee({
+      name: "Dashboard Bob",
+      email: "dash-bob@test.com",
+      role: "Agent",
+      status: "Active",
+    });
+    empBobId = bob.id;
+
+    // 4 calls across the two agents with known scores + sentiments.
+    const scores: Array<{ perf: string; sent: string; sentScore: string; emp: string }> = [
+      { perf: "9.0", sent: "positive", sentScore: "0.9", emp: empAliceId },
+      { perf: "7.5", sent: "positive", sentScore: "0.7", emp: empAliceId },
+      { perf: "6.0", sent: "neutral", sentScore: "0.5", emp: empBobId },
+      { perf: "4.0", sent: "negative", sentScore: "0.2", emp: empBobId },
+    ];
+    for (let i = 0; i < scores.length; i++) {
+      const s = scores[i];
+      const call = await storage.createCall({
+        fileName: `dash-seed-${i}.mp3`,
+        status: "completed",
+        contentHash: `dash-seed-${i}`,
+      });
+      seededCallIds.push(call.id);
+      await storage.setCallEmployee(call.id, s.emp);
+      await storage.createCallAnalysis({
+        callId: call.id,
+        performanceScore: s.perf,
+        summary: `seed ${i}`,
+      } as any);
+      await storage.createSentimentAnalysis({
+        callId: call.id,
+        overallSentiment: s.sent,
+        overallScore: s.sentScore,
+      } as any);
+    }
+  });
+
+  it("GET /api/dashboard/metrics returns aggregates over seeded data", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/dashboard/metrics");
+    assert.equal(status, 200);
+    // Earlier describe blocks may have seeded additional calls, so assert ≥.
+    assert.ok(body.totalCalls >= 4, `expected ≥4 totalCalls, got ${body.totalCalls}`);
+    assert.equal(typeof body.avgSentiment, "number");
+    assert.equal(typeof body.avgPerformanceScore, "number");
+    assert.ok(body.avgPerformanceScore >= 0 && body.avgPerformanceScore <= 10);
+  });
+
+  it("GET /api/dashboard/sentiment includes all 3 sentiment buckets", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/dashboard/sentiment");
+    assert.equal(status, 200);
+    // Our seed contributes: 2 positive, 1 neutral, 1 negative.
+    assert.ok(body.positive >= 2, `expected ≥2 positive, got ${body.positive}`);
+    assert.ok(body.neutral >= 1);
+    assert.ok(body.negative >= 1);
+  });
+
+  it("GET /api/dashboard/performers returns employees ranked by avg score", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/dashboard/performers");
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body));
+    const alice = body.find((p: any) => p.id === empAliceId);
+    const bob = body.find((p: any) => p.id === empBobId);
+    assert.ok(alice, "Dashboard Alice should appear in performers");
+    assert.ok(bob, "Dashboard Bob should appear in performers");
+    // Alice's avg (9.0, 7.5) = 8.25; Bob's (6.0, 4.0) = 5.0.
+    assert.ok(alice.avgPerformanceScore > bob.avgPerformanceScore,
+      "Alice should rank above Bob");
+  });
+
+  it("GET /api/dashboard/performers respects limit query", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/dashboard/performers?limit=1");
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body));
+    assert.equal(body.length, 1, "limit=1 should return exactly 1 performer");
+  });
+
+  it("GET /api/dashboard/weekly-changes returns narrative for manager+", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/dashboard/weekly-changes", undefined, "manager");
+    assert.equal(status, 200);
+    assert.equal(typeof body, "object");
+  });
+
+  it("GET /api/dashboard/weekly-changes returns 403 for viewer", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/dashboard/weekly-changes", undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/dashboard/weekly-changes returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/dashboard/weekly-changes", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("Dashboard metrics exclude calls flagged as excluded_from_metrics", async () => {
+    // INV-34 regression guard at the route level.
+    const before = await req(baseUrl, "GET", "/api/dashboard/metrics");
+    const beforeTotal = before.body.totalCalls;
+
+    await storage.updateCall(seededCallIds[0], { excludedFromMetrics: true });
+    const after = await req(baseUrl, "GET", "/api/dashboard/metrics");
+    assert.equal(after.body.totalCalls, beforeTotal - 1,
+      "flagged call should be excluded from totalCalls");
+
+    // Cleanup for any subsequent describe blocks that share storage.
+    await storage.updateCall(seededCallIds[0], { excludedFromMetrics: false });
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// REPORTS: scoring-quality + similar-uncorrected route tests (#2)
+// =====================================================================
+//
+// Covers the two new manager+ read-only endpoints shipped in Tier A #3
+// and Tier 2 #5. Both operate on the in-memory corrections array backed
+// by scoring-feedback.ts; tests seed via recordScoringCorrection so the
+// composition layer (auth → data → response shape) is exercised.
+describe("Reports — scoring quality + similar-uncorrected (#2)", () => {
+  const app = buildAppWith(registerReportRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  it("setup", (_, done) => {
+    server.listen(0, () => {
+      baseUrl = `http://localhost:${(server.address() as any).port}`;
+      done();
+    });
+  });
+
+  it("GET /api/scoring-quality returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/scoring-quality", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/scoring-quality returns 403 for viewer", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/scoring-quality", undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/scoring-quality returns the expected shape for manager", async () => {
+    const { status, body } = await req(baseUrl, "GET", "/api/scoring-quality", undefined, "manager");
+    assert.equal(status, 200);
+    // Lean projection: correctionStats + qualityAlerts + calibration summary.
+    assert.ok(body.correctionStats, "correctionStats must be present");
+    assert.equal(typeof body.correctionStats.total, "number");
+    assert.equal(typeof body.correctionStats.upgrades, "number");
+    assert.equal(typeof body.correctionStats.downgrades, "number");
+    assert.ok(Array.isArray(body.qualityAlerts), "qualityAlerts must be an array");
+    assert.ok(body.calibration, "calibration summary must be present");
+    assert.ok("lastSnapshotAt" in body.calibration);
+    assert.ok("driftDetected" in body.calibration);
+  });
+
+  it("GET /api/scoring-quality is also reachable for admin role", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/scoring-quality", undefined, "admin");
+    assert.equal(status, 200);
+  });
+
+  it("GET /api/scoring-corrections/similar-uncorrected returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/scoring-corrections/similar-uncorrected", undefined, "none");
+    assert.equal(status, 401);
+  });
+
+  it("GET /api/scoring-corrections/similar-uncorrected returns 403 for viewer", async () => {
+    const { status } = await req(baseUrl, "GET", "/api/scoring-corrections/similar-uncorrected", undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/scoring-corrections/similar-uncorrected returns empty when no corrections", async () => {
+    const { status, body } = await req(
+      baseUrl,
+      "GET",
+      "/api/scoring-corrections/similar-uncorrected",
+      undefined,
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.suggestions));
+    assert.ok(Array.isArray(body.groups));
+  });
+
+  it("GET /api/scoring-corrections/similar-uncorrected returns groups after seeding corrections", async () => {
+    // Seed 2 same-category/direction corrections by "manager" (the test role's
+    // username). This seeds the in-memory `corrections` array backing the
+    // scoring-feedback module. After seeding, the endpoint should see the
+    // user's recent corrections and compute a qualifying group.
+    const { recordScoringCorrection } = await import("../server/services/scoring-feedback");
+    const empIdA = "emp-siml-" + Math.random().toString(36).slice(2, 8);
+    const callA = await storage.createCall({
+      fileName: "siml-a.mp3",
+      status: "completed",
+      contentHash: `siml-a-${Date.now()}`,
+    });
+    await storage.setCallEmployee(callA.id, empIdA);
+    await storage.createCallAnalysis({ callId: callA.id, performanceScore: "3.0" } as any);
+    const callB = await storage.createCall({
+      fileName: "siml-b.mp3",
+      status: "completed",
+      contentHash: `siml-b-${Date.now()}`,
+    });
+    await storage.setCallEmployee(callB.id, empIdA);
+    await storage.createCallAnalysis({ callId: callB.id, performanceScore: "3.5" } as any);
+
+    await recordScoringCorrection({
+      callId: callA.id,
+      correctedBy: "manager",
+      reason: "too low for a clean call",
+      originalScore: 3.0,
+      correctedScore: 5.0,
+    });
+    await recordScoringCorrection({
+      callId: callB.id,
+      correctedBy: "manager",
+      reason: "also too low",
+      originalScore: 3.5,
+      correctedScore: 5.5,
+    });
+
+    const { status, body } = await req(
+      baseUrl,
+      "GET",
+      "/api/scoring-corrections/similar-uncorrected",
+      undefined,
+      "manager",
+    );
+    assert.equal(status, 200);
+    // With 2 corrections in the same (category=general, direction=upgraded)
+    // bucket, a qualifying group should be returned (minCount=2).
+    assert.ok(body.groups.length >= 1, `expected ≥1 group, got ${body.groups.length}`);
+    const upgradedGroup = body.groups.find((g: any) => g.direction === "upgraded");
+    assert.ok(upgradedGroup, "upgraded group should exist");
+    assert.equal(upgradedGroup.count, 2);
+    // Centroid is the mean of 3.0 + 3.5 = 3.25 (rounded to 1 decimal in API).
+    assert.ok(Math.abs(upgradedGroup.centroid - 3.25) < 0.1,
+      `centroid should be ~3.25, got ${upgradedGroup.centroid}`);
+  });
+
+  it("GET /api/scoring-corrections/similar-uncorrected clamps limit to [1, 50]", async () => {
+    const hi = await req(
+      baseUrl,
+      "GET",
+      "/api/scoring-corrections/similar-uncorrected?limit=9999",
+      undefined,
+      "manager",
+    );
+    assert.equal(hi.status, 200);
+    // Should not throw / no clamping issue; just run.
+    assert.ok(Array.isArray(hi.body.suggestions));
+
+    const lo = await req(
+      baseUrl,
+      "GET",
+      "/api/scoring-corrections/similar-uncorrected?limit=0",
+      undefined,
+      "manager",
+    );
+    assert.equal(lo.status, 200);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});
+
+// =====================================================================
+// COACHING: effectivenessRating PATCH round-trip + /outcome filter (#3)
+// =====================================================================
+//
+// Covers the Tier 2 #8 effectiveness rating fields and the Tier B #5
+// filter that makes per-session /outcome consistent with the program-wide
+// /outcomes-summary behavior (excludes flagged-from-metrics calls from
+// before/after windows).
+describe("Coaching — effectivenessRating + outcome filter (#3)", () => {
+  const app = buildAppWith(registerCoachingRoutes);
+  const server = http.createServer(app);
+  let baseUrl: string;
+
+  let employeeId = "";
+  let sessionId = "";
+
+  it("setup + seed coaching session", async () => {
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => {
+        baseUrl = `http://localhost:${(server.address() as any).port}`;
+        resolve();
+      });
+    });
+    const emp = await storage.createEmployee({
+      name: "Coaching Target",
+      email: "coaching-target@test.com",
+      role: "Agent",
+      status: "Active",
+    });
+    employeeId = emp.id;
+    const session = await storage.createCoachingSession({
+      employeeId,
+      assignedBy: "manager",
+      title: "Test coaching session for effectiveness rating",
+      category: "general",
+    });
+    sessionId = session.id;
+  });
+
+  it("PATCH /api/coaching/:id accepts effectivenessRating + effectivenessNote", async () => {
+    const { status, body } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+      effectivenessRating: "helpful",
+      effectivenessNote: "Agent applied the feedback next call — clear improvement.",
+    });
+    assert.equal(status, 200);
+    assert.equal(body.effectivenessRating, "helpful");
+    assert.equal(body.effectivenessNote, "Agent applied the feedback next call — clear improvement.");
+  });
+
+  it("PATCH effectivenessRating persists across storage round-trip", async () => {
+    // Pull direct from storage to prove the field lands in persistence.
+    const row = await storage.getCoachingSession(sessionId);
+    assert.ok(row);
+    assert.equal(row.effectivenessRating, "helpful");
+  });
+
+  it("PATCH effectivenessRating rejects unknown enum values (400)", async () => {
+    const { status } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+      effectivenessRating: "super_helpful",
+    });
+    assert.equal(status, 400);
+  });
+
+  it("PATCH effectivenessNote rejects notes over 1000 chars", async () => {
+    const { status } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+      effectivenessNote: "x".repeat(1001),
+    });
+    assert.equal(status, 400);
+  });
+
+  it("PATCH accepts neutral + not_helpful enum values", async () => {
+    for (const rating of ["neutral", "not_helpful"] as const) {
+      const { status, body } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+        effectivenessRating: rating,
+      });
+      assert.equal(status, 200, `${rating} should be accepted`);
+      assert.equal(body.effectivenessRating, rating);
+    }
+  });
+
+  it("PATCH returns 401 without auth", async () => {
+    const { status } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+      effectivenessRating: "helpful",
+    }, "none");
+    assert.equal(status, 401);
+  });
+
+  it("PATCH returns 403 for viewer role", async () => {
+    const { status } = await req(baseUrl, "PATCH", `/api/coaching/${sessionId}`, {
+      effectivenessRating: "helpful",
+    }, "viewer");
+    assert.equal(status, 403);
+  });
+
+  it("GET /api/coaching/:id/outcome filters excludedFromMetrics (Tier B #5)", async () => {
+    // Set up a session with known before/after calls, flag one as excluded,
+    // and verify the call count reflects the filter.
+    const empId = (await storage.createEmployee({
+      name: "Outcome Filter Test",
+      email: "outcome-filter@test.com",
+      role: "Agent",
+      status: "Active",
+    })).id;
+
+    const now = Date.now();
+    const sessionAt = now - 5 * 86400000;
+    const ownedSession = await storage.createCoachingSession({
+      employeeId: empId,
+      assignedBy: "manager",
+      title: "Outcome filter session",
+      category: "general",
+    });
+    await storage.updateCoachingSession(ownedSession.id, {
+      createdAt: new Date(sessionAt).toISOString(),
+    });
+
+    // 4 before calls + 4 after calls, all scoring 6.0 except one flagged
+    // before-call scoring 0.0 (would drag the avg down if included).
+    const earlier = now - 8 * 86400000;
+    const later = now - 2 * 86400000;
+    for (let i = 0; i < 4; i++) {
+      const c = await storage.createCall({
+        fileName: `outcome-before-${i}.mp3`,
+        status: "completed",
+        contentHash: `outcome-before-${i}-${now}`,
+      });
+      await storage.setCallEmployee(c.id, empId);
+      await storage.updateCall(c.id, { uploadedAt: new Date(earlier + i * 1000).toISOString() });
+      await storage.createCallAnalysis({ callId: c.id, performanceScore: "6.0" } as any);
+    }
+    const flagged = await storage.createCall({
+      fileName: "outcome-before-flagged.mp3",
+      status: "completed",
+      contentHash: `outcome-before-flagged-${now}`,
+      excludedFromMetrics: true,
+    });
+    await storage.setCallEmployee(flagged.id, empId);
+    await storage.updateCall(flagged.id, { uploadedAt: new Date(earlier + 4000).toISOString() });
+    await storage.createCallAnalysis({ callId: flagged.id, performanceScore: "0.0" } as any);
+
+    for (let i = 0; i < 4; i++) {
+      const c = await storage.createCall({
+        fileName: `outcome-after-${i}.mp3`,
+        status: "completed",
+        contentHash: `outcome-after-${i}-${now}`,
+      });
+      await storage.setCallEmployee(c.id, empId);
+      await storage.updateCall(c.id, { uploadedAt: new Date(later + i * 1000).toISOString() });
+      await storage.createCallAnalysis({ callId: c.id, performanceScore: "8.0" } as any);
+    }
+
+    const { status, body } = await req(
+      baseUrl,
+      "GET",
+      `/api/coaching/${ownedSession.id}/outcome`,
+      undefined,
+      "manager",
+    );
+    assert.equal(status, 200);
+    assert.equal(body.before.callCount, 4, "flagged before-call must be excluded");
+    assert.equal(body.after.callCount, 4);
+    // Without the filter, flagged 0.0 would drop before-avg from 6.0 to 4.8.
+    assert.equal(body.before.avgScore, 6.0);
+    assert.equal(body.after.avgScore, 8.0);
+  });
+
+  it("GET /api/coaching/:id/outcome returns 403 for viewer", async () => {
+    const { status } = await req(baseUrl, "GET", `/api/coaching/${sessionId}/outcome`, undefined, "viewer");
+    assert.equal(status, 403);
+  });
+
+  after((_, done) => {
+    server.close(done);
+  });
+});

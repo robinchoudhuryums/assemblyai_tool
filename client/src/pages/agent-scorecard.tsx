@@ -325,7 +325,7 @@ export default function AgentScorecard() {
     <div className="min-h-screen bg-background text-foreground" data-testid="agent-scorecard-page">
       {/* Warm-paper app bar (hidden on print) */}
       <div
-        className="flex items-center gap-3 px-4 sm:px-7 py-3 bg-card border-b border-border print:hidden"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border print:hidden"
         style={{ fontSize: 12 }}
       >
         <nav

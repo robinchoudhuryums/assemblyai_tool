@@ -620,7 +620,7 @@ export default function EmployeesPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="employees-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -647,7 +647,7 @@ export default function EmployeesPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <SectionKicker>Directory</SectionKicker>
         <div
           className="font-display font-medium text-foreground mt-1"
@@ -662,7 +662,7 @@ export default function EmployeesPage() {
       </div>
 
       {/* Action bar */}
-      <div className="flex flex-wrap items-center gap-2 px-7 py-3 bg-background border-b border-border">
+      <div className="flex flex-wrap items-center gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border">
         <ActionChip active={showSubTeam} onClick={() => setShowSubTeam((p) => !p)}>
           {showSubTeam ? "Sub-teams ON" : "Sub-teams OFF"}
         </ActionChip>

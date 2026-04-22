@@ -211,7 +211,7 @@ export default function ReportsPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="reports-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -251,7 +251,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -271,7 +271,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Filters Bar */}
-      <div className="bg-background border-b border-border px-7 py-4">
+      <div className="bg-background border-b border-border px-4 sm:px-7 py-4">
         <div className="flex flex-wrap gap-4 items-end">
           {/* Report Type */}
           <div className="min-w-[160px]">
@@ -415,7 +415,7 @@ export default function ReportsPage() {
         )}
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* Metrics Cards */}
         <section className="bg-card border border-border" style={{ padding: "22px 24px" }}>
           <SectionHeader icon={ChartBar} label={`Metrics · ${PRESET_LABELS[datePreset]}`} />

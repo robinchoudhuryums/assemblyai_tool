@@ -148,7 +148,7 @@ export default function AgentComparePage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="agent-compare-page">
       {/* App bar */}
       <div
-        className="flex items-center gap-3 px-7 py-3 bg-card border-b border-border"
+        className="flex items-center gap-3 pl-16 pr-4 sm:px-7 py-3 bg-card border-b border-border"
         style={{ fontSize: 12 }}
       >
         <nav
@@ -169,7 +169,7 @@ export default function AgentComparePage() {
       </div>
 
       {/* Page header */}
-      <div className="px-7 pt-6 pb-4 bg-background border-b border-border">
+      <div className="px-4 sm:px-7 pt-6 pb-4 bg-background border-b border-border">
         <div
           className="font-mono uppercase text-muted-foreground flex items-center gap-1.5"
           style={{ fontSize: 10, letterSpacing: "0.18em" }}
@@ -191,7 +191,7 @@ export default function AgentComparePage() {
         </p>
       </div>
 
-      <main className="px-7 py-6 space-y-6">
+      <main className="px-4 sm:px-7 py-6 space-y-6">
         {/* Agent picker */}
         <ComparePanel kicker="Selection" icon={Users} title="Select agents to compare">
           <div className="flex flex-wrap items-center gap-2">
