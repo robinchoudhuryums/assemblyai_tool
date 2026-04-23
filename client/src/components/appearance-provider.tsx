@@ -5,13 +5,15 @@ import {
   loadAppearance,
   saveAppearance,
 } from "@/lib/appearance";
-import { type PaletteId, paletteCss } from "@/lib/palettes";
+import { type PaletteId, type PaperTone, paletteCss } from "@/lib/palettes";
 
 interface AppearanceContextValue {
   theme: Theme;
   palette: PaletteId;
+  paperTone: PaperTone;
   setTheme: (t: Theme) => void;
   setPalette: (p: PaletteId) => void;
+  setPaperTone: (tone: PaperTone) => void;
 }
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
@@ -33,11 +35,13 @@ export default function AppearanceProvider({ children }: { children: ReactNode }
   }, [prefs.theme]);
 
   // Apply palette override by injecting a <style> block that redefines
-  // --copper + --copper-soft for both :root and .dark. The default
-  // palette ("copper") yields an empty string and we remove the style
-  // element entirely so the baseline values from index.css apply.
+  // --copper + --copper-soft (always) and the paper-tone tokens (when
+  // the palette defines them AND paperTone is "accent") for both :root
+  // and .dark. The default palette ("copper") yields an empty string
+  // and we remove the style element entirely so the baseline values
+  // from index.css apply.
   useEffect(() => {
-    const css = paletteCss(prefs.palette);
+    const css = paletteCss(prefs.palette, prefs.paperTone);
     let styleEl = document.getElementById(PALETTE_STYLE_ID) as HTMLStyleElement | null;
     if (!css) {
       styleEl?.remove();
@@ -49,7 +53,7 @@ export default function AppearanceProvider({ children }: { children: ReactNode }
       document.head.appendChild(styleEl);
     }
     styleEl.textContent = css;
-  }, [prefs.palette]);
+  }, [prefs.palette, prefs.paperTone]);
 
   const update = useCallback((partial: Partial<AppearancePrefs>) => {
     setPrefs((prev) => {
@@ -61,14 +65,17 @@ export default function AppearanceProvider({ children }: { children: ReactNode }
 
   const setTheme = useCallback((t: Theme) => update({ theme: t }), [update]);
   const setPalette = useCallback((p: PaletteId) => update({ palette: p }), [update]);
+  const setPaperTone = useCallback((tone: PaperTone) => update({ paperTone: tone }), [update]);
 
   return (
     <AppearanceContext.Provider
       value={{
         theme: prefs.theme,
         palette: prefs.palette,
+        paperTone: prefs.paperTone,
         setTheme,
         setPalette,
+        setPaperTone,
       }}
     >
       {children}

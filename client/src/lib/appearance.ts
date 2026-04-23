@@ -1,11 +1,17 @@
 import { safeSet } from "./safe-storage";
-import { VALID_PALETTES, DEFAULT_PALETTE, type PaletteId } from "./palettes";
+import { VALID_PALETTES, DEFAULT_PALETTE, type PaletteId, type PaperTone } from "./palettes";
 
 export type Theme = "light" | "dark";
 
 export interface AppearancePrefs {
   theme: Theme;
   palette: PaletteId;
+  /**
+   * Whether a non-default palette also recolors the paper canvas.
+   * "accent" (default, prior behavior) — paper hue follows accent family.
+   * "classic" — accent shifts but paper stays the warm cream baseline.
+   */
+  paperTone: PaperTone;
 }
 
 const STORAGE_KEY = "appearance";
@@ -13,7 +19,10 @@ const STORAGE_KEY = "appearance";
 const defaults: AppearancePrefs = {
   theme: "light",
   palette: DEFAULT_PALETTE,
+  paperTone: "accent",
 };
+
+const VALID_PAPER_TONES: PaperTone[] = ["accent", "classic"];
 
 export function loadAppearance(): AppearancePrefs {
   if (typeof window === "undefined") return defaults;
@@ -35,6 +44,9 @@ export function loadAppearance(): AppearancePrefs {
     return {
       theme: parsed.theme === "dark" ? "dark" : "light",
       palette: VALID_PALETTES.includes(parsed.palette) ? parsed.palette : DEFAULT_PALETTE,
+      // Back-compat: prefs blobs from before this field existed have no
+      // `paperTone` key; default to "accent" to preserve prior behavior.
+      paperTone: VALID_PAPER_TONES.includes(parsed.paperTone) ? parsed.paperTone : "accent",
     };
   } catch {
     return defaults;

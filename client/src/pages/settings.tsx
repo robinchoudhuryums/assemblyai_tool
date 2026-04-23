@@ -2,7 +2,14 @@ import { Sun, Moon } from "@phosphor-icons/react";
 import { Link } from "wouter";
 import { useAppearance } from "@/components/appearance-provider";
 import type { Theme } from "@/lib/appearance";
-import { PALETTES, VALID_PALETTES, type PaletteDef, type PaletteId } from "@/lib/palettes";
+import {
+  PALETTES,
+  VALID_PALETTES,
+  paletteHasPaperOverride,
+  type PaletteDef,
+  type PaletteId,
+  type PaperTone,
+} from "@/lib/palettes";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────
@@ -189,7 +196,8 @@ function SelectionTile({
 // ─────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { theme, palette, setTheme, setPalette } = useAppearance();
+  const { theme, palette, paperTone, setTheme, setPalette, setPaperTone } = useAppearance();
+  const showPaperTone = paletteHasPaperOverride(palette);
 
   return (
     <div className="min-h-screen bg-background text-foreground" data-testid="settings-page">
@@ -266,6 +274,26 @@ export default function SettingsPage() {
             })}
           </div>
         </SettingsPanel>
+
+        {/* Paper tone — only renders when the selected palette has a paper
+            override defined. The default copper palette has none, so the
+            toggle would be a no-op there and is hidden. */}
+        {showPaperTone && (
+          <SettingsPanel
+            kicker="Paper tone"
+            title="Background canvas"
+            description="The selected accent palette includes a complementary paper hue. Choose whether the page canvas matches that hue, or stays on the default warm-cream baseline regardless of accent."
+          >
+            <ToggleGroup<PaperTone>
+              value={paperTone}
+              onChange={setPaperTone}
+              options={[
+                { value: "accent", label: "Match accent" },
+                { value: "classic", label: "Classic warm paper" },
+              ]}
+            />
+          </SettingsPanel>
+        )}
       </div>
     </div>
   );

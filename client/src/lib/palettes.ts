@@ -204,23 +204,40 @@ export const VALID_PALETTES: PaletteId[] = Object.keys(PALETTES) as PaletteId[];
 export const DEFAULT_PALETTE: PaletteId = "copper";
 
 /**
+ * Whether a palette change should also recolor the paper surface, or
+ * keep the baseline warm-paper canvas regardless of accent.
+ *
+ * - `"accent"` (default): when the palette defines `lightPaper` /
+ *   `darkPaper`, those tokens are emitted alongside the accent pair so
+ *   the surface harmonizes with the accent.
+ * - `"classic"`: only the accent pair is emitted. Paper-tone tokens
+ *   stay at the baseline values defined in `index.css`. Lets users opt
+ *   into a non-default accent without losing the warm-paper canvas.
+ */
+export type PaperTone = "accent" | "classic";
+
+/**
  * Returns the CSS text to inject into <style id="palette-override">.
  * Returns an empty string for the default palette (copper) because the
  * baseline values already live in index.css — no override needed.
  *
- * When a palette defines `lightPaper` / `darkPaper`, the emitted CSS
- * redefines the full paper-tone token set alongside the accent pair so
- * every downstream alias (`--background`, `--card`, `--border`, etc.)
- * updates. Palettes without paper overrides emit just the accent pair
- * (preserving the pre-widening behavior).
+ * When a palette defines `lightPaper` / `darkPaper` AND `paperTone` is
+ * "accent" (default), the emitted CSS redefines the full paper-tone
+ * token set alongside the accent pair so every downstream alias
+ * (`--background`, `--card`, `--border`, etc.) updates. Palettes
+ * without paper overrides emit just the accent pair regardless of
+ * `paperTone`. Pass `paperTone: "classic"` to suppress the paper-tone
+ * recolor even on palettes that define one — accent shifts but paper
+ * stays warm.
  */
-export function paletteCss(id: PaletteId): string {
+export function paletteCss(id: PaletteId, paperTone: PaperTone = "accent"): string {
   if (id === DEFAULT_PALETTE) return "";
   const p = PALETTES[id];
+  const emitPaper = paperTone === "accent";
   const lines: string[] = [":root{"];
   lines.push(`--copper:${p.tokens.accent};`);
   lines.push(`--copper-soft:${p.tokens.accentSoft};`);
-  if (p.lightPaper) {
+  if (emitPaper && p.lightPaper) {
     lines.push(`--paper:${p.lightPaper.paper};`);
     lines.push(`--paper-2:${p.lightPaper.paper2};`);
     lines.push(`--paper-card:${p.lightPaper.paperCard};`);
@@ -232,7 +249,7 @@ export function paletteCss(id: PaletteId): string {
   lines.push(".dark{");
   lines.push(`--copper:${p.tokens.accentDark};`);
   lines.push(`--copper-soft:${p.tokens.accentSoftDark};`);
-  if (p.darkPaper) {
+  if (emitPaper && p.darkPaper) {
     lines.push(`--paper:${p.darkPaper.paper};`);
     lines.push(`--paper-2:${p.darkPaper.paper2};`);
     lines.push(`--paper-card:${p.darkPaper.paperCard};`);
@@ -242,4 +259,16 @@ export function paletteCss(id: PaletteId): string {
   }
   lines.push("}");
   return lines.join("");
+}
+
+/**
+ * Whether a palette change would visually affect paper tone. Used by
+ * the Settings UI to hide the paper-tone toggle when it would do
+ * nothing — the default `copper` palette has no paper override, so
+ * neither tone choice changes the surface.
+ */
+export function paletteHasPaperOverride(id: PaletteId): boolean {
+  if (id === DEFAULT_PALETTE) return false;
+  const p = PALETTES[id];
+  return Boolean(p.lightPaper || p.darkPaper);
 }
