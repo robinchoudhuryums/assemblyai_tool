@@ -175,8 +175,10 @@ export function RubricRack({ rubric, compact = false }: { rubric: RubricValues; 
     ["Resolution", rubric.resolution],
   ];
   const barH = compact ? 120 : 160;
+  // Gap widened from 18/28 and label font shrunk in compact mode so
+  // "Communication" and "Resolution" stop colliding with neighbors.
   return (
-    <div style={{ display: "flex", gap: compact ? 18 : 28, alignItems: "flex-end" }}>
+    <div style={{ display: "flex", gap: compact ? 26 : 32, alignItems: "flex-end" }}>
       {entries.map(([name, val]) => {
         const pct = Math.min(100, Math.max(0, (val / 10) * 100));
         const low = val < 7;
@@ -210,7 +212,16 @@ export function RubricRack({ rubric, compact = false }: { rubric: RubricValues; 
                 />
               ))}
             </div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-center leading-tight" style={{ maxWidth: 68 }}>
+            <div
+              className={`font-mono uppercase tracking-[0.06em] text-muted-foreground text-center leading-tight ${
+                compact ? "text-[9px]" : "text-[10px]"
+              }`}
+              style={{
+                maxWidth: compact ? 72 : 80,
+                overflowWrap: "anywhere",
+                hyphens: "auto",
+              }}
+            >
               {name}
             </div>
           </div>

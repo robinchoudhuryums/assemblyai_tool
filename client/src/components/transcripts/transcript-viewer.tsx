@@ -760,11 +760,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </div>
         </div>
       )}
-      {/* Compact secondary toolbar — only controls that aren't already in
-          the ViewerHeader (search/export/download) or the Scrubber
-          (play/rate). Kept here because these are functional shortcuts
-          without a better home: skip to next segment, jump to next
-          flagged moment, and the volume popover. */}
+      {/* Compact secondary toolbar — Skip to next segment + Jump to next
+          flagged moment. Volume + playback controls live together in the
+          bottom-docked Scrubber. */}
       <div className="flex items-center justify-end gap-1.5 mb-3">
         <button
           type="button"
@@ -788,50 +786,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           <Flag style={{ width: 12, height: 12 }} />
           Flag
         </button>
-        {/* Volume popover — persisted to localStorage; mute is session-only. */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              className="font-mono inline-flex items-center border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
-            >
-              {muted || volume === 0
-                ? <SpeakerX style={{ width: 12, height: 12 }} />
-                : volume < 0.5
-                  ? <SpeakerLow style={{ width: 12, height: 12 }} />
-                  : <SpeakerHigh style={{ width: 12, height: 12 }} />}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-48 p-3" align="end">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Volume</span>
-                <button
-                  type="button"
-                  onClick={() => setMuted((v) => !v)}
-                  className="text-foreground hover:underline"
-                >
-                  {muted ? "Unmute" : "Mute"}
-                </button>
-              </div>
-              <Slider
-                value={[muted ? 0 : volume]}
-                onValueChange={([v]) => {
-                  setVolume(v);
-                  if (v > 0 && muted) setMuted(false);
-                }}
-                min={0}
-                max={1}
-                step={0.05}
-              />
-              <div className="text-[10px] text-muted-foreground text-right">
-                {Math.round((muted ? 0 : volume) * 100)}%
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
       </div>
 
       {/* Hidden audio element that streams from S3 via the API */}
@@ -842,43 +796,70 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          {/* Search hit chip — driven by ViewerHeader's search input via
-              `transcript:search-query` events. Prev / next buttons walk the
-              matches and scroll the column to the hit segment. */}
-          {searchQuery && (
-            <div
-              className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
-              role="status"
-              aria-live="polite"
-            >
-              <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
-              <span
-                className="font-mono tabular-nums text-foreground flex-1 truncate"
-                style={{ fontSize: 11 }}
-              >
-                {searchMatches.length > 0
-                  ? `${searchMatchIdx + 1} / ${searchMatches.length}`
-                  : "0 results"}
-                <span className="text-muted-foreground"> · "{searchQuery}"</span>
-              </span>
-              <button
-                onClick={() => goToMatch(searchMatchIdx - 1)}
-                disabled={searchMatches.length === 0}
-                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                aria-label="Previous match"
-              >
-                <CaretUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => goToMatch(searchMatchIdx + 1)}
-                disabled={searchMatches.length === 0}
-                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                aria-label="Next match"
-              >
-                <CaretDown className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          {/* Search bar — input + hit count + prev/next nav buttons.
+              Sits directly above the transcript body so the control and its
+              target are adjacent. Dispatches the same `transcript:search-query`
+              events the prior header-mounted input did, so listeners don't
+              change. Keeps id="transcript-header-search" so the Ctrl+F
+              shortcut in the useEffect above still focuses this input. */}
+          <div
+            className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
+            role="search"
+            aria-label="Transcript search"
+          >
+            <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
+            <input
+              id="transcript-header-search"
+              type="search"
+              placeholder="Search transcript…"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchMatchIdx(0);
+              }}
+              className="bg-transparent border-none outline-none flex-1 font-mono text-[11px] text-foreground placeholder:text-muted-foreground"
+              aria-label="Search transcript (Ctrl+F)"
+            />
+            {searchQuery && (
+              <>
+                <span
+                  className="font-mono tabular-nums text-muted-foreground shrink-0"
+                  style={{ fontSize: 11 }}
+                  aria-live="polite"
+                >
+                  {searchMatches.length > 0
+                    ? `${searchMatchIdx + 1} / ${searchMatches.length}`
+                    : "0 results"}
+                </span>
+                <button
+                  onClick={() => goToMatch(searchMatchIdx - 1)}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="Previous match"
+                >
+                  <CaretUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => goToMatch(searchMatchIdx + 1)}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="Next match"
+                >
+                  <CaretDown className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    setSearchMatchIdx(0);
+                  }}
+                  className="p-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
+          </div>
           <div
             ref={transcriptContainerRef}
             className="bg-card border border-border overflow-y-auto"
@@ -1316,6 +1297,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             playing={isPlaying}
             playbackRate={playbackRate}
             sentimentSegments={call.sentiment?.segments}
+            volume={volume}
+            muted={muted}
+            onVolumeChange={(v) => {
+              setVolume(v);
+              if (v > 0 && muted) setMuted(false);
+            }}
+            onToggleMute={() => setMuted((m) => !m)}
             onSeek={(ms) => {
               if (audioRef.current) audioRef.current.currentTime = ms / 1000;
               setCurrentTime(ms);

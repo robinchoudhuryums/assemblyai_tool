@@ -20,8 +20,10 @@
  * extracted to keep the audio thread idle.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pause, Play } from "@phosphor-icons/react";
+import { Pause, Play, SpeakerHigh, SpeakerLow, SpeakerX } from "@phosphor-icons/react";
 import { SPEED_OPTIONS } from "@/lib/constants";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
 
 interface SentimentSegment {
   start?: number;
@@ -39,9 +41,14 @@ interface ScrubberProps {
   playbackRate: number;
   /** Per-utterance sentiment segments — start/end are in ms to match transcript data */
   sentimentSegments?: SentimentSegment[];
+  /** Volume 0–1. Persisted by parent. */
+  volume: number;
+  muted: boolean;
   onSeek: (ms: number) => void;
   onTogglePlay: () => void;
   onRate: (r: number) => void;
+  onVolumeChange: (v: number) => void;
+  onToggleMute: () => void;
 }
 
 const BAR_COUNT = 180;
@@ -173,9 +180,13 @@ export default function Scrubber({
   playing,
   playbackRate,
   sentimentSegments,
+  volume,
+  muted,
   onSeek,
   onTogglePlay,
   onRate,
+  onVolumeChange,
+  onToggleMute,
 }: ScrubberProps) {
   const railRef = useRef<HTMLDivElement>(null);
   const [hoverMs, setHoverMs] = useState<number | null>(null);
@@ -278,6 +289,55 @@ export default function Scrubber({
             </button>
           ))}
         </div>
+
+        {/* Volume popover — colocated with play/rate so audio controls are
+            together instead of split between the top toolbar and bottom dock. */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
+              data-testid="scrubber-volume"
+              className="font-mono inline-flex items-center border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
+            >
+              {muted || volume === 0 ? (
+                <SpeakerX style={{ width: 12, height: 12 }} />
+              ) : volume < 0.5 ? (
+                <SpeakerLow style={{ width: 12, height: 12 }} />
+              ) : (
+                <SpeakerHigh style={{ width: 12, height: 12 }} />
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-3" align="end">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Volume</span>
+                <button
+                  type="button"
+                  onClick={onToggleMute}
+                  className="text-foreground hover:underline"
+                >
+                  {muted ? "Unmute" : "Mute"}
+                </button>
+              </div>
+              <Slider
+                value={[muted ? 0 : volume]}
+                onValueChange={([v]) => {
+                  onVolumeChange(v);
+                  if (v > 0 && muted) onToggleMute();
+                }}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+              <div className="text-[10px] text-muted-foreground text-right">
+                {Math.round((muted ? 0 : volume) * 100)}%
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Rail */}
