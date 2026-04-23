@@ -623,6 +623,95 @@ export function registerSimulatedCallRoutes(
     },
   );
 
+  // ── Retry a failed generation ──────────────────────────────
+  // When a generation ends in `status: "failed"` (e.g. ElevenLabs credits
+  // exhausted, ffmpeg crash, transient network issue), the operator can
+  // re-run the job without rebuilding the script from scratch. The row's
+  // script + config are preserved; only status transitions back to
+  // "pending" and a fresh generate_simulated_call job is enqueued.
+  //
+  // Daily cap still applies — a retry counts the same as a fresh
+  // generation against SIMULATED_CALL_DAILY_CAP. This prevents a user
+  // from burning through their daily budget via repeated retries.
+  router.post(
+    "/api/admin/simulated-calls/:id/retry",
+    requireAuth,
+    requireRole("admin"),
+    requireMFASetup,
+    validateIdParam,
+    async (req, res) => {
+      if (!isSimulatedCallsAvailable()) {
+        return sendError(res, 503, "Simulated calls require DATABASE_URL");
+      }
+      if (!isFfmpegAvailable()) {
+        return sendError(res, 503, "ffmpeg not available on this server");
+      }
+      if (!elevenLabsClient.isAvailable) {
+        return sendError(res, 503, "ELEVENLABS_API_KEY is not configured");
+      }
+
+      const row = await getSimulatedCall(req.params.id);
+      if (!row) return sendError(res, 404, "Simulated call not found");
+      if (row.status !== "failed") {
+        return sendError(
+          res,
+          409,
+          `Only failed generations can be retried (current status: ${row.status})`,
+        );
+      }
+
+      const username = req.user!.username;
+
+      // Daily cap guard — same as /generate. Retries count toward spend.
+      const used = await countSimulatedCallsToday(username);
+      if (used >= DAILY_GENERATION_CAP) {
+        return sendError(
+          res,
+          429,
+          `Daily generation cap reached (${DAILY_GENERATION_CAP}). Try again tomorrow.`,
+        );
+      }
+
+      const jobQueue = getJobQueue();
+      if (!jobQueue) {
+        return sendError(res, 503, "Job queue is not running");
+      }
+
+      // Transition: failed → pending. Clear the prior error so the UI
+      // doesn't show a stale failure reason once the new job starts.
+      await updateSimulatedCall(row.id, { status: "pending", error: null });
+
+      // Same priority as the initial /generate path so retries don't
+      // preempt real-call analyses.
+      await jobQueue.enqueue(
+        "generate_simulated_call",
+        { simulatedCallId: row.id, uploadedBy: username },
+        -10,
+      );
+
+      logPhiAccess({
+        ...auditContext(req),
+        timestamp: new Date().toISOString(),
+        event: "retry_simulated_call",
+        resourceType: "simulated_call",
+        resourceId: row.id,
+        detail: `retry from failed; tier=${row.qualityTier}`,
+      });
+
+      broadcastSimulatedCallUpdate(row.id, "pending", {
+        title: row.title,
+        createdBy: username,
+      });
+
+      res.status(202).json({
+        simulatedCallId: row.id,
+        status: "pending",
+        dailyUsed: used + 1,
+        dailyCap: DAILY_GENERATION_CAP,
+      });
+    },
+  );
+
   // ── Delete ─────────────────────────────────────────────────
   router.delete(
     "/api/admin/simulated-calls/:id",
