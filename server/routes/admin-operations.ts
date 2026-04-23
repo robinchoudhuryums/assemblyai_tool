@@ -21,6 +21,7 @@ import {
   clearTierOverride,
   type ModelTier,
 } from "../services/model-tiers";
+import { getSearchAnalytics } from "../services/search-analytics";
 import { z } from "zod";
 
 export function registerOperationsRoutes(
@@ -505,4 +506,12 @@ export function registerOperationsRoutes(
   });
   // Suppress "unused" warning for MODEL_TIERS if Zod enum is used instead of it.
   void MODEL_TIERS;
+
+  // Search analytics — FAQ-style aggregation of manager keyword +
+  // semantic searches over the last N entries (in-memory ring buffer,
+  // see services/search-analytics.ts). Surfaces repeated searches and
+  // zero-result queries as concrete data/docs gaps.
+  router.get("/api/admin/search-analytics", requireRole("admin"), (_req, res) => {
+    res.json(getSearchAnalytics());
+  });
 }

@@ -17,7 +17,8 @@
     "check": "tsc",
     "seed": "tsx seed.ts",
     "seed-admin": "tsx seed-admin.ts",
-    "backfill-embeddings": "tsx scripts/backfill-embeddings.ts"
+    "backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
+    "eval:rag": "tsx server/scripts/evalRagIntegration.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

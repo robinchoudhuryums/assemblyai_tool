@@ -1,0 +1,107 @@
+{
+  "version": "1.0.0",
+  "description": "Gold-standard questions CA asks the RAG knowledge base as part of call-analysis + coaching flows. Each pair lists keywords that should appear in the retrieved context for the response to be useful. Adapted from the ums-knowledge-reference harness pattern, re-targeted at CA's analyst/coaching domain.",
+  "lastUpdated": "2026-04-23",
+  "pairs": [
+    {
+      "question": "What is the return policy for CPAP equipment?",
+      "category": "equipment-policy",
+      "expectedKeywords": ["return", "CPAP", "days", "policy"]
+    },
+    {
+      "question": "What documentation is required for a wheelchair order?",
+      "category": "equipment-policy",
+      "expectedKeywords": ["wheelchair", "documentation", "prescription", "evaluation"]
+    },
+    {
+      "question": "How long is the standard warranty on oxygen concentrators?",
+      "category": "equipment-policy",
+      "expectedKeywords": ["warranty", "oxygen", "concentrator", "year"]
+    },
+    {
+      "question": "What's the process for reporting a damaged delivery?",
+      "category": "delivery",
+      "expectedKeywords": ["damaged", "delivery", "report", "replacement"]
+    },
+    {
+      "question": "What information does a patient need to provide for insurance verification?",
+      "category": "billing",
+      "expectedKeywords": ["insurance", "verification", "member", "policy", "birth"]
+    },
+    {
+      "question": "What are the eligibility requirements for power mobility devices?",
+      "category": "clinical",
+      "expectedKeywords": ["power", "mobility", "eligibility", "physician"]
+    },
+    {
+      "question": "How should an agent handle an irate caller about billing errors?",
+      "category": "call-handling",
+      "expectedKeywords": ["irate", "billing", "empathy", "escalate"]
+    },
+    {
+      "question": "What HIPAA information should never be verbally confirmed over the phone?",
+      "category": "compliance",
+      "expectedKeywords": ["HIPAA", "verbal", "confirm", "identity"]
+    },
+    {
+      "question": "What are the steps for processing a prior authorization request?",
+      "category": "billing",
+      "expectedKeywords": ["prior", "authorization", "request", "submit", "insurance"]
+    },
+    {
+      "question": "When should a call be escalated to a supervisor?",
+      "category": "call-handling",
+      "expectedKeywords": ["escalate", "supervisor", "manager"]
+    },
+    {
+      "question": "What is the replacement schedule for CPAP masks and tubing?",
+      "category": "equipment-policy",
+      "expectedKeywords": ["CPAP", "mask", "tubing", "replacement", "days"]
+    },
+    {
+      "question": "What documentation is needed for a Medicare-covered oxygen prescription?",
+      "category": "billing",
+      "expectedKeywords": ["Medicare", "oxygen", "prescription", "saturation"]
+    },
+    {
+      "question": "What scripting should agents use for the opening of every call?",
+      "category": "call-handling",
+      "expectedKeywords": ["opening", "greeting", "identify", "script"]
+    },
+    {
+      "question": "How should an agent verify patient identity before discussing account details?",
+      "category": "compliance",
+      "expectedKeywords": ["verify", "identity", "birth", "HIPAA"]
+    },
+    {
+      "question": "What are the coverage requirements for a hospital bed?",
+      "category": "clinical",
+      "expectedKeywords": ["hospital", "bed", "coverage", "physician", "medical"]
+    },
+    {
+      "question": "What is the company policy on offering discounts or adjustments?",
+      "category": "billing",
+      "expectedKeywords": ["discount", "adjustment", "approval", "policy"]
+    },
+    {
+      "question": "What is the appeal process for a denied insurance claim?",
+      "category": "billing",
+      "expectedKeywords": ["appeal", "denied", "claim", "insurance", "submit"]
+    },
+    {
+      "question": "How should agents handle callers who cannot afford their copay?",
+      "category": "call-handling",
+      "expectedKeywords": ["copay", "afford", "assistance", "financial", "program"]
+    },
+    {
+      "question": "What are the signs a call may involve suspected fraud?",
+      "category": "compliance",
+      "expectedKeywords": ["fraud", "suspicious", "report", "compliance"]
+    },
+    {
+      "question": "What is the delivery timeline for a new CPAP setup?",
+      "category": "delivery",
+      "expectedKeywords": ["CPAP", "delivery", "setup", "business", "days"]
+    }
+  ]
+}
