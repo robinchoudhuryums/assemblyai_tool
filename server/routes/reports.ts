@@ -13,6 +13,7 @@ import { clampInt, parseDate, safeFloat, safeJsonParse, filterCallsByDateRange, 
 import { expandMedicalSynonyms } from "../services/medical-synonyms";
 import { embeddingCosineSimilarity } from "../services/call-clustering";
 import { getPool, isPgvectorAvailable } from "../db/pool";
+import { recordSearch } from "../services/search-analytics";
 import type { CallWithDetails } from "@shared/schema";
 
 export function registerReportRoutes(router: Router) {
@@ -59,6 +60,15 @@ export function registerReportRoutes(router: Router) {
         filtered = filtered.filter(c => parseFloat(c.analysis?.performanceScore || "10") <= maxScore);
       }
       filtered = filterCallsByDateRange(filtered, req.query.from as string, req.query.to as string);
+
+      // Roll into the in-memory search-analytics buffer so the admin
+      // FAQ dashboard can surface repeated queries + zero-result gaps.
+      recordSearch({
+        username: req.user?.username ?? "unknown",
+        query,
+        mode: "keyword",
+        resultCount: filtered.length,
+      });
 
       res.json(filtered);
     } catch (error) {
@@ -179,6 +189,12 @@ export function registerReportRoutes(router: Router) {
       if (!queryEmbedding) {
         const fallback = await storage.searchCalls(expandMedicalSynonyms(query), limit);
         const filtered = applyClientFilters(fallback);
+        recordSearch({
+          username: req.user?.username ?? "unknown",
+          query,
+          mode: "semantic",
+          resultCount: filtered.length,
+        });
         res.json({ mode: "keyword-fallback", results: filtered });
         return;
       }
@@ -226,6 +242,12 @@ export function registerReportRoutes(router: Router) {
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
 
+        recordSearch({
+          username: req.user?.username ?? "unknown",
+          query,
+          mode: "semantic",
+          resultCount: scored.length,
+        });
         res.json({
           mode,
           backend,
