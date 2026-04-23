@@ -19,7 +19,7 @@ import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Microphone, Pause, Play, Plus, SpinnerGap, Sparkle, SlidersHorizontal, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
+import { Microphone, Pause, Play, Plus, SpinnerGap, Sparkle, SlidersHorizontal, Trash, WarningCircle, CheckCircle, PaperPlaneTilt, CaretDown, MagnifyingGlass, ArrowClockwise } from "@phosphor-icons/react";
 import type {
   SimulatedCall,
   SimulatedCallStatus,
@@ -523,6 +523,15 @@ function LibraryTable({
     onError: (e: Error) => toast({ title: "Analyze failed", description: e.message, variant: "destructive" }),
   });
 
+  const retryMut = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/simulated-calls/${id}/retry`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/simulated-calls"] });
+      toast({ title: "Retry queued", description: "Generation will restart; watch the row for progress." });
+    },
+    onError: (e: Error) => toast({ title: "Retry failed", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -578,6 +587,17 @@ function LibraryTable({
                   )}
                 </div>
                 <div className="flex gap-2 shrink-0">
+                  {c.status === "failed" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={retryMut.isPending}
+                      onClick={() => retryMut.mutate(c.id)}
+                    >
+                      <ArrowClockwise className={`w-4 h-4 mr-1${retryMut.isPending && retryMut.variables === c.id ? " animate-spin" : ""}`} />
+                      Retry
+                    </Button>
+                  )}
                   {c.status === "ready" && (
                     <>
                       <Button size="sm" variant="outline" onClick={() => onPlay(isPlaying ? null : c.id)}>
