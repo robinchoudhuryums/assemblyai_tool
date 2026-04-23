@@ -40,6 +40,13 @@ interface SideRailProps {
   editScore: string;
   editSummary: string;
   editReason: string;
+  // Array-valued analysis fields. Stored as newline-joined strings for
+  // textarea editing; parent splits on save and diffs against call.analysis.
+  editStrengths: string;
+  editSuggestions: string;
+  editActionItems: string;
+  editTopics: string;
+  editFlags: string;
   editError: string | null;
   editPending: boolean;
   onStartEditing: () => void;
@@ -47,6 +54,11 @@ interface SideRailProps {
   onChangeEditScore: (v: string) => void;
   onChangeEditSummary: (v: string) => void;
   onChangeEditReason: (v: string) => void;
+  onChangeEditStrengths: (v: string) => void;
+  onChangeEditSuggestions: (v: string) => void;
+  onChangeEditActionItems: (v: string) => void;
+  onChangeEditTopics: (v: string) => void;
+  onChangeEditFlags: (v: string) => void;
   onSave: () => void;
   // Exclude-from-metrics toggle (manager+; backend enforces role).
   onToggleExcluded: (next: boolean) => void;
@@ -185,6 +197,56 @@ export default function SideRail(props: SideRailProps) {
               />
             </div>
             <div>
+              <Label className="text-xs">Coaching Highlights — Strengths</Label>
+              <p className="text-[10px] text-muted-foreground mb-1">One per line.</p>
+              <textarea
+                value={props.editStrengths}
+                onChange={(e) => props.onChangeEditStrengths(e.target.value)}
+                className="w-full min-h-[70px] rounded-sm border border-input bg-background px-3 py-2 text-sm"
+                placeholder="One strength per line…"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Coaching Highlights — Opportunities</Label>
+              <p className="text-[10px] text-muted-foreground mb-1">One per line.</p>
+              <textarea
+                value={props.editSuggestions}
+                onChange={(e) => props.onChangeEditSuggestions(e.target.value)}
+                className="w-full min-h-[70px] rounded-sm border border-input bg-background px-3 py-2 text-sm"
+                placeholder="One suggestion per line…"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Commitments &amp; Follow-ups</Label>
+              <p className="text-[10px] text-muted-foreground mb-1">One action item per line.</p>
+              <textarea
+                value={props.editActionItems}
+                onChange={(e) => props.onChangeEditActionItems(e.target.value)}
+                className="w-full min-h-[70px] rounded-sm border border-input bg-background px-3 py-2 text-sm"
+                placeholder="One commitment per line…"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Topics Detected</Label>
+              <p className="text-[10px] text-muted-foreground mb-1">One topic per line.</p>
+              <textarea
+                value={props.editTopics}
+                onChange={(e) => props.onChangeEditTopics(e.target.value)}
+                className="w-full min-h-[60px] rounded-sm border border-input bg-background px-3 py-2 text-sm"
+                placeholder="One topic per line…"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Flags</Label>
+              <p className="text-[10px] text-muted-foreground mb-1">One flag per line. System flags may be re-emitted if the call is re-analyzed.</p>
+              <textarea
+                value={props.editFlags}
+                onChange={(e) => props.onChangeEditFlags(e.target.value)}
+                className="w-full min-h-[50px] rounded-sm border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="One flag per line…"
+              />
+            </div>
+            <div>
               <Label className="text-xs text-destructive">Reason for edit *</Label>
               <Input
                 value={props.editReason}
@@ -254,10 +316,11 @@ export default function SideRail(props: SideRailProps) {
       )}
 
       {/* Panel 3 — Coaching highlights (agent) / QA flags (manager) */}
-      <CoachingPanel {...props} roleView={roleView} />
+      {!props.isEditing && <CoachingPanel {...props} roleView={roleView} />}
 
       {/* Panel 4 — Commitments & follow-ups */}
-      {call.analysis?.actionItems &&
+      {!props.isEditing &&
+        call.analysis?.actionItems &&
         Array.isArray(call.analysis.actionItems) &&
         call.analysis.actionItems.length > 0 && (
           <Panel>
@@ -292,7 +355,8 @@ export default function SideRail(props: SideRailProps) {
         )}
 
       {/* Panel 5 — Topics detected */}
-      {call.analysis?.topics &&
+      {!props.isEditing &&
+        call.analysis?.topics &&
         Array.isArray(call.analysis.topics) &&
         call.analysis.topics.length > 0 && (
           <Panel>

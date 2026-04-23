@@ -9,7 +9,8 @@ import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
-import type { CallWithDetails } from "@shared/schema";
+import { useToast } from "@/hooks/use-toast";
+import type { Annotation, CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { safeSet } from "@/lib/safe-storage";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
@@ -69,11 +70,18 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     safeSet("transcript-audio-volume", String(volume));
   }, [volume]);
 
-  // Manual edit state
+  // Manual edit state. Score + summary are native scalars; arrays (strengths,
+  // suggestions, action items, topics, flags) are held as newline-joined
+  // strings for simple textarea editing and split back on save.
   const [isEditing, setIsEditing] = useState(false);
   const [editScore, setEditScore] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
+  const [editStrengths, setEditStrengths] = useState("");
+  const [editSuggestions, setEditSuggestions] = useState("");
+  const [editActionItems, setEditActionItems] = useState("");
+  const [editTopics, setEditTopics] = useState("");
+  const [editFlags, setEditFlags] = useState("");
 
   // Transcript search state — query is driven by ViewerHeader via
   // `transcript:search-query` window events; we keep only the query +
@@ -83,14 +91,24 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
   // Warn before navigating away with unsaved edits
-  useBeforeUnload(isEditing && (editScore !== "" || editSummary !== "" || editReason !== ""));
+  useBeforeUnload(
+    isEditing &&
+      (editScore !== "" ||
+        editSummary !== "" ||
+        editReason !== "" ||
+        editStrengths !== "" ||
+        editSuggestions !== "" ||
+        editActionItems !== "" ||
+        editTopics !== "" ||
+        editFlags !== "")
+  );
 
   const { data: call, isLoading } = useQuery<CallWithDetails>({
     queryKey: ["/api/calls", callId],
   });
 
   const editMutation = useMutation({
-    mutationFn: async (payload: { updates: Record<string, string | number>; reason: string }) => {
+    mutationFn: async (payload: { updates: Record<string, unknown>; reason: string }) => {
       const { getCsrfToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/calls/${callId}/analysis`, {
         method: "PATCH",
@@ -137,22 +155,69 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     },
   });
 
+  // Render an array of AI-emitted items (strings or {text,timestamp} objects)
+  // as a newline-delimited textarea value. Object timestamps are dropped on
+  // edit — managers can re-add them as inline "[0:42]" tags in the text and
+  // the viewer keeps parsing those for jump-to-offset.
+  const arrayToLines = (arr: unknown): string => {
+    if (!Array.isArray(arr)) return "";
+    return arr.map(item => toDisplayString(item)).filter(Boolean).join("\n");
+  };
+  const linesToArray = (s: string): string[] =>
+    s.split("\n").map(l => l.trim()).filter(Boolean);
+
   const startEditing = () => {
-    setEditScore(call?.analysis?.performanceScore?.toString() || "");
-    setEditSummary(toDisplayString(call?.analysis?.summary) || "");
+    const analysis = call?.analysis;
+    setEditScore(analysis?.performanceScore?.toString() || "");
+    setEditSummary(toDisplayString(analysis?.summary) || "");
+    const feedback = analysis?.feedback as
+      | { strengths?: unknown[]; suggestions?: unknown[] }
+      | undefined;
+    setEditStrengths(arrayToLines(feedback?.strengths));
+    setEditSuggestions(arrayToLines(feedback?.suggestions));
+    setEditActionItems(arrayToLines(analysis?.actionItems));
+    setEditTopics(arrayToLines(analysis?.topics));
+    setEditFlags(arrayToLines(analysis?.flags));
     setEditReason("");
     setIsEditing(true);
   };
 
   const handleSaveEdit = () => {
     if (!editReason.trim()) return;
-    const updates: Record<string, string | number> = {};
-    if (editScore !== (call?.analysis?.performanceScore?.toString() || "")) {
+    const analysis = call?.analysis;
+    const originalFeedback = analysis?.feedback as
+      | { strengths?: unknown[]; suggestions?: unknown[] }
+      | undefined;
+    const updates: Record<string, unknown> = {};
+
+    if (editScore !== (analysis?.performanceScore?.toString() || "")) {
       updates.performanceScore = editScore;
     }
-    if (editSummary !== (toDisplayString(call?.analysis?.summary) || "")) {
+    if (editSummary !== (toDisplayString(analysis?.summary) || "")) {
       updates.summary = editSummary;
     }
+
+    const newStrengths = linesToArray(editStrengths);
+    const newSuggestions = linesToArray(editSuggestions);
+    const origStrengths = arrayToLines(originalFeedback?.strengths);
+    const origSuggestions = arrayToLines(originalFeedback?.suggestions);
+    if (editStrengths !== origStrengths || editSuggestions !== origSuggestions) {
+      updates.feedback = {
+        strengths: newStrengths,
+        suggestions: newSuggestions,
+      };
+    }
+
+    if (editActionItems !== arrayToLines(analysis?.actionItems)) {
+      updates.actionItems = linesToArray(editActionItems);
+    }
+    if (editTopics !== arrayToLines(analysis?.topics)) {
+      updates.topics = linesToArray(editTopics);
+    }
+    if (editFlags !== arrayToLines(analysis?.flags)) {
+      updates.flags = linesToArray(editFlags);
+    }
+
     if (Object.keys(updates).length === 0) {
       setIsEditing(false);
       return;
@@ -967,6 +1032,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             editScore={editScore}
             editSummary={editSummary}
             editReason={editReason}
+            editStrengths={editStrengths}
+            editSuggestions={editSuggestions}
+            editActionItems={editActionItems}
+            editTopics={editTopics}
+            editFlags={editFlags}
             editError={editMutation.isError ? (editMutation.error?.message || "Save failed") : null}
             editPending={editMutation.isPending}
             onStartEditing={startEditing}
@@ -974,6 +1044,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             onChangeEditScore={setEditScore}
             onChangeEditSummary={setEditSummary}
             onChangeEditReason={setEditReason}
+            onChangeEditStrengths={setEditStrengths}
+            onChangeEditSuggestions={setEditSuggestions}
+            onChangeEditActionItems={setEditActionItems}
+            onChangeEditTopics={setEditTopics}
+            onChangeEditFlags={setEditFlags}
             onSave={handleSaveEdit}
             onToggleExcluded={(next) => excludeMutation.mutate(next)}
             excludedPending={excludeMutation.isPending}
@@ -1411,6 +1486,7 @@ function ScoreBreakdown({ call }: { call: CallWithDetails }) {
 function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; currentTime: number; onJump: (ms: number) => void }) {
   const [newText, setNewText] = React.useState("");
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: annotations } = useQuery<import("@shared/schema").Annotation[]>({
     queryKey: ["/api/calls", callId, "annotations"],
@@ -1439,13 +1515,44 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
     },
   });
 
+  // Optimistic delete: remove from the cached list immediately so the UI
+  // reflects the click. Rollback + toast on failure; always re-fetch on
+  // settle so the server's view is authoritative.
+  const annotationQueryKey = React.useMemo(
+    () => ["/api/calls", callId, "annotations"] as const,
+    [callId]
+  );
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { getCsrfToken: csrf } = await import("@/lib/queryClient");
-      const res = await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include", headers: csrf() ? { "x-csrf-token": csrf()! } : {} });
-      if (!res.ok) throw new Error("Failed to delete annotation");
+      const res = await fetch(`/api/calls/${callId}/annotations/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: csrf() ? { "x-csrf-token": csrf()! } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Delete failed (${res.status})`);
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: annotationQueryKey });
+      const previous = queryClient.getQueryData<Annotation[]>(annotationQueryKey);
+      queryClient.setQueryData<Annotation[]>(
+        annotationQueryKey,
+        (previous ?? []).filter(a => a.id !== id)
+      );
+      return { previous };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(annotationQueryKey, ctx.previous);
+      toast({
+        variant: "destructive",
+        title: "Couldn't delete annotation",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: annotationQueryKey }),
   });
 
   const formatTime = (ms: number) => {
