@@ -4,6 +4,7 @@ import {
   VALID_PALETTES,
   DEFAULT_PALETTE,
   paletteCss,
+  paletteHasPaperOverride,
   type PaletteId,
 } from "./palettes";
 
@@ -94,6 +95,58 @@ describe("palettes", () => {
       expect(css.endsWith("}")).toBe(true);
       expect(css).toMatch(/--copper:oklch\(/);
       expect(css).toMatch(/--paper:oklch\(/);
+    });
+
+    it("paperTone='classic' suppresses paper tokens even on palettes with overrides", () => {
+      // The paper-tone toggle: user picks a non-default accent but keeps
+      // the warm-paper canvas. Accent must still emit, paper must not.
+      for (const id of VALID_PALETTES) {
+        if (id === DEFAULT_PALETTE) continue;
+        const css = paletteCss(id, "classic");
+        const p = PALETTES[id];
+        // Accent pair still emits regardless of tone.
+        expect(css).toContain(`--copper:${p.tokens.accent}`);
+        expect(css).toContain(`--copper:${p.tokens.accentDark}`);
+        // Paper tokens MUST NOT emit when paperTone is "classic", even if
+        // the palette defines lightPaper/darkPaper. The baseline values in
+        // index.css apply instead.
+        if (p.lightPaper) {
+          expect(css).not.toContain(`--paper:${p.lightPaper.paper}`);
+          expect(css).not.toContain(`--paper-2:${p.lightPaper.paper2}`);
+          expect(css).not.toContain(`--ink:${p.lightPaper.ink}`);
+        }
+        if (p.darkPaper) {
+          expect(css).not.toContain(`--paper:${p.darkPaper.paper}`);
+        }
+      }
+    });
+
+    it("paperTone='accent' (default) emits paper tokens — explicit and implicit forms agree", () => {
+      // Calling paletteCss(id) and paletteCss(id, "accent") must produce
+      // identical output so the default keeps prior behavior verbatim.
+      for (const id of VALID_PALETTES) {
+        if (id === DEFAULT_PALETTE) continue;
+        expect(paletteCss(id)).toBe(paletteCss(id, "accent"));
+      }
+    });
+  });
+
+  describe("paletteHasPaperOverride", () => {
+    it("returns false for the default palette (copper has no paper override)", () => {
+      expect(paletteHasPaperOverride("copper")).toBe(false);
+    });
+
+    it("returns true for every non-default palette in the current registry", () => {
+      // Drives the Settings UI's decision to show or hide the paper-tone
+      // toggle. If a future palette ships accent-only, this expectation
+      // narrows naturally — only palettes with a defined lightPaper or
+      // darkPaper return true.
+      for (const id of VALID_PALETTES) {
+        if (id === DEFAULT_PALETTE) continue;
+        const p = PALETTES[id];
+        const expected = Boolean(p.lightPaper || p.darkPaper);
+        expect(paletteHasPaperOverride(id)).toBe(expected);
+      }
     });
   });
 });
