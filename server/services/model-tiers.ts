@@ -82,7 +82,7 @@ export interface TierSnapshot {
 // pipeline.ts short-call path).
 const DEFAULTS: Record<ModelTier, string> = {
   strong: "us.anthropic.claude-sonnet-4-6",
-  fast: "us.anthropic.claude-haiku-4-5-20251001",
+  fast: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   reasoning: "us.anthropic.claude-opus-4-7",
 };
 
