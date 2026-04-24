@@ -16,6 +16,7 @@ import { useWebSocket, type ConnectionState } from "@/hooks/use-websocket";
 import { useIdleTimeout } from "@/hooks/use-idle-timeout";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "@/lib/i18n";
+import { sanitizeReturnTo } from "@/lib/return-to";
 
 // Route-level code splitting — each page loads on demand
 const Dashboard = lazy(() => import("@/pages/dashboard"));
@@ -283,6 +284,23 @@ function AuthenticatedApp() {
       queryClient.clear();
     }
   }, [user, isLoading]);
+
+  // SSO return-to for already-authenticated users.
+  //
+  // When RAG's "Sign in with CallAnalyzer" button targets ${CA_BASE_URL}/auth
+  // (see ums-knowledge-reference backend/src/server.ts:436), the user lands on
+  // /auth?return_to=<rag-origin>. If they're already logged in at CA, the
+  // AuthPage gate below is skipped and Router() renders — which has no /auth
+  // route and shows 404. This effect catches that case and redirects the user
+  // back to RAG directly. SSRF-guarded via sanitizeReturnTo (host allowlist).
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const dest = sanitizeReturnTo(params.get("return_to"));
+    if (dest) {
+      window.location.replace(dest);
+    }
+  }, [user]);
 
   // HIPAA: Auto-logout after 15 minutes of inactivity with 2-minute warning
   const handleIdleLogout = useCallback(async () => {
