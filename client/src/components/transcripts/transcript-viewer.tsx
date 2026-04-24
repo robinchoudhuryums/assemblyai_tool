@@ -32,6 +32,28 @@ interface TranscriptWord {
   speaker?: string;
 }
 
+// Parse an AI-supplied timestamp string ("M:SS", "MM:SS", or "HH:MM:SS") into
+// milliseconds. Returns null if the string is malformed. Module-level so the
+// inline-feedback index + the side-rail jump buttons can both consume it.
+function parseAiTimestampToMs(ts: unknown): number | null {
+  if (typeof ts !== "string") return null;
+  const match = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(ts.trim());
+  if (!match) return null;
+  const a = parseInt(match[1], 10);
+  const b = parseInt(match[2], 10);
+  const c = match[3] !== undefined ? parseInt(match[3], 10) : null;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || (c !== null && !Number.isFinite(c))) return null;
+  let totalSeconds: number;
+  if (c !== null) {
+    if (b > 59 || c > 59) return null;
+    totalSeconds = a * 3600 + b * 60 + c;
+  } else {
+    if (b > 59) return null;
+    totalSeconds = a * 60 + b;
+  }
+  return totalSeconds * 1000;
+}
+
 export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -320,6 +342,55 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     [searchQuery, transcriptSegments],
   );
 
+  // Inline-feedback index: group AI feedback items by the transcript
+  // segment they reference via the AI-emitted timestamp. Items without a
+  // parseable timestamp stay in the side rail only. Items whose timestamp
+  // falls before the first segment or after the last are attached to the
+  // nearest segment so nothing is silently dropped. `validateTimestamps`
+  // on the server already strips timestamps beyond call duration, so the
+  // no-match case is extremely rare in practice.
+  // MUST be called before early returns to respect Rules of Hooks.
+  type InlineFeedbackItem = { kind: "strength" | "suggestion"; text: string; timestampMs: number };
+  const inlineFeedbackBySegment = useMemo<Record<number, InlineFeedbackItem[]>>(() => {
+    const result: Record<number, InlineFeedbackItem[]> = {};
+    const f = call?.analysis?.feedback;
+    if (!f || typeof f !== "object" || Array.isArray(f)) return result;
+    const strengths = Array.isArray((f as Record<string, unknown>).strengths)
+      ? ((f as Record<string, unknown>).strengths as unknown[])
+      : [];
+    const suggestions = Array.isArray((f as Record<string, unknown>).suggestions)
+      ? ((f as Record<string, unknown>).suggestions as unknown[])
+      : [];
+    if (transcriptSegments.length === 0) return result;
+
+    const collect = (list: unknown[], kind: "strength" | "suggestion") => {
+      for (const item of list) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        const text = typeof obj.text === "string" ? obj.text : toDisplayString(item);
+        const ts = obj.timestamp;
+        const timestampMs = parseAiTimestampToMs(ts);
+        if (timestampMs == null) continue;
+        // Binary-search-ish linear scan for the segment containing this ms.
+        // transcriptSegments are sorted by start; pick the last segment
+        // whose start <= timestampMs.
+        let segIdx = -1;
+        for (let i = 0; i < transcriptSegments.length; i++) {
+          if (transcriptSegments[i].start <= timestampMs) {
+            segIdx = i;
+          } else {
+            break;
+          }
+        }
+        if (segIdx === -1) segIdx = 0; // before first — attach to first
+        (result[segIdx] ||= []).push({ kind, text, timestampMs });
+      }
+    };
+    collect(strengths, "strength");
+    collect(suggestions, "suggestion");
+    return result;
+  }, [call?.analysis?.feedback, transcriptSegments]);
+
   // Navigate between search matches
   // MUST be called before early returns to respect Rules of Hooks
   const goToMatch = useCallback((idx: number) => {
@@ -513,29 +584,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     setCurrentTime(clampedMs);
   };
 
-  // Parse an AI-supplied timestamp string ("M:SS", "MM:SS", or "HH:MM:SS") into milliseconds.
-  // Returns null if the string is malformed or out of bounds. Used by feedback jump buttons.
-  const parseTimestampString = (ts: unknown): number | null => {
-    if (typeof ts !== "string") return null;
-    const match = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(ts.trim());
-    if (!match) return null;
-    const a = parseInt(match[1], 10);
-    const b = parseInt(match[2], 10);
-    const c = match[3] !== undefined ? parseInt(match[3], 10) : null;
-    if (!Number.isFinite(a) || !Number.isFinite(b) || (c !== null && !Number.isFinite(c))) return null;
-    let totalSeconds: number;
-    if (c !== null) {
-      // HH:MM:SS
-      if (b > 59 || c > 59) return null;
-      totalSeconds = a * 3600 + b * 60 + c;
-    } else {
-      // M:SS or MM:SS
-      if (b > 59) return null;
-      totalSeconds = a * 60 + b;
-    }
-    if (totalSeconds < 0 || totalSeconds > 24 * 3600) return null; // Cap at 24 hours
-    return totalSeconds * 1000;
-  };
+  // Alias the module-level parser — lifted so the inline-feedback index in
+  // the transcript body can use it without duplicating the parser.
+  const parseTimestampString = parseAiTimestampToMs;
 
   // Skip to next segment (skips silence gaps between speakers)
   const skipToNextSegment = () => {
@@ -959,6 +1010,63 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                         >
                           {highlightKeywords(segment.text, index)}
                         </div>
+
+                        {/*
+                          Inline AI feedback. When the model emitted a
+                          timestamp on a strength/suggestion, render it
+                          directly under the referenced transcript segment
+                          so the reviewer sees the reasoning alongside the
+                          evidence (rather than needing to cross-reference
+                          the side rail). Sage left-stripe = strength,
+                          amber left-stripe = suggestion. Same content
+                          remains in the side-rail CoachingPanel so the
+                          rail-only view still works.
+                        */}
+                        {inlineFeedbackBySegment[index] && inlineFeedbackBySegment[index].length > 0 && (
+                          <div
+                            className="mt-2 flex flex-col gap-1.5"
+                            data-testid={`inline-feedback-${index}`}
+                          >
+                            {inlineFeedbackBySegment[index].map((fb, fi) => {
+                              const isStrength = fb.kind === "strength";
+                              const stripeColor = isStrength ? "var(--sage)" : "var(--amber)";
+                              const bgColor = isStrength ? "var(--sage-soft)" : "var(--amber-soft)";
+                              const textColor = isStrength
+                                ? "color-mix(in oklch, var(--sage), var(--ink) 25%)"
+                                : "color-mix(in oklch, var(--amber), var(--ink) 25%)";
+                              const labelColor = isStrength
+                                ? "color-mix(in oklch, var(--sage), var(--ink) 35%)"
+                                : "color-mix(in oklch, var(--amber), var(--ink) 40%)";
+                              return (
+                                <div
+                                  key={fi}
+                                  onClick={(e) => {
+                                    // Don't bubble into the parent segment's onClick
+                                    // (which would re-seek and double-fire).
+                                    e.stopPropagation();
+                                    jumpToTime(fb.timestampMs);
+                                  }}
+                                  className="rounded-sm p-2 cursor-pointer"
+                                  style={{
+                                    background: bgColor,
+                                    borderLeft: `3px solid ${stripeColor}`,
+                                    fontSize: 12,
+                                    lineHeight: 1.45,
+                                    color: textColor,
+                                  }}
+                                >
+                                  <span
+                                    className="font-mono uppercase mr-1.5"
+                                    style={{ fontSize: 9, letterSpacing: "0.1em", color: labelColor }}
+                                  >
+                                    {isStrength ? "AI · Strength" : "AI · Opportunity"}
+                                  </span>
+                                  <span>{fb.text}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1077,6 +1185,93 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
                   Re-analysis won't help: it re-transcribes the same audio and will hit the same
                   gate. Re-upload higher-quality audio instead.
                 </p>
+              </div>
+            );
+          })()}
+
+          {/*
+            "This call surprised the AI" banner. Translates raw flag strings
+            (output_anomaly:*, prompt_injection*, low_confidence, awaiting_batch_analysis)
+            into plain-English reviewer-facing guidance. Kept separate from
+            the "AI analysis skipped" banner above (which covers the empty/
+            low-quality-transcript case) so the reviewer sees both when
+            both apply.
+          */}
+          {call.analysis?.flags && Array.isArray(call.analysis.flags) && (() => {
+            const flagStrs = (call.analysis.flags as unknown[]).map(f => toDisplayString(f));
+            // Don't double-surface: the empty/low-quality banner above covers
+            // those; we skip when either is set (analysis was gated, no AI output).
+            if (flagStrs.includes("empty_transcript") || flagStrs.includes("low_transcript_quality")) return null;
+
+            const concerns: Array<{ label: string; detail: string }> = [];
+            for (const f of flagStrs) {
+              if (f === "low_confidence") {
+                concerns.push({
+                  label: "Low transcript confidence",
+                  detail:
+                    "Transcription confidence was below the usual threshold. Scores and quoted phrases may not accurately reflect what was said — verify with the audio before acting on them.",
+                });
+              } else if (f === "prompt_injection_detected" || f.startsWith("prompt_injection")) {
+                concerns.push({
+                  label: "Possible prompt injection in transcript",
+                  detail:
+                    "The transcript contains language that looked like an attempt to steer the AI (e.g., 'ignore previous instructions'). The injection was isolated in the prompt, but the AI's score, summary, or coaching suggestions for this call may have been influenced — review manually.",
+                });
+              } else if (f === "output_anomaly:invalid_feedback_timestamps" || f.startsWith("output_anomaly:invalid_feedback_timestamps")) {
+                const match = f.match(/:(\d+)$/);
+                const count = match ? match[1] : "some";
+                concerns.push({
+                  label: "AI hallucinated feedback timestamps",
+                  detail: `The AI referenced ${count} timestamp(s) beyond the call's actual duration. Those were stripped, but it's a signal the model may have also invented surrounding detail — double-check the feedback below.`,
+                });
+              } else if (f.startsWith("output_anomaly")) {
+                concerns.push({
+                  label: "AI output flagged as anomalous",
+                  detail: `The AI response tripped an output-anomaly check (${f}). Review the summary, score, and feedback carefully — treat as a quality signal, not a hard failure.`,
+                });
+              } else if (f === "awaiting_batch_analysis") {
+                concerns.push({
+                  label: "Deferred batch analysis",
+                  detail:
+                    "This call's analysis is running in Bedrock batch mode (50% cheaper; up to 24h). Fields below are placeholders until the batch run completes.",
+                });
+              }
+            }
+            if (concerns.length === 0) return null;
+
+            return (
+              <div
+                role="alert"
+                className="rounded-sm p-4"
+                style={{
+                  background: "var(--amber-soft)",
+                  border: "1px solid color-mix(in oklch, var(--amber), transparent 55%)",
+                  borderLeft: "3px solid var(--amber)",
+                  color: "color-mix(in oklch, var(--amber), var(--ink) 25%)",
+                }}
+                data-testid="ai-surprise-banner"
+              >
+                <h4
+                  className="font-semibold mb-2 flex items-center gap-1.5"
+                  style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 30%)" }}
+                >
+                  <Warning className="w-4 h-4" weight="fill" /> This call surprised the AI
+                </h4>
+                <p className="text-sm mb-2">
+                  One or more quality signals indicate the AI's analysis of this call may be
+                  less reliable than usual. Skim the transcript directly before trusting the
+                  generated summary or coaching points.
+                </p>
+                <ul className="text-sm space-y-1.5 mt-1 list-disc pl-5">
+                  {concerns.map((c, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{c.label}.</span>{" "}
+                      <span style={{ color: "color-mix(in oklch, var(--amber), var(--ink) 35%)" }}>
+                        {c.detail}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             );
           })()}

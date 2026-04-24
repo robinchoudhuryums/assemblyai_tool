@@ -670,8 +670,27 @@ export default function MyPerformancePage() {
                       </div>
                     </>
                   )}
+                  {exemplar.strength && (
+                    <div
+                      className="mt-6 p-4"
+                      style={{
+                        background: "var(--sage-soft)",
+                        borderLeft: "3px solid var(--sage)",
+                      }}
+                    >
+                      <div
+                        className="font-mono text-[10px] uppercase tracking-[0.14em] mb-1.5"
+                        style={{ color: "color-mix(in oklch, var(--sage), var(--ink) 35%)" }}
+                      >
+                        What worked well
+                      </div>
+                      <div className="text-[13px] leading-relaxed text-foreground">
+                        {exemplar.strength}
+                      </div>
+                    </div>
+                  )}
                   {exemplar.suggestion && (
-                    <div className="mt-6 p-4 bg-secondary border border-border">
+                    <div className="mt-3 p-4 bg-secondary border border-border">
                       <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-1.5">
                         One thing to try
                       </div>
@@ -1011,8 +1030,31 @@ interface Exemplar {
   score: number;
   rubric: RubricValues | null;
   suggestion: string | null;
+  /** One concrete strength from the call's feedback — powers the "what
+   *  went well" callout. Null when the AI emitted no usable strengths. */
+  strength: string | null;
   categoryLabel: string;
   durationMinSec: string | null;
+}
+
+/**
+ * Extract the first non-empty text from a heterogeneous feedback array.
+ * The AI can emit items as plain strings OR as `{text, timestamp}` objects;
+ * the earlier implementation only handled strings and missed object-shaped
+ * items, causing "One thing to try" to frequently render blank.
+ */
+function firstFeedbackText(items: unknown[] | undefined | null): string | null {
+  if (!Array.isArray(items)) return null;
+  for (const raw of items) {
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed.length > 0) return trimmed;
+    } else if (raw && typeof raw === "object") {
+      const text = (raw as Record<string, unknown>).text;
+      if (typeof text === "string" && text.trim().length > 0) return text.trim();
+    }
+  }
+  return null;
 }
 
 /**
@@ -1039,10 +1081,11 @@ function pickExemplar(calls: CallWithDetails[]): Exemplar | null {
         }
       : null;
 
-  const suggestions = call.analysis?.feedback?.suggestions ?? [];
-  const firstSuggestion = suggestions.find(
-    (s): s is string => typeof s === "string" && s.trim().length > 0,
-  );
+  // Upgraded: handle both string and { text, timestamp? } feedback shapes.
+  // The old string-only filter missed object-shaped items and left the
+  // "one thing to try" slot empty on many otherwise-qualifying exemplars.
+  const firstSuggestion = firstFeedbackText(call.analysis?.feedback?.suggestions);
+  const firstStrength = firstFeedbackText(call.analysis?.feedback?.strengths);
 
   const categoryLabel = (call.callCategory || "Call").toString();
   const durationMinSec = call.duration
@@ -1053,7 +1096,8 @@ function pickExemplar(calls: CallWithDetails[]): Exemplar | null {
     call,
     score,
     rubric,
-    suggestion: firstSuggestion ?? null,
+    suggestion: firstSuggestion,
+    strength: firstStrength,
     categoryLabel: categoryLabel.charAt(0).toUpperCase() + categoryLabel.slice(1),
     durationMinSec,
   };

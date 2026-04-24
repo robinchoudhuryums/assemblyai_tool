@@ -22,6 +22,8 @@ import {
   type ModelTier,
 } from "../services/model-tiers";
 import { getSearchAnalytics } from "../services/search-analytics";
+import { getAwsCredentials } from "../services/aws-credentials";
+import { isPgvectorAvailable } from "../db/pool";
 import { z } from "zod";
 
 export function registerOperationsRoutes(
@@ -513,5 +515,304 @@ export function registerOperationsRoutes(
   // zero-result queries as concrete data/docs gaps.
   router.get("/api/admin/search-analytics", requireRole("admin"), (_req, res) => {
     res.json(getSearchAnalytics());
+  });
+
+  // Soft-fail operator-state dashboard. Enumerates the items in CLAUDE.md's
+  // Operator State Checklist (25+ silent-degradation paths) and reports
+  // live state for each. The existing /api/admin/health-deep focuses on
+  // in-process runtime signals (queue, breaker, cache); this endpoint
+  // covers the "silent boot-time / config-time degradation" vectors that
+  // don't show up in runtime health (e.g. RAG_ENABLED with no URL, MFA
+  // required but no admin enrolled, unlinked viewer users, missing prompt
+  // templates per category).
+  //
+  // Fast path only — no blocking network checks. Each item is an env-var
+  // inspection, a single-query DB lookup, or a cached in-process flag.
+  // Designed to be refreshable on a 30s poll cycle from the admin page.
+  router.get("/api/admin/soft-fail-status", requireRole("admin"), async (_req, res) => {
+    type Status = "ok" | "warning" | "error" | "unknown";
+    interface Check {
+      id: string;
+      label: string;
+      category: "credentials" | "storage" | "ai" | "auth" | "data" | "runtime";
+      status: Status;
+      message: string;
+      fixHint?: string;
+    }
+    const checks: Check[] = [];
+    const pool = getPool();
+
+    // --- Credentials + env ---
+    checks.push({
+      id: "session-secret",
+      label: "SESSION_SECRET set",
+      category: "credentials",
+      status: process.env.SESSION_SECRET ? "ok" : "error",
+      message: process.env.SESSION_SECRET
+        ? "Session signing key present."
+        : "SESSION_SECRET is not set — sessions are ephemeral.",
+      fixHint: "Set SESSION_SECRET (32+ chars) in .env; production boot hard-fails without it.",
+    });
+
+    checks.push({
+      id: "audit-hmac-secret",
+      label: "AUDIT_HMAC_SECRET set",
+      category: "credentials",
+      status: process.env.AUDIT_HMAC_SECRET
+        ? "ok"
+        : (process.env.NODE_ENV === "production" ? "error" : "warning"),
+      message: process.env.AUDIT_HMAC_SECRET
+        ? "Dedicated audit HMAC secret present."
+        : "Falling back to SESSION_SECRET — rotating SESSION_SECRET will break the audit integrity chain.",
+      fixHint: "Set AUDIT_HMAC_SECRET to a dedicated 32+ char secret (HIPAA §164.312(b)).",
+    });
+
+    checks.push({
+      id: "assemblyai-key",
+      label: "AssemblyAI API key",
+      category: "credentials",
+      status: process.env.ASSEMBLYAI_API_KEY ? "ok" : "error",
+      message: process.env.ASSEMBLYAI_API_KEY
+        ? "Transcription credentials configured."
+        : "No ASSEMBLYAI_API_KEY — every call upload will queue at 'processing' and never complete.",
+      fixHint: "Set ASSEMBLYAI_API_KEY in .env.",
+    });
+
+    let awsCredStatus: Status = "unknown";
+    let awsCredMsg = "Could not resolve AWS credentials.";
+    try {
+      const creds = await getAwsCredentials();
+      if (creds) {
+        awsCredStatus = "ok";
+        awsCredMsg = "AWS credentials resolved (env vars or IMDS).";
+      } else {
+        awsCredStatus = "error";
+        awsCredMsg = "No AWS credentials available — S3 uploads and Bedrock analysis will fail.";
+      }
+    } catch (err) {
+      awsCredStatus = "error";
+      awsCredMsg = `AWS credential resolution threw: ${(err as Error).message}`;
+    }
+    checks.push({
+      id: "aws-credentials",
+      label: "AWS credentials",
+      category: "credentials",
+      status: awsCredStatus,
+      message: awsCredMsg,
+      fixHint: "Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY in .env, or run on an EC2 instance with an instance profile.",
+    });
+
+    // --- Storage ---
+    const s3BucketSet = !!process.env.S3_BUCKET;
+    const dbUrlSet = !!process.env.DATABASE_URL;
+    checks.push({
+      id: "storage-backend",
+      label: "Storage backend",
+      category: "storage",
+      status: dbUrlSet && s3BucketSet ? "ok" : dbUrlSet ? "error" : s3BucketSet ? "warning" : "warning",
+      message: dbUrlSet && s3BucketSet
+        ? "PostgreSQL (metadata) + S3 (audio) — production configuration."
+        : dbUrlSet && !s3BucketSet
+        ? "DATABASE_URL set but S3_BUCKET missing — production boot will hard-fail; dev uses memorystore."
+        : !dbUrlSet && s3BucketSet
+        ? "S3 configured but no DATABASE_URL — running against S3-only legacy backend (deprecated) or memorystore."
+        : "Neither DATABASE_URL nor S3_BUCKET set — running against in-memory storage (data lost on restart).",
+      fixHint: "For production, set both DATABASE_URL (RDS) and S3_BUCKET.",
+    });
+
+    checks.push({
+      id: "pgvector",
+      label: "pgvector extension",
+      category: "storage",
+      status: !pool ? "unknown" : isPgvectorAvailable() ? "ok" : "warning",
+      message: !pool
+        ? "No DATABASE_URL — skipping pgvector check."
+        : isPgvectorAvailable()
+        ? "pgvector enabled — SQL-native cosine search available."
+        : "pgvector not available — semantic search falls back to O(n) in-memory scoring.",
+      fixHint: "Upgrade to PostgreSQL ≥15.2 (RDS) or install the pgvector extension.",
+    });
+
+    // --- AI / RAG ---
+    const ragEnabledFlag = process.env.RAG_ENABLED === "true";
+    const ragUrl = process.env.RAG_SERVICE_URL;
+    checks.push({
+      id: "rag-config",
+      label: "RAG knowledge base",
+      category: "ai",
+      status: !ragEnabledFlag ? "warning" : !ragUrl ? "error" : isRagEnabled() ? "ok" : "warning",
+      message: !ragEnabledFlag
+        ? "RAG_ENABLED is not 'true' — AI runs on generic prompts without company-specific context."
+        : !ragUrl
+        ? "RAG_ENABLED is 'true' but RAG_SERVICE_URL is missing — feature silently disabled."
+        : isRagEnabled()
+        ? "RAG client initialized."
+        : "RAG client failed to initialize (check boot log).",
+      fixHint: "Set RAG_SERVICE_URL + RAG_API_KEY, or set RAG_ENABLED=false to suppress this warning.",
+    });
+
+    checks.push({
+      id: "elevenlabs",
+      label: "ElevenLabs TTS (Simulated Calls)",
+      category: "ai",
+      status: process.env.ELEVENLABS_API_KEY ? "ok" : "warning",
+      message: process.env.ELEVENLABS_API_KEY
+        ? "Simulated Call Generator is functional."
+        : "ELEVENLABS_API_KEY not set — the admin Simulated Calls page is visible but /generate will 503.",
+      fixHint: "Set ELEVENLABS_API_KEY in .env if the Simulated Calls feature is in use.",
+    });
+
+    // --- Auth / MFA ---
+    const requireMfa = process.env.REQUIRE_MFA === "true";
+    let unenrolledAdmins = 0;
+    let mfaCheckError: string | null = null;
+    if (requireMfa && pool) {
+      try {
+        const { rows } = await pool.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt
+           FROM users u
+           LEFT JOIN mfa_secrets m ON m.username = u.username AND m.enabled = TRUE
+           WHERE u.active = TRUE
+             AND u.role IN ('admin', 'manager')
+             AND m.username IS NULL`,
+        );
+        unenrolledAdmins = parseInt(rows[0]?.cnt ?? "0", 10);
+      } catch (err) {
+        mfaCheckError = (err as Error).message;
+      }
+    }
+    checks.push({
+      id: "mfa-enrollment",
+      label: "MFA enrollment",
+      category: "auth",
+      status: !requireMfa
+        ? "ok"
+        : mfaCheckError
+        ? "unknown"
+        : unenrolledAdmins > 0
+        ? "error"
+        : "ok",
+      message: !requireMfa
+        ? "REQUIRE_MFA=false — MFA is optional."
+        : mfaCheckError
+        ? `MFA enrollment query failed: ${mfaCheckError}`
+        : unenrolledAdmins > 0
+        ? `REQUIRE_MFA=true but ${unenrolledAdmins} admin/manager account(s) have no MFA — they cannot mutate /api/admin/* and are locked out of password changes.`
+        : "All admin/manager accounts have MFA enrolled.",
+      fixHint: unenrolledAdmins > 0
+        ? "Have affected users enroll via /api/auth/mfa/setup + /api/auth/mfa/enable immediately."
+        : undefined,
+    });
+
+    // Unlinked viewers — copies the 7-day distinct-username query from
+    // /api/admin/health-deep so this page doesn't depend on that endpoint.
+    let unlinkedUsersCount: number | null = null;
+    if (pool) {
+      try {
+        const { rows } = await pool.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt
+           FROM users u
+           WHERE u.active = TRUE
+             AND u.role = 'viewer'
+             AND NOT EXISTS (
+               SELECT 1 FROM employees e
+               WHERE LOWER(e.email) = LOWER(u.username)
+                  OR LOWER(e.name) = LOWER(u.display_name)
+             )`,
+        );
+        unlinkedUsersCount = parseInt(rows[0]?.cnt ?? "0", 10);
+      } catch { /* DB unavailable */ }
+    }
+    checks.push({
+      id: "unlinked-viewers",
+      label: "Unlinked viewer users",
+      category: "auth",
+      status: unlinkedUsersCount == null
+        ? "unknown"
+        : unlinkedUsersCount === 0
+        ? "ok"
+        : unlinkedUsersCount > 5
+        ? "error"
+        : "warning",
+      message: unlinkedUsersCount == null
+        ? "Could not check (DB unavailable)."
+        : unlinkedUsersCount === 0
+        ? "Every viewer has a matching employee row."
+        : `${unlinkedUsersCount} viewer user(s) have no linked employee — they see empty lists with no data.`,
+      fixHint: unlinkedUsersCount != null && unlinkedUsersCount > 0
+        ? "Visit the admin Users tab → Onboarding banner → Link to employee."
+        : undefined,
+    });
+
+    // --- Data ---
+    let promptTemplateCount = 0;
+    if (pool) {
+      try {
+        const { rows } = await pool.query<{ cnt: string }>(`SELECT COUNT(*)::text AS cnt FROM prompt_templates`);
+        promptTemplateCount = parseInt(rows[0]?.cnt ?? "0", 10);
+      } catch { /* table missing / DB unavailable */ }
+    }
+    checks.push({
+      id: "prompt-templates",
+      label: "Prompt templates seeded",
+      category: "data",
+      status: promptTemplateCount === 0 ? "warning" : "ok",
+      message: promptTemplateCount === 0
+        ? "No prompt templates in DB — pipeline falls back to the generic default prompt. Scores are not company-specific."
+        : `${promptTemplateCount} prompt template(s) in DB.`,
+      fixHint: "Author per-category templates via the admin Prompt Templates page.",
+    });
+
+    // --- Runtime (lightweight echoes of health-deep) ---
+    const bedrockState = getBedrockCircuitBreakerState();
+    checks.push({
+      id: "bedrock-circuit",
+      label: "Bedrock circuit breaker",
+      category: "runtime",
+      status: bedrockState === "closed" ? "ok" : bedrockState === "half-open" ? "warning" : "error",
+      message: bedrockState === "closed"
+        ? "Closed — Bedrock calls proceed normally."
+        : bedrockState === "half-open"
+        ? "Half-open — testing recovery; one probe call allowed."
+        : "OPEN — Bedrock calls are short-circuited for 30s after 5 consecutive failures.",
+      fixHint: bedrockState !== "closed"
+        ? "Check pm2 logs for the underlying AWS error; breaker auto-recovers once Bedrock responds."
+        : undefined,
+    });
+
+    checks.push({
+      id: "audit-queue",
+      label: "Audit log write-ahead queue",
+      category: "runtime",
+      status: getDroppedAuditEntryCount() > 0
+        ? "error"
+        : getPendingAuditEntryCount() > 100
+        ? "warning"
+        : "ok",
+      message: getDroppedAuditEntryCount() > 0
+        ? `${getDroppedAuditEntryCount()} audit entries dropped — stdout log retains them for manual reconciliation.`
+        : getPendingAuditEntryCount() > 100
+        ? `${getPendingAuditEntryCount()} audit entries pending flush — DB may be slow.`
+        : "Queue draining normally.",
+      fixHint: getDroppedAuditEntryCount() > 0
+        ? "Investigate DB write throughput; drop-oldest discards the oldest queued rows, not the stdout chain."
+        : undefined,
+    });
+
+    // --- Summary ---
+    const counts = {
+      ok: checks.filter(c => c.status === "ok").length,
+      warning: checks.filter(c => c.status === "warning").length,
+      error: checks.filter(c => c.status === "error").length,
+      unknown: checks.filter(c => c.status === "unknown").length,
+    };
+    const overall: Status = counts.error > 0 ? "error" : counts.warning > 0 ? "warning" : "ok";
+
+    res.json({
+      overall,
+      counts,
+      checks,
+      generatedAt: new Date().toISOString(),
+    });
   });
 }

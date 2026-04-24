@@ -357,12 +357,22 @@ export default function SearchPage() {
           {(["keyword", "semantic", "hybrid"] as const).map((mode) => {
             const active = searchMode === mode;
             const label = mode === "keyword" ? "Keywords" : mode === "semantic" ? "Meaning" : "Hybrid";
+            // Tooltip explains what each mode does — closes the "which do I
+            // pick?" friction that made users pick the wrong one and get
+            // fewer results than they'd have with a different choice.
+            const hint =
+              mode === "keyword"
+                ? "Exact word + phrase match. Best for proper nouns, SKUs, and quoted phrases."
+                : mode === "semantic"
+                ? "Match by meaning, not wording. Best when you know the concept but not the exact words (e.g. 'customer was upset')."
+                : "Blend both — keyword precision with semantic recall. Good default when you're not sure.";
             return (
               <button
                 key={mode}
                 type="button"
                 onClick={() => setSearchMode(mode)}
                 aria-pressed={active}
+                title={hint}
                 className="font-mono uppercase border rounded-sm px-2.5 py-1 transition-colors"
                 style={{
                   fontSize: 10,
@@ -419,6 +429,51 @@ export default function SearchPage() {
                   </span>
                 )}
             </span>
+          )}
+        </div>
+        {/* Mode explainer — one-liner that reflects the current pick. Keeps
+            the chrome small but closes the "which mode?" friction raised
+            during the cycle's strategic review. */}
+        <div
+          className="text-xs text-muted-foreground"
+          data-testid="search-mode-hint"
+        >
+          {searchMode === "keyword" && (
+            <>
+              <span className="font-medium">Keywords</span> — exact word match. Try
+              {" "}
+              <button
+                type="button"
+                onClick={() => setSearchMode("hybrid")}
+                className="underline hover:text-foreground"
+              >
+                Hybrid
+              </button>
+              {" "}
+              if you're not finding what you expect.
+            </>
+          )}
+          {searchMode === "semantic" && (
+            <>
+              <span className="font-medium">Meaning</span> — matches the concept, not
+              the exact words. Try
+              {" "}
+              <button
+                type="button"
+                onClick={() => setSearchMode("hybrid")}
+                className="underline hover:text-foreground"
+              >
+                Hybrid
+              </button>
+              {" "}
+              if you also want proper-noun hits.
+            </>
+          )}
+          {searchMode === "hybrid" && (
+            <>
+              <span className="font-medium">Hybrid</span> — blends exact-match and
+              meaning. Slide the Mix toward kw for proper nouns, toward sem for concepts.
+            </>
           )}
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
