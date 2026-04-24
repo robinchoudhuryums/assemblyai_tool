@@ -479,7 +479,7 @@ S3_BUCKET                       # Default: ums-call-archive (audio blobs when DB
 
 # AI Model — tiered (see server/services/model-tiers.ts)
 BEDROCK_MODEL_STRONG            # Primary analysis model (Sonnet-class). Default: us.anthropic.claude-sonnet-4-6
-BEDROCK_MODEL_FAST              # Cost-optimized model (Haiku-class). Default: us.anthropic.claude-haiku-4-5-20251001
+BEDROCK_MODEL_FAST              # Cost-optimized model (Haiku-class). Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
 BEDROCK_MODEL_REASONING         # Reasoning model (Opus-class). Default: us.anthropic.claude-opus-4-7 — reserved, nothing reads it today
 BEDROCK_MODEL                   # LEGACY: alias for BEDROCK_MODEL_STRONG (still respected, new deploys should use the tier-specific var)
 BEDROCK_HAIKU_MODEL             # LEGACY: alias for BEDROCK_MODEL_FAST

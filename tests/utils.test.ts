@@ -32,7 +32,7 @@ describe("estimateBedrockCost", () => {
 
   it("calculates cost for Haiku 4.5", () => {
     // Titan V2 rate updated A27: $0.0008 in / $0.004 out per 1K
-    const cost = estimateBedrockCost("us.anthropic.claude-haiku-4-5-20251001", 1000, 500);
+    const cost = estimateBedrockCost("us.anthropic.claude-haiku-4-5-20251001-v1:0", 1000, 500);
     assert.equal(cost, 0.0008 + 0.002);
   });
 

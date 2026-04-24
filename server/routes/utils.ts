@@ -794,7 +794,7 @@ export async function autoAssignEmployee(
 const BEDROCK_PRICING: Record<string, [number, number]> = {
   "us.anthropic.claude-sonnet-4-6": [0.003, 0.015],
   "us.anthropic.claude-sonnet-4-20250514": [0.003, 0.015],
-  "us.anthropic.claude-haiku-4-5-20251001": [0.0008, 0.004],
+  "us.anthropic.claude-haiku-4-5-20251001-v1:0": [0.0008, 0.004],
   "anthropic.claude-3-haiku-20240307": [0.00025, 0.00125],
   "anthropic.claude-3-5-sonnet-20241022": [0.003, 0.015],
 };
