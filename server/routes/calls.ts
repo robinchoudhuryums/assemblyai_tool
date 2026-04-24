@@ -533,8 +533,21 @@ export function registerCallRoutes(
               callId, correctedBy: editedBy, reason: reason.trim(),
               originalScore: origScore, correctedScore: newScore,
               subScoreChanges: Object.keys(subChanges).length > 0 ? subChanges : undefined,
-            }).catch(() => {}); // fire-and-forget
-          }).catch(() => {});
+            }).catch((err) => {
+              // F-10: fire-and-forget but surface failures. A silently
+              // dropped correction is a missed learning signal — the RAG
+              // feedback loop degrades invisibly over time without this log.
+              logger.warn("failed to record scoring correction", {
+                callId,
+                error: (err as Error).message,
+              });
+            });
+          }).catch((err) => {
+            logger.warn("failed to load scoring-feedback module for correction capture", {
+              callId,
+              error: (err as Error).message,
+            });
+          });
         }
       }
 

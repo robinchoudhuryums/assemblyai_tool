@@ -29,7 +29,7 @@ import { captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
 import { runWithCorrelationId } from "./services/correlation-id";
-import { flushAuditQueue, persistIntegrityChainHead } from "./services/audit-log";
+import { flushAuditQueue, persistIntegrityChainHead, startIntegrityPersistScheduler, stopIntegrityPersistScheduler } from "./services/audit-log";
 import { initWebhooks } from "./services/webhooks";
 
 const app = express();
@@ -240,9 +240,11 @@ app.use((req, res, next) => {
       const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
       metrics.increment("http_requests_total", 1, { method: req.method, status: statusClass });
       metrics.observe("http_request_duration_ms", duration, { method: req.method });
-
-      // Also write the human-readable log for pm2 console
-      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms${aborted ? " (aborted)" : ""}`);
+      // F-15: the previous `[AUDIT] ...` pm2-console line was removed. It
+      // duplicated the structured `api_request` entry above and — because
+      // it routed through `vite.ts:log()` → console.log — bypassed the
+      // logger's PHI redaction path. Every bracket-prefixed literal except
+      // the canonical `[HIPAA_AUDIT]` stdout line is now gone.
     }
   };
 
@@ -466,6 +468,11 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // doesn't reset to 'genesis' and break sequential chain verification.
   await (await import("./services/audit-log")).loadAuditIntegrityChain();
 
+  // F-06: Start the periodic chain-head persist scheduler. Bounds the
+  // "in-flight vs durable" window between fire-and-forget per-entry writes
+  // and the on-disk head, closing the crash-mid-burst chain-drift gap.
+  startIntegrityPersistScheduler();
+
   // A7/F09: explicit startup wiring of webhook service. Previously this ran
   // as a side effect of importing storage.ts; moved here so module load order
   // is no longer load-bearing.
@@ -633,6 +640,15 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           mod.stopAgentDeclineScheduler?.();
         } catch (err) {
           logger.error("Failed to stop agent-decline scheduler", { error: (err as Error).message });
+        }
+        // F-06: Stop the periodic audit integrity chain persist scheduler.
+        // The final persist happens in step 3a via persistIntegrityChainHead()
+        // below, which is awaited. Stopping the timer here prevents a late
+        // interval-triggered write from racing the DB pool close.
+        try {
+          stopIntegrityPersistScheduler();
+        } catch (err) {
+          logger.error("Failed to stop audit integrity persist scheduler", { error: (err as Error).message });
         }
         // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
         //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s

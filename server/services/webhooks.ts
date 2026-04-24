@@ -27,6 +27,37 @@ export const webhookBreaker = new PerKeyCircuitBreaker(
   WEBHOOK_BREAKER_RESET_MS,
 );
 
+/**
+ * Thrown by `deliverWebhook` when the receiver returns a non-2xx HTTP status.
+ * Carries the numeric status so the circuit-breaker `isFailure` predicate can
+ * distinguish client-side errors (4xx) from upstream-unhealthy errors (5xx,
+ * 429, network failures). Mirrors `BedrockClientError`'s role in `bedrock.ts`.
+ */
+export class WebhookHttpError extends Error {
+  constructor(public readonly status: number, public readonly statusText: string) {
+    super(`HTTP ${status} ${statusText}`);
+    this.name = "WebhookHttpError";
+  }
+}
+
+/**
+ * Circuit-breaker failure predicate for webhook delivery.
+ *
+ * Only network failures, timeouts, 429 (throttling), and 5xx (upstream
+ * failure) count toward the open-threshold. A misconfigured webhook URL
+ * returning 4xx is a permanent client-side error — tripping the breaker on
+ * it doesn't help (retry won't fix it) and it also blocks the durable-retry
+ * enqueue, making it harder for the operator to re-send after fixing the
+ * config. Mirrors the Bedrock breaker's `isCircuitFailure` contract.
+ */
+function isWebhookCircuitFailure(err: unknown): boolean {
+  if (err instanceof WebhookHttpError) {
+    return err.status === 429 || err.status >= 500;
+  }
+  // Network errors, timeouts, AbortError, SSRF blocks — all count.
+  return true;
+}
+
 /** Exported for the admin observability endpoint. */
 export function getWebhookBreakerSnapshot(): CircuitSnapshot[] {
   return webhookBreaker.snapshot();
@@ -243,9 +274,20 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
   // fields inherit the service-wide defaults declared at module scope.
   const policy = config.retryPolicy ?? {};
   const maxRetries = policy.maxInProcessRetries ?? WEBHOOK_MAX_RETRIES;
-  const breakerOverride = policy.circuitThreshold !== undefined || policy.circuitResetMs !== undefined
-    ? { threshold: policy.circuitThreshold, resetMs: policy.circuitResetMs }
-    : undefined;
+  // F-02: always pass the isFailure predicate so 4xx (except 429) do not
+  // count toward the breaker's open threshold. Merge with any per-webhook
+  // threshold/resetMs overrides. Keeping the breaker in one shape means a
+  // future maintainer can't accidentally drop the predicate when adding a
+  // new policy field.
+  const breakerExecuteOptions: {
+    isFailure: (err: unknown) => boolean;
+    threshold?: number;
+    resetMs?: number;
+  } = {
+    isFailure: isWebhookCircuitFailure,
+    ...(policy.circuitThreshold !== undefined ? { threshold: policy.circuitThreshold } : {}),
+    ...(policy.circuitResetMs !== undefined ? { resetMs: policy.circuitResetMs } : {}),
+  };
 
   // Per-webhook circuit breaker check. When open, skip delivery AND skip the
   // durable-retry enqueue — the receiver is known-broken, hammering it with
@@ -270,7 +312,7 @@ async function deliverWithRetry(config: WebhookConfig, event: string, body: stri
       await webhookBreaker.execute(
         config.id,
         () => deliverWebhook(config, event, body),
-        breakerOverride ?? undefined,
+        breakerExecuteOptions,
       );
       return;
     } catch (err) {
@@ -376,7 +418,7 @@ async function deliverWebhook(config: WebhookConfig, event: string, body: string
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      throw new WebhookHttpError(response.status, response.statusText);
     }
 
     logger.info("Webhook delivered", { event, url: config.url, status: response.status });

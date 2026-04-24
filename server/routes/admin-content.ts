@@ -4,7 +4,7 @@ import fs from "fs";
 import { randomUUID } from "crypto";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
-import { requireAuth, requireRole } from "../auth";
+import { requireAuth, requireRole, requireMFASetup } from "../auth";
 import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
@@ -42,7 +42,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.post("/api/prompt-templates", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/prompt-templates", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
       const parsed = insertPromptTemplateSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -59,7 +59,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.patch("/api/prompt-templates/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.patch("/api/prompt-templates/:id", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const { updatedBy: _ignore, id: _ignoreId, ...bodyWithoutMeta } = req.body;
       const templateUpdateParsed = insertPromptTemplateSchema.partial().safeParse(bodyWithoutMeta);
@@ -81,7 +81,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.delete("/api/prompt-templates/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.delete("/api/prompt-templates/:id", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       await storage.deletePromptTemplate(req.params.id);
       res.json({ message: "Template deleted" });
@@ -94,7 +94,7 @@ export function registerContentRoutes(
   // Re-runs AI analysis with the candidate template against existing transcripts
   // so admins can see score deltas before publishing. Test results are NOT persisted
   // and do NOT affect stored analyses, metrics, coaching, or gamification.
-  router.post("/api/prompt-templates/:id/test", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.post("/api/prompt-templates/:id/test", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const template = await storage.getPromptTemplate(req.params.id);
       if (!template) {
@@ -274,7 +274,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.post("/api/ab-tests/upload", requireAuth, requireRole("admin"), uploadMiddleware, async (req, res) => {
+  router.post("/api/ab-tests/upload", requireAuth, requireMFASetup, requireRole("admin"), uploadMiddleware, async (req, res) => {
     try {
       if (!req.file) {
         res.status(400).json({ message: "No audio file provided" });
@@ -324,7 +324,7 @@ export function registerContentRoutes(
     }
   });
 
-  router.delete("/api/ab-tests/:id", requireAuth, requireRole("admin"), validateIdParam, async (req, res) => {
+  router.delete("/api/ab-tests/:id", requireAuth, requireMFASetup, requireRole("admin"), validateIdParam, async (req, res) => {
     try {
       const test = await storage.getABTest(req.params.id);
       if (!test) {
@@ -499,7 +499,7 @@ export function registerContentRoutes(
   // Promote a model to production (update aiProvider singleton + persist to S3).
   // Requires the model to be in BEDROCK_MODEL_PRESETS whitelist — we do NOT
   // accept arbitrary model IDs here, because a typo would silently cost-bomb.
-  router.post("/api/ab-tests/promote", requireAuth, requireRole("admin"), async (req, res) => {
+  router.post("/api/ab-tests/promote", requireAuth, requireMFASetup, requireRole("admin"), async (req, res) => {
     try {
       const { model, baselineModel, sampleSize, avgDelta } = req.body || {};
 

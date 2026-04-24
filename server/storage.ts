@@ -96,6 +96,39 @@ export interface ObjectStorageClient {
   getPresignedUrl?(objectName: string, expiresInSeconds?: number): Promise<string>;
 }
 
+/**
+ * F-04: Allowlist of keys accepted by `updateCall`. Any other key (including
+ * `externalId`, `synthetic`, `contentHash` on some prior deploys) will be
+ * rejected rather than silently dropped (PostgresStorage) or silently
+ * written (MemStorage / CloudStorage). `employeeId` is explicitly handled
+ * by its own guard — use `atomicAssignEmployee` / `setCallEmployee`.
+ * Adding a new updatable field requires adding it here AND to
+ * PostgresStorage.updateCall's COLUMN_MAP.
+ */
+export const UPDATABLE_CALL_KEYS = [
+  "fileName",
+  "filePath",
+  "status",
+  "duration",
+  "assemblyAiId",
+  "callCategory",
+  "contentHash",
+  "excludedFromMetrics",
+  "uploadedAt",
+] as const;
+
+export function validateUpdateCallKeys(updates: Record<string, unknown>): void {
+  const allowed = new Set<string>(UPDATABLE_CALL_KEYS);
+  for (const key of Object.keys(updates)) {
+    if (key === "employeeId") continue; // handled by a separate guard in each backend
+    if (!allowed.has(key)) {
+      throw new Error(
+        `updateCall: key "${key}" is not in the updatable allowlist — add it to UPDATABLE_CALL_KEYS (and PostgresStorage COLUMN_MAP) if it should be writable.`,
+      );
+    }
+  }
+}
+
 export interface IStorage {
   // User operations (env-var-based, legacy)
   getUser(id: string): Promise<User | undefined>;
@@ -538,6 +571,9 @@ export class MemStorage implements IStorage {
         "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
       );
     }
+    // F-04: reject unknown keys so MemStorage matches PostgresStorage's
+    // contract. Previously the spread below would silently write any key.
+    validateUpdateCallKeys(updates as Record<string, unknown>);
     const call = this.calls.get(id);
     if (!call) return undefined;
     const updated = { ...call, ...updates };
@@ -1143,6 +1179,19 @@ export class MemStorage implements IStorage {
 export class CloudStorage implements IStorage {
   private client: ObjectStorageClient;
 
+  /**
+   * F-07: per-call mutex for `atomicAssignEmployee`. CloudStorage has no
+   * native conditional-put primitive (S3 supports If-None-Match for create
+   * only, not "update-if-unchanged"). Two concurrent auto-assigns for the
+   * same callId would otherwise both read `employeeId === null`, both pass
+   * the check, and both write — last-write-wins. Serializing per callId at
+   * the process level closes the race for single-process deployments,
+   * which is the only place CloudStorage runs (PostgresStorage uses a real
+   * atomic SQL UPDATE and is the production path). Multi-process S3-legacy
+   * deployments would need distributed locking (out of scope).
+   */
+  private assignLocks: Map<string, Promise<boolean>> = new Map();
+
   constructor(client: ObjectStorageClient) {
     this.client = client;
   }
@@ -1250,6 +1299,9 @@ export class CloudStorage implements IStorage {
         "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
       );
     }
+    // F-04: reject unknown keys so CloudStorage matches PostgresStorage's
+    // contract. Previously the spread below would silently write any key.
+    validateUpdateCallKeys(updates as Record<string, unknown>);
     const call = await this.getCall(id);
     if (!call) return undefined;
     const updated = { ...call, ...updates };
@@ -1257,11 +1309,35 @@ export class CloudStorage implements IStorage {
     return updated;
   }
   async atomicAssignEmployee(callId: string, employeeId: string): Promise<boolean> {
-    // S3 has no atomic conditional update, so do read-check-write (best effort)
-    const call = await this.getCall(callId);
-    if (!call || call.employeeId) return false;
-    await this.client.uploadJson(`calls/${callId}.json`, { ...call, employeeId });
-    return true;
+    // F-07: serialize per-call assigns. S3 has no atomic conditional update,
+    // so we use a process-local Map<callId, Promise> mutex. Concurrent callers
+    // await the first in-flight assign, then each runs its own read-check-write
+    // (the second will observe the now-assigned employeeId and return false).
+    const existingLock = this.assignLocks.get(callId);
+    if (existingLock) {
+      // Wait for the current in-flight assign to resolve. Whether it
+      // succeeded or not is irrelevant to us — we still need to do our own
+      // read-check-write afterward (the call may have been assigned in that
+      // window).
+      try { await existingLock; } catch { /* ignore — we retry below */ }
+    }
+    const pending = (async () => {
+      const call = await this.getCall(callId);
+      if (!call || call.employeeId) return false;
+      await this.client.uploadJson(`calls/${callId}.json`, { ...call, employeeId });
+      return true;
+    })();
+    this.assignLocks.set(callId, pending);
+    try {
+      return await pending;
+    } finally {
+      // Only clear the lock if it's still our pending (didn't get replaced
+      // by a newer in-flight call — shouldn't happen in practice since we
+      // awaited existingLock first, but defensive).
+      if (this.assignLocks.get(callId) === pending) {
+        this.assignLocks.delete(callId);
+      }
+    }
   }
   async setCallEmployee(callId: string, employeeId: string | null): Promise<Call | undefined> {
     const call = await this.getCall(callId);

@@ -21,6 +21,7 @@ import type {
   Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData, CoachingOutcomeSessionAgg, CoachingOutcomeWindowAgg } from "./storage";
+import { validateUpdateCallKeys } from "./storage";
 import { safeFloat } from "./routes/utils";
 import { logPhiAccess } from "./services/audit-log";
 
@@ -408,6 +409,11 @@ export class PostgresStorage implements IStorage {
         "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
       );
     }
+    // F-04: reject unknown keys loudly. Previously COLUMN_MAP silently
+    // dropped anything not in its whitelist (e.g. `externalId`), which made
+    // a mis-named field look like a successful update from the caller's
+    // side but never reach the DB.
+    validateUpdateCallKeys(updates as Record<string, unknown>);
     // Dynamic SET clause: only update keys explicitly provided. Includes
     // content_hash (F01) which was missing from the legacy whitelist.
     const COLUMN_MAP: Record<string, string> = {

@@ -81,6 +81,50 @@ function computeIntegrityHash(content: string): string {
 export async function persistIntegrityChainHead(): Promise<void> {
   if (previousHash === "genesis") return;
   await persistPreviousHash(previousHash);
+  lastDurablyPersistedHash = previousHash;
+}
+
+// --- F-06: Periodic chain-head persistence ---
+//
+// Each audit entry already triggers a fire-and-forget `persistPreviousHash`
+// from `computeIntegrityHash`. On a crash mid-burst, those writes may not
+// have committed — the on-disk head lags the in-memory head, so next boot
+// re-chains from a stale position and tamper detection has a gap.
+//
+// The per-entry writes are kept (fast path), but a periodic scheduler
+// additionally AWAITS a persist every INTEGRITY_PERSIST_INTERVAL_MS and
+// only issues a write if the head has advanced since the last successful
+// persist. This bounds the "in-flight vs durable" gap under healthy DB
+// conditions. Under sustained DB outage the scheduler logs a warning and
+// the stdout HMAC chain remains the canonical non-repudiable record.
+//
+// Interval is `.unref()`'d per INV-30 so it doesn't block graceful shutdown.
+const INTEGRITY_PERSIST_INTERVAL_MS = 30_000;
+let lastDurablyPersistedHash: string | null = null;
+let integrityPersistTimer: NodeJS.Timeout | null = null;
+
+export function startIntegrityPersistScheduler(): void {
+  if (integrityPersistTimer) return; // idempotent
+  integrityPersistTimer = setInterval(async () => {
+    try {
+      if (previousHash === "genesis") return;
+      if (previousHash === lastDurablyPersistedHash) return; // unchanged, skip DB write
+      await persistPreviousHash(previousHash);
+      lastDurablyPersistedHash = previousHash;
+    } catch (err) {
+      logger.warn("audit-log: periodic integrity chain persist failed", {
+        error: (err as Error).message,
+      });
+    }
+  }, INTEGRITY_PERSIST_INTERVAL_MS);
+  integrityPersistTimer.unref();
+}
+
+export function stopIntegrityPersistScheduler(): void {
+  if (integrityPersistTimer) {
+    clearInterval(integrityPersistTimer);
+    integrityPersistTimer = null;
+  }
 }
 
 let integrityLoaded = false;

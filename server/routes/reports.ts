@@ -379,7 +379,7 @@ router.get("/api/performance", requireAuth, requireRole("manager", "admin"), asy
   // Filtered reports: accepts date range, employee, role filters
   // F35: uses storage.getFilteredReportMetrics() for SQL-level aggregation
   // instead of loading all calls into memory.
-  router.get("/api/reports/filtered", requireAuth, async (req, res) => {
+  router.get("/api/reports/filtered", requireAuth, requireMFASetup, async (req, res) => {
     try {
       // A15/F14: query param renamed from `department` to `role` because
       // the filter actually compares against employees.role (not a separate
