@@ -9,7 +9,8 @@ import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Link } from "wouter";
 import { useBeforeUnload } from "@/hooks/use-before-unload";
-import type { CallWithDetails } from "@shared/schema";
+import { useToast } from "@/hooks/use-toast";
+import type { Annotation, CallWithDetails } from "@shared/schema";
 import { toDisplayString } from "@/lib/display-utils";
 import { safeSet } from "@/lib/safe-storage";
 import { computeSearchMatches, findGlobalMatchIndex } from "@/lib/transcript-search";
@@ -69,11 +70,18 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     safeSet("transcript-audio-volume", String(volume));
   }, [volume]);
 
-  // Manual edit state
+  // Manual edit state. Score + summary are native scalars; arrays (strengths,
+  // suggestions, action items, topics, flags) are held as newline-joined
+  // strings for simple textarea editing and split back on save.
   const [isEditing, setIsEditing] = useState(false);
   const [editScore, setEditScore] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editReason, setEditReason] = useState("");
+  const [editStrengths, setEditStrengths] = useState("");
+  const [editSuggestions, setEditSuggestions] = useState("");
+  const [editActionItems, setEditActionItems] = useState("");
+  const [editTopics, setEditTopics] = useState("");
+  const [editFlags, setEditFlags] = useState("");
 
   // Transcript search state — query is driven by ViewerHeader via
   // `transcript:search-query` window events; we keep only the query +
@@ -83,14 +91,24 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
   // Warn before navigating away with unsaved edits
-  useBeforeUnload(isEditing && (editScore !== "" || editSummary !== "" || editReason !== ""));
+  useBeforeUnload(
+    isEditing &&
+      (editScore !== "" ||
+        editSummary !== "" ||
+        editReason !== "" ||
+        editStrengths !== "" ||
+        editSuggestions !== "" ||
+        editActionItems !== "" ||
+        editTopics !== "" ||
+        editFlags !== "")
+  );
 
   const { data: call, isLoading } = useQuery<CallWithDetails>({
     queryKey: ["/api/calls", callId],
   });
 
   const editMutation = useMutation({
-    mutationFn: async (payload: { updates: Record<string, string | number>; reason: string }) => {
+    mutationFn: async (payload: { updates: Record<string, unknown>; reason: string }) => {
       const { getCsrfToken } = await import("@/lib/queryClient");
       const res = await fetch(`/api/calls/${callId}/analysis`, {
         method: "PATCH",
@@ -137,22 +155,69 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     },
   });
 
+  // Render an array of AI-emitted items (strings or {text,timestamp} objects)
+  // as a newline-delimited textarea value. Object timestamps are dropped on
+  // edit — managers can re-add them as inline "[0:42]" tags in the text and
+  // the viewer keeps parsing those for jump-to-offset.
+  const arrayToLines = (arr: unknown): string => {
+    if (!Array.isArray(arr)) return "";
+    return arr.map(item => toDisplayString(item)).filter(Boolean).join("\n");
+  };
+  const linesToArray = (s: string): string[] =>
+    s.split("\n").map(l => l.trim()).filter(Boolean);
+
   const startEditing = () => {
-    setEditScore(call?.analysis?.performanceScore?.toString() || "");
-    setEditSummary(toDisplayString(call?.analysis?.summary) || "");
+    const analysis = call?.analysis;
+    setEditScore(analysis?.performanceScore?.toString() || "");
+    setEditSummary(toDisplayString(analysis?.summary) || "");
+    const feedback = analysis?.feedback as
+      | { strengths?: unknown[]; suggestions?: unknown[] }
+      | undefined;
+    setEditStrengths(arrayToLines(feedback?.strengths));
+    setEditSuggestions(arrayToLines(feedback?.suggestions));
+    setEditActionItems(arrayToLines(analysis?.actionItems));
+    setEditTopics(arrayToLines(analysis?.topics));
+    setEditFlags(arrayToLines(analysis?.flags));
     setEditReason("");
     setIsEditing(true);
   };
 
   const handleSaveEdit = () => {
     if (!editReason.trim()) return;
-    const updates: Record<string, string | number> = {};
-    if (editScore !== (call?.analysis?.performanceScore?.toString() || "")) {
+    const analysis = call?.analysis;
+    const originalFeedback = analysis?.feedback as
+      | { strengths?: unknown[]; suggestions?: unknown[] }
+      | undefined;
+    const updates: Record<string, unknown> = {};
+
+    if (editScore !== (analysis?.performanceScore?.toString() || "")) {
       updates.performanceScore = editScore;
     }
-    if (editSummary !== (toDisplayString(call?.analysis?.summary) || "")) {
+    if (editSummary !== (toDisplayString(analysis?.summary) || "")) {
       updates.summary = editSummary;
     }
+
+    const newStrengths = linesToArray(editStrengths);
+    const newSuggestions = linesToArray(editSuggestions);
+    const origStrengths = arrayToLines(originalFeedback?.strengths);
+    const origSuggestions = arrayToLines(originalFeedback?.suggestions);
+    if (editStrengths !== origStrengths || editSuggestions !== origSuggestions) {
+      updates.feedback = {
+        strengths: newStrengths,
+        suggestions: newSuggestions,
+      };
+    }
+
+    if (editActionItems !== arrayToLines(analysis?.actionItems)) {
+      updates.actionItems = linesToArray(editActionItems);
+    }
+    if (editTopics !== arrayToLines(analysis?.topics)) {
+      updates.topics = linesToArray(editTopics);
+    }
+    if (editFlags !== arrayToLines(analysis?.flags)) {
+      updates.flags = linesToArray(editFlags);
+    }
+
     if (Object.keys(updates).length === 0) {
       setIsEditing(false);
       return;
@@ -695,11 +760,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           </div>
         </div>
       )}
-      {/* Compact secondary toolbar — only controls that aren't already in
-          the ViewerHeader (search/export/download) or the Scrubber
-          (play/rate). Kept here because these are functional shortcuts
-          without a better home: skip to next segment, jump to next
-          flagged moment, and the volume popover. */}
+      {/* Compact secondary toolbar — Skip to next segment + Jump to next
+          flagged moment. Volume + playback controls live together in the
+          bottom-docked Scrubber. */}
       <div className="flex items-center justify-end gap-1.5 mb-3">
         <button
           type="button"
@@ -723,50 +786,6 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
           <Flag style={{ width: 12, height: 12 }} />
           Flag
         </button>
-        {/* Volume popover — persisted to localStorage; mute is session-only. */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              title={muted ? "Unmute" : `Volume ${Math.round(volume * 100)}%`}
-              className="font-mono inline-flex items-center border border-border rounded-sm px-2.5 py-1.5 text-foreground hover:bg-secondary transition-colors"
-            >
-              {muted || volume === 0
-                ? <SpeakerX style={{ width: 12, height: 12 }} />
-                : volume < 0.5
-                  ? <SpeakerLow style={{ width: 12, height: 12 }} />
-                  : <SpeakerHigh style={{ width: 12, height: 12 }} />}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-48 p-3" align="end">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Volume</span>
-                <button
-                  type="button"
-                  onClick={() => setMuted((v) => !v)}
-                  className="text-foreground hover:underline"
-                >
-                  {muted ? "Unmute" : "Mute"}
-                </button>
-              </div>
-              <Slider
-                value={[muted ? 0 : volume]}
-                onValueChange={([v]) => {
-                  setVolume(v);
-                  if (v > 0 && muted) setMuted(false);
-                }}
-                min={0}
-                max={1}
-                step={0.05}
-              />
-              <div className="text-[10px] text-muted-foreground text-right">
-                {Math.round((muted ? 0 : volume) * 100)}%
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
       </div>
 
       {/* Hidden audio element that streams from S3 via the API */}
@@ -777,43 +796,70 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          {/* Search hit chip — driven by ViewerHeader's search input via
-              `transcript:search-query` events. Prev / next buttons walk the
-              matches and scroll the column to the hit segment. */}
-          {searchQuery && (
-            <div
-              className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
-              role="status"
-              aria-live="polite"
-            >
-              <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
-              <span
-                className="font-mono tabular-nums text-foreground flex-1 truncate"
-                style={{ fontSize: 11 }}
-              >
-                {searchMatches.length > 0
-                  ? `${searchMatchIdx + 1} / ${searchMatches.length}`
-                  : "0 results"}
-                <span className="text-muted-foreground"> · "{searchQuery}"</span>
-              </span>
-              <button
-                onClick={() => goToMatch(searchMatchIdx - 1)}
-                disabled={searchMatches.length === 0}
-                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                aria-label="Previous match"
-              >
-                <CaretUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => goToMatch(searchMatchIdx + 1)}
-                disabled={searchMatches.length === 0}
-                className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
-                aria-label="Next match"
-              >
-                <CaretDown className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          {/* Search bar — input + hit count + prev/next nav buttons.
+              Sits directly above the transcript body so the control and its
+              target are adjacent. Dispatches the same `transcript:search-query`
+              events the prior header-mounted input did, so listeners don't
+              change. Keeps id="transcript-header-search" so the Ctrl+F
+              shortcut in the useEffect above still focuses this input. */}
+          <div
+            className="flex items-center gap-2 mb-2 bg-card border border-border px-3 py-2"
+            role="search"
+            aria-label="Transcript search"
+          >
+            <MagnifyingGlass className="text-muted-foreground shrink-0" style={{ width: 14, height: 14 }} />
+            <input
+              id="transcript-header-search"
+              type="search"
+              placeholder="Search transcript…"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchMatchIdx(0);
+              }}
+              className="bg-transparent border-none outline-none flex-1 font-mono text-[11px] text-foreground placeholder:text-muted-foreground"
+              aria-label="Search transcript (Ctrl+F)"
+            />
+            {searchQuery && (
+              <>
+                <span
+                  className="font-mono tabular-nums text-muted-foreground shrink-0"
+                  style={{ fontSize: 11 }}
+                  aria-live="polite"
+                >
+                  {searchMatches.length > 0
+                    ? `${searchMatchIdx + 1} / ${searchMatches.length}`
+                    : "0 results"}
+                </span>
+                <button
+                  onClick={() => goToMatch(searchMatchIdx - 1)}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="Previous match"
+                >
+                  <CaretUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => goToMatch(searchMatchIdx + 1)}
+                  disabled={searchMatches.length === 0}
+                  className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="Next match"
+                >
+                  <CaretDown className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    setSearchMatchIdx(0);
+                  }}
+                  className="p-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
+          </div>
           <div
             ref={transcriptContainerRef}
             className="bg-card border border-border overflow-y-auto"
@@ -967,6 +1013,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             editScore={editScore}
             editSummary={editSummary}
             editReason={editReason}
+            editStrengths={editStrengths}
+            editSuggestions={editSuggestions}
+            editActionItems={editActionItems}
+            editTopics={editTopics}
+            editFlags={editFlags}
             editError={editMutation.isError ? (editMutation.error?.message || "Save failed") : null}
             editPending={editMutation.isPending}
             onStartEditing={startEditing}
@@ -974,6 +1025,11 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             onChangeEditScore={setEditScore}
             onChangeEditSummary={setEditSummary}
             onChangeEditReason={setEditReason}
+            onChangeEditStrengths={setEditStrengths}
+            onChangeEditSuggestions={setEditSuggestions}
+            onChangeEditActionItems={setEditActionItems}
+            onChangeEditTopics={setEditTopics}
+            onChangeEditFlags={setEditFlags}
             onSave={handleSaveEdit}
             onToggleExcluded={(next) => excludeMutation.mutate(next)}
             excludedPending={excludeMutation.isPending}
@@ -1241,6 +1297,13 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
             playing={isPlaying}
             playbackRate={playbackRate}
             sentimentSegments={call.sentiment?.segments}
+            volume={volume}
+            muted={muted}
+            onVolumeChange={(v) => {
+              setVolume(v);
+              if (v > 0 && muted) setMuted(false);
+            }}
+            onToggleMute={() => setMuted((m) => !m)}
             onSeek={(ms) => {
               if (audioRef.current) audioRef.current.currentTime = ms / 1000;
               setCurrentTime(ms);
@@ -1411,6 +1474,7 @@ function ScoreBreakdown({ call }: { call: CallWithDetails }) {
 function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; currentTime: number; onJump: (ms: number) => void }) {
   const [newText, setNewText] = React.useState("");
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: annotations } = useQuery<import("@shared/schema").Annotation[]>({
     queryKey: ["/api/calls", callId, "annotations"],
@@ -1439,13 +1503,44 @@ function AnnotationsPanel({ callId, currentTime, onJump }: { callId: string; cur
     },
   });
 
+  // Optimistic delete: remove from the cached list immediately so the UI
+  // reflects the click. Rollback + toast on failure; always re-fetch on
+  // settle so the server's view is authoritative.
+  const annotationQueryKey = React.useMemo(
+    () => ["/api/calls", callId, "annotations"] as const,
+    [callId]
+  );
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { getCsrfToken: csrf } = await import("@/lib/queryClient");
-      const res = await fetch(`/api/calls/${callId}/annotations/${id}`, { method: "DELETE", credentials: "include", headers: csrf() ? { "x-csrf-token": csrf()! } : {} });
-      if (!res.ok) throw new Error("Failed to delete annotation");
+      const res = await fetch(`/api/calls/${callId}/annotations/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: csrf() ? { "x-csrf-token": csrf()! } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Delete failed (${res.status})`);
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/calls", callId, "annotations"] }),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: annotationQueryKey });
+      const previous = queryClient.getQueryData<Annotation[]>(annotationQueryKey);
+      queryClient.setQueryData<Annotation[]>(
+        annotationQueryKey,
+        (previous ?? []).filter(a => a.id !== id)
+      );
+      return { previous };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(annotationQueryKey, ctx.previous);
+      toast({
+        variant: "destructive",
+        title: "Couldn't delete annotation",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: annotationQueryKey }),
   });
 
   const formatTime = (ms: number) => {

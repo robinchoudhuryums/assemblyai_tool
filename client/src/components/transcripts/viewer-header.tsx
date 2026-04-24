@@ -23,7 +23,6 @@ import { Link } from "wouter";
 import {
   DownloadSimple,
   FileText,
-  MagnifyingGlass,
   Plus,
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/dashboard/primitives";
@@ -102,7 +101,6 @@ export default function ViewerHeader({ callId }: { callId: string }) {
   const [roleView, setRoleView] = useState<"agent" | "manager">(
     canManage ? "manager" : "agent",
   );
-  const [searchValue, setSearchValue] = useState("");
 
   // Emit role-view changes so the side rail can relabel panels.
   useEffect(() => {
@@ -110,17 +108,6 @@ export default function ViewerHeader({ callId }: { callId: string }) {
       new CustomEvent("transcript:role-change", { detail: { role: roleView } }),
     );
   }, [roleView]);
-
-  // Debounce the search dispatch to avoid regex-churning the transcript on
-  // every keystroke. 120ms feels snappy enough to read as "live".
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("transcript:search-query", { detail: { query: searchValue } }),
-      );
-    }, 120);
-    return () => window.clearTimeout(id);
-  }, [searchValue]);
 
   const coachingHref = canManage
     ? `/coaching?newSession=true&callId=${encodeURIComponent(callId)}`
@@ -166,24 +153,7 @@ export default function ViewerHeader({ callId }: { callId: string }) {
 
         <div className="flex-1" />
 
-        {/* Inline search — dispatches `transcript:search-query` events;
-            transcript-viewer listens and drives its searchQuery state. */}
-        <label className="relative">
-          <MagnifyingGlass
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-            style={{ width: 12, height: 12 }}
-          />
-          <input
-            id="transcript-header-search"
-            type="search"
-            placeholder="Search transcript…"
-            value={searchValue}
-            onChange={(e) => setSearchValue(e.target.value)}
-            className="bg-secondary border border-border rounded-sm pl-7 pr-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary"
-            style={{ width: 180 }}
-            aria-label="Search transcript (Ctrl+F)"
-          />
-        </label>
+        {/* Search input has moved next to the transcript body. */}
 
         {/* Role toggle — visible for managers/admins; viewers are locked to Agent view */}
         {canManage && (
