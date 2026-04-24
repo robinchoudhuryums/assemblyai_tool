@@ -93,8 +93,23 @@ export function injectCspNonce(html: string, res: import("express").Response, is
     ? `'self' 'nonce-${nonce}' 'unsafe-inline'`
     : `'self' 'nonce-${nonce}'`;
 
+  // Allow the RAG knowledge base to be iframed in the Ask KB drawer.
+  // Derives the origin from RAG_SERVICE_URL so dev / staging / prod each
+  // authorize only their own KB host. Falls back to 'none' when unset so
+  // dev instances without RAG configured keep a deny-by-default posture.
+  let frameSrc = "'none'";
+  const ragUrl = process.env.RAG_SERVICE_URL;
+  if (ragUrl) {
+    try {
+      const { origin } = new URL(ragUrl);
+      frameSrc = origin;
+    } catch {
+      // malformed URL — leave frameSrc as 'none'
+    }
+  }
+
   res.setHeader("Content-Security-Policy",
-    `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none';`
+    `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-src ${frameSrc}; frame-ancestors 'none';`
   );
 
   return nonceHtml;
