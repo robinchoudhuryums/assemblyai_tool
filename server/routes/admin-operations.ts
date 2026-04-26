@@ -517,6 +517,171 @@ export function registerOperationsRoutes(
     res.json(getSearchAnalytics());
   });
 
+  // Pipeline trends — aggregate operations view of audio-processing health.
+  // Compares "today" vs. "trailing 7-day" for: completed call count,
+  // failure rate, avg AI processing duration (jobs.completed_at -
+  // jobs.created_at), avg cost per call (usage_records.total_estimated_cost).
+  // Plus a 7-day daily series for the cost trend.
+  //
+  // Designed to make the "the pipeline is silently slowing down" failure
+  // mode visible. The existing /admin/system-health shows runtime SIGNALS
+  // (queue depth, breaker state, audit drops); this shows TREND deltas.
+  // Single SQL roundtrip; falls through to a zeros/null response when
+  // DATABASE_URL is unset (memorystore dev).
+  router.get("/api/admin/pipeline-trends", requireRole("admin"), async (_req, res) => {
+    const pool = getPool();
+    if (!pool) {
+      res.json({
+        backendAvailable: false,
+        today: { completed: 0, failed: 0, avgDurationSec: null, avgCost: null },
+        trailing7d: { completed: 0, failed: 0, avgDurationSec: null, avgCost: null },
+        deltas: { completedPctChange: null, failureRatePctChange: null, durationPctChange: null, costPctChange: null },
+        dailyCostSeries: [],
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    try {
+      // One query per metric — kept separate so a failure on one doesn't
+      // tank the whole response. Each query is bounded by indexed
+      // timestamp ranges, so cost is roughly constant regardless of
+      // total table size.
+      const [todayJobsRes, weekJobsRes, todayCostRes, weekCostRes, dailyCostRes] = await Promise.all([
+        // Today: completed + failed audio jobs
+        pool.query<{ status: string; cnt: string; avg_dur_sec: string | null }>(
+          `SELECT status,
+                  COUNT(*)::text AS cnt,
+                  ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - created_at)))::numeric, 2)::text AS avg_dur_sec
+           FROM jobs
+           WHERE type = 'process_audio'
+             AND created_at >= NOW() - INTERVAL '1 day'
+             AND status IN ('completed', 'dead', 'failed')
+           GROUP BY status`,
+        ),
+        // Trailing 7 days excluding today
+        pool.query<{ status: string; cnt: string; avg_dur_sec: string | null }>(
+          `SELECT status,
+                  COUNT(*)::text AS cnt,
+                  ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - created_at)))::numeric, 2)::text AS avg_dur_sec
+           FROM jobs
+           WHERE type = 'process_audio'
+             AND created_at >= NOW() - INTERVAL '8 days'
+             AND created_at <  NOW() - INTERVAL '1 day'
+             AND status IN ('completed', 'dead', 'failed')
+           GROUP BY status`,
+        ),
+        // Today: avg cost per call
+        pool.query<{ avg_cost: string | null; cnt: string }>(
+          `SELECT ROUND(AVG(total_estimated_cost)::numeric, 4)::text AS avg_cost,
+                  COUNT(*)::text AS cnt
+           FROM usage_records
+           WHERE timestamp >= NOW() - INTERVAL '1 day'
+             AND type = 'call'`,
+        ),
+        // Trailing 7 days excluding today: avg cost per call
+        pool.query<{ avg_cost: string | null; cnt: string }>(
+          `SELECT ROUND(AVG(total_estimated_cost)::numeric, 4)::text AS avg_cost,
+                  COUNT(*)::text AS cnt
+           FROM usage_records
+           WHERE timestamp >= NOW() - INTERVAL '8 days'
+             AND timestamp <  NOW() - INTERVAL '1 day'
+             AND type = 'call'`,
+        ),
+        // Last 7 days: per-day cost series for the sparkline
+        pool.query<{ day: string; total_cost: string; calls: string }>(
+          `SELECT TO_CHAR(date_trunc('day', timestamp), 'YYYY-MM-DD') AS day,
+                  ROUND(SUM(total_estimated_cost)::numeric, 4)::text AS total_cost,
+                  COUNT(*)::text AS calls
+           FROM usage_records
+           WHERE timestamp >= NOW() - INTERVAL '7 days'
+             AND type = 'call'
+           GROUP BY date_trunc('day', timestamp)
+           ORDER BY day ASC`,
+        ),
+      ]);
+
+      const summarize = (rows: Array<{ status: string; cnt: string; avg_dur_sec: string | null }>) => {
+        let completed = 0, failed = 0;
+        let weightedDurationSum = 0, durationWeight = 0;
+        for (const r of rows) {
+          const cnt = parseInt(r.cnt, 10) || 0;
+          if (r.status === "completed") {
+            completed += cnt;
+            const avg = r.avg_dur_sec ? parseFloat(r.avg_dur_sec) : NaN;
+            if (Number.isFinite(avg)) {
+              weightedDurationSum += avg * cnt;
+              durationWeight += cnt;
+            }
+          } else {
+            // dead OR failed both count as failures from a pipeline perspective
+            failed += cnt;
+          }
+        }
+        const avgDurationSec = durationWeight > 0 ? weightedDurationSum / durationWeight : null;
+        return { completed, failed, avgDurationSec };
+      };
+
+      const today = summarize(todayJobsRes.rows);
+      const trailing = summarize(weekJobsRes.rows);
+
+      const todayAvgCost = todayCostRes.rows[0]?.avg_cost ? parseFloat(todayCostRes.rows[0].avg_cost) : null;
+      const weekAvgCost = weekCostRes.rows[0]?.avg_cost ? parseFloat(weekCostRes.rows[0].avg_cost) : null;
+
+      const todayCallCount = parseInt(todayCostRes.rows[0]?.cnt ?? "0", 10);
+      const weekCallCount = parseInt(weekCostRes.rows[0]?.cnt ?? "0", 10);
+
+      // Trailing-week values are 7-day totals; convert to per-day for fair comparison.
+      const trailingPerDayCompleted = trailing.completed / 7;
+      const trailingPerDayFailed = trailing.failed / 7;
+
+      const pctChange = (current: number | null, prior: number | null): number | null => {
+        if (current == null || prior == null || prior === 0) return null;
+        return Math.round(((current - prior) / prior) * 1000) / 10; // one decimal
+      };
+
+      const todayFailureRate = (today.completed + today.failed) > 0
+        ? today.failed / (today.completed + today.failed)
+        : null;
+      const weekFailureRate = (trailing.completed + trailing.failed) > 0
+        ? trailing.failed / (trailing.completed + trailing.failed)
+        : null;
+
+      res.json({
+        backendAvailable: true,
+        today: {
+          completed: today.completed,
+          failed: today.failed,
+          avgDurationSec: today.avgDurationSec,
+          avgCost: todayAvgCost,
+          callCount: todayCallCount,
+        },
+        trailing7d: {
+          completed: trailing.completed,
+          failed: trailing.failed,
+          avgDurationSec: trailing.avgDurationSec,
+          avgCost: weekAvgCost,
+          callCount: weekCallCount,
+        },
+        deltas: {
+          completedPctChange: pctChange(today.completed, trailingPerDayCompleted),
+          failureRatePctChange: pctChange(todayFailureRate, weekFailureRate),
+          durationPctChange: pctChange(today.avgDurationSec, trailing.avgDurationSec),
+          costPctChange: pctChange(todayAvgCost, weekAvgCost),
+        },
+        dailyCostSeries: dailyCostRes.rows.map(r => ({
+          day: r.day,
+          totalCost: parseFloat(r.total_cost),
+          calls: parseInt(r.calls, 10),
+        })),
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.warn("pipeline-trends: query failed", { error: (err as Error).message });
+      res.status(500).json({ error: "Failed to compute pipeline trends" });
+    }
+  });
+
   // Soft-fail operator-state dashboard. Enumerates the items in CLAUDE.md's
   // Operator State Checklist (25+ silent-degradation paths) and reports
   // live state for each. The existing /api/admin/health-deep focuses on

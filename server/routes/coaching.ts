@@ -6,6 +6,7 @@ import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
 import { validateIdParam, validateParams, sendValidationError, buildCsv, writeCsvResponse, buildPdfBuffer, writePdfResponse } from "./utils";
 import { logPhiAccess, auditContext } from "../services/audit-log";
+import { logger } from "../services/logger";
 
 // Shared helper powering both the CSV + PDF export of the per-manager
 // coaching-outcomes breakdown. Delegates to `storage.getCoachingOutcomes`
@@ -151,8 +152,19 @@ export function register(router: Router) {
           category: session.category,
           assignedBy: session.assignedBy,
           callId: session.callId || undefined,
-        }).catch(() => {});
-      } catch {}
+        }).catch(err => {
+          logger.warn("coaching: webhook delivery failed", {
+            sessionId: session.id,
+            event: "coaching.created",
+            error: (err as Error).message,
+          });
+        });
+      } catch (lookupErr) {
+        logger.warn("coaching: failed to look up employee for webhook", {
+          sessionId: session.id,
+          error: (lookupErr as Error).message,
+        });
+      }
 
       res.status(201).json(session);
     } catch (error) {

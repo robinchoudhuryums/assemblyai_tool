@@ -479,19 +479,37 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   initWebhooks(() => storage.getObjectStorageClient());
 
   // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
-  void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});
+  void import("./services/scoring-feedback")
+    .then(m => m.loadPersistedCorrections())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate scoring-feedback corrections from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Active-model override: if an admin previously promoted a model via
   // POST /api/ab-tests/promote, rehydrate it now so the aiProvider singleton
   // reflects the last promotion decision. Non-critical; the env var
   // BEDROCK_MODEL is the fallback.
-  void import("./services/active-model").then(m => m.loadActiveModelOverride()).catch(() => {});
+  void import("./services/active-model")
+    .then(m => m.loadActiveModelOverride())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate active-model override from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Hydrate pipeline quality-gate settings from S3 so an admin's tuning
   // (via PATCH /api/admin/pipeline-settings) survives restart. Fire-and-
   // forget — the in-memory defaults from env vars remain effective if
   // S3 is unreachable.
-  void import("./services/pipeline-settings").then(m => m.loadPipelineSettings()).catch(() => {});
+  void import("./services/pipeline-settings")
+    .then(m => m.loadPipelineSettings())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate pipeline settings from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
@@ -567,7 +585,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
       try {
         const purged = await storage.purgeExpiredCalls(retentionDays);
         if (purged > 0) {
-          log(`[RETENTION] Purged ${purged} call(s) older than ${retentionDays} days`);
+          logger.info("retention purged old calls", { purged, retentionDays });
         }
       } catch (error) {
         logger.error("Retention purge error", { error: (error as Error).message });
