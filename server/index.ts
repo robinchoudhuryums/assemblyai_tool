@@ -29,7 +29,7 @@ import { captureException as sentryCaptureException } from "./services/sentry";
 import crypto from "crypto";
 import { logger, metrics } from "./services/logger";
 import { runWithCorrelationId } from "./services/correlation-id";
-import { flushAuditQueue, persistIntegrityChainHead } from "./services/audit-log";
+import { flushAuditQueue, persistIntegrityChainHead, startIntegrityPersistScheduler, stopIntegrityPersistScheduler } from "./services/audit-log";
 import { initWebhooks } from "./services/webhooks";
 
 const app = express();
@@ -240,9 +240,11 @@ app.use((req, res, next) => {
       const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
       metrics.increment("http_requests_total", 1, { method: req.method, status: statusClass });
       metrics.observe("http_request_duration_ms", duration, { method: req.method });
-
-      // Also write the human-readable log for pm2 console
-      log(`[AUDIT] ${new Date().toISOString()} ${username}${role ? `(${role})` : ""} ${req.method} ${reqPath} ${res.statusCode} ${duration}ms${aborted ? " (aborted)" : ""}`);
+      // F-15: the previous `[AUDIT] ...` pm2-console line was removed. It
+      // duplicated the structured `api_request` entry above and — because
+      // it routed through `vite.ts:log()` → console.log — bypassed the
+      // logger's PHI redaction path. Every bracket-prefixed literal except
+      // the canonical `[HIPAA_AUDIT]` stdout line is now gone.
     }
   };
 
@@ -466,25 +468,48 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
   // doesn't reset to 'genesis' and break sequential chain verification.
   await (await import("./services/audit-log")).loadAuditIntegrityChain();
 
+  // F-06: Start the periodic chain-head persist scheduler. Bounds the
+  // "in-flight vs durable" window between fire-and-forget per-entry writes
+  // and the on-disk head, closing the crash-mid-burst chain-drift gap.
+  startIntegrityPersistScheduler();
+
   // A7/F09: explicit startup wiring of webhook service. Previously this ran
   // as a side effect of importing storage.ts; moved here so module load order
   // is no longer load-bearing.
   initWebhooks(() => storage.getObjectStorageClient());
 
   // A2/F11: Hydrate scoring-feedback corrections from S3 (fire-and-forget; non-critical)
-  void import("./services/scoring-feedback").then(m => m.loadPersistedCorrections()).catch(() => {});
+  void import("./services/scoring-feedback")
+    .then(m => m.loadPersistedCorrections())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate scoring-feedback corrections from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Active-model override: if an admin previously promoted a model via
   // POST /api/ab-tests/promote, rehydrate it now so the aiProvider singleton
   // reflects the last promotion decision. Non-critical; the env var
   // BEDROCK_MODEL is the fallback.
-  void import("./services/active-model").then(m => m.loadActiveModelOverride()).catch(() => {});
+  void import("./services/active-model")
+    .then(m => m.loadActiveModelOverride())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate active-model override from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Hydrate pipeline quality-gate settings from S3 so an admin's tuning
   // (via PATCH /api/admin/pipeline-settings) survives restart. Fire-and-
   // forget — the in-memory defaults from env vars remain effective if
   // S3 is unreachable.
-  void import("./services/pipeline-settings").then(m => m.loadPipelineSettings()).catch(() => {});
+  void import("./services/pipeline-settings")
+    .then(m => m.loadPipelineSettings())
+    .catch(err => {
+      logger.warn("startup: failed to hydrate pipeline settings from S3", {
+        error: (err as Error).message,
+      });
+    });
 
   // Authentication (must come before routes) - async to hash env var passwords on startup
   await setupAuth(app);
@@ -560,7 +585,7 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
       try {
         const purged = await storage.purgeExpiredCalls(retentionDays);
         if (purged > 0) {
-          log(`[RETENTION] Purged ${purged} call(s) older than ${retentionDays} days`);
+          logger.info("retention purged old calls", { purged, retentionDays });
         }
       } catch (error) {
         logger.error("Retention purge error", { error: (error as Error).message });
@@ -633,6 +658,15 @@ app.get("/api/export/team-analytics", rateLimit(60 * 1000, 5));
           mod.stopAgentDeclineScheduler?.();
         } catch (err) {
           logger.error("Failed to stop agent-decline scheduler", { error: (err as Error).message });
+        }
+        // F-06: Stop the periodic audit integrity chain persist scheduler.
+        // The final persist happens in step 3a via persistIntegrityChainHead()
+        // below, which is awaited. Stopping the timer here prevents a late
+        // interval-triggered write from racing the DB pool close.
+        try {
+          stopIntegrityPersistScheduler();
+        } catch (err) {
+          logger.error("Failed to stop audit integrity persist scheduler", { error: (err as Error).message });
         }
         // 2b. Stop the durable job queue so in-flight audio pipeline jobs drain
         //     gracefully before the DB pool closes. Bounded by JobQueue.stop()'s

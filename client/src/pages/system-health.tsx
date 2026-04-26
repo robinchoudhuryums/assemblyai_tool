@@ -360,6 +360,11 @@ export default function SystemHealthPage() {
               </SubsystemCard>
             </div>
 
+            {/* Pipeline trends — today vs. trailing 7-day. Surfaces the
+                "pipeline is silently slowing down" failure mode that runtime
+                signals (queue depth, breaker state) don't show on their own. */}
+            <PipelineTrendsCard />
+
             <p
               className="font-mono uppercase text-muted-foreground text-right"
               style={{ fontSize: 10, letterSpacing: "0.1em" }}
@@ -552,6 +557,228 @@ function MetricRow({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pipeline trends card — today vs. trailing 7-day comparison.
+// Backed by /api/admin/pipeline-trends. Polls on the same 30s
+// cadence as the parent page.
+// ─────────────────────────────────────────────────────────────
+
+interface PipelineTrendsResponse {
+  backendAvailable: boolean;
+  today: { completed: number; failed: number; avgDurationSec: number | null; avgCost: number | null; callCount: number };
+  trailing7d: { completed: number; failed: number; avgDurationSec: number | null; avgCost: number | null; callCount: number };
+  deltas: {
+    completedPctChange: number | null;
+    failureRatePctChange: number | null;
+    durationPctChange: number | null;
+    costPctChange: number | null;
+  };
+  dailyCostSeries: Array<{ day: string; totalCost: number; calls: number }>;
+  generatedAt: string;
+}
+
+function PipelineTrendsCard() {
+  const { data, isLoading } = useQuery<PipelineTrendsResponse>({
+    queryKey: ["/api/admin/pipeline-trends"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/pipeline-trends", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load pipeline trends");
+      return res.json();
+    },
+    refetchInterval: 30_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="rounded-sm border bg-card p-5" style={{ borderColor: "var(--border)" }}>
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
+  }
+  if (!data) return null;
+  if (!data.backendAvailable) {
+    return (
+      <div
+        className="rounded-sm border bg-card px-5 py-4"
+        style={{ borderColor: "var(--border)" }}
+      >
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.14em" }}
+        >
+          Pipeline trends
+        </div>
+        <p className="text-sm text-muted-foreground mt-2">
+          Trends require <code>DATABASE_URL</code>. In-memory backend has no historical data.
+        </p>
+      </div>
+    );
+  }
+
+  // For deltas: positive failure-rate / duration / cost change is BAD;
+  // positive completed-count change is GOOD. Color accordingly.
+  const formatPct = (v: number | null, goodIsPositive: boolean): { label: string; color: string } => {
+    if (v == null) return { label: "—", color: "var(--muted-foreground)" };
+    const isUp = v > 0;
+    const isBad = goodIsPositive ? !isUp : isUp;
+    const color = Math.abs(v) < 5
+      ? "var(--muted-foreground)"
+      : isBad
+      ? "var(--destructive)"
+      : "var(--sage)";
+    const sign = isUp ? "+" : "";
+    return { label: `${sign}${v.toFixed(1)}%`, color };
+  };
+
+  const completedDelta = formatPct(data.deltas.completedPctChange, true);
+  const failureDelta = formatPct(data.deltas.failureRatePctChange, false);
+  const durationDelta = formatPct(data.deltas.durationPctChange, false);
+  const costDelta = formatPct(data.deltas.costPctChange, false);
+
+  // Tiny inline sparkline for the daily cost series. SVG path; no
+  // dependency on Recharts so this card has zero new chart imports.
+  const series = data.dailyCostSeries;
+  const maxCost = series.length > 0 ? Math.max(...series.map(s => s.totalCost), 0.0001) : 0;
+  const sparklineWidth = 140;
+  const sparklineHeight = 28;
+  const points = series.length > 1
+    ? series.map((s, i) => {
+        const x = (i / (series.length - 1)) * sparklineWidth;
+        const y = sparklineHeight - (s.totalCost / maxCost) * sparklineHeight;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ")
+    : "";
+
+  return (
+    <div
+      className="rounded-sm border bg-card px-5 py-4"
+      style={{ borderColor: "var(--border)" }}
+      data-testid="pipeline-trends-card"
+    >
+      <div className="flex items-baseline justify-between mb-4">
+        <div>
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            Pipeline trends · today vs. trailing 7-day average
+          </div>
+          <div
+            className="font-display font-medium text-foreground mt-0.5"
+            style={{ fontSize: 18, letterSpacing: "-0.2px" }}
+          >
+            Is the pipeline drifting?
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <TrendCell
+          label="Completed today"
+          value={data.today.completed.toString()}
+          subtext={`week avg ${(data.trailing7d.completed / 7).toFixed(0)}/day`}
+          delta={completedDelta}
+        />
+        <TrendCell
+          label="Failure rate today"
+          value={
+            data.today.completed + data.today.failed > 0
+              ? `${((data.today.failed / (data.today.completed + data.today.failed)) * 100).toFixed(1)}%`
+              : "—"
+          }
+          subtext={
+            data.trailing7d.completed + data.trailing7d.failed > 0
+              ? `week ${((data.trailing7d.failed / (data.trailing7d.completed + data.trailing7d.failed)) * 100).toFixed(1)}%`
+              : "—"
+          }
+          delta={failureDelta}
+        />
+        <TrendCell
+          label="Avg AI processing"
+          value={data.today.avgDurationSec != null ? `${data.today.avgDurationSec.toFixed(1)}s` : "—"}
+          subtext={data.trailing7d.avgDurationSec != null ? `week ${data.trailing7d.avgDurationSec.toFixed(1)}s` : "—"}
+          delta={durationDelta}
+        />
+        <TrendCell
+          label="Avg cost / call"
+          value={data.today.avgCost != null ? `$${data.today.avgCost.toFixed(4)}` : "—"}
+          subtext={data.trailing7d.avgCost != null ? `week $${data.trailing7d.avgCost.toFixed(4)}` : "—"}
+          delta={costDelta}
+        />
+      </div>
+
+      {/* Daily cost sparkline */}
+      {series.length >= 2 && (
+        <div className="mt-5 flex items-center gap-3">
+          <div
+            className="font-mono uppercase text-muted-foreground"
+            style={{ fontSize: 10, letterSpacing: "0.14em" }}
+          >
+            7-day cost
+          </div>
+          <svg width={sparklineWidth} height={sparklineHeight} aria-hidden="true">
+            <polyline
+              points={points}
+              fill="none"
+              stroke="var(--accent)"
+              strokeWidth={1.5}
+            />
+          </svg>
+          <div className="font-mono tabular-nums text-muted-foreground" style={{ fontSize: 10 }}>
+            total ${series.reduce((a, b) => a + b.totalCost, 0).toFixed(2)}
+            {" · "}
+            {series.reduce((a, b) => a + b.calls, 0)} calls
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TrendCell({
+  label,
+  value,
+  subtext,
+  delta,
+}: {
+  label: string;
+  value: string;
+  subtext: string;
+  delta: { label: string; color: string };
+}) {
+  return (
+    <div>
+      <div
+        className="font-mono uppercase text-muted-foreground"
+        style={{ fontSize: 10, letterSpacing: "0.14em" }}
+      >
+        {label}
+      </div>
+      <div className="flex items-baseline gap-2 mt-1">
+        <div
+          className="font-display font-medium text-foreground tabular-nums"
+          style={{ fontSize: 22 }}
+        >
+          {value}
+        </div>
+        <div
+          className="font-mono tabular-nums"
+          style={{ fontSize: 11, color: delta.color }}
+          data-testid={`trend-delta-${label.toLowerCase().replace(/\s+/g, "-")}`}
+        >
+          {delta.label}
+        </div>
+      </div>
+      <div
+        className="font-mono text-muted-foreground mt-0.5"
+        style={{ fontSize: 10 }}
+      >
+        {subtext}
+      </div>
     </div>
   );
 }

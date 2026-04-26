@@ -17,7 +17,7 @@
  */
 import { useEffect, useState } from "react";
 import type { CallWithDetails } from "@shared/schema";
-import { Clock, FloppyDisk, PencilSimple, X, ProhibitInset } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, Clock, FloppyDisk, PencilSimple, X, ProhibitInset } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -287,6 +287,14 @@ export default function SideRail(props: SideRailProps) {
               </div>
             </div>
           )
+        )}
+
+        {/* "Why this score?" expander — derives a plain-English breakdown
+            from sub-scores + flags + feedback. No new API; pure presentation
+            of data already loaded with the call. Closes the
+            "trust the score or not?" gap raised in the strategic review. */}
+        {!props.isEditing && score != null && (
+          <ScoreReasoningPanel call={call} score={score} />
         )}
 
         {!props.isEditing && call.analysis?.detectedAgentName && (
@@ -728,4 +736,226 @@ function composeVerdictSubtitle(call: CallWithDetails): string | null {
 function safeNum(s: string, fallback: number): number {
   const n = Number(s);
   return Number.isFinite(n) ? n : fallback;
+}
+
+// ─────────────────────────────────────────────────────────────
+// "Why this score?" panel — collapsible reasoning breakdown.
+// Pure-presentation: derives narrative from sub-scores + flags +
+// feedback already loaded with the call. No new API call.
+// Closes the "trust the score or not?" gap from the strategic review.
+// ─────────────────────────────────────────────────────────────
+
+const SUB_SCORE_LABELS: Record<string, string> = {
+  compliance: "Compliance",
+  customerExperience: "Customer experience",
+  communication: "Communication",
+  resolution: "Resolution",
+};
+
+interface ScoreDriver {
+  label: string;
+  kind: "positive" | "negative" | "neutral";
+  detail: string;
+}
+
+function deriveScoreDrivers(call: CallWithDetails, score: number): ScoreDriver[] {
+  const drivers: ScoreDriver[] = [];
+  const sub = call.analysis?.subScores as Record<string, number | undefined> | undefined;
+
+  // Sub-score driver: highest contributor + lowest contributor.
+  if (sub) {
+    const entries = Object.entries(sub).filter(
+      ([k, v]) => typeof v === "number" && Number.isFinite(v) && k in SUB_SCORE_LABELS,
+    ) as Array<[string, number]>;
+    if (entries.length >= 2) {
+      const sorted = [...entries].sort((a, b) => b[1] - a[1]);
+      const [topKey, topVal] = sorted[0];
+      const [botKey, botVal] = sorted[sorted.length - 1];
+      // Only call out if there's a meaningful spread (>1.5 between best/worst).
+      if (topVal - botVal >= 1.5) {
+        drivers.push({
+          label: `Strongest: ${SUB_SCORE_LABELS[topKey]}`,
+          kind: topVal >= 7 ? "positive" : "neutral",
+          detail: `${topVal.toFixed(1)} / 10 — pulled the overall score up.`,
+        });
+        drivers.push({
+          label: `Weakest: ${SUB_SCORE_LABELS[botKey]}`,
+          kind: botVal < 5 ? "negative" : "neutral",
+          detail: `${botVal.toFixed(1)} / 10 — pulled the overall score down.`,
+        });
+      }
+    }
+  }
+
+  // Flag drivers — positive and negative signals the AI raised.
+  const flagsRaw = call.analysis?.flags;
+  const flags = Array.isArray(flagsRaw)
+    ? flagsRaw.map((f) => toDisplayString(f))
+    : [];
+  for (const f of flags) {
+    if (f === "exceptional_call") {
+      drivers.push({
+        label: "Flagged exceptional",
+        kind: "positive",
+        detail: "AI marked this as a model call worth learning from.",
+      });
+    } else if (f === "low_score") {
+      drivers.push({
+        label: "Flagged low score",
+        kind: "negative",
+        detail: "AI flagged the score as concerningly low for the category.",
+      });
+    } else if (f.startsWith("agent_misconduct")) {
+      const sub = f.replace("agent_misconduct:", "").trim();
+      drivers.push({
+        label: "Misconduct concern",
+        kind: "negative",
+        detail: sub
+          ? `AI flagged potential misconduct (${sub}). Manager review recommended.`
+          : "AI flagged potential misconduct. Manager review recommended.",
+      });
+    } else if (f === "low_confidence") {
+      drivers.push({
+        label: "Low transcript confidence",
+        kind: "neutral",
+        detail: "Transcription confidence below threshold — score is less reliable than usual.",
+      });
+    } else if (f === "prompt_injection_detected" || f.startsWith("prompt_injection")) {
+      drivers.push({
+        label: "Prompt-injection language detected",
+        kind: "neutral",
+        detail: "Transcript contained AI-steering language. Score may have been influenced.",
+      });
+    } else if (f.startsWith("output_anomaly")) {
+      drivers.push({
+        label: "Output anomaly",
+        kind: "neutral",
+        detail: "AI response tripped a quality check. Treat the score as a signal, not ground truth.",
+      });
+    } else if (f === "medicare_call") {
+      drivers.push({
+        label: "Medicare call",
+        kind: "neutral",
+        detail: "Stricter compliance rubric applied to this category.",
+      });
+    }
+  }
+
+  // Top strength + suggestion from feedback as concrete evidence.
+  const feedback = call.analysis?.feedback as
+    | { strengths?: unknown[]; suggestions?: unknown[] }
+    | undefined;
+  const firstFeedback = (items: unknown[] | undefined): string | null => {
+    if (!Array.isArray(items)) return null;
+    for (const raw of items) {
+      if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+      if (raw && typeof raw === "object") {
+        const t = (raw as Record<string, unknown>).text;
+        if (typeof t === "string" && t.trim().length > 0) return t.trim();
+      }
+    }
+    return null;
+  };
+  const strength = firstFeedback(feedback?.strengths);
+  if (strength) {
+    drivers.push({
+      label: "AI noted",
+      kind: "positive",
+      detail: strength.slice(0, 220) + (strength.length > 220 ? "…" : ""),
+    });
+  }
+  const suggestion = firstFeedback(feedback?.suggestions);
+  if (suggestion) {
+    drivers.push({
+      label: "AI suggested",
+      kind: "negative",
+      detail: suggestion.slice(0, 220) + (suggestion.length > 220 ? "…" : ""),
+    });
+  }
+
+  // Headline narrative when no other drivers fire (mid-range scores).
+  if (drivers.length === 0) {
+    const tier =
+      score >= 8 ? "strong" : score >= 6 ? "solid" : score >= 4 ? "mixed" : "weak";
+    drivers.push({
+      label: `Overall ${tier}`,
+      kind: "neutral",
+      detail: "No specific drivers stood out. Sub-scores were in a similar range.",
+    });
+  }
+
+  return drivers;
+}
+
+function ScoreReasoningPanel({ call, score }: { call: CallWithDetails; score: number }) {
+  const [open, setOpen] = useState(false);
+  const drivers = deriveScoreDrivers(call, score);
+
+  return (
+    <div className="mt-4 pt-3 border-t border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center justify-between w-full text-left"
+        aria-expanded={open}
+        data-testid="why-this-score-toggle"
+      >
+        <SectionLabel>Why this score?</SectionLabel>
+        {open ? (
+          <CaretUp className="w-3 h-3 text-muted-foreground" />
+        ) : (
+          <CaretDown className="w-3 h-3 text-muted-foreground" />
+        )}
+      </button>
+      {open && (
+        <div className="mt-3 space-y-2" data-testid="why-this-score-content">
+          {drivers.map((d, i) => {
+            const stripeColor =
+              d.kind === "positive"
+                ? "var(--sage)"
+                : d.kind === "negative"
+                ? "var(--warm-red)"
+                : "var(--muted-foreground)";
+            const labelColor =
+              d.kind === "positive"
+                ? "color-mix(in oklch, var(--sage), var(--ink) 30%)"
+                : d.kind === "negative"
+                ? "color-mix(in oklch, var(--warm-red), var(--ink) 25%)"
+                : "var(--foreground)";
+            return (
+              <div
+                key={i}
+                className="rounded-sm pl-3 py-1.5"
+                style={{ borderLeft: `2px solid ${stripeColor}` }}
+              >
+                <div
+                  className="font-mono uppercase"
+                  style={{
+                    fontSize: 9,
+                    letterSpacing: "0.12em",
+                    color: labelColor,
+                  }}
+                >
+                  {d.label}
+                </div>
+                <div
+                  className="text-muted-foreground mt-0.5"
+                  style={{ fontSize: 12, lineHeight: 1.45 }}
+                >
+                  {d.detail}
+                </div>
+              </div>
+            );
+          })}
+          <div
+            className="text-muted-foreground mt-3 italic"
+            style={{ fontSize: 11 }}
+          >
+            Derived from sub-scores, flags, and AI feedback. The score is an
+            opinion — verify against the transcript when in doubt.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

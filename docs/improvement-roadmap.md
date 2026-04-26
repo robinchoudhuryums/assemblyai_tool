@@ -142,29 +142,29 @@ Fixes shipped across three `/broad-scan` → `/broad-implement` cycles.
 
 ## Open From Audit Cycles (Spring 2026)
 
-### Remaining incident-response refactor
-- `updateActionItem` in `server/services/incident-response.ts:395-414` still uses the mutate-then-persist anti-pattern. Apply the same clone-then-persist fix as the sibling functions already received. Effort: **S**
+### ~~Remaining incident-response refactor~~ ✅ RESOLVED (verified Stage 2, April 2026)
+- `updateActionItem` in `server/services/incident-response.ts:437-451` IS clone-then-persist. Roadmap entry was stale.
 
-### Audit log HMAC chain drift (top-10 #5)
-- `persistPreviousHash` is fire-and-forget between each audit entry. On crash mid-burst, the persisted chain head lags in-memory; next boot re-chains from the older head, creating a gap. **Fix**: persist the head synchronously every N entries OR flush on graceful shutdown. HIPAA §164.312(b) integrity chain matters. Effort: **S–M**
+### ~~Audit log HMAC chain drift (top-10 #5)~~ ✅ RESOLVED (F-06, April 2026 cycle)
+- `startIntegrityPersistScheduler()` persists the HMAC chain head on a 30s interval (skip-if-unchanged). Bounds the crash-mid-burst gap between fire-and-forget per-entry persists and durable DB commit. Wired into startup + graceful shutdown; timer `.unref()`'d per INV-30.
 
 ### Audit queue spool-to-disk (non-lossy variant)
 - Current design is drop-oldest with loud Sentry escalation. A truly non-lossy upgrade would spool overflow entries to a local JSONL file and drain them back into the queue on each flush cycle. Complexity: file rotation, atomic writes, PHI-on-disk considerations. Effort: **M**
 
-### Scheduled reports hourly catch-up
-- `runCatchUp()` is only called at startup. If a report fails to generate mid-hour (e.g., transient DB error during the 00:00 Monday tick), nothing retries until the next process restart. **Fix**: call `runCatchUp()` from the hourly `checkAndGenerate` tick as well — cheap when nothing's missing because `reportExistsForPeriod` short-circuits. Effort: **S**
+### ~~Scheduled reports hourly catch-up~~ ✅ RESOLVED (prior cycle)
+- `runCatchUp()` now runs on every hourly `checkAndGenerate` tick (idempotent via `reportExistsForPeriod` short-circuit). Recovers failed mid-hour reports within an hour instead of waiting for process restart.
 
 ### Batch pre-submit intent file
 - Current batch orphan recovery covers the `createJob` → tracking-write gap with retry + fallback + Sentry, but a narrow window still exists where AWS accepts the job and the process crashes before either write completes. **Fix**: write a "pre-submit intent" file to S3 before calling `createJob`, reconcile on next cycle. Effort: **M**
 
 ### Coaching outcomes dashboard (strategic, top-10 #9)
-- No UI currently shows whether coaching sessions actually improved sub-scores. Add a widget on the coaching page showing per-agent sub-score trajectory in the N calls following a coaching session. All data exists in `call_analyses.subScores` and `coaching_sessions`. Effort: **M**
+- **Partially shipped**: `/coaching` has a program-effectiveness panel with per-group + weekly sparkline + avgSubDeltas chips, and the DetailPanel shows per-session before/after outcomes. **Residual gap**: no per-agent sub-score trajectory chart showing the N calls following a specific coaching session as a time-series. Data primitives exist (`call_analyses.subScores` + `coaching_sessions.created_at`); the missing piece is the visualization. Effort: **S–M**
 
 ### Weekly digest email — "interesting three"
 - Stage 3 strategic suggestion: passive engagement surface via weekly email with top 3 noteworthy calls (one exceptional, one compliance risk, one coaching opportunity). Builds on existing scheduled-reports + webhooks. Effort: **M**
 
-### `console.warn` pattern in pipeline
-- Although the audit finding about PHI leakage was retracted (`reasons` are static labels), any `console.*` call in PHI-adjacent code paths bypasses the `logger.*` PHI scrubber. A future edit could silently introduce a PHI value into a log message. Defensive migration to structured `logger.*` calls would close the hazard surface. Effort: **S**
+### ~~`console.warn` pattern in pipeline~~ ✅ COMPLETED (April 2026 cycle)
+- Direct `console.*` calls in production paths were migrated to structured `logger.*` in prior cycles. The April 2026 follow-on closed the related silent-`.catch(() => {})` hazard surface (coaching webhook trigger, three startup hydration loaders, two best-effort S3 cleanup paths). Only documented exceptions remain: `server/vite.ts` (CSS-styled dev terminal output) and the canonical `[HIPAA_AUDIT]` stdout line in `audit-log.ts:313`.
 
 ---
 

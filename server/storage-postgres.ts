@@ -21,6 +21,7 @@ import type {
   Badge, InsertBadge, LeaderboardRow,
 } from "@shared/schema";
 import type { IStorage, ObjectStorageClient, FilteredReportResult, InsightsCallData, CoachingOutcomeSessionAgg, CoachingOutcomeWindowAgg } from "./storage";
+import { validateUpdateCallKeys } from "./storage";
 import { safeFloat } from "./routes/utils";
 import { logPhiAccess } from "./services/audit-log";
 
@@ -408,6 +409,11 @@ export class PostgresStorage implements IStorage {
         "updateCall: employeeId cannot be modified via updateCall — use atomicAssignEmployee or setCallEmployee",
       );
     }
+    // F-04: reject unknown keys loudly. Previously COLUMN_MAP silently
+    // dropped anything not in its whitelist (e.g. `externalId`), which made
+    // a mis-named field look like a successful update from the caller's
+    // side but never reach the DB.
+    validateUpdateCallKeys(updates as Record<string, unknown>);
     // Dynamic SET clause: only update keys explicitly provided. Includes
     // content_hash (F01) which was missing from the legacy whitelist.
     const COLUMN_MAP: Record<string, string> = {
@@ -1524,7 +1530,15 @@ export class PostgresStorage implements IStorage {
             this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
               logger.error("Failed to delete S3 audio for call during retention", { callId: id, error: err.message }),
             ),
-            this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch(() => {}),
+            // Pending batch-inference artifact is best-effort: only batch-mode
+            // calls have one. A 404 here is normal. We still log at debug so a
+            // real S3 outage leaves a trace for operator forensics.
+            this.audioClient!.deleteObject(`batch-inference/pending/${id}.json`).catch((err) =>
+              logger.debug("retention: batch-pending artifact cleanup non-fatal", {
+                callId: id,
+                error: (err as Error).message,
+              }),
+            ),
           ]),
         );
       }
@@ -1565,7 +1579,12 @@ export class PostgresStorage implements IStorage {
       if (this.audioClient) {
         await Promise.allSettled(
           failedIds.map((id: string) =>
-            this.audioClient!.deleteByPrefix(`audio/${id}/`).catch(() => {}),
+            this.audioClient!.deleteByPrefix(`audio/${id}/`).catch((err) =>
+              logger.debug("failed-call cleanup: S3 audio prefix delete non-fatal", {
+                callId: id,
+                error: (err as Error).message,
+              }),
+            ),
           ),
         );
       }

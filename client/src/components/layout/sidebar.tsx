@@ -516,6 +516,19 @@ export default function Sidebar({ isOpen, onClose, wsState }: { isOpen?: boolean
                   <span>{t("nav.systemHealth")}</span>
                 </Link>
                 <Link
+                  href="/admin/soft-fail"
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
+                    location === "/admin/soft-fail"
+                      ? "bg-[var(--copper-soft)] text-foreground font-medium shadow-[inset_2px_0_0_var(--accent)]"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                  data-testid="nav-link-soft-fail"
+                >
+                  <Warning className="w-4 h-4 shrink-0" />
+                  <span>Operator status</span>
+                </Link>
+                <Link
                   href="/admin/batch"
                   className={cn(
                     "flex items-center gap-2.5 px-3 py-1.5 rounded-sm text-[13px] transition-colors",
