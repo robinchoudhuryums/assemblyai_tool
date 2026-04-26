@@ -163,8 +163,8 @@ Fixes shipped across three `/broad-scan` → `/broad-implement` cycles.
 ### Weekly digest email — "interesting three"
 - Stage 3 strategic suggestion: passive engagement surface via weekly email with top 3 noteworthy calls (one exceptional, one compliance risk, one coaching opportunity). Builds on existing scheduled-reports + webhooks. Effort: **M**
 
-### `console.warn` pattern in pipeline
-- Although the audit finding about PHI leakage was retracted (`reasons` are static labels), any `console.*` call in PHI-adjacent code paths bypasses the `logger.*` PHI scrubber. A future edit could silently introduce a PHI value into a log message. Defensive migration to structured `logger.*` calls would close the hazard surface. Effort: **S**
+### ~~`console.warn` pattern in pipeline~~ ✅ COMPLETED (April 2026 cycle)
+- Direct `console.*` calls in production paths were migrated to structured `logger.*` in prior cycles. The April 2026 follow-on closed the related silent-`.catch(() => {})` hazard surface (coaching webhook trigger, three startup hydration loaders, two best-effort S3 cleanup paths). Only documented exceptions remain: `server/vite.ts` (CSS-styled dev terminal output) and the canonical `[HIPAA_AUDIT]` stdout line in `audit-log.ts:313`.
 
 ---
 
