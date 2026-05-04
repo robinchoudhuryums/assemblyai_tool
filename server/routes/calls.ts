@@ -11,7 +11,7 @@ import { recordDataAccess } from "../services/security-monitor";
 import { getPool } from "../db/pool";
 import { CALL_CATEGORIES, analysisEditSchema, assignCallSchema } from "@shared/schema";
 import type { JobQueue } from "../services/job-queue";
-import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError, resolveBulkReanalyzeCallIds } from "./utils";
+import { cleanupFile, validateIdParam, validateParams, sendError, sendValidationError, resolveBulkReanalyzeCallIds, checkAndRecordBulkReanalyzeQuota } from "./utils";
 import { registerCallTagRoutes } from "./calls-tags";
 
 // Shared audio processing queue (A11) — single singleton across pipeline.ts,
@@ -709,6 +709,26 @@ export function registerCallRoutes(
           res.json({ message: "No calls matched the filter", results: [] });
           return;
         }
+      }
+
+      // F7: per-admin 24h rolling quota (default 200, BULK_REANALYZE_DAILY_CAP).
+      // Each call re-runs the full pipeline (~$0.10–$0.20 each) so a careless
+      // admin click can spike spend without warning. Reject before any work.
+      const quota = checkAndRecordBulkReanalyzeQuota(req.user!.username, callIds.length);
+      if (!quota.allowed) {
+        const retryHours = Math.ceil(quota.retryAfterMs / (60 * 60 * 1000));
+        logger.warn("bulk-reanalyze: daily quota exceeded", {
+          username: req.user!.username,
+          requested: callIds.length,
+          used: quota.used,
+          cap: quota.cap,
+          retryHours,
+        });
+        res.status(429).json({
+          message: `Bulk reanalyze quota exceeded: ${quota.used}/${quota.cap} calls in the last 24h. Retry in ~${retryHours}h or raise BULK_REANALYZE_DAILY_CAP.`,
+          quota: { used: quota.used, cap: quota.cap, retryAfterMs: quota.retryAfterMs },
+        });
+        return;
       }
 
       const jobQueue = getJobQueue();

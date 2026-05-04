@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { userRateLimit } from "../middleware/rate-limit";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
@@ -299,6 +300,88 @@ export function register(router: Router) {
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to compute coaching outcome" });
+    }
+  });
+
+  /**
+   * GET /api/coaching/:id/trajectory
+   *
+   * Per-agent post-coaching trajectory chart data. Returns up to N completed
+   * calls on each side of the session's createdAt, with the timestamp,
+   * overall score, and sub-scores for each call. The frontend renders these
+   * as a time-series chart in the DetailPanel so a manager can visually see
+   * "did this coaching actually move the needle?" rather than only seeing
+   * the single before/after delta from /outcome.
+   *
+   * Same exclusion semantics as /outcome: filters excluded_from_metrics so
+   * manager-flagged noise calls don't distort the trajectory.
+   *
+   * Rate limiting: global `userRateLimit(120, 60_000)` on /api/* (set in
+   * server/index.ts:519) PLUS the explicit per-route `userRateLimit(60,
+   * 60_000)` below. CodeQL's `js/missing-rate-limiting` heuristic only
+   * pattern-matches against `express-rate-limit` / `express-slow-down`
+   * library calls and doesn't recognize our custom `userRateLimit`
+   * middleware, so the alert is a documented false positive. The
+   * suppression comment below acknowledges this; the route is in fact
+   * protected at both global and per-route layers.
+   */
+  // lgtm[js/missing-rate-limiting]
+  router.get("/api/coaching/:id/trajectory", requireAuth, requireRole("manager", "admin"), validateIdParam, userRateLimit(60, 60_000), async (req, res) => {
+    try {
+      const session = await storage.getCoachingSession(req.params.id);
+      if (!session) return res.status(404).json({ message: "Coaching session not found" });
+
+      const nRaw = parseInt((req.query.n as string) || "20", 10);
+      const N = Math.max(1, Math.min(Number.isFinite(nRaw) ? nRaw : 20, 50));
+
+      const sessionCreatedAt = new Date(session.createdAt || 0).getTime();
+      if (!sessionCreatedAt || !Number.isFinite(sessionCreatedAt)) {
+        return res.status(400).json({ message: "Coaching session has no valid createdAt timestamp" });
+      }
+
+      const allCalls = (await storage.getCallsWithDetails({
+        status: "completed",
+        employee: session.employeeId,
+      })).filter(c => !c.excludedFromMetrics);
+
+      const withTs = allCalls
+        .map(c => ({ call: c, ts: new Date(c.uploadedAt || 0).getTime() }))
+        .filter(x => Number.isFinite(x.ts) && x.ts > 0)
+        .sort((a, b) => a.ts - b.ts);
+      const beforePts = withTs.filter(x => x.ts < sessionCreatedAt).slice(-N);
+      const afterPts = withTs.filter(x => x.ts >= sessionCreatedAt).slice(0, N);
+
+      const toPoint = (entry: { call: typeof allCalls[number]; ts: number }, side: "before" | "after") => {
+        const score = parseFloat(entry.call.analysis?.performanceScore || "");
+        const sub = entry.call.analysis?.subScores as
+          | { compliance?: number; customerExperience?: number; communication?: number; resolution?: number }
+          | undefined;
+        return {
+          callId: entry.call.id,
+          uploadedAt: entry.call.uploadedAt,
+          ts: entry.ts,
+          side,
+          score: Number.isFinite(score) ? Math.round(score * 100) / 100 : null,
+          subScores: {
+            compliance: typeof sub?.compliance === "number" ? sub.compliance : null,
+            customerExperience: typeof sub?.customerExperience === "number" ? sub.customerExperience : null,
+            communication: typeof sub?.communication === "number" ? sub.communication : null,
+            resolution: typeof sub?.resolution === "number" ? sub.resolution : null,
+          },
+        };
+      };
+
+      res.json({
+        coachingSessionId: session.id,
+        employeeId: session.employeeId,
+        coachingCreatedAt: session.createdAt,
+        windowSize: N,
+        before: beforePts.map(p => toPoint(p, "before")),
+        after: afterPts.map(p => toPoint(p, "after")),
+      });
+    } catch (error) {
+      logger.error("coaching trajectory error", { sessionId: req.params.id, error: (error as Error).message });
+      res.status(500).json({ message: "Failed to compute coaching trajectory" });
     }
   });
 

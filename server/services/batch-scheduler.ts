@@ -168,12 +168,16 @@ async function processBatchResults(
           const estimatedInputTokens = Math.ceil((transcriptResponse.text || "").length / 4) + 500;
           const estimatedOutputTokens = 800;
           const rawBedrockCost = estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens);
-          // F-04: warn on unknown model so operators know cost tracking is broken.
-          // Previously silently recorded $0 via ?? 0 without any warning.
-          if (rawBedrockCost === null) {
+          // F6: store null + costPricingMissing=true on unknown model so the
+          // spend UI can render an "Unknown" badge instead of $0. Previously
+          // silently recorded $0 via ?? 0.
+          const pricingMissing = rawBedrockCost === null;
+          if (pricingMissing) {
             warnOnUnknownBedrockModel(bedrockModel, { callId, phase: "batch_usage_tracking" });
           }
-          const bedrockCost = (rawBedrockCost ?? 0) * 0.5;
+          const bedrockCostStored = pricingMissing
+            ? null
+            : Math.round(((rawBedrockCost as number) * 0.5) * 10000) / 10000;
 
           const usageRecord: UsageRecord = {
             id: randomUUID(),
@@ -186,10 +190,11 @@ async function processBatchResults(
                 model: bedrockModel,
                 estimatedInputTokens,
                 estimatedOutputTokens,
-                estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+                estimatedCost: bedrockCostStored,
+                ...(pricingMissing ? { costPricingMissing: true } : {}),
               },
             },
-            totalEstimatedCost: Math.round(bedrockCost * 10000) / 10000,
+            totalEstimatedCost: bedrockCostStored ?? 0,
           };
           await storage.createUsageRecord(usageRecord);
         } catch (usageErr) {

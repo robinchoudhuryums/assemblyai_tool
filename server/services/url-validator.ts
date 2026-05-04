@@ -11,6 +11,7 @@
  *   4. DNS resolution check (blocks DNS rebinding — resolves hostname and validates the IP)
  */
 import { lookup } from "dns/promises";
+import { logger } from "./logger";
 
 // --- Blocked hostnames ---
 const BLOCKED_HOSTNAMES = new Set([
@@ -135,9 +136,21 @@ export async function validateUrlForSSRF(
         }
       }
       return { valid: true, resolvedIp: result[0]?.address };
-    } catch {
-      // DNS lookup failed — hostname doesn't resolve
-      return { valid: false, error: "URL hostname could not be resolved" };
+    } catch (err) {
+      // F3: a transient resolver failure (DNS server hiccup, ENOTFOUND
+      // racing a fresh DNS record propagation) used to reject the URL,
+      // which blackholed webhook config creation during DNS outages and
+      // produced a fan-out of "URL hostname could not be resolved" errors
+      // with no admin signal. Now we warn-and-allow: the prior layers
+      // (blocklist + private/reserved IP) have already validated the
+      // hostname/IP shape, and the actual fetch will fail at delivery time
+      // if the host truly doesn't resolve. The webhook circuit breaker and
+      // durable-retry queue handle the delivery-side failure gracefully.
+      logger.warn("url-validator: DNS lookup failed, allowing URL (fetch-time will catch unresolvable hosts)", {
+        hostname,
+        error: (err as Error).message,
+      });
+      return { valid: true };
     }
   }
 

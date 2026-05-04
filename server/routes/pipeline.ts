@@ -849,13 +849,17 @@ export async function processAudioFile(
       const rawBedrockCost = (aiAnalysis !== null)
         ? estimateBedrockCost(bedrockModel, estimatedInputTokens, estimatedOutputTokens)
         : 0;
-      // Loud-fail on unknown model: null coalesced to 0 silently hid typos
-      // and new-model misconfiguration. Warn once per unique unknown model
-      // id so spend tracking stays trustworthy without spamming Sentry.
-      if (rawBedrockCost === null) {
+      // F6: store null + costPricingMissing=true when the model isn't in
+      // BEDROCK_PRICING. Prior coalesce-to-zero made the spend dashboard
+      // graph $0 with no signal that pricing was missing, so a typo in
+      // BEDROCK_MODEL or a fresh AWS model id silently broke cost tracking.
+      const pricingMissing = aiAnalysis !== null && rawBedrockCost === null;
+      if (pricingMissing) {
         warnOnUnknownBedrockModel(bedrockModel, { callId, phase: "usage_tracking" });
       }
-      const bedrockCost = rawBedrockCost ?? 0;
+      const bedrockCostStored = pricingMissing
+        ? null
+        : (aiAnalysis !== null ? Math.round((rawBedrockCost as number) * 10000) / 10000 : 0);
 
       const usageRecord: UsageRecord = {
         id: randomUUID(),
@@ -869,10 +873,14 @@ export async function processAudioFile(
             model: bedrockModel,
             estimatedInputTokens,
             estimatedOutputTokens,
-            estimatedCost: Math.round(bedrockCost * 10000) / 10000,
+            estimatedCost: bedrockCostStored,
+            ...(pricingMissing ? { costPricingMissing: true } : {}),
           } : undefined,
         },
-        totalEstimatedCost: Math.round((assemblyaiCost + bedrockCost) * 10000) / 10000,
+        // totalEstimatedCost stays a number; missing-pricing rows underreport
+        // the model side but the per-service `costPricingMissing` flag tells
+        // the UI to badge the row as "Bedrock cost unknown".
+        totalEstimatedCost: Math.round((assemblyaiCost + (bedrockCostStored ?? 0)) * 10000) / 10000,
       };
       await storage.createUsageRecord(usageRecord);
     } catch (usageErr) {

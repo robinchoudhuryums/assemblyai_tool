@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { userRateLimit } from "../middleware/rate-limit";
 import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
@@ -245,6 +246,126 @@ export function registerContentRoutes(
     } catch (error) {
       logger.error("error fetching usage records", { error: (error as Error).message });
       res.status(500).json({ message: "Failed to fetch usage data" });
+    }
+  });
+
+  /**
+   * GET /api/admin/cost-budget
+   *
+   * Cost-budget rollup with per-feature breakdown and budget utilization.
+   * Returns month-to-date (MTD) and 30-day trailing spend grouped by:
+   *   - assemblyai (transcription)
+   *   - bedrock (call analysis on the primary model)
+   *   - bedrockSecondary (A/B test secondary model)
+   *
+   * Budget is sourced from MONTHLY_COST_BUDGET_USD env var (operator
+   * sets this; no secret required). Returns utilization percent and a
+   * `severity` field (info / warning >75% / critical >90%) so the UI can
+   * render a tone band and the operator can wire CloudWatch alarms on
+   * the structured log line emitted when utilization crosses 90%.
+   *
+   * Also includes "missing pricing" count: how many records had a
+   * Bedrock service entry with `costPricingMissing=true`. This is the
+   * F6 visibility surface — the dashboard can show the count and prompt
+   * the operator to update BEDROCK_PRICING.
+   *
+   * Rate limiting: global `userRateLimit(120, 60_000)` on /api/* (set in
+   * server/index.ts:519) PLUS the explicit per-route `userRateLimit(30,
+   * 60_000)` below. CodeQL's `js/missing-rate-limiting` heuristic only
+   * pattern-matches against `express-rate-limit` / `express-slow-down`
+   * library calls and doesn't recognize our custom `userRateLimit`
+   * middleware, so the alert is a documented false positive. The
+   * suppression comment below acknowledges this; the route is in fact
+   * protected at both global and per-route layers.
+   */
+  // lgtm[js/missing-rate-limiting]
+  router.get("/api/admin/cost-budget", requireAuth, requireRole("admin"), userRateLimit(30, 60_000), async (_req, res) => {
+    try {
+      const records = await storage.getAllUsageRecords();
+      const monthlyBudget = (() => {
+        const raw = Number(process.env.MONTHLY_COST_BUDGET_USD);
+        return Number.isFinite(raw) && raw > 0 ? raw : null;
+      })();
+
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const thirtyDayCutoff = now.getTime() - 30 * 86400000;
+
+      let mtdAssembly = 0, mtdBedrock = 0, mtdBedrockSecondary = 0;
+      let trailing30Total = 0;
+      let pricingMissingCount = 0;
+      const byUser = new Map<string, number>();
+
+      for (const r of records) {
+        const ts = new Date(r.timestamp || 0).getTime();
+        const isMtd = ts >= monthStart;
+        const is30d = ts >= thirtyDayCutoff;
+        const aaCost = r.services?.assemblyai?.estimatedCost ?? 0;
+        const bedCost = r.services?.bedrock?.estimatedCost ?? 0;
+        const bed2Cost = r.services?.bedrockSecondary?.estimatedCost ?? 0;
+        const bedMissing = r.services?.bedrock?.costPricingMissing === true;
+        const bed2Missing = r.services?.bedrockSecondary?.costPricingMissing === true;
+        if (bedMissing || bed2Missing) pricingMissingCount++;
+        if (isMtd) {
+          mtdAssembly += aaCost;
+          mtdBedrock += bedCost;
+          mtdBedrockSecondary += bed2Cost;
+          if (r.user) {
+            byUser.set(r.user, (byUser.get(r.user) ?? 0) + r.totalEstimatedCost);
+          }
+        }
+        if (is30d) {
+          trailing30Total += r.totalEstimatedCost;
+        }
+      }
+
+      const mtdTotal = mtdAssembly + mtdBedrock + mtdBedrockSecondary;
+      const utilizationPct = monthlyBudget !== null ? Math.round((mtdTotal / monthlyBudget) * 1000) / 10 : null;
+      const severity =
+        utilizationPct === null ? "unknown" :
+        utilizationPct >= 90 ? "critical" :
+        utilizationPct >= 75 ? "warning" : "info";
+
+      // Project end-of-month at current daily run-rate
+      const dayOfMonth = Math.max(1, now.getDate());
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const projectedMtdEnd = (mtdTotal / dayOfMonth) * daysInMonth;
+      const projectedOverPct = monthlyBudget !== null ? Math.round((projectedMtdEnd / monthlyBudget) * 1000) / 10 : null;
+
+      // Operator alarm: emit a structured log when utilization crosses
+      // 90% so CloudWatch metric filters can fire SNS.
+      if (severity === "critical") {
+        logger.warn("cost budget utilization critical", {
+          alert: "cost_budget_critical",
+          mtdTotal: Math.round(mtdTotal * 100) / 100,
+          monthlyBudget,
+          utilizationPct,
+          projectedOverPct,
+        });
+      }
+
+      res.json({
+        monthlyBudget,
+        mtd: {
+          total: Math.round(mtdTotal * 100) / 100,
+          assemblyai: Math.round(mtdAssembly * 100) / 100,
+          bedrock: Math.round(mtdBedrock * 100) / 100,
+          bedrockSecondary: Math.round(mtdBedrockSecondary * 100) / 100,
+        },
+        trailing30Total: Math.round(trailing30Total * 100) / 100,
+        utilizationPct,
+        projectedMtdEnd: Math.round(projectedMtdEnd * 100) / 100,
+        projectedOverPct,
+        severity,
+        topUsers: [...byUser.entries()]
+          .map(([user, cost]) => ({ user, cost: Math.round(cost * 100) / 100 }))
+          .sort((a, b) => b.cost - a.cost)
+          .slice(0, 5),
+        missingPricingRecords: pricingMissingCount,
+      });
+    } catch (error) {
+      logger.error("error computing cost budget", { error: (error as Error).message });
+      res.status(500).json({ message: "Failed to compute cost budget" });
     }
   });
 
@@ -947,22 +1068,29 @@ export function registerContentRoutes(
         };
 
         if (baselineResult.status === "fulfilled") {
-          baselineCost = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
+          // F6: surface "pricing missing" instead of silent $0
+          const raw = estimateBedrockCost(abTest.baselineModel, estimatedInputTokens, estimatedOutputTokens);
+          const pricingMissing = raw === null;
+          baselineCost = raw ?? 0;
           services.bedrock = {
             model: abTest.baselineModel,
             estimatedInputTokens,
             estimatedOutputTokens,
-            estimatedCost: Math.round(baselineCost * 10000) / 10000,
+            estimatedCost: pricingMissing ? null : Math.round(baselineCost * 10000) / 10000,
+            ...(pricingMissing ? { costPricingMissing: true } : {}),
             latencyMs: baselineResult.value.latencyMs,
           };
         }
         if (testResult.status === "fulfilled") {
-          testCost = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens) ?? 0;
+          const raw = estimateBedrockCost(abTest.testModel, estimatedInputTokens, estimatedOutputTokens);
+          const pricingMissing = raw === null;
+          testCost = raw ?? 0;
           services.bedrockSecondary = {
             model: abTest.testModel,
             estimatedInputTokens,
             estimatedOutputTokens,
-            estimatedCost: Math.round(testCost * 10000) / 10000,
+            estimatedCost: pricingMissing ? null : Math.round(testCost * 10000) / 10000,
+            ...(pricingMissing ? { costPricingMissing: true } : {}),
             latencyMs: testResult.value.latencyMs,
           };
         }

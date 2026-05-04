@@ -11,10 +11,18 @@
  *     - embed:close                 → user pressed Escape inside the
  *                                     iframe (keydown doesn't bubble); we
  *                                     call onClose
- *     - embed:open-source { url }   → user clicked a source citation;
- *                                     we window.open() to a new tab so
- *                                     PDFs / viewers don't render inside
- *                                     this narrow drawer
+ *     - embed:open-source { url, preview? } →
+ *                                     user clicked a source citation. If
+ *                                     a `preview` field is included
+ *                                     ({ title, snippet }) we render the
+ *                                     snippet as an inline panel inside
+ *                                     the drawer with an "Open" button
+ *                                     to escape to a new tab; without a
+ *                                     preview we fall back to the prior
+ *                                     window.open behavior. RAG can opt
+ *                                     into the inline preview by adding
+ *                                     the field; absence stays
+ *                                     backward-compatible.
  *   Outbound (CA → RAG):
  *     - embed:clear                 → the "Clear chat" button; RAG's
  *                                     EmbedShell remounts ChatInterface
@@ -26,12 +34,18 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { X, ChatCircleText, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { X, ChatCircleText, ArrowCounterClockwise, ArrowSquareOut } from "@phosphor-icons/react";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   embedUrl: string;
+}
+
+interface SourcePreview {
+  url: string;
+  title?: string;
+  snippet?: string;
 }
 
 function originOf(url: string): string {
@@ -45,6 +59,7 @@ function originOf(url: string): string {
 export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
+  const [sourcePreview, setSourcePreview] = useState<SourcePreview | null>(null);
   const allowedOrigin = originOf(embedUrl);
 
   useEffect(() => {
@@ -53,6 +68,7 @@ export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
       const data = event.data as {
         type?: string;
         url?: unknown;
+        preview?: { title?: unknown; snippet?: unknown };
       } | null;
       if (!data || typeof data.type !== "string") return;
       if (data.type === "embed:ready") {
@@ -76,6 +92,18 @@ export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
         } catch {
           return;
         }
+        // If RAG included a preview snippet, show the inline panel inside
+        // the drawer instead of window.opening straight away. The user
+        // can read the snippet without leaving CA's context, and the
+        // "Open in new tab" button still escalates to the full document.
+        if (data.preview && typeof data.preview === "object") {
+          const title = typeof data.preview.title === "string" ? data.preview.title : undefined;
+          const snippet = typeof data.preview.snippet === "string" ? data.preview.snippet : undefined;
+          if (title || snippet) {
+            setSourcePreview({ url: data.url, title, snippet });
+            return;
+          }
+        }
         window.open(data.url, "_blank", "noopener,noreferrer");
         return;
       }
@@ -97,9 +125,13 @@ export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
   }, [open, onClose]);
 
   // Reset the ready flag when the drawer closes so the loading state
-  // shows again next time it opens.
+  // shows again next time it opens. Also clear any stale source preview
+  // so reopening the drawer doesn't flash the previous snippet.
   useEffect(() => {
-    if (!open) setReady(false);
+    if (!open) {
+      setReady(false);
+      setSourcePreview(null);
+    }
   }, [open]);
 
   const handleClear = () => {
@@ -169,6 +201,57 @@ export function KnowledgeDrawer({ open, onClose, embedUrl }: Props) {
             // wouldn't authenticate).
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
           />
+          {/* Inline source-citation preview. Shown when RAG sends an
+              `embed:open-source` with a `preview { title, snippet }`
+              payload. Lets the user read the supporting snippet without
+              context-switching to a new tab; "Open in new tab" still
+              escalates to the full document. */}
+          {sourcePreview && (
+            <div
+              className="absolute inset-x-0 bottom-0 max-h-[55%] overflow-y-auto border-t border-border bg-card p-3 shadow-lg"
+              role="region"
+              aria-label="Source citation preview"
+            >
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  {sourcePreview.title && (
+                    <div className="font-display text-[13px] font-semibold text-foreground truncate">
+                      {sourcePreview.title}
+                    </div>
+                  )}
+                  {sourcePreview.snippet && (
+                    <div
+                      className="mt-1 text-muted-foreground"
+                      style={{ fontSize: 12, lineHeight: 1.45 }}
+                    >
+                      {sourcePreview.snippet}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.open(sourcePreview.url, "_blank", "noopener,noreferrer");
+                    setSourcePreview(null);
+                  }}
+                  aria-label="Open source in new tab"
+                  title="Open in new tab"
+                  className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <ArrowSquareOut size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSourcePreview(null)}
+                  aria-label="Close source preview"
+                  title="Close"
+                  className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
     </>

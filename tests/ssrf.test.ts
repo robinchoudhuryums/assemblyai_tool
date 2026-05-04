@@ -156,10 +156,13 @@ describe("validateUrlForSSRF — DNS resolution", () => {
     assert.equal(result.valid, false);
   });
 
-  it("rejects URLs where hostname cannot be resolved", async () => {
+  it("allows URLs where DNS lookup fails transiently (F3 — fetch-time will catch truly unresolvable hosts)", async () => {
+    // Prior behavior was to reject, which blackholed webhook config
+    // creation during transient resolver failures. The blocklist + private
+    // IP check have already validated the hostname shape; if the host
+    // truly never resolves the actual fetch will fail at delivery time.
     const result = await validateUrlForSSRF("https://this-domain-definitely-does-not-exist-xyz123.com/hook");
-    assert.equal(result.valid, false);
-    assert.ok(result.error?.includes("could not be resolved"));
+    assert.equal(result.valid, true);
   });
 });
 

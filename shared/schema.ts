@@ -299,12 +299,29 @@ export const promptTemplateSchema = z.object({
     label: z.string(),
     severity: z.enum(["required", "recommended"]).default("required"),
   })).optional(),
+  // Operator-tunable rubric weights (Stage 3 #4): structured field rather
+  // than free-form prose, so different teams can shift emphasis between
+  // compliance/CX/communication/resolution without rewriting the prompt
+  // body. The frontend already shows a "total weight" indicator; the
+  // server-side superRefine below rejects writes that don't sum to ~100
+  // (±2% tolerance for rounding) so a misconfigured template can't
+  // silently land and distort the model's interpretation of the weights.
   scoringWeights: z.object({
     compliance: z.number().min(0).max(100).default(25),
     customerExperience: z.number().min(0).max(100).default(25),
     communication: z.number().min(0).max(100).default(25),
     resolution: z.number().min(0).max(100).default(25),
-  }).optional(),
+  })
+    .superRefine((w, ctx) => {
+      const sum = w.compliance + w.customerExperience + w.communication + w.resolution;
+      if (Math.abs(sum - 100) > 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `scoringWeights must sum to 100 (got ${sum}). Adjust the four sub-weights so they total 100%.`,
+        });
+      }
+    })
+    .optional(),
   additionalInstructions: z.string().optional(),
   isActive: z.boolean().default(true),
   updatedAt: z.string().optional(),
@@ -521,14 +538,20 @@ export const usageRecordSchema = z.object({
       model: z.string(),
       estimatedInputTokens: z.number().default(0),
       estimatedOutputTokens: z.number().default(0),
-      estimatedCost: z.number().default(0),
+      // F6: cost is nullable when the model isn't in BEDROCK_PRICING. Prior
+      // behavior was to silently store 0, which made the spend dashboard
+      // graph $0 for unknown models with no visible "missing pricing" badge.
+      // null carries the "we couldn't price this" signal up to the UI.
+      estimatedCost: z.number().nullable().default(0),
+      costPricingMissing: z.boolean().optional(),
       latencyMs: z.number().optional(),
     }).optional(),
     bedrockSecondary: z.object({
       model: z.string(),
       estimatedInputTokens: z.number().default(0),
       estimatedOutputTokens: z.number().default(0),
-      estimatedCost: z.number().default(0),
+      estimatedCost: z.number().nullable().default(0),
+      costPricingMissing: z.boolean().optional(),
       latencyMs: z.number().optional(),
     }).optional(),
   }),

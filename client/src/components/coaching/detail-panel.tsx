@@ -74,6 +74,29 @@ interface CoachingOutcome {
   };
 }
 
+interface CoachingTrajectoryPoint {
+  callId: string;
+  uploadedAt: string | null | undefined;
+  ts: number;
+  side: "before" | "after";
+  score: number | null;
+  subScores: {
+    compliance: number | null;
+    customerExperience: number | null;
+    communication: number | null;
+    resolution: number | null;
+  };
+}
+
+interface CoachingTrajectory {
+  coachingSessionId: string;
+  employeeId: string;
+  coachingCreatedAt: string;
+  windowSize: number;
+  before: CoachingTrajectoryPoint[];
+  after: CoachingTrajectoryPoint[];
+}
+
 export interface DetailPanelProps {
   session: CoachingSession | null;
   /** Display name for the assignee — GET /api/coaching injects employeeName; pass it through */
@@ -109,6 +132,14 @@ export default function DetailPanel(props: DetailPanelProps) {
   // silently hide the Evidence section.
   const outcomeQuery = useQuery<CoachingOutcome>({
     queryKey: ["/api/coaching", props.session?.id, "outcome"],
+    enabled: !!props.session?.id && props.canManage === true,
+    retry: false,
+  });
+
+  // Per-agent post-coaching trajectory chart. Manager-only. Same
+  // exclusion semantics as outcome (drops excluded_from_metrics).
+  const trajectoryQuery = useQuery<CoachingTrajectory>({
+    queryKey: ["/api/coaching", props.session?.id, "trajectory"],
     enabled: !!props.session?.id && props.canManage === true,
     retry: false,
   });
@@ -293,6 +324,16 @@ export default function DetailPanel(props: DetailPanelProps) {
           />
         )}
 
+        {/* Per-agent trajectory chart — visualizes the score progression
+            on either side of the coaching session creation. Hidden if
+            there's nothing meaningful to show (no data points). */}
+        {props.canManage && trajectoryQuery.data && (trajectoryQuery.data.before.length + trajectoryQuery.data.after.length) >= 2 && (
+          <TrajectorySection
+            trajectory={trajectoryQuery.data}
+            num={computeSectionNum(session, 3)}
+          />
+        )}
+
         {/* Manager-supplied effectiveness rating — shown for completed
             sessions so managers can capture the causal judgment that the
             statistical outcome metric can't: "did this actually help?". */}
@@ -345,7 +386,7 @@ function DetailSection({
 }: {
   num: string;
   title: string;
-  accent?: "sage";
+  accent?: "sage" | "copper";
   children: React.ReactNode;
 }) {
   return (
@@ -362,7 +403,10 @@ function DetailSection({
           style={{
             fontSize: 12,
             letterSpacing: "0.14em",
-            color: accent === "sage" ? "var(--sage)" : "var(--foreground)",
+            color:
+              accent === "sage" ? "var(--sage)" :
+              accent === "copper" ? "var(--copper)" :
+              "var(--foreground)",
             margin: 0,
           }}
         >
@@ -443,6 +487,139 @@ function EvidenceSection({ outcome, num }: { outcome: CoachingOutcome; num: stri
               </div>
             );
           })}
+        </div>
+      </div>
+    </DetailSection>
+  );
+}
+
+function TrajectorySection({ trajectory, num }: { trajectory: CoachingTrajectory; num: string }) {
+  // SVG line chart: x = sequence position (oldest before → newest after),
+  // y = overall score (0–10). The coaching session creation is rendered as
+  // a vertical line at the boundary between the before/after arrays.
+  const W = 540;
+  const H = 140;
+  const PAD_L = 28;
+  const PAD_R = 12;
+  const PAD_T = 8;
+  const PAD_B = 24;
+  const all = [...trajectory.before, ...trajectory.after];
+  const points = all
+    .map((p, i) => ({ ...p, idx: i }))
+    .filter((p) => p.score !== null);
+
+  if (points.length < 2) {
+    return (
+      <DetailSection num={num} title="Score trajectory" accent="copper">
+        <div className="text-muted-foreground italic" style={{ fontSize: 13 }}>
+          Not enough scored calls yet to plot a trend.
+        </div>
+      </DetailSection>
+    );
+  }
+
+  const xMin = 0;
+  const xMax = Math.max(1, all.length - 1);
+  const xScale = (i: number) => PAD_L + ((i - xMin) / (xMax - xMin)) * (W - PAD_L - PAD_R);
+  const yScale = (v: number) => PAD_T + (1 - v / 10) * (H - PAD_T - PAD_B);
+
+  const beforeIdx = trajectory.before.length; // first "after" index
+  const boundaryX = beforeIdx > 0 ? xScale(beforeIdx - 0.5) : PAD_L;
+
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(p.idx).toFixed(1)} ${yScale(p.score!).toFixed(1)}`)
+    .join(" ");
+
+  return (
+    <DetailSection num={num} title="Score trajectory" accent="copper">
+      <div className="border border-border px-4 py-3" style={{ background: "var(--paper-2)" }}>
+        <div
+          className="font-mono uppercase text-muted-foreground mb-2"
+          style={{ fontSize: 9, letterSpacing: "0.1em" }}
+        >
+          {trajectory.before.length} before · {trajectory.after.length} after · session boundary marked
+        </div>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full"
+          style={{ maxHeight: 160 }}
+          role="img"
+          aria-label="Per-call overall score trajectory before and after coaching session"
+        >
+          {/* Y-axis gridlines at 0, 5, 10 */}
+          {[0, 5, 10].map((v) => (
+            <g key={v}>
+              <line
+                x1={PAD_L}
+                x2={W - PAD_R}
+                y1={yScale(v)}
+                y2={yScale(v)}
+                stroke="var(--border)"
+                strokeDasharray={v === 5 ? "2 2" : "1 3"}
+              />
+              <text
+                x={PAD_L - 4}
+                y={yScale(v) + 3}
+                textAnchor="end"
+                style={{ fontSize: 9, fill: "var(--muted-foreground)" }}
+                fontFamily="ui-monospace, monospace"
+              >
+                {v}
+              </text>
+            </g>
+          ))}
+          {/* Coaching boundary marker */}
+          <line
+            x1={boundaryX}
+            x2={boundaryX}
+            y1={PAD_T}
+            y2={H - PAD_B}
+            stroke="var(--accent)"
+            strokeDasharray="3 3"
+          />
+          <text
+            x={boundaryX + 4}
+            y={PAD_T + 9}
+            style={{ fontSize: 9, fill: "var(--accent)" }}
+            fontFamily="ui-monospace, monospace"
+          >
+            COACHING
+          </text>
+          {/* Trajectory line */}
+          <path d={path} fill="none" stroke="var(--copper)" strokeWidth={1.5} />
+          {/* Per-call dots, colored by side */}
+          {points.map((p) => (
+            <circle
+              key={p.callId}
+              cx={xScale(p.idx)}
+              cy={yScale(p.score!)}
+              r={2.5}
+              fill={p.side === "before" ? "var(--muted-foreground)" : "var(--sage)"}
+            >
+              <title>
+                {p.uploadedAt} — score {p.score!.toFixed(1)}
+              </title>
+            </circle>
+          ))}
+        </svg>
+        <div
+          className="font-mono uppercase text-muted-foreground mt-2 flex gap-4"
+          style={{ fontSize: 9, letterSpacing: "0.08em" }}
+        >
+          <span>
+            <span
+              className="inline-block mr-1"
+              style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--muted-foreground)" }}
+            />
+            BEFORE
+          </span>
+          <span>
+            <span
+              className="inline-block mr-1"
+              style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--sage)" }}
+            />
+            AFTER
+          </span>
         </div>
       </div>
     </DetailSection>

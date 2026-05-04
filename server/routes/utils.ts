@@ -864,6 +864,65 @@ export function estimateEmbeddingCost(textLength: number): number {
 }
 
 /**
+ * F7 — Per-admin daily quota for bulk-reanalyze. Each call in a bulk batch
+ * re-runs the full pipeline (AssemblyAI re-transcription + Bedrock analysis),
+ * so an admin who clicks "reanalyze 50 calls" twice in an afternoon spends
+ * ~$5–10 with no rolling cap. The quota tracker is in-memory (process-local)
+ * because bulk-reanalyze is admin-only and rare; full distributed accounting
+ * would belong in the cost-budget service if/when bulk ops become routine.
+ *
+ * Cap default: 200 calls/24h per admin. Tunable via BULK_REANALYZE_DAILY_CAP.
+ * The window slides in 1h buckets so a fresh 24h window starts each hour
+ * rather than resetting at midnight.
+ */
+const BULK_REANALYZE_DAILY_CAP = (() => {
+  const raw = Number(process.env.BULK_REANALYZE_DAILY_CAP);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 200;
+})();
+const BULK_REANALYZE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const bulkReanalyzeUsage = new Map<string, { count: number; bucketStart: number }[]>();
+
+export interface BulkQuotaResult {
+  allowed: boolean;
+  used: number;
+  cap: number;
+  /** ms until the oldest bucket falls out of the window (0 if not capped) */
+  retryAfterMs: number;
+}
+
+export function checkAndRecordBulkReanalyzeQuota(
+  username: string,
+  requestedCount: number,
+): BulkQuotaResult {
+  const now = Date.now();
+  const buckets = bulkReanalyzeUsage.get(username) ?? [];
+  // Drop buckets older than the window
+  const fresh = buckets.filter(b => now - b.bucketStart < BULK_REANALYZE_WINDOW_MS);
+  const used = fresh.reduce((sum, b) => sum + b.count, 0);
+  if (used + requestedCount > BULK_REANALYZE_DAILY_CAP) {
+    bulkReanalyzeUsage.set(username, fresh);
+    const oldest = fresh[0];
+    const retryAfterMs = oldest ? Math.max(0, BULK_REANALYZE_WINDOW_MS - (now - oldest.bucketStart)) : 0;
+    return { allowed: false, used, cap: BULK_REANALYZE_DAILY_CAP, retryAfterMs };
+  }
+  // Bucket by hour to keep the array small (max 24 entries)
+  const bucketStart = Math.floor(now / (60 * 60 * 1000)) * (60 * 60 * 1000);
+  const lastBucket = fresh[fresh.length - 1];
+  if (lastBucket && lastBucket.bucketStart === bucketStart) {
+    lastBucket.count += requestedCount;
+  } else {
+    fresh.push({ count: requestedCount, bucketStart });
+  }
+  bulkReanalyzeUsage.set(username, fresh);
+  return { allowed: true, used: used + requestedCount, cap: BULK_REANALYZE_DAILY_CAP, retryAfterMs: 0 };
+}
+
+/** Test seam: clear all per-admin bulk quota counters. */
+export function _resetBulkReanalyzeQuota(): void {
+  bulkReanalyzeUsage.clear();
+}
+
+/**
  * Concurrency-limited task queue for expensive async operations.
  *
  * Bounds (A11/F16/F76):
