@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { userRateLimit } from "../middleware/rate-limit";
 import { insertCoachingSessionSchema } from "@shared/schema";
 import { z } from "zod";
 import { triggerWebhook } from "../services/webhooks";
@@ -315,7 +316,7 @@ export function register(router: Router) {
    * Same exclusion semantics as /outcome: filters excluded_from_metrics so
    * manager-flagged noise calls don't distort the trajectory.
    */
-  router.get("/api/coaching/:id/trajectory", requireAuth, requireRole("manager", "admin"), validateIdParam, async (req, res) => {
+  router.get("/api/coaching/:id/trajectory", requireAuth, requireRole("manager", "admin"), validateIdParam, userRateLimit(60, 60_000), async (req, res) => {
     try {
       const session = await storage.getCoachingSession(req.params.id);
       if (!session) return res.status(404).json({ message: "Coaching session not found" });

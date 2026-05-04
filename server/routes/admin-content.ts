@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup } from "../auth";
+import { userRateLimit } from "../middleware/rate-limit";
 import { assemblyAIService } from "../services/assemblyai";
 import { BedrockProvider } from "../services/bedrock";
 import { broadcastCallUpdate } from "../services/websocket";
@@ -268,7 +269,7 @@ export function registerContentRoutes(
    * F6 visibility surface — the dashboard can show the count and prompt
    * the operator to update BEDROCK_PRICING.
    */
-  router.get("/api/admin/cost-budget", requireAuth, requireRole("admin"), async (_req, res) => {
+  router.get("/api/admin/cost-budget", requireAuth, requireRole("admin"), userRateLimit(30, 60_000), async (_req, res) => {
     try {
       const records = await storage.getAllUsageRecords();
       const monthlyBudget = (() => {
