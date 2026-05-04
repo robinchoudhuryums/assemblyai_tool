@@ -268,7 +268,17 @@ export function registerContentRoutes(
    * Bedrock service entry with `costPricingMissing=true`. This is the
    * F6 visibility surface — the dashboard can show the count and prompt
    * the operator to update BEDROCK_PRICING.
+   *
+   * Rate limiting: global `userRateLimit(120, 60_000)` on /api/* (set in
+   * server/index.ts:519) PLUS the explicit per-route `userRateLimit(30,
+   * 60_000)` below. CodeQL's `js/missing-rate-limiting` heuristic only
+   * pattern-matches against `express-rate-limit` / `express-slow-down`
+   * library calls and doesn't recognize our custom `userRateLimit`
+   * middleware, so the alert is a documented false positive. The
+   * suppression comment below acknowledges this; the route is in fact
+   * protected at both global and per-route layers.
    */
+  // lgtm[js/missing-rate-limiting]
   router.get("/api/admin/cost-budget", requireAuth, requireRole("admin"), userRateLimit(30, 60_000), async (_req, res) => {
     try {
       const records = await storage.getAllUsageRecords();

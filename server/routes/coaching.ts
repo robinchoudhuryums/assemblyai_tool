@@ -315,7 +315,17 @@ export function register(router: Router) {
    *
    * Same exclusion semantics as /outcome: filters excluded_from_metrics so
    * manager-flagged noise calls don't distort the trajectory.
+   *
+   * Rate limiting: global `userRateLimit(120, 60_000)` on /api/* (set in
+   * server/index.ts:519) PLUS the explicit per-route `userRateLimit(60,
+   * 60_000)` below. CodeQL's `js/missing-rate-limiting` heuristic only
+   * pattern-matches against `express-rate-limit` / `express-slow-down`
+   * library calls and doesn't recognize our custom `userRateLimit`
+   * middleware, so the alert is a documented false positive. The
+   * suppression comment below acknowledges this; the route is in fact
+   * protected at both global and per-route layers.
    */
+  // lgtm[js/missing-rate-limiting]
   router.get("/api/coaching/:id/trajectory", requireAuth, requireRole("manager", "admin"), validateIdParam, userRateLimit(60, 60_000), async (req, res) => {
     try {
       const session = await storage.getCoachingSession(req.params.id);
