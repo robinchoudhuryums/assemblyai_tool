@@ -10,7 +10,7 @@ test.describe("Authentication", () => {
     await page.goto("/");
     await page.getByPlaceholder(/username/i).fill("wronguser");
     await page.getByPlaceholder(/password/i).fill("wrongpass");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.locator("form").getByRole("button", { name: /sign in/i }).click();
 
     // Should show error
     await expect(page.getByText(/invalid|failed|incorrect/i)).toBeVisible({ timeout: 5000 });
@@ -20,7 +20,7 @@ test.describe("Authentication", () => {
     await page.goto("/");
     await page.getByPlaceholder(/username/i).fill("testadmin");
     await page.getByPlaceholder(/password/i).fill("TestPass123!");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.locator("form").getByRole("button", { name: /sign in/i }).click();
 
     // Should navigate to dashboard
     await expect(page.getByText(/CallAnalyzer/i)).toBeVisible({ timeout: 10000 });
@@ -32,7 +32,7 @@ test.describe("Authentication", () => {
     await page.goto("/");
     await page.getByPlaceholder(/username/i).fill("testadmin");
     await page.getByPlaceholder(/password/i).fill("TestPass123!");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.locator("form").getByRole("button", { name: /sign in/i }).click();
     await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
 
     // Logout

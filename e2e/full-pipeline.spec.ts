@@ -23,7 +23,8 @@ async function loginAsAdmin(page: Page) {
   await page.goto("/");
   await page.getByPlaceholder(/username/i).fill("testadmin");
   await page.getByPlaceholder(/password/i).fill("TestPass123!");
-  await page.getByRole("button", { name: /sign in/i }).click();
+  // Scope to the form — the auth page also has a tab-toggle "Sign In" button.
+  await page.locator("form").getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
 }
 
