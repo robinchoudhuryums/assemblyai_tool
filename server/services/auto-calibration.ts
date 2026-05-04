@@ -149,6 +149,51 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
       });
     }
 
+    // Operator drift alarm — separate from the calibration recommendation.
+    // Compares trailing 7d to trailing 30d (default window) so a sudden
+    // regression in scoring (prompt-template edit gone wrong, model change
+    // unexpectedly shifting the distribution) surfaces as a structured
+    // CloudWatch-queryable signal: $.alert = "score_distribution_alert".
+    // Mirrors the synthetic-call `calibration_drift` pattern but for real
+    // calls. Severity: warning at >0.8 mean shift, critical at >1.5.
+    try {
+      const sevenDayCutoff = new Date(Date.now() - 7 * 86400000);
+      const sevenDayCalls = await storage.getCallsSince(sevenDayCutoff);
+      const sevenDayCompleted = sevenDayCalls.filter(c => c.status === "completed");
+      if (sevenDayCompleted.length >= MIN_SAMPLE_SIZE) {
+        const sevenDayIds = sevenDayCompleted.map(c => c.id);
+        const sevenDayAnalyses = await storage.getCallAnalysesBulk(sevenDayIds);
+        const sevenDayScores: number[] = [];
+        for (const [, analysis] of sevenDayAnalyses) {
+          if (analysis?.performanceScore) {
+            const score = parseFloat(String(analysis.performanceScore));
+            if (Number.isFinite(score) && score >= 0 && score <= 10) sevenDayScores.push(score);
+          }
+        }
+        if (sevenDayScores.length >= MIN_SAMPLE_SIZE) {
+          const sevenDayMean = sevenDayScores.reduce((a, b) => a + b, 0) / sevenDayScores.length;
+          const meanShift = Math.abs(sevenDayMean - mean);
+          const SCORE_DRIFT_WARN = 0.8;
+          const SCORE_DRIFT_CRITICAL = 1.5;
+          if (meanShift >= SCORE_DRIFT_WARN) {
+            const severity = meanShift >= SCORE_DRIFT_CRITICAL ? "critical" : "warning";
+            logger.warn("score distribution drift", {
+              alert: "score_distribution_alert",
+              severity,
+              sevenDayMean: Number(sevenDayMean.toFixed(2)),
+              windowMean: Number(mean.toFixed(2)),
+              meanShift: Number(meanShift.toFixed(2)),
+              sevenDaySampleSize: sevenDayScores.length,
+              windowSampleSize: rawScores.length,
+              direction: sevenDayMean > mean ? "up" : "down",
+            });
+          }
+        }
+      }
+    } catch (driftErr) {
+      logger.debug("score distribution drift check failed (non-blocking)", { error: (driftErr as Error).message });
+    }
+
     // Store snapshot for admin visibility
     try {
       const s3Client = storage.getObjectStorageClient();

@@ -1358,15 +1358,25 @@ export class CloudStorage implements IStorage {
   }
 
   async getAllCalls(): Promise<Call[]> {
+    // INV-34: filter synthetic at the centralized list path (matches the
+    // PostgresStorage `WHERE synthetic = FALSE` in getAllCalls). Note that
+    // excluded_from_metrics calls intentionally stay visible in this list
+    // because INV-34/35 says manager-flagged calls remain in list/search/
+    // detail paths and are only dropped from aggregates. Aggregate methods
+    // (getDashboardMetrics, getSentimentDistribution, getTopPerformers,
+    // getInsightsData, getLeaderboardData) apply the second filter.
     const calls = await this.client.listAndDownloadJson<Call>("calls/");
-    return calls.sort(
+    const filtered = calls.filter(c => !c.synthetic);
+    return filtered.sort(
       (a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime()
     );
   }
   async getCallsByStatus(status: string): Promise<Call[]> {
-    // A7/F14: no secondary index in S3-only backend — O(n) is unavoidable here.
-    const all = await this.getAllCalls();
-    return all.filter(c => c.status === status);
+    // INV-34 exception: orphan recovery needs to see synthetic rows that
+    // got stuck in `processing` / `transcribing`. Bypass the getAllCalls
+    // filter and read raw, then filter by status only.
+    const calls = await this.client.listAndDownloadJson<Call>("calls/");
+    return calls.filter(c => c.status === status);
   }
   async getCallsSince(since: Date): Promise<Call[]> {
     const all = await this.getAllCalls();
@@ -1375,12 +1385,17 @@ export class CloudStorage implements IStorage {
   }
   async findCallByContentHash(contentHash: string): Promise<Call | undefined> {
     // O(n) in S3-only mode — acceptable fallback when no DB is configured.
-    const all = await this.getAllCalls();
+    // Bypass getAllCalls' synthetic filter: dedup must catch a duplicate
+    // upload regardless of whether the prior copy was synthetic, so we read
+    // the raw call list here.
+    const all = await this.client.listAndDownloadJson<Call>("calls/");
     return all.find(c => c.contentHash === contentHash);
   }
   async findCallByExternalId(externalId: string): Promise<Call | undefined> {
     // O(n) in S3-only mode — see note above. Indexed in PostgresStorage.
-    const all = await this.getAllCalls();
+    // Bypass getAllCalls' synthetic filter: dedup must work for synthetic
+    // simulated-call rows that link back via `external_id="sim:<id>"`.
+    const all = await this.client.listAndDownloadJson<Call>("calls/");
     return all.find(c => (c as any).externalId === externalId);
   }
 
@@ -1449,18 +1464,25 @@ export class CloudStorage implements IStorage {
   // O(N) over the call set. Acceptable because CloudStorage is the
   // legacy/dev fallback — production runs PostgresStorage.
   async countCompletedCallsByEmployee(employeeId: string): Promise<number> {
+    // INV-34: aggregate read path — must drop manager-excluded calls in
+    // addition to the synthetic filter applied by getCallsWithDetails.
     const calls = await this.getCallsWithDetails({ employee: employeeId, status: "completed" });
-    return calls.length;
+    return calls.filter(c => !c.excludedFromMetrics).length;
   }
 
   async getRecentCallsForBadgeEval(employeeId: string, limit: number): Promise<CallWithDetails[]> {
+    // INV-34: badge eval feeds gamification; manager-excluded calls don't
+    // count toward badges/streaks.
     const calls = await this.getCallsWithDetails({ employee: employeeId, status: "completed" });
-    return calls.slice(0, Math.max(1, Math.min(limit, 200)));
+    const filtered = calls.filter(c => !c.excludedFromMetrics);
+    return filtered.slice(0, Math.max(1, Math.min(limit, 200)));
   }
 
   async getLeaderboardData(options: { since?: Date }): Promise<LeaderboardRow[]> {
     const sinceMs = options.since ? options.since.getTime() : 0;
-    const all = await this.getCallsWithDetails({ status: "completed" });
+    // INV-34: leaderboard is the canonical aggregate; drop excluded calls.
+    const all = (await this.getCallsWithDetails({ status: "completed" }))
+      .filter(c => !c.excludedFromMetrics);
     const byEmployee = new Map<string, LeaderboardRow>();
     const sorted = all
       .filter(c => c.employee && new Date(c.uploadedAt || 0).getTime() >= sinceMs)
@@ -1625,25 +1647,35 @@ export class CloudStorage implements IStorage {
 
   // --- Dashboard and Reporting Methods ---
   async getDashboardMetrics(): Promise<DashboardMetrics> {
+    // INV-34: build excluded-callId set so synthetic + manager-excluded
+    // calls are dropped from the sentiment + analysis aggregates too.
     const [calls, sentiments, analyses] = await Promise.all([
-      this.client.listObjects("calls/"),
+      this.client.listAndDownloadJson<Call>("calls/"),
       this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
       this.client.listAndDownloadJson<CallAnalysis>("analyses/"),
     ]);
+    const excludedCallIds = new Set<string>();
+    for (const c of calls) {
+      if (c.synthetic || c.excludedFromMetrics) excludedCallIds.add(c.id);
+    }
 
-    const totalCalls = calls.length;
+    const eligibleCalls = calls.filter(c => !excludedCallIds.has(c.id));
+    const eligibleSentiments = sentiments.filter(s => !excludedCallIds.has(s.callId));
+    const eligibleAnalyses = analyses.filter(a => !excludedCallIds.has(a.callId));
+
+    const totalCalls = eligibleCalls.length;
 
     const avgSentiment =
-      sentiments.length > 0
-        ? (sentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) /
-            sentiments.length) *
+      eligibleSentiments.length > 0
+        ? (eligibleSentiments.reduce((sum, s) => sum + safeFloat(s.overallScore), 0) /
+            eligibleSentiments.length) *
           10
         : 0;
 
     const avgPerformanceScore =
-      analyses.length > 0
-        ? analyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) /
-          analyses.length
+      eligibleAnalyses.length > 0
+        ? eligibleAnalyses.reduce((sum, a) => sum + safeFloat(a.performanceScore), 0) /
+          eligibleAnalyses.length
         : 0;
 
     return {
@@ -1655,23 +1687,35 @@ export class CloudStorage implements IStorage {
   }
 
   async getSentimentDistribution(): Promise<SentimentDistribution> {
-    const sentiments = await this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/");
+    // INV-34: filter sentiments whose underlying call is synthetic /
+    // excluded_from_metrics.
+    const [calls, sentiments] = await Promise.all([
+      this.client.listAndDownloadJson<Call>("calls/"),
+      this.client.listAndDownloadJson<SentimentAnalysis>("sentiments/"),
+    ]);
+    const excludedCallIds = new Set<string>();
+    for (const c of calls) {
+      if (c.synthetic || c.excludedFromMetrics) excludedCallIds.add(c.id);
+    }
     const distribution: SentimentDistribution = { positive: 0, neutral: 0, negative: 0 };
-
     for (const s of sentiments) {
+      if (excludedCallIds.has(s.callId)) continue;
       const key = s.overallSentiment as keyof SentimentDistribution;
       if (key in distribution) {
         distribution[key]++;
       }
     }
-
     return distribution;
   }
 
   async getTopPerformers(limit = 3): Promise<PerformerSummary[]> {
+    // INV-34: drop synthetic + manager-excluded calls before aggregating
+    // per-employee scores.
     const [employees, calls, analyses] = await Promise.all([
       this.getAllEmployees(),
-      this.client.listAndDownloadJson<Call>("calls/"),
+      this.client.listAndDownloadJson<Call>("calls/").then(rows =>
+        rows.filter(c => !c.synthetic && !c.excludedFromMetrics)
+      ),
       this.client.listAndDownloadJson<CallAnalysis>("analyses/"),
     ]);
 
@@ -1721,7 +1765,10 @@ export class CloudStorage implements IStorage {
     from?: string; to?: string; employeeId?: string; role?: string; callPartyType?: string;
   }): Promise<FilteredReportResult> {
     // CloudStorage is deprecated (s3-legacy, dev only). Load and filter in JS.
-    const allCalls = await this.getCallsWithDetails({ status: "completed" });
+    // INV-34: filtered reports are an aggregate path — drop manager-excluded
+    // calls in addition to the synthetic filter applied by getCallsWithDetails.
+    const allCalls = (await this.getCallsWithDetails({ status: "completed" }))
+      .filter(c => !c.excludedFromMetrics);
     const employees = await this.getAllEmployees();
     const employeeMap = new Map(employees.map(e => [e.id, e]));
     let filtered = allCalls;
@@ -1771,8 +1818,9 @@ export class CloudStorage implements IStorage {
 
   async getInsightsData(since: Date): Promise<InsightsCallData[]> {
     // CloudStorage is deprecated. Use getCallsSinceWithDetails and map.
+    // INV-34: insights aggregate — drop manager-excluded calls.
     const allCalls = await this.getCallsSinceWithDetails(since);
-    return allCalls.filter(c => c.status === "completed" && c.analysis).map(c => ({
+    return allCalls.filter(c => c.status === "completed" && c.analysis && !c.excludedFromMetrics).map(c => ({
       id: c.id, status: c.status, uploadedAt: c.uploadedAt || null,
       employeeName: c.employee?.name || null, sentiment: c.sentiment?.overallSentiment || null,
       performanceScore: c.analysis?.performanceScore || null, confidenceScore: c.analysis?.confidenceScore || null,

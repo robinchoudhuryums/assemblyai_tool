@@ -37,7 +37,9 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
-function formatCostPrecise(cost: number): string {
+function formatCostPrecise(cost: number | null | undefined): string {
+  // F6: null = pricing missing; render an explicit signal rather than $0.00
+  if (cost == null) return "—";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
   return `$${cost.toFixed(2)}`;
 }
@@ -128,10 +130,26 @@ function getUserData(records: UsageRecord[]) {
 // tooltips/legends; service split uses sage (AssemblyAI) + copper
 // (Bedrock) instead of the prior hex palette.
 // ─────────────────────────────────────────────────────────────
+interface CostBudgetSummary {
+  monthlyBudget: number | null;
+  mtd: { total: number; assemblyai: number; bedrock: number; bedrockSecondary: number };
+  trailing30Total: number;
+  utilizationPct: number | null;
+  projectedMtdEnd: number;
+  projectedOverPct: number | null;
+  severity: "info" | "warning" | "critical" | "unknown";
+  topUsers: { user: string; cost: number }[];
+  missingPricingRecords: number;
+}
+
 export default function SpendTrackingPage() {
   const [period, setPeriod] = useState<Period>("current-month");
   const { data: records = [], isLoading } = useQuery<UsageRecord[]>({
     queryKey: ["/api/usage"],
+    staleTime: 60000,
+  });
+  const { data: budget } = useQuery<CostBudgetSummary>({
+    queryKey: ["/api/admin/cost-budget"],
     staleTime: 60000,
   });
 
@@ -176,6 +194,9 @@ export default function SpendTrackingPage() {
         </p>
       </div>
 
+      {/* Cost budget banner — month-to-date utilization vs configured cap */}
+      {budget && <CostBudgetBanner budget={budget} />}
+
       {/* Period tabs */}
       <div className="flex gap-2 px-4 sm:px-7 py-3 bg-background border-b border-border flex-wrap">
         {PERIOD_TABS.map(({ value, label }) => (
@@ -215,6 +236,71 @@ export default function SpendTrackingPage() {
           )}
         </SpendPanel>
       </main>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cost budget banner: MTD utilization vs configured monthly cap
+// ─────────────────────────────────────────────────────────────
+function CostBudgetBanner({ budget }: { budget: CostBudgetSummary }) {
+  const { monthlyBudget, mtd, utilizationPct, projectedOverPct, severity, missingPricingRecords } = budget;
+  if (monthlyBudget === null) {
+    return (
+      <div
+        className="px-4 sm:px-7 py-3 bg-background border-b border-border"
+      >
+        <div
+          className="font-mono uppercase text-muted-foreground"
+          style={{ fontSize: 10, letterSpacing: "0.1em" }}
+        >
+          MTD spend ${mtd.total.toFixed(2)} · monthly budget unset (set MONTHLY_COST_BUDGET_USD to enable utilization tracking)
+          {missingPricingRecords > 0 && (
+            <span style={{ color: "var(--amber)" }}> · {missingPricingRecords} record{missingPricingRecords === 1 ? "" : "s"} with missing Bedrock pricing</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+  const tone =
+    severity === "critical" ? { bg: "var(--destructive-soft)", fg: "var(--destructive)" } :
+    severity === "warning" ? { bg: "var(--amber-soft)", fg: "var(--amber)" } :
+    { bg: "var(--sage-soft)", fg: "var(--sage)" };
+  return (
+    <div
+      className="px-4 sm:px-7 py-3 border-b border-border"
+      style={{ background: tone.bg }}
+    >
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <div
+          className="font-display font-medium tabular-nums"
+          style={{ fontSize: 22, color: tone.fg, lineHeight: 1 }}
+        >
+          {utilizationPct?.toFixed(1)}%
+        </div>
+        <div
+          className="font-mono uppercase"
+          style={{ fontSize: 10, letterSpacing: "0.1em", color: tone.fg }}
+        >
+          MTD ${mtd.total.toFixed(2)} / ${monthlyBudget.toFixed(2)} budget
+          {projectedOverPct !== null && (
+            <> · projected month-end {projectedOverPct.toFixed(1)}%</>
+          )}
+        </div>
+      </div>
+      <div
+        className="font-mono uppercase text-muted-foreground mt-1.5 flex gap-3 flex-wrap"
+        style={{ fontSize: 9, letterSpacing: "0.08em" }}
+      >
+        <span>AAI ${mtd.assemblyai.toFixed(2)}</span>
+        <span>Bedrock ${mtd.bedrock.toFixed(2)}</span>
+        {mtd.bedrockSecondary > 0 && <span>A/B ${mtd.bedrockSecondary.toFixed(2)}</span>}
+        {missingPricingRecords > 0 && (
+          <span style={{ color: "var(--amber)" }}>
+            {missingPricingRecords} unpriced
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -457,11 +543,41 @@ function ActivityRow({ record: r }: { record: UsageRecord }) {
             {r.services.bedrock && (
               <span className="ml-3">
                 Bedrock {formatCostPrecise(r.services.bedrock.estimatedCost)}
+                {r.services.bedrock.costPricingMissing && (
+                  <span
+                    className="ml-1 px-1 py-0.5 font-mono uppercase"
+                    style={{
+                      fontSize: 9,
+                      letterSpacing: "0.05em",
+                      backgroundColor: "var(--amber-soft)",
+                      color: "var(--amber)",
+                      borderRadius: 2,
+                    }}
+                    title={`Cost pricing missing for model "${r.services.bedrock.model}". Add it to BEDROCK_PRICING in server/routes/utils.ts.`}
+                  >
+                    pricing?
+                  </span>
+                )}
               </span>
             )}
             {r.services.bedrockSecondary && (
               <span className="ml-1">
                 + {formatCostPrecise(r.services.bedrockSecondary.estimatedCost)}
+                {r.services.bedrockSecondary.costPricingMissing && (
+                  <span
+                    className="ml-1 px-1 py-0.5 font-mono uppercase"
+                    style={{
+                      fontSize: 9,
+                      letterSpacing: "0.05em",
+                      backgroundColor: "var(--amber-soft)",
+                      color: "var(--amber)",
+                      borderRadius: 2,
+                    }}
+                    title={`Cost pricing missing for model "${r.services.bedrockSecondary.model}".`}
+                  >
+                    pricing?
+                  </span>
+                )}
               </span>
             )}
           </div>
