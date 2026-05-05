@@ -74,12 +74,14 @@ test.describe("Full audio pipeline (with MSW mocks)", () => {
     // POST multipart audio to /api/calls/upload. Server CSRF middleware
     // requires both `X-Requested-With` (multipart proof-of-origin) and
     // the double-submit `x-csrf-token` header echoing the cookie.
+    // Per-test unique payload — the upload route does SHA-256 dedup, so
+    // two tests with the same buffer would 409 the second one.
     const res = await request.post("/api/calls/upload", {
       multipart: {
         audioFile: {
           name: "mock-call.mp3",
           mimeType: "audio/mpeg",
-          buffer: Buffer.from("fake-mp3-bytes"),
+          buffer: Buffer.from(`fake-mp3-bytes-upload-test-${Date.now()}`),
         },
       },
       headers: {
@@ -104,7 +106,9 @@ test.describe("Full audio pipeline (with MSW mocks)", () => {
         audioFile: {
           name: "pipeline-test.mp3",
           mimeType: "audio/mpeg",
-          buffer: Buffer.from("fake-mp3-bytes"),
+          // Per-test unique payload — content-hash dedup would 409 a
+          // duplicate buffer otherwise.
+          buffer: Buffer.from(`fake-mp3-bytes-pipeline-test-${Date.now()}`),
         },
       },
       headers: {

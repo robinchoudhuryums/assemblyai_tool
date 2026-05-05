@@ -33,6 +33,12 @@ test.describe("Navigation", () => {
   });
 
   test("admin links visible for admin users", async ({ page }) => {
+    // The admin sidebar section is collapsed by default — adminExpanded
+    // initial state at sidebar.tsx:61 only auto-expands when location
+    // starts with /admin. After login the user lands on / (dashboard),
+    // so we must click the toggle (or navigate to /admin) before the
+    // admin link testids are rendered. Click is faster.
+    await page.getByLabel("Toggle admin section").click();
     await expect(page.getByTestId("nav-link-admin")).toBeVisible();
     await expect(page.getByTestId("nav-link-templates")).toBeVisible();
     await expect(page.getByTestId("nav-link-ab-testing")).toBeVisible();
