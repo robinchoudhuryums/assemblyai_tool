@@ -10,7 +10,7 @@
  * HIPAA: S3 is HIPAA-eligible under the AWS BAA.
  */
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
-import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, generatePresignedUrl } from "./sigv4.js";
+import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, generatePresignedUrl, encodeCanonicalUri } from "./sigv4.js";
 import { logger } from "./logger.js";
 
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
@@ -410,11 +410,25 @@ export class S3Client {
     contentType?: string,
   ): Promise<Response> {
     const creds = await this.ensureCredentials();
-    const url = queryString
-      ? `https://${this.host}${path}?${queryString}`
-      : `https://${this.host}${path}`;
 
-    const headers = this.sign(method, path, queryString || "", body, contentType, creds);
+    // Encode the path ONCE, then use the same encoded string for both the
+    // fetch URL and the SigV4 canonical URI. Previously `path` (raw, with
+    // literal special chars like spaces in 8x8 telephony filenames) was
+    // passed to fetch — which percent-encodes per the WHATWG URL spec —
+    // AND to the signer, which percent-encodes via encodeURIComponent.
+    // The two encoders disagree on which characters need encoding (e.g.
+    // WHATWG keeps `! ' ( ) *` literal; encodeURIComponent escapes them),
+    // and on edge cases like a literal space the actual divergence
+    // surfaces as `SignatureDoesNotMatch` from S3 because the wire path
+    // and the signed canonical URI aren't byte-identical. Encoding once
+    // upstream and telling the signer not to re-encode (with
+    // pathAlreadyEncoded:true) eliminates the entire class of mismatches.
+    const encodedPath = encodeCanonicalUri(path);
+    const url = queryString
+      ? `https://${this.host}${encodedPath}?${queryString}`
+      : `https://${this.host}${encodedPath}`;
+
+    const headers = this.sign(method, encodedPath, queryString || "", body, contentType, creds);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), S3_TIMEOUT_MS);
     try {
@@ -458,7 +472,11 @@ export class S3Client {
     return signRequest({
       method,
       host: this.host,
+      // request() above hands us an already-encoded path (single source
+      // of truth for the path string, shared with the fetch URL). Skip
+      // the signer's re-encoding step so we don't double-encode.
       rawPath,
+      pathAlreadyEncoded: true,
       queryString,
       service: "s3",
       region: this.region,
