@@ -1,12 +1,12 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { CaretDown, CaretRight, Eye, FileText, GitDiff, PencilSimple, UploadSimple, UserPlus, Users, Warning, X } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretDown, CaretRight, Eye, FileText, GitDiff, PencilSimple, UploadSimple, UserPlus, Users, Warning, X } from "@phosphor-icons/react";
 import { Link } from "wouter";
 import { POWER_MOBILITY_SUBTEAMS } from "@shared/schema";
 import type { Employee } from "@shared/schema";
@@ -388,9 +388,50 @@ export default function EmployeesPage() {
     },
   });
 
+  // Quick deactivate / reactivate toggle on the row itself — separate from
+  // updateMutation so the success toast can carry the right verb and the
+  // edit-dialog close side-effect doesn't fire when nobody opened it.
+  const statusToggleMutation = useMutation({
+    mutationFn: async ({ id, next }: { id: string; next: "Active" | "Inactive" }) => {
+      const res = await apiRequest("PATCH", `/api/employees/${id}`, { status: next });
+      const body = await res.json();
+      return { ...body, _next: next };
+    },
+    onSuccess: (data: { name?: string; _next: "Active" | "Inactive" }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+      toast({
+        title: data._next === "Inactive" ? "Employee deactivated" : "Employee reactivated",
+        description:
+          data._next === "Inactive"
+            ? `${data.name ?? "Employee"} no longer appears in active rosters. Call history preserved.`
+            : `${data.name ?? "Employee"} is active again.`,
+      });
+    },
+    onError: (error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // CSV import — server expects multipart/form-data with a `file` field
+  // (A29 contract). Hidden file picker triggered by the "Import CSV" button.
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const importMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/employees/import-csv");
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const csrf = getCsrfToken();
+      const headers: Record<string, string> = { "X-Requested-With": "XMLHttpRequest" };
+      if (csrf) headers["x-csrf-token"] = csrf;
+      const res = await fetch("/api/employees/import-csv", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+        headers,
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ message: `Upload failed (${res.status})` }));
+        throw new Error(errorData.message || `Upload failed (${res.status})`);
+      }
       return res.json();
     },
     onSuccess: (data: { message: string }) => {
@@ -544,6 +585,42 @@ export default function EmployeesPage() {
           <Button size="sm" variant="ghost" aria-label="Edit agent" onClick={() => openEditDialog(emp)}>
             <PencilSimple className="w-3.5 h-3.5" />
           </Button>
+          {/* Deactivate / Reactivate toggle. We don't hard-delete employees
+              because calls / coaching / snapshots reference employee_id;
+              hard-delete would orphan history. Deactivation preserves
+              integrity and is reversible. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={emp.status === "Active" ? "Deactivate agent" : "Reactivate agent"}
+            title={
+              emp.status === "Active"
+                ? "Deactivate (preserves call history)"
+                : "Reactivate"
+            }
+            onClick={() => {
+              const next = emp.status === "Active" ? "Inactive" : "Active";
+              if (
+                emp.status === "Active" &&
+                !window.confirm(
+                  `Deactivate ${emp.name}? Their call history is preserved and they can be reactivated from this view. Use deactivation instead of deletion to keep audit + analysis records intact.`,
+                )
+              ) {
+                return;
+              }
+              statusToggleMutation.mutate({ id: emp.id, next });
+            }}
+            disabled={statusToggleMutation.isPending}
+            style={{
+              color: emp.status === "Active" ? undefined : "var(--accent)",
+            }}
+          >
+            {emp.status === "Active" ? (
+              <X className="w-3.5 h-3.5" />
+            ) : (
+              <ArrowClockwise className="w-3.5 h-3.5" />
+            )}
+          </Button>
         </div>
       </div>
     );
@@ -667,11 +744,25 @@ export default function EmployeesPage() {
           {showSubTeam ? "Sub-teams ON" : "Sub-teams OFF"}
         </ActionChip>
         <div className="flex-1" />
+        <input
+          ref={csvInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          aria-hidden="true"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) importMutation.mutate(file);
+            // Reset value so picking the same file twice in a row still fires onChange
+            e.target.value = "";
+          }}
+        />
         <Button
           variant="outline"
           size="sm"
-          onClick={() => importMutation.mutate()}
+          onClick={() => csvInputRef.current?.click()}
           disabled={importMutation.isPending}
+          title='CSV columns: "Agent Name" (required), "Department", "Extension", "Pseudonym" / "Display Name", "Status" (Active|Inactive). Max 500 rows, 2 MB.'
         >
           <UploadSimple className="w-4 h-4 mr-1.5" />
           {importMutation.isPending ? "Importing…" : "Import CSV"}
@@ -880,8 +971,9 @@ export default function EmployeesPage() {
             </p>
             <Button
               variant="outline"
-              onClick={() => importMutation.mutate()}
+              onClick={() => csvInputRef.current?.click()}
               disabled={importMutation.isPending}
+              title='CSV columns: "Agent Name" (required), "Department", "Extension", "Pseudonym" / "Display Name", "Status" (Active|Inactive). Max 500 rows, 2 MB.'
             >
               <UploadSimple className="w-4 h-4 mr-1.5" />
               {importMutation.isPending ? "Importing…" : "Import from CSV"}
