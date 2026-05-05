@@ -37,8 +37,9 @@ test.describe("Admin workflows", () => {
   test("coaching page renders for manager+ without crashing", async ({ page }) => {
     await page.goto("/coaching");
     // Empty-state (no sessions in MemStorage) or loaded sessions — either
-    // way the page must not throw. The page-shell testid is always rendered.
-    await expect(page.getByTestId("page-shell")).toBeVisible({ timeout: 10000 });
+    // way the page must not throw. CoachingPageShell renders an outer
+    // div with `coaching-page-shell` regardless of empty/populated state.
+    await expect(page.getByTestId("coaching-page-shell")).toBeVisible({ timeout: 10000 });
     await expect(page.getByText(/Something went wrong/i)).not.toBeVisible();
   });
 

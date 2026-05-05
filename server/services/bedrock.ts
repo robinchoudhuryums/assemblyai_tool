@@ -82,6 +82,104 @@ export function getBedrockCircuitBreakerState() {
   return bedrockCircuitBreaker.getState();
 }
 
+/**
+ * In-process 24h rolling counter for Bedrock 403 access-denied / 429
+ * quota-exhausted events. Surfaced on /admin/health-deep so operators
+ * can see at a glance whether AWS Budget actions or service quotas
+ * are silently blocking analyses. Bucketed by hour so we can prune
+ * efficiently and don't pay per-event Map churn at high throughput.
+ */
+const accessDeniedBuckets: { ts: number; count: number; classification: string }[] = [];
+const ACCESS_DENIED_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function recordBedrockAccessBlocked(classification: "budget" | "quota" | "policy" | "other"): void {
+  const now = Date.now();
+  // Drop buckets older than 24h
+  while (accessDeniedBuckets.length > 0 && now - accessDeniedBuckets[0].ts > ACCESS_DENIED_WINDOW_MS) {
+    accessDeniedBuckets.shift();
+  }
+  const hourBucket = Math.floor(now / (60 * 60 * 1000)) * (60 * 60 * 1000);
+  const last = accessDeniedBuckets[accessDeniedBuckets.length - 1];
+  if (last && last.ts === hourBucket && last.classification === classification) {
+    last.count++;
+  } else {
+    accessDeniedBuckets.push({ ts: hourBucket, count: 1, classification });
+  }
+}
+
+/**
+ * 24h Bedrock-blocked counter for /admin/health-deep. Returns total +
+ * breakdown by classification (budget action / service quota / generic
+ * policy denial / other 4xx). Operators with a CloudWatch metric filter
+ * on `alert: "bedrock_access_denied"` get pushed alerts; this surface
+ * is the pull view for the admin dashboard.
+ */
+export function getBedrockAccessBlockedStats(): {
+  total: number;
+  byClassification: Record<string, number>;
+} {
+  const now = Date.now();
+  while (accessDeniedBuckets.length > 0 && now - accessDeniedBuckets[0].ts > ACCESS_DENIED_WINDOW_MS) {
+    accessDeniedBuckets.shift();
+  }
+  const byClassification: Record<string, number> = {};
+  let total = 0;
+  for (const b of accessDeniedBuckets) {
+    byClassification[b.classification] = (byClassification[b.classification] ?? 0) + b.count;
+    total += b.count;
+  }
+  return { total, byClassification };
+}
+
+/** Test seam: clear the access-blocked counter. */
+export function _resetBedrockAccessBlockedCounter(): void {
+  accessDeniedBuckets.length = 0;
+}
+
+/**
+ * Classify a Bedrock 4xx error body to distinguish budget-cap denials
+ * from generic IAM/policy issues. AWS Budgets actions apply an SCP that
+ * surfaces in the error message as "explicit deny in a service control
+ * policy"; service-quota throttles are 429 with "ThrottlingException";
+ * model-access-not-granted comes through as "You don't have access to
+ * the model with the specified model ID". The classification feeds both
+ * the structured log tag and the /admin/health-deep breakdown.
+ */
+function classifyBedrockAccessError(status: number, errorText: string): "budget" | "quota" | "policy" | "other" {
+  if (status === 429) return "quota";
+  const lower = errorText.toLowerCase();
+  if (/budget|service control policy|explicit deny/i.test(lower)) return "budget";
+  if (/throttl|too many requests|rate.exceeded/i.test(lower)) return "quota";
+  if (status === 403 || /access\s*denied|not\s*authorized|don't have access/i.test(lower)) return "policy";
+  return "other";
+}
+
+/**
+ * Emit the structured `alert: "bedrock_access_denied"` log tag on 403
+ * and 429 responses + record into the 24h counter. CloudWatch metric
+ * filters matching `$.alert = "bedrock_access_denied"` wire this into
+ * existing alarm stacks. Mirrors the calibration_drift / cost_budget
+ * patterns. Called from both generateText and analyzeCallTranscript.
+ */
+function reportBedrockAccessBlocked(args: {
+  status: number;
+  errorText: string;
+  model: string;
+  callId?: string;
+  phase: "generateText" | "analyzeCallTranscript";
+}): void {
+  const classification = classifyBedrockAccessError(args.status, args.errorText);
+  recordBedrockAccessBlocked(classification);
+  logger.warn("Bedrock access blocked", {
+    alert: "bedrock_access_denied",
+    status: args.status,
+    classification,
+    model: args.model,
+    phase: args.phase,
+    callId: args.callId,
+  });
+}
+
 export class BedrockProvider implements AIAnalysisProvider {
   readonly name = "bedrock";
   private credentials: AwsCredentials | null = null;
@@ -198,6 +296,17 @@ export class BedrockProvider implements AIAnalysisProvider {
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
+          // Spend-cap visibility: 403 and 429 indicate AWS-side blocking
+          // (Budget Actions, service quotas, IAM policy). Emit structured
+          // alert tag + counter so /admin/health-deep + CloudWatch see it.
+          if (response.status === 403 || response.status === 429) {
+            reportBedrockAccessBlocked({
+              status: response.status,
+              errorText,
+              model: modelId,
+              phase: "generateText",
+            });
+          }
           // F-17: 4xx (except 429 throttling) signals a client problem — bad
           // prompt, schema rejection, etc. Throw BedrockClientError so the
           // circuit breaker doesn't count it toward the open threshold.
@@ -277,6 +386,17 @@ export class BedrockProvider implements AIAnalysisProvider {
           const statusCategory = response.status >= 500 ? "service unavailable" :
             response.status === 429 ? "rate limited" :
             response.status === 403 ? "access denied" : "request failed";
+          // Spend-cap visibility (parity with generateText path): emit
+          // alert + counter for AWS-side blocking responses.
+          if (response.status === 403 || response.status === 429) {
+            reportBedrockAccessBlocked({
+              status: response.status,
+              errorText,
+              model: this.model,
+              callId,
+              phase: "analyzeCallTranscript",
+            });
+          }
           // INV-32 / F-17 parity: 4xx (except 429 throttling) is a client
           // problem — bad prompt, schema rejection, invalid model id — and
           // must NOT count toward the circuit-breaker open threshold.

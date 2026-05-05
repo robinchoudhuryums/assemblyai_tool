@@ -32,7 +32,7 @@ export default function CoachingPageShell({
   const canManage = role === "manager" || role === "admin";
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground" data-testid="coaching-page-shell">
       <CoachingAppBar active={active} canManage={canManage} />
       {children}
     </div>

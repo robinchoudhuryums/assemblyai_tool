@@ -10,7 +10,7 @@ import { analyzeScoreDistribution, getLatestCalibrationSnapshot } from "../servi
 import { getCorrectionStats, getScoringQualityAlerts } from "../services/scoring-feedback";
 import { getDroppedAuditEntryCount, getPendingAuditEntryCount } from "../services/audit-log";
 import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
-import { getBedrockCircuitBreakerState } from "../services/bedrock";
+import { getBedrockCircuitBreakerState, getBedrockAccessBlockedStats } from "../services/bedrock";
 import { is8x8Enabled } from "../services/telephony-8x8";
 import { getPool } from "../db/pool";
 import { getPipelineSettingsWithMeta, setPipelineSettings } from "../services/pipeline-settings";
@@ -52,6 +52,12 @@ export function registerOperationsRoutes(
 
       // Bedrock circuit breaker
       const bedrockCircuitState = getBedrockCircuitBreakerState();
+
+      // Bedrock access-blocked counter (24h rolling). Surfaces 403 budget
+      // actions / 429 quota throttles separately from the circuit breaker
+      // (which intentionally doesn't trip on these — INV-32). Operators
+      // see this as the "AWS is silently blocking our analyses" signal.
+      const bedrockAccessBlocked = getBedrockAccessBlockedStats();
 
       // RAG cache
       const ragEnabled = isRagEnabled();
@@ -112,6 +118,19 @@ export function registerOperationsRoutes(
         issues.push(`${chronicallyUnlinkedLast7d} viewers/managers unlinked for 7d+`);
       }
 
+      // Spend-cap visibility: surface AWS-side blocking events so operators
+      // see budget-action denials / quota throttles in the same place as
+      // the rest of system health. Threshold of 5 in 24h promotes to an
+      // issue line — small teams with occasional throttling don't get
+      // noisy alerts; sustained blocking does.
+      if (bedrockAccessBlocked.total >= 5) {
+        const breakdown = Object.entries(bedrockAccessBlocked.byClassification)
+          .map(([k, v]) => `${v} ${k}`)
+          .join(", ");
+        issues.push(`Bedrock blocked ${bedrockAccessBlocked.total}× in last 24h (${breakdown})`);
+        if (overallStatus === "healthy") overallStatus = "degraded";
+      }
+
       res.json({
         status: overallStatus,
         timestamp: new Date().toISOString(),
@@ -119,7 +138,11 @@ export function registerOperationsRoutes(
         subsystems: {
           auditLog: { droppedEntries: auditDropped, pendingEntries: auditPending, healthy: auditDropped === 0 },
           jobQueue: queueStats,
-          bedrockAI: { circuitState: bedrockCircuitState, healthy: bedrockCircuitState === "closed" },
+          bedrockAI: {
+            circuitState: bedrockCircuitState,
+            healthy: bedrockCircuitState === "closed" && bedrockAccessBlocked.total === 0,
+            accessBlocked24h: bedrockAccessBlocked,
+          },
           ragKnowledgeBase: ragEnabled ? { enabled: true, cache: ragCache } : { enabled: false },
           batchInference: { enabled: batchMode },
           scoringQuality: { ...correctionStats, alerts: qualityAlerts },
