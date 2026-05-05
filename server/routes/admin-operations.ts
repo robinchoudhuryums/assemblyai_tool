@@ -110,6 +110,67 @@ export function registerOperationsRoutes(
         }
       }
 
+      // AI-skipped flags (24h rolling). Counts distinct calls completed in
+      // the last 24h whose analysis carries an `ai_unavailable:*` or
+      // `output_anomaly:*` flag. These two prefixes are the strongest
+      // signals of pipeline degradation: the first means AI couldn't run
+      // (Bedrock 403/429, circuit open, parse-failure exhaustion); the
+      // second means the model ran but produced malformed output we had
+      // to scrub. Threshold 1 = unusual; ≥5 = ongoing issue. Synthetic
+      // calls excluded (INV-34) so the simulated-call calibration suite
+      // doesn't poison the signal. Falls back to null when DB is
+      // unavailable (CloudStorage / MemStorage paths don't have a
+      // SQL-shaped flag-prefix query).
+      let aiSkippedFlags24h: {
+        total: number;
+        byPrefix: Record<string, number>;
+      } | null = null;
+      if (pool) {
+        try {
+          // Single CTE: explode each call's flag array, project the
+          // matching prefix, dedupe by (call_id, prefix), then aggregate.
+          // The 24h window pruned by calls.created_at runs first via the
+          // existing index — the JSONB unnest only sees a small slice.
+          const { rows } = await pool.query<{ prefix: string; cnt: string }>(
+            `WITH flagged AS (
+               SELECT DISTINCT c.id, p.prefix
+               FROM calls c
+               JOIN call_analyses ca ON ca.call_id = c.id,
+                    LATERAL jsonb_array_elements_text(ca.flags) AS flag,
+                    LATERAL (
+                      SELECT CASE
+                        WHEN flag LIKE 'ai_unavailable:%' THEN 'ai_unavailable'
+                        WHEN flag LIKE 'output_anomaly:%' THEN 'output_anomaly'
+                      END AS prefix
+                    ) p
+               WHERE c.created_at >= NOW() - INTERVAL '24 hours'
+                 AND c.synthetic = FALSE
+                 AND ca.flags IS NOT NULL
+                 AND p.prefix IS NOT NULL
+             )
+             SELECT prefix, COUNT(*)::text AS cnt
+             FROM flagged
+             GROUP BY prefix`,
+          );
+          const byPrefix: Record<string, number> = {};
+          let total = 0;
+          for (const row of rows) {
+            const n = parseInt(row.cnt, 10);
+            if (Number.isFinite(n)) {
+              byPrefix[row.prefix] = n;
+              total += n;
+            }
+          }
+          aiSkippedFlags24h = { total, byPrefix };
+        } catch (err) {
+          // call_analyses may not exist on fresh deploys, or DB blip.
+          // Don't fail the whole health endpoint.
+          logger.warn("health-deep: ai-skipped-flags query failed", {
+            error: (err as Error).message,
+          });
+        }
+      }
+
       // Overall status: "healthy" / "degraded" / "unhealthy"
       let overallStatus: "healthy" | "degraded" | "unhealthy" = "healthy";
       const issues: string[] = [];
@@ -161,6 +222,18 @@ export function registerOperationsRoutes(
         if (overallStatus === "healthy") overallStatus = "degraded";
       }
 
+      // AI-skipped flag rate: ≥5 in 24h promotes to a degraded issue. A
+      // single ai_unavailable flag is usually a transient AWS blip; a
+      // sustained pattern means the pipeline is producing partially-
+      // analyzed calls at scale and reviewers will see degraded scores.
+      if (aiSkippedFlags24h && aiSkippedFlags24h.total >= 5) {
+        const breakdown = Object.entries(aiSkippedFlags24h.byPrefix)
+          .map(([k, v]) => `${v} ${k}`)
+          .join(", ");
+        issues.push(`AI-skipped/anomaly flags ${aiSkippedFlags24h.total}× in last 24h (${breakdown})`);
+        if (overallStatus === "healthy") overallStatus = "degraded";
+      }
+
       res.json({
         status: overallStatus,
         timestamp: new Date().toISOString(),
@@ -192,6 +265,18 @@ export function registerOperationsRoutes(
             chronicallyUnlinkedLast7d,
             healthy: chronicallyUnlinkedLast7d === null || chronicallyUnlinkedLast7d === 0,
           },
+          // AI-skipped / output-anomaly flag rate (24h). Optional because
+          // CloudStorage / MemStorage paths can't run the SQL JSONB query
+          // and surface null. UI hides the card when null. Threshold 1 =
+          // unusual, ≥5 = ongoing issue (matches the issues-array gate
+          // above).
+          aiAnalysisFlags: aiSkippedFlags24h
+            ? {
+                total24h: aiSkippedFlags24h.total,
+                byPrefix: aiSkippedFlags24h.byPrefix,
+                healthy: aiSkippedFlags24h.total === 0,
+              }
+            : null,
         },
       });
     } catch (error) {
