@@ -16,6 +16,83 @@ import { logger } from "./logger.js";
 const S3_TIMEOUT_MS = 60_000; // 60 seconds — prevents indefinite hangs on S3 operations
 
 /**
+ * Audio-archive resilience (post-incident: batch-of-5 upload lost all
+ * audio because concurrent S3 PUTs hit transient throttling and the
+ * pipeline's silent-warn-and-continue masked the failure).
+ *
+ * Retry budget for S3 PUTs only: 3 attempts with 200ms / 800ms / 3200ms
+ * backoff. ~4 seconds total worst case before final failure. We retry
+ * on any throw (network errors, 5xx, 429) — the request() helper above
+ * already classifies non-200 responses as throws, so this catches them
+ * uniformly. Idempotent uploads (same key + same content) are safe to
+ * retry per AWS S3 semantics.
+ */
+const S3_PUT_RETRY_DELAYS_MS = [200, 800, 3200];
+
+/**
+ * 24h rolling counter of S3 PUT failures that exhausted all retries.
+ * Categorized by object-key prefix so /admin/health-deep can surface
+ * audio-archive failures separately (the original incident driver) from
+ * other PUT failures (batch tracking, calibration snapshots, etc.).
+ * Hour-bucketed, prunes lazily on read. Mirrors the
+ * bedrock_access_denied counter pattern.
+ */
+const S3_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const s3FailureBuckets: { ts: number; objectName: string; category: string }[] = [];
+
+function categorizeKey(objectName: string): string {
+  if (objectName.startsWith("audio/")) return "audio";
+  if (objectName.startsWith("batch-inference/")) return "batch_inference";
+  if (objectName.startsWith("calibration/")) return "calibration";
+  if (objectName.startsWith("ab-tests/")) return "ab_test";
+  if (objectName.startsWith("usage/")) return "usage";
+  return "other";
+}
+
+function recordS3Failure(objectName: string): void {
+  const now = Date.now();
+  while (s3FailureBuckets.length > 0 && now - s3FailureBuckets[0].ts > S3_FAILURE_WINDOW_MS) {
+    s3FailureBuckets.shift();
+  }
+  const hourBucket = Math.floor(now / (60 * 60 * 1000)) * (60 * 60 * 1000);
+  s3FailureBuckets.push({ ts: hourBucket, objectName, category: categorizeKey(objectName) });
+}
+
+/**
+ * Operator pull surface for /admin/health-deep. Returns total +
+ * per-category breakdown + a small sample of recent failure keys for
+ * triage. Audio-specific count is the operator-facing signal that
+ * matches the original incident ("missing playback after batch
+ * upload"); other categories are also surfaced because a batch-
+ * tracking PUT failure has its own ops impact (orphaned AWS Bedrock
+ * batch jobs).
+ */
+export function getS3UploadFailureStats(): {
+  total: number;
+  byCategory: Record<string, number>;
+  recentKeys: string[];
+} {
+  const now = Date.now();
+  while (s3FailureBuckets.length > 0 && now - s3FailureBuckets[0].ts > S3_FAILURE_WINDOW_MS) {
+    s3FailureBuckets.shift();
+  }
+  const byCategory: Record<string, number> = {};
+  for (const b of s3FailureBuckets) {
+    byCategory[b.category] = (byCategory[b.category] ?? 0) + 1;
+  }
+  return {
+    total: s3FailureBuckets.length,
+    byCategory,
+    recentKeys: s3FailureBuckets.slice(-10).map(b => b.objectName),
+  };
+}
+
+/** Test seam. */
+export function _resetS3FailureCounter(): void {
+  s3FailureBuckets.length = 0;
+}
+
+/**
  * A12/F16: S3 ListObjectsV2 XML-encodes object keys that contain reserved XML
  * characters (&, <, >, ', "). Without decoding, a key like `audio/foo&bar.wav`
  * comes back as `audio/foo&amp;bar.wav` and subsequent GET/DELETE requests
@@ -94,7 +171,53 @@ export class S3Client {
 
   /** Upload a binary file (audio, etc.) */
   async uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void> {
-    await this.putObject(objectName, buffer, contentType);
+    // Retry transient failures (5xx, 429, network) with exponential backoff.
+    // See S3_PUT_RETRY_DELAYS_MS comment above for rationale.
+    let lastErr: Error | undefined;
+    for (let attempt = 0; attempt <= S3_PUT_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        await this.putObject(objectName, buffer, contentType);
+        if (attempt > 0) {
+          // Recovered after one or more retries — useful signal for
+          // calibrating retry budget if we see this often.
+          logger.info("s3: upload succeeded after retry", {
+            objectName,
+            attempt,
+            totalAttempts: attempt + 1,
+          });
+        }
+        return;
+      } catch (err) {
+        lastErr = err as Error;
+        const isLastAttempt = attempt === S3_PUT_RETRY_DELAYS_MS.length;
+        if (isLastAttempt) break;
+        const delayMs = S3_PUT_RETRY_DELAYS_MS[attempt];
+        logger.warn("s3: upload failed, retrying", {
+          objectName,
+          attempt: attempt + 1,
+          totalAttempts: S3_PUT_RETRY_DELAYS_MS.length + 1,
+          delayMs,
+          error: lastErr.message,
+        });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+    // All retries exhausted. Promote to error + structured alert tag so
+    // CloudWatch metric filters can surface this. The category field
+    // lets operators split audio-archive failures (user-facing impact)
+    // from batch-tracking failures (cost-leak risk) etc. Counter feeds
+    // /admin/health-deep. Then re-throw so callers can decide whether
+    // to fail the operation or continue with degraded behavior.
+    const category = categorizeKey(objectName);
+    recordS3Failure(objectName);
+    logger.error("s3: upload failed after all retries", {
+      alert: "s3_upload_failed",
+      category,
+      objectName,
+      totalAttempts: S3_PUT_RETRY_DELAYS_MS.length + 1,
+      error: lastErr?.message ?? "unknown",
+    });
+    throw lastErr ?? new Error(`S3 upload failed for ${objectName} (no error captured)`);
   }
 
   /** Download and parse a JSON object. Returns undefined if not found. */

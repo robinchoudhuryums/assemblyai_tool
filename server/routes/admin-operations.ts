@@ -11,6 +11,7 @@ import { getCorrectionStats, getScoringQualityAlerts } from "../services/scoring
 import { getDroppedAuditEntryCount, getPendingAuditEntryCount } from "../services/audit-log";
 import { getRagCacheMetrics, isRagEnabled } from "../services/rag-client";
 import { getBedrockCircuitBreakerState, getBedrockAccessBlockedStats } from "../services/bedrock";
+import { getS3UploadFailureStats } from "../services/s3";
 import { is8x8Enabled } from "../services/telephony-8x8";
 import { getPool } from "../db/pool";
 import { getPipelineSettingsWithMeta, setPipelineSettings } from "../services/pipeline-settings";
@@ -58,6 +59,14 @@ export function registerOperationsRoutes(
       // (which intentionally doesn't trip on these — INV-32). Operators
       // see this as the "AWS is silently blocking our analyses" signal.
       const bedrockAccessBlocked = getBedrockAccessBlockedStats();
+
+      // S3 upload failures (24h rolling). Audio-archive bucket is the
+      // user-facing impact (missing playback after upload); other
+      // categories (batch_inference, calibration, ab_test, usage) are
+      // cost-leak / observability impact. Per-category breakdown lets
+      // operators tell which surface needs attention.
+      const s3Failures = getS3UploadFailureStats();
+      const audioArchiveFailures = s3Failures.byCategory.audio ?? 0;
 
       // RAG cache
       const ragEnabled = isRagEnabled();
@@ -131,6 +140,27 @@ export function registerOperationsRoutes(
         if (overallStatus === "healthy") overallStatus = "degraded";
       }
 
+      // Audio archive failures: each one means a permanently missing
+      // playback file — direct user impact. ANY audio-archive failure
+      // in 24h is worth flagging because retries already absorbed the
+      // transient cases; what's left through the retry budget is real.
+      if (audioArchiveFailures > 0) {
+        issues.push(`Audio archive failed ${audioArchiveFailures}× in last 24h (calls have no playback)`);
+        if (overallStatus === "healthy") overallStatus = "degraded";
+      }
+      // Other S3 category failures: less user-visible but observability
+      // signal that something's off. Higher threshold so admins don't
+      // get paged on a single calibration-snapshot blip.
+      const nonAudioS3Failures = s3Failures.total - audioArchiveFailures;
+      if (nonAudioS3Failures >= 3) {
+        const breakdown = Object.entries(s3Failures.byCategory)
+          .filter(([k]) => k !== "audio")
+          .map(([k, v]) => `${v} ${k}`)
+          .join(", ");
+        issues.push(`S3 upload failures (non-audio) ${nonAudioS3Failures}× in last 24h: ${breakdown}`);
+        if (overallStatus === "healthy") overallStatus = "degraded";
+      }
+
       res.json({
         status: overallStatus,
         timestamp: new Date().toISOString(),
@@ -142,6 +172,16 @@ export function registerOperationsRoutes(
             circuitState: bedrockCircuitState,
             healthy: bedrockCircuitState === "closed" && bedrockAccessBlocked.total === 0,
             accessBlocked24h: bedrockAccessBlocked,
+          },
+          audioArchive: {
+            failures24h: audioArchiveFailures,
+            healthy: audioArchiveFailures === 0,
+          },
+          s3Uploads: {
+            total24h: s3Failures.total,
+            byCategory: s3Failures.byCategory,
+            recentKeys: s3Failures.recentKeys,
+            healthy: s3Failures.total === 0,
           },
           ragKnowledgeBase: ragEnabled ? { enabled: true, cache: ragCache } : { enabled: false },
           batchInference: { enabled: batchMode },
