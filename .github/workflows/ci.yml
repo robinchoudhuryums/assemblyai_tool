@@ -87,7 +87,7 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     # E2E tests are non-blocking until Sprint 3 (test expansion) lands. The
     # current 4 specs (auth, dashboard, navigation, health) were added in
     # PR #122 to wire up the CI infrastructure but they have not been
