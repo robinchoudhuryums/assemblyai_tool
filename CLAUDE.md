@@ -38,7 +38,7 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.test.ts — 1101 tests)
+npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.test.ts — 1096 tests)
 npm run test:coverage # Backend tests with c8 coverage report (text + text-summary)
 npm run test:client  # Run frontend tests (Vitest + React Testing Library — 242 tests)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
@@ -1351,7 +1351,6 @@ Every subsequent request:
 - `server/services/telephony-8x8.ts` is described as an integration but is a stub pending API access
 - `server/services/scheduled-reports.ts` is dynamically imported by `routes.ts` for the scheduler init; the admin routes (`/api/admin/reports`, `/api/admin/reports/:id`, `/api/admin/reports/generate`) ARE in the API table as of A16.
 - `@replit/vite-plugin-*` packages remain in devDependencies but are unused in `vite.config.ts`
-- Improvement roadmap lists "Structured observability" and "correlation IDs" as TODO but both are implemented
 
 ## Operator State Checklist
 
@@ -1371,6 +1370,7 @@ These cause the server to refuse to start if missing in production. No silent de
 These log a warning but allow the server to start. The app appears healthy but has broken or degraded functionality.
 
 - [ ] `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (or EC2 instance profile) — needed for Bedrock + S3. Without these, audio uploads queue to "processing" status and never complete. **HIGH risk** — app appears healthy, all uploads silently broken.
+- [ ] `ASSEMBLYAI_API_KEY` — `server/index.ts:458` warns at boot when unset and allows the server to start. Without it, every audio upload silently fails at the transcription step: pipeline marks the call "failed" with a generic error, the upload UI accepts files normally, and no call ever completes end-to-end. Same failure shape as the AWS-credentials gap directly above. **HIGH risk** — app appears healthy, transcription pipeline broken on every call.
 - [ ] `ASSEMBLYAI_WEBHOOK_SECRET` if `APP_BASE_URL` is set in production — webhooks rejected at runtime (transcription falls back to polling). **MEDIUM risk** — slower turnaround but no functional break.
 - [ ] `RAG_SERVICE_URL` and `RAG_API_KEY` if `RAG_ENABLED=true` — RAG silently disabled, AI uses generic prompts. **MEDIUM risk** — analyses lose company-specific grounding.
 - [ ] `AUTH_USERS` env var OR a row in the `users` table seeded manually — without either, no one can log in. **HIGH risk** — fresh deploy is unusable. After deploy, grep pm2 logs for `auth: AUTH_USERS was set but ALL entries were rejected` to confirm at least one ENV-VAR user loaded (F8).
@@ -1501,7 +1501,7 @@ See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full mu
 
 ### Test Commands
 ```bash
-npm test                   # Backend (1101 tests)
+npm test                   # Backend (1096 tests)
 npm run test:client        # Frontend (242 tests)
 npm run check              # TypeScript type check
 ```
@@ -1525,7 +1525,7 @@ RAG & Knowledge Base:
 Engagement & Reporting:
   server/services/gamification.ts, server/services/coaching-alerts.ts, server/services/performance-snapshots.ts, server/services/scheduled-reports.ts, server/services/simulated-call-storage.ts, server/services/agent-decline-alert.ts, server/services/calibration-assertions.ts, server/services/search-analytics.ts, server/routes/coaching.ts, server/routes/gamification.ts, server/routes/analytics.ts, server/routes/reports.ts, server/routes/insights.ts, server/routes/snapshots.ts, server/routes/dashboard.ts, server/routes/employees.ts, server/routes/calls.ts, server/routes/calls-tags.ts, server/routes/admin-operations.ts, server/routes/admin-content.ts, server/routes/simulated-calls.ts
 Frontend / UI:
-  client/src/App.tsx, client/src/pages/, client/src/components/, client/src/lib/queryClient.ts, client/src/lib/i18n.ts, client/src/lib/constants.ts, client/src/lib/safe-storage.ts, client/src/lib/transcript-search.ts, client/src/hooks/, client/src/index.css, client/index.html, tailwind.config.ts
+  client/src/App.tsx, client/src/pages/, client/src/components/, client/src/lib/queryClient.ts, client/src/lib/i18n.ts, client/src/lib/constants.ts, client/src/lib/safe-storage.ts, client/src/lib/transcript-search.ts, client/src/lib/appearance.ts, client/src/lib/dashboard-config.ts, client/src/lib/display-utils.ts, client/src/lib/palettes.ts, client/src/lib/return-to.ts, client/src/lib/saved-filters.ts, client/src/lib/sentry.ts, client/src/lib/utils.ts, client/src/hooks/, client/src/index.css, client/index.html, tailwind.config.ts
 
 ### Invariant Library
 INV-01 | updateCall must throw if employeeId is in the updates payload | Subsystem: Storage
