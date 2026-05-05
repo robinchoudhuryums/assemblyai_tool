@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { dismissMfaSetupPromptIfPresent } from "./_helpers";
 
 // Stable signal that we're on the login view: the username input.
 // The auth page's only heading is the brand name (h1 appName), so a
@@ -23,8 +24,12 @@ test.describe("Authentication", () => {
     await page.getByPlaceholder(/password/i).fill("wrongpass");
     await page.locator("form").getByRole("button", { name: /sign in/i }).click();
 
-    // Should show error toast/inline message
-    await expect(page.getByText(/invalid|failed|incorrect/i)).toBeVisible({ timeout: 5000 });
+    // Error toast — title says "Login Failed", description says "Invalid
+    // username or password", and a screen-reader live region echoes both.
+    // Assert against the description specifically: it's the most
+    // user-visible signal and unique enough to avoid the strict-mode
+    // multi-element ambiguity that the earlier broad regex hit.
+    await expect(page.getByText("Invalid username or password")).toBeVisible({ timeout: 5000 });
   });
 
   test("logs in with valid credentials and reaches dashboard", async ({ page }) => {
@@ -44,6 +49,10 @@ test.describe("Authentication", () => {
     await page.getByPlaceholder(/password/i).fill("TestPass123!");
     await page.locator("form").getByRole("button", { name: /sign in/i }).click();
     await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
+    // Dismiss the MFA setup prompt that fires for unenrolled
+    // admin/manager users — its backdrop intercepts the logout click
+    // otherwise.
+    await dismissMfaSetupPromptIfPresent(page);
 
     // Logout — back to login = username field reappears.
     await page.getByTestId("logout-button").click();

@@ -22,6 +22,7 @@
  * backend pipeline.test.ts suite.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { dismissMfaSetupPromptIfPresent } from "./_helpers";
 
 async function loginAsAdmin(page: Page) {
   await page.goto("/");
@@ -30,6 +31,9 @@ async function loginAsAdmin(page: Page) {
   // Scope to the form — the auth page also has a tab-toggle "Sign In" button.
   await page.locator("form").getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
+  // The MFA setup prompt fires for unenrolled admin/manager users and
+  // its backdrop blocks every subsequent click.
+  await dismissMfaSetupPromptIfPresent(page);
 }
 
 test.describe("Audio pipeline surfaces", () => {
