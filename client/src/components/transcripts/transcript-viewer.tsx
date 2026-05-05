@@ -1479,12 +1479,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
       {/* Bottom-docked scrubber — waveform + per-utterance sentiment
           ribbon. Phase 3 installment; phase 5 prunes the duplicate top-bar
-          play/skip/speed/volume controls above. */}
-      {audioReady && (
-        <div
-          className="mt-5 pt-4 border-t border-border"
-          data-testid="scrubber-dock"
-        >
+          play/skip/speed/volume controls above. Sticky-positioned so the
+          dock stays in viewport regardless of transcript length, instead
+          of burying the controls under ~1500 lines of rendered content.
+          The dock always renders so audio-load failures show a visible
+          fallback instead of silently disappearing. */}
+      <div
+        className="sticky bottom-0 left-0 right-0 z-20 mt-5 pt-4 border-t border-border bg-card"
+        data-testid="scrubber-dock"
+      >
+        {audioReady ? (
           <Scrubber
             audioRef={audioRef}
             currentTime={currentTime}
@@ -1509,8 +1513,20 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               if (audioRef.current) audioRef.current.playbackRate = r;
             }}
           />
-        </div>
-      )}
+        ) : (
+          <div className="px-4 py-3 flex items-center gap-3" role="status">
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.12em" }}
+            >
+              Audio
+            </div>
+            <div className="text-sm text-muted-foreground italic">
+              Could not be loaded. The transcript and analysis above are still available.
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
