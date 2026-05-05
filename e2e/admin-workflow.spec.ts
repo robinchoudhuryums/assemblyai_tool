@@ -8,6 +8,7 @@
  * between Playwright test files so each test starts from a clean slate.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { dismissMfaSetupPromptIfPresent } from "./_helpers";
 
 async function loginAsAdmin(page: Page) {
   await page.goto("/");
@@ -19,6 +20,9 @@ async function loginAsAdmin(page: Page) {
   // one we actually want to click.
   await page.locator("form").getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
+  // The MFA setup prompt fires for unenrolled admin/manager users and
+  // its backdrop blocks every subsequent click.
+  await dismissMfaSetupPromptIfPresent(page);
 }
 
 test.describe("Admin workflows", () => {
@@ -37,8 +41,9 @@ test.describe("Admin workflows", () => {
   test("coaching page renders for manager+ without crashing", async ({ page }) => {
     await page.goto("/coaching");
     // Empty-state (no sessions in MemStorage) or loaded sessions — either
-    // way the page must not throw. The page-shell testid is always rendered.
-    await expect(page.getByTestId("page-shell")).toBeVisible({ timeout: 10000 });
+    // way the page must not throw. CoachingPageShell renders an outer
+    // div with `coaching-page-shell` regardless of empty/populated state.
+    await expect(page.getByTestId("coaching-page-shell")).toBeVisible({ timeout: 10000 });
     await expect(page.getByText(/Something went wrong/i)).not.toBeVisible();
   });
 

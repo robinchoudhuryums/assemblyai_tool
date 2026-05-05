@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { dismissMfaSetupPromptIfPresent } from "./_helpers";
 
 async function login(page: Page) {
   await page.goto("/");
@@ -7,6 +8,9 @@ async function login(page: Page) {
   // Scope to the form — the auth page also has a tab-toggle "Sign In" button.
   await page.locator("form").getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
+  // The MFA setup prompt fires for unenrolled admin/manager users and
+  // its backdrop blocks every subsequent click.
+  await dismissMfaSetupPromptIfPresent(page);
 }
 
 test.describe("Navigation", () => {
@@ -33,6 +37,12 @@ test.describe("Navigation", () => {
   });
 
   test("admin links visible for admin users", async ({ page }) => {
+    // The admin sidebar section is collapsed by default — adminExpanded
+    // initial state at sidebar.tsx:61 only auto-expands when location
+    // starts with /admin. After login the user lands on / (dashboard),
+    // so we must click the toggle (or navigate to /admin) before the
+    // admin link testids are rendered. Click is faster.
+    await page.getByLabel("Toggle admin section").click();
     await expect(page.getByTestId("nav-link-admin")).toBeVisible();
     await expect(page.getByTestId("nav-link-templates")).toBeVisible();
     await expect(page.getByTestId("nav-link-ab-testing")).toBeVisible();

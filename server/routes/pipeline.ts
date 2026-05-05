@@ -3,6 +3,7 @@ import fs from "fs";
 import { storage } from "../storage";
 import { assemblyAIService, buildSpeakerLabeledTranscript, computeUtteranceMetrics } from "../services/assemblyai";
 import { aiProvider } from "../services/ai-factory";
+import { BedrockClientError } from "../services/bedrock";
 import { calibrateScore, calibrateSubScores, getCalibrationConfig } from "../services/scoring-calibration";
 import { buildAnalysisPrompt } from "../services/ai-provider";
 import { fetchRagContext, buildRagQuery, isRagEnabled, type RagSource } from "../services/rag-client";
@@ -261,6 +262,12 @@ export async function processAudioFile(
     // Step 4: AI analysis (Bedrock/Claude — or fall back to defaults)
     broadcastCallUpdate(callId, "analyzing", { step: 4, totalSteps: 6, label: "Running AI analysis..." });
     let aiAnalysis = null;
+    // Spend-cap visibility: when the catch detects a Bedrock 403/429,
+    // we set this so the flag-emission block downstream can mark the
+    // call's analysis with `ai_unavailable:bedrock_access_denied`.
+    // Reviewers viewing the transcript see why the AI fields are
+    // empty instead of assuming the AI just gave a generic answer.
+    let aiBlockReason: string | null = null;
 
     // Load custom prompt template for this call category
     let promptTemplate = undefined;
@@ -459,8 +466,6 @@ export async function processAudioFile(
           }
         }
 
-        const { BedrockClientError } = await import("../services/bedrock");
-
         const invokeAnalysis = async (provider: typeof aiProvider) =>
           provider.analyzeCallTranscript(speakerLabeledText, callId, callCategory, promptTemplate, language, callDurationSeconds, undefined, ragContext);
 
@@ -500,12 +505,24 @@ export async function processAudioFile(
         const errMsg = (aiError as Error).message || "";
         const isParseFailure =
           /JSON|parse|schema/i.test(errMsg) && !/timeout|unavailable|ECONNREFUSED|ETIMEDOUT|throttl/i.test(errMsg);
+        // Spend-cap visibility: detect Bedrock 403/429 specifically so we
+        // can flag the call with `ai_unavailable:bedrock_access_denied`
+        // downstream. Reviewers see "AI was blocked by AWS" instead of
+        // "no AI ran for some reason." `BedrockClientError` carries the
+        // numeric status; a plain Error from the 429 path doesn't, so we
+        // also string-match the message we know `bedrock.ts` emits.
+        const isAiBlocked =
+          (aiError instanceof BedrockClientError && aiError.status === 403) ||
+          /Bedrock API error \(403\)|Bedrock API error \(429\)/.test(errMsg);
+        if (isAiBlocked) {
+          aiBlockReason = "bedrock_access_denied";
+        }
         if (isParseFailure) {
           logger.error("pipeline: AI returned unparseable response after retry (continuing with defaults)", { callId, error: errMsg });
           captureException(aiError as Error, { callId, errorType: "ai_parse_failure" });
         } else {
-          logger.warn("pipeline: AI analysis failed (continuing with defaults)", { callId, error: errMsg });
-          captureException(aiError as Error, { callId, errorType: "ai_unavailable" });
+          logger.warn("pipeline: AI analysis failed (continuing with defaults)", { callId, error: errMsg, blocked: isAiBlocked });
+          captureException(aiError as Error, { callId, errorType: isAiBlocked ? "ai_blocked" : "ai_unavailable" });
         }
       }
     } else if (!aiProvider.isAvailable) {
@@ -604,6 +621,17 @@ export async function processAudioFile(
     if (confidenceScore < 0.7) {
       const existingFlags = (analysis.flags as string[]) || [];
       existingFlags.push("low_confidence");
+      analysis.flags = existingFlags;
+    }
+
+    // Spend-cap visibility: if AI was blocked by Bedrock (403 budget action /
+    // 429 quota), tag the analysis so reviewers see "AI was unavailable" in
+    // the transcript UI instead of an empty rubric they might mistake for
+    // a generic AI verdict. Mirrors the `output_anomaly:*` flag convention
+    // already used by the prompt guard.
+    if (aiBlockReason) {
+      const existingFlags = (analysis.flags as string[]) || [];
+      existingFlags.push(`ai_unavailable:${aiBlockReason}`);
       analysis.flags = existingFlags;
     }
 

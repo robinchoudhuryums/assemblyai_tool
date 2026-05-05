@@ -12,7 +12,7 @@
  * (if deterministic) transcription + analysis. Fine-grained UI
  * behavior is covered in the unit + other e2e specs.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -26,6 +26,31 @@ async function loginAsAdmin(page: Page) {
   // Scope to the form — the auth page also has a tab-toggle "Sign In" button.
   await page.locator("form").getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
+}
+
+/**
+ * Extract CSRF token from cookies set by the dev server. The double-submit
+ * CSRF middleware (server/index.ts:294-320) seeds a `csrf_token` cookie on
+ * every response and requires the same value echoed in the `x-csrf-token`
+ * header on POST/PATCH/PUT/DELETE. /api/auth/login is the standard way to
+ * bootstrap the cookie because it's CSRF-exempt itself but its response
+ * still seeds the cookie for the next request.
+ */
+async function loginViaApiAndGetCsrf(request: APIRequestContext): Promise<string> {
+  const loginRes = await request.post("/api/auth/login", {
+    data: { username: "testadmin", password: "TestPass123!" },
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!loginRes.ok()) {
+    throw new Error(`Login failed: ${loginRes.status()} ${await loginRes.text()}`);
+  }
+  // Read the csrf_token cookie that the response set.
+  const cookies = await request.storageState();
+  const csrf = cookies.cookies.find((c) => c.name === "csrf_token");
+  if (!csrf) {
+    throw new Error("CSRF cookie was not set after login — check server middleware");
+  }
+  return csrf.value;
 }
 
 test.describe("Full audio pipeline (with MSW mocks)", () => {
@@ -44,25 +69,24 @@ test.describe("Full audio pipeline (with MSW mocks)", () => {
     // check. AssemblyAI's upload endpoint is mocked to return a
     // deterministic transcript ID; the pipeline polls once and sees
     // "completed" immediately; Bedrock returns the fixed mock analysis.
+    const csrf = await loginViaApiAndGetCsrf(request);
 
-    // First log in via the API context so the session cookie is set.
-    const loginRes = await request.post("/api/auth/login", {
-      data: { username: "testadmin", password: "TestPass123!" },
-      headers: { "Content-Type": "application/json" },
-    });
-    expect(loginRes.ok()).toBeTruthy();
-
-    // POST multipart audio to /api/calls/upload. The file payload is
-    // a minimal bytes buffer — the pipeline archives it to the mocked
-    // S3 endpoint, submits to the mocked AssemblyAI, polls once for
-    // completion, then analyzes via the mocked Bedrock.
+    // POST multipart audio to /api/calls/upload. Server CSRF middleware
+    // requires both `X-Requested-With` (multipart proof-of-origin) and
+    // the double-submit `x-csrf-token` header echoing the cookie.
+    // Per-test unique payload — the upload route does SHA-256 dedup, so
+    // two tests with the same buffer would 409 the second one.
     const res = await request.post("/api/calls/upload", {
       multipart: {
         audioFile: {
           name: "mock-call.mp3",
           mimeType: "audio/mpeg",
-          buffer: Buffer.from("fake-mp3-bytes"),
+          buffer: Buffer.from(`fake-mp3-bytes-upload-test-${Date.now()}`),
         },
+      },
+      headers: {
+        "x-csrf-token": csrf,
+        "X-Requested-With": "XMLHttpRequest",
       },
     });
     expect(res.status(), await res.text()).toBe(201);
@@ -76,17 +100,20 @@ test.describe("Full audio pipeline (with MSW mocks)", () => {
     // shows up. With MSW mocks, the pipeline should complete within
     // seconds — but allow generous timeout because the job queue
     // polls at 5s intervals in dev.
-    await request.post("/api/auth/login", {
-      data: { username: "testadmin", password: "TestPass123!" },
-      headers: { "Content-Type": "application/json" },
-    });
+    const csrf = await loginViaApiAndGetCsrf(request);
     const uploadRes = await request.post("/api/calls/upload", {
       multipart: {
         audioFile: {
           name: "pipeline-test.mp3",
           mimeType: "audio/mpeg",
-          buffer: Buffer.from("fake-mp3-bytes"),
+          // Per-test unique payload — content-hash dedup would 409 a
+          // duplicate buffer otherwise.
+          buffer: Buffer.from(`fake-mp3-bytes-pipeline-test-${Date.now()}`),
         },
+      },
+      headers: {
+        "x-csrf-token": csrf,
+        "X-Requested-With": "XMLHttpRequest",
       },
     });
     expect(uploadRes.ok()).toBeTruthy();
