@@ -158,6 +158,79 @@ describe("encodeCanonicalUri", () => {
     assert.ok(result.startsWith("/bucket/"));
     assert.ok(result.includes("%"));
   });
+
+  // Regression guard for the SignatureDoesNotMatch incident driven by
+  // 8x8 telephony filenames containing literal spaces. encodeCanonicalUri
+  // must produce the same encoding as what fetch sends over the wire,
+  // so signer and HTTP client agree on canonical bytes. The recipe is:
+  // 1) Caller encodes once via encodeCanonicalUri
+  // 2) Same encoded string used for both fetch URL and signRequest with
+  //    pathAlreadyEncoded:true. signRequest must NOT re-encode.
+  it("encodes spaces as %20", () => {
+    const result = encodeCanonicalUri("/audio/cid/foo bar.mp3");
+    assert.equal(result, "/audio/cid/foo%20bar.mp3");
+  });
+
+  it("re-encoding an already-encoded path would double-encode (proof: pathAlreadyEncoded must be honored)", () => {
+    // If a caller naively pre-encoded then ALSO passed pathAlreadyEncoded:false,
+    // the signer would double-encode the %20 to %2520. This test pins the
+    // contract: the flag exists for exactly this reason.
+    const onceEncoded = encodeCanonicalUri("/audio/foo bar.mp3");
+    const twiceEncoded = encodeCanonicalUri(onceEncoded);
+    assert.equal(onceEncoded, "/audio/foo%20bar.mp3");
+    assert.equal(twiceEncoded, "/audio/foo%2520bar.mp3");
+    assert.notEqual(onceEncoded, twiceEncoded);
+  });
+});
+
+describe("signRequest path encoding", () => {
+  const baseCreds = {
+    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+    region: "us-east-1",
+  };
+
+  it("encodes the rawPath when pathAlreadyEncoded is unset (default)", () => {
+    // Two requests with the same canonical bytes should produce the same signature.
+    // We don't expose the canonical request directly, so verify behavior by
+    // observing that pre-encoding a raw path produces the same Authorization
+    // as letting signRequest encode itself (when pathAlreadyEncoded is true).
+    const fixedDate = new Date("2026-01-01T00:00:00.000Z");
+    const _origDate = Date;
+    // Mock Date to ensure both signing operations use the same timestamp
+    (globalThis as any).Date = class extends _origDate {
+      constructor(...args: any[]) {
+        if (args.length === 0) super(fixedDate.getTime());
+        else super(...args as []);
+      }
+      static now() { return fixedDate.getTime(); }
+    };
+    try {
+      const rawPath = "/bucket/my file.txt";
+      const encoded = encodeCanonicalUri(rawPath);
+      const headersA = signRequest({
+        method: "PUT",
+        host: "bucket.s3.us-east-1.amazonaws.com",
+        rawPath,
+        service: "s3",
+        region: "us-east-1",
+        creds: baseCreds,
+      });
+      const headersB = signRequest({
+        method: "PUT",
+        host: "bucket.s3.us-east-1.amazonaws.com",
+        rawPath: encoded,
+        pathAlreadyEncoded: true,
+        service: "s3",
+        region: "us-east-1",
+        creds: baseCreds,
+      });
+      // Same canonical request → same Authorization signature.
+      assert.equal(headersA.Authorization, headersB.Authorization);
+    } finally {
+      (globalThis as any).Date = _origDate;
+    }
+  });
 });
 
 describe("EMPTY_PAYLOAD_HASH", () => {

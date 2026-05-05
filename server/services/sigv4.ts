@@ -57,7 +57,18 @@ export function encodeCanonicalUri(rawPath: string): string {
 export interface SignRequestOptions {
   method: string;
   host: string;
+  /**
+   * The path component of the request, used to compute the SigV4
+   * canonical URI. By default this is treated as a RAW (unencoded)
+   * path and run through `encodeCanonicalUri` (per-segment
+   * `encodeURIComponent`). Pass `pathAlreadyEncoded: true` if you've
+   * already encoded the path upstream — typical when the same encoded
+   * string needs to be shared with the HTTP client (so signer and
+   * wire-format URL are byte-identical and signatures actually match).
+   */
   rawPath: string;
+  /** Skip re-encoding `rawPath`. See `rawPath` comment for rationale. */
+  pathAlreadyEncoded?: boolean;
   queryString?: string;
   service: string;
   region: string;
@@ -90,7 +101,7 @@ export function signRequest(opts: SignRequestOptions): Record<string, string> {
     }
   }
 
-  const canonicalUri = encodeCanonicalUri(rawPath);
+  const canonicalUri = opts.pathAlreadyEncoded ? rawPath : encodeCanonicalUri(rawPath);
 
   // Build header entries — sorted alphabetically for canonical form
   const headerEntries: [string, string][] = [

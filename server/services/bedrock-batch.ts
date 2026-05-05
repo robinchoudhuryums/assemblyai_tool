@@ -17,7 +17,7 @@
 import { randomUUID } from "crypto";
 import { parseJsonResponse } from "./ai-provider";
 import type { CallAnalysis } from "./ai-provider";
-import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH } from "./sigv4.js";
+import { signRequest, sha256Buffer, EMPTY_PAYLOAD_HASH, encodeCanonicalUri } from "./sigv4.js";
 import { getAwsCredentials, type AwsCredentials } from "./aws-credentials.js";
 import { logger } from "./logger";
 import { bedrockCircuitBreaker, isCircuitFailure, BedrockClientError } from "./bedrock";
@@ -335,7 +335,13 @@ export class BedrockBatchService {
     if (contentType) extraHeaders.push(["content-type", contentType]);
     if (method === "PUT") extraHeaders.push(["x-amz-server-side-encryption", "AES256"]);
 
-    const headers = signRequest({ method, host, rawPath, queryString, service: "s3", region, creds, payloadHash, body, extraHeaders });
+    // pathAlreadyEncoded matches the S3Client pattern in s3.ts: the
+    // caller is expected to hand in a canonical-URI-encoded path so
+    // signer + fetch see the same bytes. Today batch S3 keys don't
+    // contain user-supplied filenames so a raw path would also work,
+    // but consistency with s3.ts prevents the same SignatureDoesNotMatch
+    // class of bug from sneaking back in via a future caller.
+    const headers = signRequest({ method, host, rawPath, pathAlreadyEncoded: true, queryString, service: "s3", region, creds, payloadHash, body, extraHeaders });
     headers["X-Amz-Content-Sha256"] = payloadHash;
     if (method === "PUT") headers["X-Amz-Server-Side-Encryption"] = "AES256";
     return headers;
@@ -345,7 +351,9 @@ export class BedrockBatchService {
     await this.ensureCredentials();
     const region = this.credentials!.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
-    const path = `/${key}`;
+    // Encode the path once so signer + fetch URL are byte-identical
+    // (see s3.ts:request for the SignatureDoesNotMatch rationale).
+    const path = encodeCanonicalUri(`/${key}`);
 
     const headers = this.signS3Headers("PUT", host, path, region, body, contentType);
     const response = await fetch(`https://${host}${path}`, { method: "PUT", headers, body: new Uint8Array(body) });
@@ -358,7 +366,7 @@ export class BedrockBatchService {
     await this.ensureCredentials();
     const region = this.credentials!.region;
     const host = `${this.bucketName}.s3.${region}.amazonaws.com`;
-    const path = `/${key}`;
+    const path = encodeCanonicalUri(`/${key}`);
 
     const headers = this.signS3Headers("GET", host, path, region);
     const response = await fetch(`https://${host}${path}`, { method: "GET", headers });
