@@ -29,8 +29,14 @@ test.describe("API Health", () => {
     // tests/auth.test.ts:32-72 (recordFailedAttempt + isLockedOut), so
     // we lose no coverage by skipping this end-to-end assertion in CI.
     // It still runs locally for hand-validation.
+    //
+    // NOTE: `E2E_MOCKS` only propagates to the spawned dev server via
+    // playwright.config.ts:webServer.env — it does NOT reach the test
+    // runner's process.env. `CI` is auto-set by GitHub Actions runners
+    // and IS visible to the test runner, which is why we key the skip
+    // off it instead.
     test.skip(
-      process.env.E2E_MOCKS === "true",
+      !!process.env.CI,
       "Skipped in CI to avoid polluting the shared 5/15min login limiter; " +
       "rate-limit logic is covered by tests/auth.test.ts at the unit level.",
     );
