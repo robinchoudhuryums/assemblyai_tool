@@ -25,7 +25,16 @@ interface SubsystemHealth {
     failedToday: number;
     backend: string;
   };
-  bedrockAI: { circuitState: string; healthy: boolean };
+  bedrockAI: {
+    circuitState: string;
+    healthy: boolean;
+    // 24h rolling counter of 403/429 events from server/services/bedrock.ts.
+    // Optional because older API responses (pre spend-cap PR) won't have it.
+    accessBlocked24h?: {
+      total: number;
+      byClassification: Record<string, number>;
+    };
+  };
   ragKnowledgeBase: {
     enabled: boolean;
     cache?: { hits: number; misses: number; hitRate: string; entries: number; maxEntries: number };
@@ -42,6 +51,21 @@ interface SubsystemHealth {
   telephony8x8: { enabled: boolean };
   onboarding?: {
     chronicallyUnlinkedLast7d: number | null;
+    healthy: boolean;
+  };
+  // 24h rolling S3 PUT failure counters added in the audio-archive
+  // resilience PR. audioArchive is the user-impact view (any failure
+  // = a permanently missing playback file); s3Uploads is the broader
+  // ops view (calibration / batch tracking / etc). Both optional so
+  // the page renders cleanly when the server hasn't deployed them yet.
+  audioArchive?: {
+    failures24h: number;
+    healthy: boolean;
+  };
+  s3Uploads?: {
+    total24h: number;
+    byCategory: Record<string, number>;
+    recentKeys: string[];
     healthy: boolean;
   };
 }
@@ -229,7 +253,85 @@ export default function SystemHealthPage() {
                   alert={data.subsystems.bedrockAI.circuitState !== "closed"}
                   success={data.subsystems.bedrockAI.circuitState === "closed"}
                 />
+                {/* AWS-side blocking events (403 budget actions / 429 quotas).
+                    Optional — older API responses won't have it. Surfaces here
+                    in addition to the issue banner so operators can see the
+                    classification breakdown at a glance during an incident. */}
+                {data.subsystems.bedrockAI.accessBlocked24h && (
+                  <>
+                    <MetricRow
+                      label="Access blocked (24h)"
+                      value={data.subsystems.bedrockAI.accessBlocked24h.total}
+                      alert={data.subsystems.bedrockAI.accessBlocked24h.total >= 5}
+                      success={data.subsystems.bedrockAI.accessBlocked24h.total === 0}
+                    />
+                    {data.subsystems.bedrockAI.accessBlocked24h.total > 0 && (
+                      <MetricRow
+                        label="By cause"
+                        value={Object.entries(
+                          data.subsystems.bedrockAI.accessBlocked24h.byClassification,
+                        )
+                          .map(([k, v]) => `${v} ${k}`)
+                          .join(", ")}
+                        isText
+                      />
+                    )}
+                  </>
+                )}
               </SubsystemCard>
+
+              {/* Audio archive — user-facing impact view. Each failure means
+                  a permanently missing playback file. Threshold 1 (any
+                  failure surfaces) because the cost of one missing audio
+                  is a real call review that can't happen. */}
+              {data.subsystems.audioArchive && (
+                <SubsystemCard
+                  icon={Database}
+                  title="Audio archive"
+                  statusPill={<StatusPill status={data.subsystems.audioArchive.healthy} />}
+                >
+                  <MetricRow
+                    label="Failures (24h)"
+                    value={data.subsystems.audioArchive.failures24h}
+                    alert={data.subsystems.audioArchive.failures24h > 0}
+                    success={data.subsystems.audioArchive.failures24h === 0}
+                  />
+                  <MetricRow
+                    label="Recovery"
+                    value="Re-upload affected calls one at a time"
+                    isText
+                  />
+                </SubsystemCard>
+              )}
+
+              {/* S3 uploads (broader view). Audio is broken out above; this
+                  card shows the cost-leak / observability impact across other
+                  S3 PUT consumers (batch tracking, calibration snapshots,
+                  A/B tests, usage records). Threshold 3 — a single
+                  calibration blip shouldn't page operators. */}
+              {data.subsystems.s3Uploads && (
+                <SubsystemCard
+                  icon={Cloud}
+                  title="S3 uploads"
+                  statusPill={<StatusPill status={data.subsystems.s3Uploads.healthy} />}
+                >
+                  <MetricRow
+                    label="Total failures (24h)"
+                    value={data.subsystems.s3Uploads.total24h}
+                    alert={data.subsystems.s3Uploads.total24h >= 3}
+                    success={data.subsystems.s3Uploads.total24h === 0}
+                  />
+                  {data.subsystems.s3Uploads.total24h > 0 && (
+                    <MetricRow
+                      label="By category"
+                      value={Object.entries(data.subsystems.s3Uploads.byCategory)
+                        .map(([k, v]) => `${v} ${k}`)
+                        .join(", ")}
+                      isText
+                    />
+                  )}
+                </SubsystemCard>
+              )}
 
               {/* RAG KB */}
               <SubsystemCard icon={Cloud} title="RAG knowledge base">
