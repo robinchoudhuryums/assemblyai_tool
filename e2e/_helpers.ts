@@ -17,15 +17,27 @@
 import { type Page, expect } from "@playwright/test";
 
 export async function dismissMfaSetupPromptIfPresent(page: Page): Promise<void> {
-  // Race-free: check whether the dialog is open with a short timeout
-  // and click close if visible. If not visible within 1s, assume it's
-  // not going to appear and continue.
+  // The dialog renders asynchronously after the /api/auth/login response
+  // resolves on the client. In CI this can take 2–4s for cold tests, so
+  // a short fixed timeout races. Strategy:
+  //   1. Wait for the network to settle (login round-trip + initial
+  //      /api/auth/me query) so the React tree has had a chance to
+  //      decide whether to render the dialog.
+  //   2. If the dialog is now visible, click close. If not, skip.
+  //   3. After clicking close, wait for the backdrop to actually leave
+  //      the DOM — otherwise subsequent clicks can still hit it during
+  //      the dialog's exit animation.
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {
+    // network may stay busy due to background polling — proceed anyway
+  });
   const close = page.getByLabel("Close dialog");
-  try {
-    await close.waitFor({ state: "visible", timeout: 1000 });
+  if (await close.isVisible().catch(() => false)) {
     await close.click();
-  } catch {
-    // Dialog not present — fine, skip.
+    // Confirm the backdrop is gone before returning
+    await page
+      .locator('[role="dialog"]')
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .catch(() => { /* dialog might already be gone */ });
   }
 }
 
@@ -38,3 +50,4 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   await expect(page.getByTestId("sidebar")).toBeVisible({ timeout: 10000 });
   await dismissMfaSetupPromptIfPresent(page);
 }
+
