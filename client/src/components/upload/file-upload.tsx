@@ -151,36 +151,82 @@ export default function FileUpload() {
 
   const uploadFile = async (index: number) => {
     const fileData = uploadFiles[index];
-    try {
-      updateFile(index, { status: 'uploading', progress: 0, processingStep: "Uploading to server..." });
-      const result = await uploadMutation.mutateAsync({
-        file: fileData.file,
-        employeeId: fileData.employeeId || undefined,
-        callCategory: fileData.callCategory || undefined,
-        processingMode: processingMode || undefined,
-        language: audioLanguage || undefined,
-      });
-      // The API returns the call ID — track it for WebSocket updates
-      const callId = result?.id || result?.callId;
-      updateFile(index, {
-        status: 'processing',
-        progress: 100,
-        callId,
-        processingStep: "Queued for processing...",
-        processingProgress: 10,
-      });
-      toast({ title: t("toast.uploadSuccess"), description: t("toast.uploadSuccessDesc") });
-    } catch (error) {
-      updateFile(index, { status: 'error', error: error instanceof Error ? error.message : 'Upload failed' });
+    // Automatic retry-on-429: if the per-IP upload rate limit is hit
+    // (default 30/min, env-tunable as UPLOAD_RATE_LIMIT_PER_MIN), the
+    // server returns 429 + "try again later". A short backoff usually
+    // clears the window. We retry up to 3 times with 5s / 12s / 25s
+    // backoff before surfacing the failure as an error the user can
+    // manually retry. The backoff times bracket the 60s window — by
+    // attempt 3 the window has rotated and the slot is free.
+    const RETRY_DELAYS_MS = [5000, 12000, 25000];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        const stepLabel = attempt === 0
+          ? "Uploading to server..."
+          : `Rate-limited, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length + 1})...`;
+        updateFile(index, { status: 'uploading', progress: 0, processingStep: stepLabel });
+        const result = await uploadMutation.mutateAsync({
+          file: fileData.file,
+          employeeId: fileData.employeeId || undefined,
+          callCategory: fileData.callCategory || undefined,
+          processingMode: processingMode || undefined,
+          language: audioLanguage || undefined,
+        });
+        // The API returns the call ID — track it for WebSocket updates
+        const callId = result?.id || result?.callId;
+        updateFile(index, {
+          status: 'processing',
+          progress: 100,
+          callId,
+          processingStep: "Queued for processing...",
+          processingProgress: 10,
+        });
+        toast({ title: t("toast.uploadSuccess"), description: t("toast.uploadSuccessDesc") });
+        return;
+      } catch (error) {
+        lastError = error;
+        // Only retry on 429-shaped errors. Non-rate-limit failures (auth,
+        // file-too-large, server crash) shouldn't trigger silent retries.
+        const msg = error instanceof Error ? error.message : "";
+        const is429 = /429|too many|rate limit/i.test(msg);
+        const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
+        if (!is429 || isLastAttempt) break;
+        await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      }
     }
+    updateFile(index, {
+      status: 'error',
+      error: lastError instanceof Error ? lastError.message : 'Upload failed',
+    });
+  };
+
+  /** Reset a single file from error → pending so uploadAll re-picks it up. */
+  const retryFile = (index: number) => {
+    updateFile(index, { status: 'pending', error: undefined, processingStep: undefined });
+    // Fire the upload immediately for single-row retry — uploadAll's
+    // batch loop is for "Upload all" workflows.
+    void uploadFile(index);
   };
 
   const MAX_CONCURRENT = MAX_CONCURRENT_UPLOADS;
 
   const uploadAll = async () => {
+    // Pick up both 'pending' (never tried) and 'error' (failed last
+    // time, e.g. 429 after the in-call retries exhausted, or a
+    // transient server error). Clicking "Upload all" again is the
+    // operator's intent to reset and retry — clear the stale error
+    // state for those rows before re-uploading.
     const pendingIndices = uploadFiles
-      .map((file, index) => file.status === 'pending' ? index : -1)
+      .map((file, index) =>
+        file.status === 'pending' || file.status === 'error' ? index : -1,
+      )
       .filter(i => i >= 0);
+    for (const idx of pendingIndices) {
+      if (uploadFiles[idx].status === 'error') {
+        updateFile(idx, { status: 'pending', error: undefined, processingStep: undefined });
+      }
+    }
 
     let totalSuccess = 0;
     let totalFailed = 0;
@@ -254,9 +300,19 @@ export default function FileUpload() {
                   {uploadFiles.filter(f => f.status === 'uploading' || f.status === 'processing').length} in progress
                 </span>
               )}
-              {uploadFiles.some(f => f.status === 'pending') && (
+              {uploadFiles.some(f => f.status === 'pending' || f.status === 'error') && (
                 <Button type="button" onClick={uploadAll} disabled={uploadMutation.isPending}>
-                  Upload All ({uploadFiles.filter(f => f.status === 'pending').length})
+                  {(() => {
+                    const pending = uploadFiles.filter(f => f.status === 'pending').length;
+                    const errored = uploadFiles.filter(f => f.status === 'error').length;
+                    if (errored > 0 && pending === 0) {
+                      return `Retry Failed (${errored})`;
+                    }
+                    if (errored > 0) {
+                      return `Upload All (${pending} new + ${errored} retry)`;
+                    }
+                    return `Upload All (${pending})`;
+                  })()}
                 </Button>
               )}
             </div>
@@ -384,7 +440,16 @@ export default function FileUpload() {
                     style={{ color: "var(--destructive)" }}
                   >
                     <XCircle className="w-5 h-5" weight="fill" />
-                    <span className="text-sm">{fileData.error}</span>
+                    <span className="text-sm flex-1 min-w-0 truncate" title={fileData.error}>{fileData.error}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => retryFile(index)}
+                      title="Retry this upload"
+                      aria-label="Retry upload"
+                    >
+                      Retry
+                    </Button>
                     <Button size="sm" variant="ghost" aria-label="Remove file" onClick={() => removeFile(index)}><X className="w-4 h-4" /></Button>
                   </div>
                 )}
