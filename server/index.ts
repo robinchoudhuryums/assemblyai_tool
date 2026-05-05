@@ -399,8 +399,18 @@ app.get("/api/health", async (_req, res) => {
 // catch-all safety net for endpoints without explicit per-user limits.
 app.use("/api", rateLimit(60 * 1000, 300));
 
-// HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP)
-app.post("/api/auth/login", rateLimit(15 * 60 * 1000, 5));
+// HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP).
+// In CI/Playwright runs we bypass — `E2E_MOCKS=true` is the test-only signal
+// already used to activate MSW interception (see server/test-mocks/setup.ts),
+// and the e2e suite has ~27 specs that each login in beforeEach from a
+// single CI runner IP, which exhausts the 5/15min cap after the 5th spec.
+// `E2E_MOCKS` is documented as NEVER-set-in-production and gates other
+// crash-on-prod behaviors, so trusting it here is consistent. The
+// limiter logic itself is unit-tested at tests/auth.test.ts:32-72.
+app.post("/api/auth/login", (req, res, next) => {
+  if (process.env.E2E_MOCKS === "true") return next();
+  return rateLimit(15 * 60 * 1000, 5)(req, res, next);
+});
 
 // Rate limiting on expensive endpoints (prevent abuse)
 const expensiveRateLimit = rateLimit(60 * 1000, 10); // 10 per minute
