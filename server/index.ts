@@ -412,9 +412,18 @@ app.post("/api/auth/login", (req, res, next) => {
   return rateLimit(15 * 60 * 1000, 5)(req, res, next);
 });
 
-// Rate limiting on expensive endpoints (prevent abuse)
-const expensiveRateLimit = rateLimit(60 * 1000, 10); // 10 per minute
-app.post("/api/calls/upload", expensiveRateLimit);
+// Rate limiting on expensive endpoints (prevent abuse). The audio upload
+// limit is env-tunable because batch upload is a real workflow — manager
+// uploads 10–20 call recordings at once is normal usage. Default 30/min
+// per IP (was 10/min before, which rejected legitimate batch uploads
+// after 10 + cumulative window). Tighten via `UPLOAD_RATE_LIMIT_PER_MIN`
+// if abuse becomes a concern.
+const UPLOAD_RATE_LIMIT_PER_MIN = (() => {
+  const raw = Number(process.env.UPLOAD_RATE_LIMIT_PER_MIN);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 30;
+})();
+const expensiveRateLimit = rateLimit(60 * 1000, 10); // 10 per minute (kept for non-upload uses)
+app.post("/api/calls/upload", rateLimit(60 * 1000, UPLOAD_RATE_LIMIT_PER_MIN));
 app.post("/api/ab-tests/upload", expensiveRateLimit);
 app.get("/api/search", rateLimit(60 * 1000, 20)); // 20 searches per minute
 app.post("/api/reports/agent-summary/:employeeId", rateLimit(60 * 1000, 5)); // 5 AI summaries per minute

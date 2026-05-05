@@ -152,16 +152,34 @@ export function register(router: Router) {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const results: Array<{ name: string; action: string }> = [];
 
+        // Header alias support — different sources export different column
+        // names ("Agent Name" from internal exports, plain "Name" from
+        // many SaaS HRIS exports, "Full Name" from some directories, etc).
+        // Accept any of the common names so operators don't have to
+        // hand-edit headers before importing. First-non-empty wins.
+        const pick = (row: Record<string, string>, ...keys: string[]): string => {
+          for (const k of keys) {
+            const v = row[k];
+            if (typeof v === "string" && v.trim()) return v;
+          }
+          return "";
+        };
+
         for (const row of rawRows) {
+          const rawName = pick(row, "Agent Name", "Name", "Full Name", "Employee Name");
+          const rawDepartment = pick(row, "Department", "Team", "Group");
+          const rawExtension = pick(row, "Extension", "Ext", "Phone Extension");
+          const rawPseudonym = pick(row, "Pseudonym", "Display Name", "Preferred Name", "Nickname");
+          const rawStatus = pick(row, "Status", "Active") || "Active";
           const parsed = csvRowSchema.safeParse({
-            name: (row["Agent Name"] || "").trim(),
-            department: (row["Department"] || "").trim() || undefined,
-            extension: (row["Extension"] || "").trim().replace(/[^\w.-]/g, "") || undefined,
-            pseudonym: (row["Pseudonym"] || row["Display Name"] || "").trim() || undefined,
-            status: ((row["Status"] || "Active").trim() as "Active" | "Inactive"),
+            name: rawName.trim(),
+            department: rawDepartment.trim() || undefined,
+            extension: rawExtension.trim().replace(/[^\w.-]/g, "") || undefined,
+            pseudonym: rawPseudonym.trim() || undefined,
+            status: (rawStatus.trim() as "Active" | "Inactive"),
           });
           if (!parsed.success) {
-            results.push({ name: row["Agent Name"] || "(unknown)", action: "skipped (validation)" });
+            results.push({ name: rawName || "(unknown)", action: "skipped (validation)" });
             continue;
           }
           const { name, department, extension, pseudonym, status } = parsed.data;
