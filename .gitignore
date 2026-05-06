@@ -18,6 +18,13 @@ dist/
 # Coverage reports
 coverage/
 
+# Playwright runtime artifacts (test-results/ holds error-context.md +
+# screenshots from failed runs; playwright-report/ is the HTML reporter
+# output). Both are recreated on every run and CI uploads
+# playwright-report/ as a workflow artifact, not via git.
+test-results/
+playwright-report/
+
 # IDE
 .vscode/
 .idea/
