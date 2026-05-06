@@ -26,10 +26,13 @@ test.describe("Authentication", () => {
 
     // Error toast — title says "Login Failed", description says "Invalid
     // username or password", and a screen-reader live region echoes both.
-    // Assert against the description specifically: it's the most
-    // user-visible signal and unique enough to avoid the strict-mode
-    // multi-element ambiguity that the earlier broad regex hit.
-    await expect(page.getByText("Invalid username or password")).toBeVisible({ timeout: 5000 });
+    // Both render with the same literal text, so a bare getByText hits
+    // strict-mode multi-element ambiguity (description div + live region
+    // span). `.first()` deterministically picks the description div
+    // (rendered first in DOM order) — that's the user-visible signal.
+    // PR #167 CI surfaced this as a flake; the live region wasn't always
+    // populated by the time the locator ran.
+    await expect(page.getByText("Invalid username or password").first()).toBeVisible({ timeout: 5000 });
   });
 
   test("logs in with valid credentials and reaches dashboard", async ({ page }) => {

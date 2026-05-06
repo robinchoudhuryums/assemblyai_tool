@@ -89,13 +89,27 @@ test.describe("Upload page batch quality summary toast", () => {
     await expect(uploadAllButton).toBeEnabled({ timeout: 5_000 });
     await uploadAllButton.click();
 
-    // Toast title — distinctive enough to anchor on. Long timeout
-    // because the full chain has to complete: 2× (upload → enqueue →
-    // worker pickup → AssemblyAI mock → Bedrock mock → storage write
-    // → WebSocket broadcast → React state update → cohort watcher).
-    // 90s is generous for CI; if it times out the issue is structural
-    // (WS not connecting, etc.) not a race.
-    await expect(page.getByText("Batch of 2 complete")).toBeVisible({ timeout: 90_000 });
+    // Diagnostic separation: the page header shows "(N/M complete)" as
+    // soon as a row's UI status hits "completed". That text reflects
+    // serverStatus → UI status mapping (file-upload.tsx:431) and
+    // appears in the static DOM, NOT a toast portal. So we assert it
+    // first — if it appears, the upload→pipeline→WS chain worked end
+    // to end. The toast assertion that follows then only tests whether
+    // the cohort WATCHER fired correctly given a known-good chain.
+    //
+    // PR #167 CI run #2 showed the toast assertion timing out at 90s
+    // with no other diagnostics failing. That's ambiguous — could be
+    // pipeline never completed, OR pipeline completed but watcher
+    // didn't fire. This split tells us which.
+    await expect(page.getByText("(2/2 complete)")).toBeVisible({ timeout: 120_000 });
+
+    // Now the toast. The watcher fires synchronously inside a useEffect
+    // when both files reach terminal serverStatus, so this should
+    // appear within a few hundred ms of the (2/2 complete) text. If
+    // this fails while (2/2 complete) succeeded, the bug is in the
+    // cohort watcher's useEffect dependency array or its fire
+    // condition — not in the upload pipeline.
+    await expect(page.getByText("Batch of 2 complete")).toBeVisible({ timeout: 10_000 });
 
     // MSW handlers return clean analysis (flags: []), so the cohort
     // resolves with 2 clean files and the description should say
