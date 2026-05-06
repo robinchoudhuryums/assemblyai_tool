@@ -399,6 +399,22 @@ app.get("/api/health", async (_req, res) => {
 // catch-all safety net for endpoints without explicit per-user limits.
 app.use("/api", rateLimit(60 * 1000, 300));
 
+// Admin surface rate limit (60/min). Blanket prefix-limiter on
+// /api/admin/* — every admin route hits the DB or external services
+// (queue-status, dead-jobs, calibration, batch-status, vuln-scan,
+// incidents, breach-reports, soft-fail-status, etc.) and was previously
+// covered only by the 300/min global limiter + the requireRole("admin")
+// gate. CodeQL js/missing-rate-limiting on PR #166 flagged this as a
+// bulk-exfil surface area if an admin cookie is stolen. 60/min is
+// generous: the admin UI's polling pages refresh at 30s intervals
+// (~2/min each) and human-driven clicks rarely exceed 20/min even
+// during incident response. Mutation routes (PATCH /admin/calibration,
+// POST /admin/dead-jobs/:id/retry, etc.) inherit the same cap, which is
+// fine — they're even more sensitive than reads. If a specific admin
+// flow legitimately needs higher throughput, add a per-route limiter
+// on top; defense-in-depth, not redundancy.
+app.use("/api/admin", rateLimit(60 * 1000, 60));
+
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP).
 // In CI/Playwright runs we bypass — `E2E_MOCKS=true` is the test-only signal
 // already used to activate MSW interception (see server/test-mocks/setup.ts),
