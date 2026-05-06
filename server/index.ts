@@ -15,6 +15,7 @@ if (process.env.E2E_MOCKS === "true") {
 // hooks are registered before Express, HTTP, and AWS SDK modules load.
 import "./services/tracing";
 import express, { type Request, Response, NextFunction } from "express";
+import expressRateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupAuth } from "./auth";
@@ -404,16 +405,40 @@ app.use("/api", rateLimit(60 * 1000, 300));
 // (queue-status, dead-jobs, calibration, batch-status, vuln-scan,
 // incidents, breach-reports, soft-fail-status, etc.) and was previously
 // covered only by the 300/min global limiter + the requireRole("admin")
-// gate. CodeQL js/missing-rate-limiting on PR #166 flagged this as a
-// bulk-exfil surface area if an admin cookie is stolen. 60/min is
-// generous: the admin UI's polling pages refresh at 30s intervals
+// gate. CodeQL js/missing-rate-limiting flagged this as a bulk-exfil
+// surface if an admin cookie is stolen.
+//
+// Why express-rate-limit instead of the hand-rolled rateLimit() above?
+// CodeQL's js/missing-rate-limiting query has a closed-set whitelist of
+// recognized packages (express-rate-limit, express-slow-down,
+// express-brute) — anything else looks like generic middleware to its
+// data-flow analysis. The hand-rolled limiter elsewhere is functionally
+// equivalent (and tested) but invisible to CodeQL. We use the named
+// package here so the static analyzer can see it; the rest of the file
+// keeps the hand-rolled limiter to avoid churn on tested paths.
+//
+// 60/min is generous: admin UI polling pages refresh at 30s intervals
 // (~2/min each) and human-driven clicks rarely exceed 20/min even
 // during incident response. Mutation routes (PATCH /admin/calibration,
 // POST /admin/dead-jobs/:id/retry, etc.) inherit the same cap, which is
 // fine — they're even more sensitive than reads. If a specific admin
 // flow legitimately needs higher throughput, add a per-route limiter
 // on top; defense-in-depth, not redundancy.
-app.use("/api/admin", rateLimit(60 * 1000, 60));
+//
+// `validate: { trustProxy: false }` because Express's `trust proxy`
+// setting at server bootstrap is intentionally false (we read the
+// X-Forwarded-For header ourselves with explicit IPv4 octet validation
+// in `req.app.set('trust proxy', ...)` would override that).
+app.use(
+  "/api/admin",
+  expressRateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { trustProxy: false },
+  }),
+);
 
 // HIPAA: Rate limiting on login endpoint (5 attempts per 15 minutes per IP).
 // In CI/Playwright runs we bypass — `E2E_MOCKS=true` is the test-only signal
