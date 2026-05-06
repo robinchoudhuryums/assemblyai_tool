@@ -88,8 +88,8 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # 9 specs / 2 Playwright projects:
-    #   - "chromium" (default): 8 specs against port 5000 (no REQUIRE_MFA)
+    # 12 specs / 2 Playwright projects:
+    #   - "chromium" (default): 11 specs against port 5000 (no REQUIRE_MFA)
     #   - "mfa-required": 1 spec against port 5001 (REQUIRE_MFA=true)
     # Two dev-server instances run in parallel via webServer: [...].
     # Static-analysis verification (May 2026) confirmed all UI testids
