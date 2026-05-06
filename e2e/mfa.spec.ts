@@ -137,6 +137,22 @@ test.describe.serial("MFA enrollment + verification (testmfa user)", () => {
   test("enable endpoint accepts current TOTP and returns recovery codes", async ({ request }) => {
     expect(mfaSecret, "first test must have populated mfaSecret").not.toBe("");
     const csrf = await loginAndGetCsrf(request, USERNAME, PASSWORD);
+
+    // First: a wrong-code-on-enable attempt is rejected with 401. The
+    // server's enable handler runs verifyTOTP and returns 401 + "Invalid
+    // verification code" without enabling. Important to check on the
+    // wire: a bug here that flipped enabling on for any input would be
+    // a critical security regression and the unit test
+    // (tests/totp.test.ts:verifyTOTP rejects wrong codes) only proves
+    // the building block works in isolation.
+    const wrongRes = await request.post("/api/auth/mfa/enable", {
+      data: { code: "000000" },
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+    });
+    expect(wrongRes.status()).toBe(401);
+    expect(((await wrongRes.json()) as { message?: string }).message).toMatch(/invalid/i);
+
+    // Now: a correct code enables MFA and returns recovery codes.
     const code = generateTOTP(mfaSecret);
     const res = await request.post("/api/auth/mfa/enable", {
       data: { code },
@@ -276,5 +292,142 @@ test.describe.serial("MFA enrollment + verification (testmfa user)", () => {
       headers: { "Content-Type": "application/json" },
     });
     expect(useSecond.status()).toBe(401);
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // State-machine round-trip: regenerate-recovery-codes → disable →
+  // re-enroll. These build on the enrollment + login work above and
+  // share the testmfa session via closure variables. After test 6
+  // burned recoveryCodes[0], indices [1..N-1] are still consumable.
+  //
+  // Helper-style: each authenticated test does the full
+  // login → mfaToken → recovery-code → CSRF dance inline. Could DRY
+  // into a helper but that would obscure which recovery-code index
+  // each test consumes — explicitness is more valuable here.
+  // ─────────────────────────────────────────────────────────────────
+
+  // The new set returned by regenerate. Captured in test 7, consumed
+  // by test 8 (because regenerate invalidates the original set).
+  let recoveryCodesAfterRegen: string[] = [];
+
+  test("regenerate-recovery-codes returns a fresh non-empty set", async ({ request }) => {
+    expect(recoveryCodes.length).toBeGreaterThan(1);
+
+    // Authenticate via recovery code [1] (recoveryCodes[0] was burned
+    // in test 6). Each recovery-code use is single-use server-side.
+    const step1 = await request.post("/api/auth/login", {
+      data: { username: USERNAME, password: PASSWORD },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(step1.ok()).toBeTruthy();
+    const { mfaToken } = (await step1.json()) as { mfaToken: string };
+
+    const step2 = await request.post("/api/auth/login", {
+      data: {
+        username: USERNAME,
+        password: PASSWORD,
+        mfaToken,
+        totpCode: recoveryCodes[1],
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(step2.ok(), await step2.text()).toBeTruthy();
+
+    // Pull CSRF cookie from the now-authenticated request context.
+    const cookies = await request.storageState();
+    const csrf = cookies.cookies.find((c) => c.name === "csrf_token");
+    expect(csrf).toBeTruthy();
+
+    const regen = await request.post("/api/auth/mfa/recovery-codes/regenerate", {
+      headers: { "X-CSRF-Token": csrf!.value, "Content-Type": "application/json" },
+    });
+    expect(regen.ok(), await regen.text()).toBeTruthy();
+    const body = (await regen.json()) as { recoveryCodes: string[] };
+    expect(Array.isArray(body.recoveryCodes)).toBeTruthy();
+    expect(body.recoveryCodes.length).toBeGreaterThanOrEqual(8);
+    for (const rc of body.recoveryCodes) {
+      expect(rc).toMatch(/^[A-Z0-9]{10}$/i);
+    }
+    // Sanity: at least one code in the new set must differ from the
+    // original. Server contract says ALL old codes are invalidated, but
+    // we don't probe that on the wire — covered by tests/totp.test.ts.
+    const overlap = body.recoveryCodes.filter((c) => recoveryCodes.includes(c));
+    expect(overlap.length).toBeLessThan(body.recoveryCodes.length);
+
+    recoveryCodesAfterRegen = body.recoveryCodes;
+  });
+
+  test("disable removes MFA requirement: subsequent login is single-step", async ({ request }) => {
+    expect(recoveryCodesAfterRegen.length).toBeGreaterThan(0);
+
+    // Authenticate via a code from the regenerated set. Old codes are
+    // server-side-invalid after the previous test's regenerate.
+    const step1 = await request.post("/api/auth/login", {
+      data: { username: USERNAME, password: PASSWORD },
+      headers: { "Content-Type": "application/json" },
+    });
+    const { mfaToken } = (await step1.json()) as { mfaToken: string };
+
+    const step2 = await request.post("/api/auth/login", {
+      data: {
+        username: USERNAME,
+        password: PASSWORD,
+        mfaToken,
+        totpCode: recoveryCodesAfterRegen[0],
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(step2.ok(), await step2.text()).toBeTruthy();
+
+    // Disable.
+    const cookies = await request.storageState();
+    const csrf = cookies.cookies.find((c) => c.name === "csrf_token");
+    const disable = await request.post("/api/auth/mfa/disable", {
+      headers: { "X-CSRF-Token": csrf!.value, "Content-Type": "application/json" },
+    });
+    expect(disable.ok(), await disable.text()).toBeTruthy();
+    expect(((await disable.json()) as { message?: string }).message).toMatch(/disabled/i);
+
+    // Now: a fresh login MUST be single-step (no mfaRequired). This is
+    // the round-trip assertion — verifies the disable actually flipped
+    // the user's MFA state, not just returned a 200 cosmetic.
+    // Use a new `request` shape via a clean login so cookies don't
+    // carry the prior session.
+    const reLogin = await request.post("/api/auth/login", {
+      data: { username: USERNAME, password: PASSWORD },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(reLogin.ok(), await reLogin.text()).toBeTruthy();
+    const reBody = (await reLogin.json()) as { mfaRequired?: boolean; username?: string };
+    expect(reBody.mfaRequired).toBeUndefined();
+    expect(reBody.username).toBe(USERNAME);
+  });
+
+  test("setup after disable returns a different secret (re-enrollment)", async ({ request }) => {
+    expect(mfaSecret).not.toBe("");
+    // MFA is now disabled (previous test). Regular single-step login.
+    const csrf = await loginAndGetCsrf(request, USERNAME, PASSWORD);
+
+    // Setup again — server should generate a fresh secret, not reuse
+    // the disabled one. Important: the setup endpoint upserts the
+    // mfa_secrets row with `enabled: false`, so a fresh secret is
+    // expected. If this test ever fails because the secret matches the
+    // original, that means the server is leaking disabled-state
+    // material and the disable flow isn't truly clearing the row.
+    const setupRes = await request.post("/api/auth/mfa/setup", {
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+    });
+    expect(setupRes.ok()).toBeTruthy();
+    const { secret: newSecret } = (await setupRes.json()) as { secret: string };
+    expect(newSecret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(newSecret).not.toBe(mfaSecret);
+
+    // Round-trip the enable to confirm the new secret works end-to-end.
+    const code = generateTOTP(newSecret);
+    const enableRes = await request.post("/api/auth/mfa/enable", {
+      data: { code },
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+    });
+    expect(enableRes.ok(), await enableRes.text()).toBeTruthy();
   });
 });
