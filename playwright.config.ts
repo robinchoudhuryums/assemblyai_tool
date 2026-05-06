@@ -30,7 +30,7 @@ export default defineConfig({
     timeout: 30_000,
     env: {
       SESSION_SECRET: "test-secret-for-e2e",
-      AUTH_USERS: "testadmin:TestPass123!:admin:Test Admin,testviewer:ViewPass123!:viewer:Test Viewer",
+      AUTH_USERS: "testadmin:TestPass123!:admin:Test Admin,testviewer:ViewPass123!:viewer:Test Viewer,testmfa:MfaTestPass123!:admin:Test MFA",
       // Activate MSW-Node interception of AssemblyAI / Bedrock / S3.
       // Without this the dev server would fail on the first outbound
       // fetch during the upload → transcribe → analyze flow.
