@@ -22,6 +22,35 @@ interface UploadFile {
   callId?: string;
   processingStep?: string;
   processingProgress?: number;
+  // Server-side terminal state — separate from UI `status` because the
+  // upload-page UI maps `awaiting_analysis` (batch mode, hours-deferred)
+  // to the same "completed" green-check as a real analyzed call. The
+  // batch-summary toast needs the underlying truth to avoid declaring
+  // "batch complete" before any analysis has actually run.
+  serverStatus?: 'completed' | 'failed' | 'awaiting_analysis';
+  // Flags from the analysis pipeline (passed through the WebSocket
+  // completion broadcast). Empty array = analyzed cleanly. Used only
+  // by the batch summary toast.
+  flags?: string[];
+}
+
+// Quality-flag families, in display order. The toast only enumerates
+// flags that appear; absent families are silently skipped. Ordered so
+// the most-actionable (AI failures) surface first.
+const FLAG_FAMILIES: { prefix: string; label: string }[] = [
+  { prefix: "ai_unavailable", label: "AI unavailable" },
+  { prefix: "output_anomaly", label: "Output anomaly" },
+  { prefix: "prompt_injection", label: "Prompt injection" },
+  { prefix: "low_confidence", label: "Low confidence" },
+  { prefix: "low_transcript_quality", label: "Low transcript quality" },
+  { prefix: "empty_transcript", label: "Empty transcript" },
+];
+
+function classifyFlag(flag: string): string | null {
+  for (const { prefix, label } of FLAG_FAMILIES) {
+    if (flag === prefix || flag.startsWith(`${prefix}:`)) return label;
+  }
+  return null;
 }
 
 const PROCESSING_STEPS = [
@@ -59,6 +88,14 @@ export default function FileUpload() {
           if (f.callId === data.callId) {
             const stepIndex = PROCESSING_STEPS.findIndex(s => s.key === data.status);
             const progress = stepIndex >= 0 ? Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100) : f.processingProgress;
+            const serverStatus =
+              data.status === "completed" ? "completed" as const :
+              data.status === "failed" ? "failed" as const :
+              data.status === "awaiting_analysis" ? "awaiting_analysis" as const :
+              f.serverStatus;
+            // Flags only arrive on the completion broadcast. Preserve any
+            // earlier value if a later (non-completion) tick comes in.
+            const flags = Array.isArray(data.flags) ? (data.flags as string[]) : f.flags;
             return {
               ...f,
               processingStep: data.label || data.status,
@@ -67,6 +104,8 @@ export default function FileUpload() {
                       data.status === "failed" ? "error" as const :
                       data.status === "awaiting_analysis" ? "completed" as const : "processing" as const,
               error: data.status === "failed" ? "Processing failed" : undefined,
+              serverStatus,
+              flags,
             };
           }
           return f;
@@ -76,6 +115,78 @@ export default function FileUpload() {
     window.addEventListener("ws:call_update", handler);
     return () => window.removeEventListener("ws:call_update", handler);
   }, []);
+
+  // Batch quality summary — tracks the cohort of callIds dispatched by
+  // the most recent uploadAll() click so we can fire a single toast once
+  // every call in the batch reaches a terminal server-side state. State
+  // (not ref) so updates trigger the watcher even when all WebSocket
+  // ticks landed before uploadAll's await loop returned. Cleared to null
+  // after the toast fires.
+  const [batchCohort, setBatchCohort] = useState<{
+    callIds: Set<string>;
+    total: number;
+  } | null>(null);
+
+  // Watcher: fires the batch summary toast when every cohort callId has
+  // resolved (completed | failed). Files in `awaiting_analysis` keep the
+  // cohort open — batch-mode uploads will trigger the toast hours later
+  // when the actual analysis lands. Upload-time failures (no callId) are
+  // counted via batchCohort.total vs callIds.size so "5 of 8 reached the
+  // pipeline, 3 failed to upload" still produces a meaningful summary.
+  useEffect(() => {
+    if (!batchCohort) return;
+    const { callIds, total } = batchCohort;
+    if (callIds.size === 0) return;
+    const cohortFiles = uploadFiles.filter(f => f.callId && callIds.has(f.callId));
+    if (cohortFiles.length < callIds.size) return; // some not seen yet
+    const allTerminal = cohortFiles.every(
+      f => f.serverStatus === "completed" || f.serverStatus === "failed"
+    );
+    if (!allTerminal) return;
+
+    const cohortSize = callIds.size;
+    const uploadFailed = total - cohortSize; // failed to even reach pipeline
+    const failed = cohortFiles.filter(f => f.serverStatus === "failed").length;
+    const completed = cohortFiles.filter(f => f.serverStatus === "completed");
+    const flagged = completed.filter(f => (f.flags?.length ?? 0) > 0);
+    const clean = completed.length - flagged.length;
+
+    // Aggregate flag-family counts across the batch.
+    const familyCounts = new Map<string, number>();
+    for (const f of flagged) {
+      for (const flag of f.flags ?? []) {
+        const family = classifyFlag(flag);
+        if (family) familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1);
+      }
+    }
+    const familySummary = Array.from(familyCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([label, n]) => `${n} ${label.toLowerCase()}`)
+      .join(", ");
+
+    const parts: string[] = [];
+    if (clean > 0) parts.push(`${clean} analyzed cleanly`);
+    if (flagged.length > 0) {
+      parts.push(
+        familySummary
+          ? `${flagged.length} flagged (${familySummary})`
+          : `${flagged.length} flagged`,
+      );
+    }
+    if (failed > 0) parts.push(`${failed} failed`);
+    if (uploadFailed > 0) parts.push(`${uploadFailed} upload-failed`);
+
+    const description = parts.join(" · ");
+    const isClean = flagged.length === 0 && failed === 0 && uploadFailed === 0;
+    toast({
+      title: `Batch of ${total} complete`,
+      description: description || "All processed",
+      variant: isClean ? "default" : "destructive",
+    });
+
+    setBatchCohort(null);
+  }, [uploadFiles, batchCohort, toast]);
 
   const { data: employees } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
@@ -149,7 +260,11 @@ export default function FileUpload() {
     setUploadFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const uploadFile = async (index: number) => {
+  /**
+   * Upload one file. Returns the server-issued callId on success (so the
+   * batch-summary cohort can collect them) or null on terminal failure.
+   */
+  const uploadFile = async (index: number): Promise<string | null> => {
     const fileData = uploadFiles[index];
     // Automatic retry-on-429: if the per-IP upload rate limit is hit
     // (default 30/min, env-tunable as UPLOAD_RATE_LIMIT_PER_MIN), the
@@ -174,7 +289,7 @@ export default function FileUpload() {
           language: audioLanguage || undefined,
         });
         // The API returns the call ID — track it for WebSocket updates
-        const callId = result?.id || result?.callId;
+        const callId: string | undefined = result?.id || result?.callId;
         updateFile(index, {
           status: 'processing',
           progress: 100,
@@ -183,7 +298,7 @@ export default function FileUpload() {
           processingProgress: 10,
         });
         toast({ title: t("toast.uploadSuccess"), description: t("toast.uploadSuccessDesc") });
-        return;
+        return callId ?? null;
       } catch (error) {
         lastError = error;
         // Only retry on 429-shaped errors. Non-rate-limit failures (auth,
@@ -199,6 +314,7 @@ export default function FileUpload() {
       status: 'error',
       error: lastError instanceof Error ? lastError.message : 'Upload failed',
     });
+    return null;
   };
 
   /** Reset a single file from error → pending so uploadAll re-picks it up. */
@@ -230,18 +346,39 @@ export default function FileUpload() {
 
     let totalSuccess = 0;
     let totalFailed = 0;
+    const cohortCallIds: string[] = [];
 
     // Process in batches of MAX_CONCURRENT
     for (let i = 0; i < pendingIndices.length; i += MAX_CONCURRENT) {
       const batch = pendingIndices.slice(i, i + MAX_CONCURRENT);
       const results = await Promise.allSettled(batch.map(idx => uploadFile(idx)));
       for (const result of results) {
-        if (result.status === "fulfilled") totalSuccess++;
-        else totalFailed++;
+        if (result.status === "fulfilled") {
+          if (result.value) {
+            totalSuccess++;
+            cohortCallIds.push(result.value);
+          } else {
+            totalFailed++;
+          }
+        } else {
+          totalFailed++;
+        }
       }
     }
 
-    // Report batch results to user
+    // Register the batch cohort for the quality-summary toast. Only arm
+    // for batches with >1 file — single uploads already get the existing
+    // per-row toasts and don't need a summary.
+    if (pendingIndices.length > 1) {
+      setBatchCohort({
+        callIds: new Set(cohortCallIds),
+        total: pendingIndices.length,
+      });
+    }
+
+    // Report upload-step failures immediately. The analysis-quality summary
+    // fires later via the cohort watcher when every call reaches a server
+    // terminal state.
     if (totalFailed > 0 && totalSuccess === 0) {
       toast({ title: t("toast.uploadFailed"), description: `${totalFailed} file(s) failed to upload.`, variant: "destructive" });
     } else if (totalFailed > 0) {

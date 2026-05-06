@@ -88,12 +88,14 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # E2E tests are non-blocking until Sprint 3 (test expansion) lands. The
-    # current 4 specs (auth, dashboard, navigation, health) were added in
-    # PR #122 to wire up the CI infrastructure but they have not been
-    # debugged in a CI environment yet. Failures here should be investigated
-    # but should NOT block PR merges.
-    continue-on-error: true
+    # 7 specs total: auth, dashboard, navigation, health, admin-workflow,
+    # pipeline, full-pipeline. Static-analysis verification (May 2026)
+    # confirmed all UI testids and the MSW-mocked AssemblyAI/Bedrock/S3
+    # paths resolve cleanly. Flipped blocking so real failures surface
+    # instead of being masked. If a flake fights a fix-forward push,
+    # revert this single line — don't add per-spec disable; we lose the
+    # whole signal that way.
+    continue-on-error: false
 
     steps:
       - name: Checkout code

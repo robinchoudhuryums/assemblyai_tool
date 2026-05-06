@@ -212,7 +212,12 @@ export async function processAudioFile(
       await storage.createCallAnalysis(analysis);
       await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
       await cleanupFile(filePath);
-      broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (empty transcript)" });
+      broadcastCallUpdate(callId, "completed", {
+        step: 6,
+        totalSteps: 6,
+        label: "Complete (empty transcript)",
+        flags: ["empty_transcript"],
+      });
       logger.info("pipeline: completed with empty_transcript flag, AI analysis skipped", { callId });
       return;
     }
@@ -241,7 +246,12 @@ export async function processAudioFile(
       await storage.createCallAnalysis(analysis);
       await storage.updateCall(callId, { status: "completed", duration: callDurationSeconds });
       await cleanupFile(filePath);
-      broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete (low quality transcript)" });
+      broadcastCallUpdate(callId, "completed", {
+        step: 6,
+        totalSteps: 6,
+        label: "Complete (low quality transcript)",
+        flags: lowQualityFlags,
+      });
       logger.info("pipeline: completed with low_transcript_quality flag, AI analysis skipped", { callId });
       return;
     }
@@ -915,7 +925,16 @@ export async function processAudioFile(
       logger.warn("pipeline: failed to record usage (non-blocking)", { callId, error: (usageErr as Error).message });
     }
 
-    broadcastCallUpdate(callId, "completed", { step: 6, totalSteps: 6, label: "Complete" });
+    // Include `flags` so the frontend's batch-upload UI can show a per-batch
+    // quality summary toast without an extra GET /api/calls/:id/analysis per
+    // file. Empty array when the call had no flags — keeps the payload shape
+    // stable for clients that already key off `flags?.length`.
+    broadcastCallUpdate(callId, "completed", {
+      step: 6,
+      totalSteps: 6,
+      label: "Complete",
+      flags: Array.isArray(analysis.flags) ? (analysis.flags as string[]) : [],
+    });
     logger.info("pipeline: processing finished successfully", { callId });
 
   } catch (error) {

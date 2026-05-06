@@ -68,6 +68,17 @@ interface SubsystemHealth {
     recentKeys: string[];
     healthy: boolean;
   };
+  // AI-skipped / output-anomaly flag rate (24h rolling). Surfaces calls
+  // where AI couldn't run (`ai_unavailable:*`) or where the model's
+  // output had to be scrubbed (`output_anomaly:*`). Strongest signal of
+  // pipeline degradation. Optional because the SQL JSONB query is only
+  // available on PostgresStorage; null = no DB or query failed. UI
+  // hides the card when null.
+  aiAnalysisFlags?: {
+    total24h: number;
+    byPrefix: Record<string, number>;
+    healthy: boolean;
+  } | null;
 }
 
 interface HealthResponse {
@@ -279,6 +290,37 @@ export default function SystemHealthPage() {
                   </>
                 )}
               </SubsystemCard>
+
+              {/* AI analysis flags (24h). Counts distinct calls whose
+                  analysis carries `ai_unavailable:*` or `output_anomaly:*`
+                  flags — the strongest "pipeline produced a degraded
+                  result" signal. Threshold 1 = unusual; ≥5 = ongoing
+                  issue (also surfaced in the issues banner above).
+                  Hidden when the server returns null (CloudStorage /
+                  MemStorage paths can't run the JSONB query). */}
+              {data.subsystems.aiAnalysisFlags && (
+                <SubsystemCard
+                  icon={Warning}
+                  title="AI analysis flags"
+                  statusPill={<StatusPill status={data.subsystems.aiAnalysisFlags.healthy} />}
+                >
+                  <MetricRow
+                    label="AI-skipped / anomaly (24h)"
+                    value={data.subsystems.aiAnalysisFlags.total24h}
+                    alert={data.subsystems.aiAnalysisFlags.total24h >= 5}
+                    success={data.subsystems.aiAnalysisFlags.total24h === 0}
+                  />
+                  {data.subsystems.aiAnalysisFlags.total24h > 0 && (
+                    <MetricRow
+                      label="By prefix"
+                      value={Object.entries(data.subsystems.aiAnalysisFlags.byPrefix)
+                        .map(([k, v]) => `${v} ${k}`)
+                        .join(", ")}
+                      isText
+                    />
+                  )}
+                </SubsystemCard>
+              )}
 
               {/* Audio archive — user-facing impact view. Each failure means
                   a permanently missing playback file. Threshold 1 (any
