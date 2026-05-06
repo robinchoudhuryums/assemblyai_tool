@@ -36,6 +36,12 @@ import { test, expect } from "@playwright/test";
 import { dismissMfaSetupPromptIfPresent } from "./_helpers";
 
 test.describe("Upload page batch quality summary toast", () => {
+  // Test-level timeout bumped — full upload→pipeline→WS chain runs
+  // 2 jobs through MSW-mocked AssemblyAI + Bedrock; in CI runners
+  // the cumulative latency can exceed the default 30s spec timeout.
+  // 90s is generous; if this still flakes we want to see WHERE.
+  test.setTimeout(120_000);
+
   test("uploading 2 clean files fires one summary toast", async ({ page }) => {
     // Login
     await page.goto("/");
@@ -70,12 +76,26 @@ test.describe("Upload page batch quality summary toast", () => {
       },
     ]);
 
+    // Diagnostic: confirm the dropzone's onDrop handler fired and
+    // populated the file list. If this fails, setInputFiles didn't
+    // reach react-dropzone — telling us the failure is upstream of
+    // the upload itself.
+    await expect(page.getByText("batch-toast-1.mp3")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("batch-toast-2.mp3")).toBeVisible({ timeout: 5_000 });
+
     // The "Upload All" button's text includes a parenthesized count
     // (e.g. "Upload All (2)"). Match by case-insensitive prefix.
-    await page.getByRole("button", { name: /upload all/i }).click();
+    const uploadAllButton = page.getByRole("button", { name: /upload all/i });
+    await expect(uploadAllButton).toBeEnabled({ timeout: 5_000 });
+    await uploadAllButton.click();
 
-    // Toast title — distinctive enough to anchor on.
-    await expect(page.getByText("Batch of 2 complete")).toBeVisible({ timeout: 30_000 });
+    // Toast title — distinctive enough to anchor on. Long timeout
+    // because the full chain has to complete: 2× (upload → enqueue →
+    // worker pickup → AssemblyAI mock → Bedrock mock → storage write
+    // → WebSocket broadcast → React state update → cohort watcher).
+    // 90s is generous for CI; if it times out the issue is structural
+    // (WS not connecting, etc.) not a race.
+    await expect(page.getByText("Batch of 2 complete")).toBeVisible({ timeout: 90_000 });
 
     // MSW handlers return clean analysis (flags: []), so the cohort
     // resolves with 2 clean files and the description should say

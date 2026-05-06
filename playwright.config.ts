@@ -30,7 +30,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? "github" : "html",
+  // GitHub annotations on the PR + a written html report at
+  // playwright-report/. The CI workflow uploads playwright-report/ as
+  // an artifact (ci.yml `Upload Playwright report` step), so without
+  // the html reporter the artifact would be empty — exactly what we
+  // saw debugging PR #167's e2e failures. Locally the html reporter
+  // also opens automatically; in CI we suppress that.
+  reporter: process.env.CI
+    ? [["github"], ["html", { open: "never" }]]
+    : "html",
   timeout: 30_000,
 
   use: {

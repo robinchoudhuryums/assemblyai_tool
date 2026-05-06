@@ -82,19 +82,26 @@ test.describe("REQUIRE_MFA=true enforcement (env-var users)", () => {
     expect((r.body as { message?: string })?.message).toMatch(/cannot enroll/i);
   });
 
-  test("AUTH_USERS viewer login still succeeds (role-exempt)", async ({ request }) => {
-    // Viewers don't trigger isMFARoleRequired (only admin/manager do),
-    // so testviewer should login normally even with REQUIRE_MFA=true
-    // globally on. Verifies the role-gated branch of the F-06 logic
-    // doesn't over-block.
+  test("AUTH_USERS viewer login succeeds with mfaSetupRequired:true", async ({ request }) => {
+    // Two distinct gates with different role semantics:
+    //   - F-06 BLOCK gate (server/auth.ts:394) — only fires for
+    //     admin/manager. Viewers pass through.
+    //   - mfaSetupRequired FLAG gate (server/routes/auth.ts:204) —
+    //     fires whenever isMFARequired() OR isMFARoleRequired(). With
+    //     REQUIRE_MFA=true, isMFARequired() is true, so EVERY user
+    //     including viewers logs in but receives mfaSetupRequired:true
+    //     so the client knows to prompt for enrollment.
+    //
+    // CI run #1 of this spec asserted mfaSetupRequired === undefined
+    // because the original spec author misread the gate semantics.
+    // Corrected: viewer logs in (200) AND gets mfaSetupRequired:true.
     const r = await login(request, "testviewer", "ViewPass123!");
     expect(r.status, r.text).toBe(200);
     expect(r.body).toMatchObject({
       username: "testviewer",
       role: "viewer",
+      mfaSetupRequired: true,
     });
-    // No mfaSetupRequired flag — viewer is genuinely exempt.
-    expect((r.body as { mfaSetupRequired?: boolean }).mfaSetupRequired).toBeUndefined();
   });
 
   test("wrong-password still returns 401 (limiter not bypassed)", async ({ request }) => {

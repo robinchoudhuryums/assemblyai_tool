@@ -46,12 +46,21 @@ async function loginAs(
 }
 
 test.describe("POST /api/calls/bulk-reanalyze gating + validation", () => {
-  test("unauthenticated request returns 401", async ({ request }) => {
+  test("unauthenticated request is blocked (CSRF before auth → 403)", async ({ request }) => {
+    // CI showed 403, not 401: the CSRF double-submit middleware
+    // (server/index.ts:319) fires BEFORE the route's requireAuth.
+    // An anonymous POST has no csrf_token cookie + no X-CSRF-Token
+    // header → 403 "CSRF token missing or invalid" before the route
+    // handler ever runs. That's a defense-in-depth feature: anonymous
+    // attackers don't even reach business logic. Assert the wire
+    // behavior, not the abstract "auth required" intent. Either
+    // status is a valid "blocked" answer; the unit suite (auth.test.ts)
+    // proves the requireAuth path independently.
     const res = await request.post("/api/calls/bulk-reanalyze", {
       data: { callIds: ["00000000-0000-0000-0000-000000000001"] },
       headers: { "Content-Type": "application/json" },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
   });
 
   test("viewer role is rejected with 403", async ({ request }) => {

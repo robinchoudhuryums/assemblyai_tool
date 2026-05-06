@@ -60,7 +60,7 @@ test.describe("/api/search/semantic contract", () => {
     expect(((await res.json()) as { message?: string }).message).toMatch(/too long/i);
   });
 
-  test("default mode returns semantic shape with empty results on empty storage", async ({ request }) => {
+  test("default mode returns semantic shape + structurally-valid coverage", async ({ request }) => {
     const res = await request.get("/api/search/semantic?q=hello");
     expect(res.ok(), await res.text()).toBeTruthy();
     const body = (await res.json()) as {
@@ -71,21 +71,28 @@ test.describe("/api/search/semantic contract", () => {
       coverage?: { totalAccessible: number; withEmbeddings: number };
     };
     // Default mode is "semantic" when an embedding is available, or
-    // "keyword-fallback" if Bedrock blew up. Either is a valid shape;
-    // MSW returns a deterministic vector so the embedding path
-    // succeeds and we expect "semantic".
+    // "keyword-fallback" if Bedrock blew up. MSW returns a
+    // deterministic vector so we expect "semantic".
     expect(body.mode).toBe("semantic");
     // No DATABASE_URL → in-memory fallback path.
     expect(body.backend).toBe("in-memory");
     // Default threshold is 0.25 per the route's parseFloat default.
     expect(body.threshold).toBe(0.25);
     expect(Array.isArray(body.results)).toBeTruthy();
-    expect(body.results.length).toBe(0);
-    // Empty MemStorage means zero accessible calls and zero with
-    // embeddings. The coverage shape itself must still be present.
+    // Coverage shape must be present + structurally valid. We can NOT
+    // assume an empty MemStorage: full-pipeline.spec.ts runs earlier
+    // alphabetically and uploads test calls that persist in the same
+    // dev-server process. Any prior spec that creates a call inflates
+    // totalAccessible. Assert structural invariants instead:
+    //   - both fields are numbers >= 0
+    //   - withEmbeddings <= totalAccessible (you can't have more
+    //     embedded calls than accessible calls)
     expect(body.coverage).toBeDefined();
-    expect(body.coverage!.totalAccessible).toBe(0);
-    expect(body.coverage!.withEmbeddings).toBe(0);
+    expect(typeof body.coverage!.totalAccessible).toBe("number");
+    expect(typeof body.coverage!.withEmbeddings).toBe("number");
+    expect(body.coverage!.totalAccessible).toBeGreaterThanOrEqual(0);
+    expect(body.coverage!.withEmbeddings).toBeGreaterThanOrEqual(0);
+    expect(body.coverage!.withEmbeddings).toBeLessThanOrEqual(body.coverage!.totalAccessible);
   });
 
   test("hybrid mode reflects alpha + adds it to the response shape", async ({ request }) => {
