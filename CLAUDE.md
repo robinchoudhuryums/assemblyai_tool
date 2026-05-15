@@ -38,7 +38,7 @@ npm run dev          # Dev server (tsx watch)
 npm run build        # Vite frontend + esbuild backend → dist/
 npm run start        # Production server (NODE_ENV=production node dist/index.js)
 npm run check        # TypeScript type check
-npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.test.ts — 1096 tests)
+npm run test         # Run backend tests (tsx --test --test-force-exit tests/*.test.ts — 1107 tests)
 npm run test:coverage # Backend tests with c8 coverage report (text + text-summary)
 npm run test:client  # Run frontend tests (Vitest + React Testing Library — 242 tests)
 npm run test:e2e     # Run E2E tests (Playwright — requires dev server)
@@ -79,7 +79,8 @@ npx vite build       # Frontend-only build (useful for quick verification)
   - `tests/aws-credentials.test.ts` — AWS credentials (env var resolution, IMDS caching, refresh buffer timing, priority order)
   - `tests/session-integration.test.ts` — Session/login flow (fingerprint consistency, keepSessionInfo, query 401 defaults)
   - `tests/routes.test.ts` — Route endpoint integration tests (HTTP-level auth enforcement, RBAC, input validation, CSV export, MemStorage CRUD)
-  - `tests/route-endpoints.test.ts` — Real route handler integration tests (employees CRUD, calls CRUD, user management, dashboard metrics — mounts actual Express routes with MemStorage)
+  - `tests/route-endpoints.test.ts` — Real route handler integration tests (employees CRUD, calls CRUD, user management, dashboard metrics, audio streaming endpoint with Range header forwarding + STREAM_AUDIO fallback + auth-before-stream ordering — mounts actual Express routes with MemStorage)
+  - `tests/streaming-audio.test.ts` — `MemStorage.streamAudio` Range-request semantics: 200 full response, 206 with Content-Range, open-ended `bytes=N-`, malformed range 416, out-of-range 416, `start>end` 416, regex-rejected suffix range, bytewise parity with `downloadAudio`
   - `tests/ssrf.test.ts` — SSRF protection (blocked hostnames, private IPs, metadata endpoints, DNS resolution, IPv6-mapped IPv4, protocol enforcement)
   - `tests/synthetic-call-isolation.test.ts` — Synthetic-call isolation regression guard (18 assertions — INV-34/INV-35 enforcement across storage queries, gamification, dashboards, reports, insights)
   - `tests/elevenlabs-client.test.ts` — ElevenLabs TTS client (availability guard, listVoices, textToSpeech buffer return, 429 retry-once behavior, cost estimation defaults and env overrides)
@@ -997,7 +998,7 @@ When both apps are on shared-cookie SSO and `RAG_ENABLED=true` + `RAG_SERVICE_UR
 - The same IAM user is shared across 3 projects (CallAnalyzer, RAG Tool, PMD Questionnaire) — IAM policy covers S3, Bedrock, and Textract
 - Recharts uses inline styles that override CSS; dark mode fixes use `!important`
 - The `useQuery` key format is `["/api/calls", callId]` — TanStack Query uses the key for caching
-- **Query 401 handling**: The default `queryFn` uses `on401: "returnNull"` — background queries silently return null on 401 instead of killing the session. **Never change the default to "throw"** — this causes any single failed query (sidebar, background refetch, stale tab) to destroy the user's session. Session expiry is handled exclusively by the `/api/auth/me` query in `AuthenticatedApp`. See `tests/session-integration.test.ts` for the rationale.
+- **Query 401 handling**: The default `queryFn` uses `on401: "returnNull"` — background queries silently return null on 401 instead of killing the session. **Never change the default to "throw"** — that would cause any single failed query (sidebar, background refetch, stale tab) to destroy the user's session. INV-24 is the floor. On top of that, the `returnNull` branch ALSO calls `queryClient.invalidateQueries({queryKey:["/api/auth/me"]})` so server-side session expiry surfaces immediately instead of waiting up to 60s for the next auth poll. Skipped during the login grace window (`lastLoginAt + LOGIN_GRACE_MS`) and when the failing query IS `/api/auth/me` (would loop). Net: session expiry is still authoritatively signaled by `/api/auth/me` returning null in `AuthenticatedApp`, but the detection latency dropped from up-to-60s to ~RTT. See `tests/session-integration.test.ts` for the invariant rationale.
 - **Session fingerprint**: `getSessionFingerprint()` in `server/auth.ts` is the **single source of truth** — both login (`routes/auth.ts:bindSessionFingerprint`) and verification (`auth.ts:requireAuth`) must use the same exported function. Uses `hash(ua + lang)` — IP intentionally excluded (mobile/VPN rotation). Test coverage in `tests/auth.test.ts` and `tests/session-integration.test.ts`.
 - In-memory storage backend loses all data on restart — only use for local development without cloud credentials
 - Without `DATABASE_URL`, sessions use memorystore (lost on restart) and job queue falls back to in-memory TaskQueue (no retry on crash)
@@ -1510,7 +1511,7 @@ See [`docs/improvement-roadmap.md`](docs/improvement-roadmap.md) for the full mu
 
 ### Test Commands
 ```bash
-npm test                   # Backend (1096 tests)
+npm test                   # Backend (1107 tests)
 npm run test:client        # Frontend (242 tests)
 npm run check              # TypeScript type check
 ```
