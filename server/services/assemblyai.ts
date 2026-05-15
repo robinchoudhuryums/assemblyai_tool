@@ -256,8 +256,21 @@ export class AssemblyAIService {
       segments: transcriptResponse.sentiment_analysis_results || [],
     };
 
-    // Build analysis record
-    const rawScore = aiAnalysis?.performance_score ?? 5.0;
+    // Build analysis record.
+    // Audio-F1: when aiAnalysis is null (Bedrock timeout, parse failure
+    // after retry, circuit-open rejection, or any other no-AI path that
+    // isn't already tagged), we previously fell back to rawScore=5.0 →
+    // 5.0 persisted (or 3.1 if calibration enabled). The fabricated
+    // score then poisoned dashboards / leaderboards / coaching alerts /
+    // badge eval with no signal that AI didn't actually run.
+    // Now: rawScore=0 (calibration is a no-op pass-through to 0; with
+    // calibration on it clamps to 0 too), and we emit a generic
+    // `ai_unavailable:no_analysis` flag below so downstream readers can
+    // detect skipped-AI calls. The pipeline may add a more-specific
+    // sibling flag (e.g. `ai_unavailable:bedrock_access_denied`) on top
+    // when it knows the cause.
+    const aiUnavailable = aiAnalysis === null || aiAnalysis === undefined;
+    const rawScore = aiAnalysis?.performance_score ?? 0;
     const calConfig = getCalibrationConfig();
     const performanceScore = calibrateScore(rawScore, calConfig);
     const calibratedSubScores = aiAnalysis?.sub_scores
@@ -279,11 +292,22 @@ export class AssemblyAIService {
       }
     }
 
-    // Determine flags (using calibrated score thresholds)
+    // Determine flags (using calibrated score thresholds).
+    // Audio-F1: when aiAnalysis is null, the score is fabricated (0) — do
+    // NOT compute score-derived flags (would emit a misleading `low_score`
+    // on top of an already-fake number). Instead, emit a single
+    // `ai_unavailable:no_analysis` flag so downstream readers can detect
+    // and skip the call cleanly.
     const flags: string[] = aiAnalysis?.flags || [];
-    const scoreFlags = getScoreFlags(performanceScore, calConfig);
-    for (const flag of scoreFlags) {
-      if (!flags.includes(flag)) flags.push(flag);
+    if (aiUnavailable) {
+      if (!flags.includes("ai_unavailable:no_analysis")) {
+        flags.push("ai_unavailable:no_analysis");
+      }
+    } else {
+      const scoreFlags = getScoreFlags(performanceScore, calConfig);
+      for (const flag of scoreFlags) {
+        if (!flags.includes(flag)) flags.push(flag);
+      }
     }
 
     // Normalize array fields from AI — coerce any objects to strings

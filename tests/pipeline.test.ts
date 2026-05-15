@@ -138,9 +138,18 @@ describe("processTranscriptData", () => {
     assert.deepEqual(analysis.actionItems, ["Call back tomorrow", "Send invoice"]);
   });
 
-  it("defaults to 5.0 performance score when AI returns null", () => {
+  it("Audio-F1: writes 0 + ai_unavailable:no_analysis flag when AI returns null (no fabricated 5.0)", () => {
     const { analysis } = service.processTranscriptData(baseTranscript, null, "call-10");
-    assert.equal(analysis.performanceScore, "5");
+    // Was previously 5.0 — that fallback masked AI failures and poisoned
+    // dashboards / coaching with fabricated mid-range scores. Now the
+    // pipeline sets 0 + the ai_unavailable flag so downstream readers
+    // can detect skipped-AI calls and skip side-effects.
+    assert.equal(analysis.performanceScore, "0");
+    const flags = (analysis.flags as string[]) || [];
+    assert.ok(
+      flags.includes("ai_unavailable:no_analysis"),
+      `expected ai_unavailable:no_analysis flag, got ${JSON.stringify(flags)}`,
+    );
   });
 
   it("uses first 500 chars of transcript as summary when AI is null", () => {

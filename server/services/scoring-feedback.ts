@@ -610,9 +610,22 @@ export async function detectScoringRegression(): Promise<ScoringRegressionResult
 
     for (const call of completed) {
       const analysis = analysesMap.get(call.id);
-      if (!analysis?.performanceScore) continue;
-      const score = parseFloat(String(analysis.performanceScore));
-      if (!Number.isFinite(score) || score < 0 || score > 10) continue;
+      if (!analysis) continue;
+      // Sc-1: prefer pre-calibration rawAiScore so week-over-week comparison
+      // doesn't bake in calibration-center convergence. Fall back to the
+      // persisted column for legacy rows; skip null (AI didn't run).
+      const factors = (analysis.confidenceFactors ?? {}) as Record<string, unknown>;
+      const stored = factors.rawAiScore;
+      let score: number | null = null;
+      if (typeof stored === "number" && Number.isFinite(stored)) {
+        score = stored;
+      } else if (stored === null) {
+        continue;
+      } else if (analysis.performanceScore) {
+        const parsed = parseFloat(String(analysis.performanceScore));
+        if (Number.isFinite(parsed)) score = parsed;
+      }
+      if (score === null || score < 0 || score > 10) continue;
 
       const uploadedAt = new Date(call.uploadedAt || 0).getTime();
       if (uploadedAt >= currentWeekStart.getTime()) {

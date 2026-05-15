@@ -265,6 +265,24 @@ export default function AgentScorecard() {
     enabled: !!employeeId,
   });
 
+  // gamStats useQuery MUST stay above the early returns below so React's
+  // hook order is stable across renders. Moving it after the `if (isLoading)`
+  // / `if (error || !profile)` returns crashes with "Rendered more hooks
+  // than during the previous render" on every cold-cache scorecard view —
+  // first render exits early with N hooks, second render runs N+1.
+  const { data: gamStats } = useQuery<{
+    totalPoints: number; currentStreak: number;
+    badges: Array<{ id: string; badgeType: string; label: string; description: string; icon: string; earnedAt: string }>;
+  }>({
+    queryKey: [`/api/gamification/stats/${employeeId}`],
+    enabled: !!employeeId,
+    queryFn: async () => {
+      const res = await fetch(`/api/gamification/stats/${employeeId}`, { credentials: "include" });
+      if (!res.ok) return { totalPoints: 0, currentStreak: 0, badges: [] };
+      return res.json();
+    },
+  });
+
   const handlePrint = () => {
     window.print();
   };
@@ -293,19 +311,6 @@ export default function AgentScorecard() {
   const BADGE_ICONS: Record<string, typeof Star> = {
     star: Star, fire: Fire, lightning: Lightning, rocket: Rocket, trophy: Trophy, crown: Crown, "trend-up": TrendUp, shield: Shield, heart: Heart, "check-circle": CheckCircle,
   };
-
-  const { data: gamStats } = useQuery<{
-    totalPoints: number; currentStreak: number;
-    badges: Array<{ id: string; badgeType: string; label: string; description: string; icon: string; earnedAt: string }>;
-  }>({
-    queryKey: [`/api/gamification/stats/${employeeId}`],
-    enabled: !!employeeId,
-    queryFn: async () => {
-      const res = await fetch(`/api/gamification/stats/${employeeId}`, { credentials: "include" });
-      if (!res.ok) return { totalPoints: 0, currentStreak: 0, badges: [] };
-      return res.json();
-    },
-  });
 
   const { employee, totalCalls, avgPerformanceScore, highScore, lowScore, sentimentBreakdown, topStrengths, topSuggestions, commonTopics, scoreTrend, flaggedCalls } = profile;
   const totalSentiment = sentimentBreakdown.positive + sentimentBreakdown.neutral + sentimentBreakdown.negative;

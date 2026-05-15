@@ -229,6 +229,10 @@ export const insertCallAnalysisSchema = z.object({
     aiAnalysisCompleted: z.boolean().optional(),
     overallScore: z.number().optional(),
     agentSpeakerLabel: z.string().optional(),
+    // Sc-1: store the raw AI score alongside the calibrated `performanceScore`
+    // so auto-calibration's drift detection can read pre-calibration values
+    // and not converge on the calibration center. Null when AI didn't run.
+    rawAiScore: z.number().nullable().optional(),
     utteranceMetrics: z.object({
       interruptionCount: z.number().optional(),
       avgResponseLatencyMs: z.number().optional(),

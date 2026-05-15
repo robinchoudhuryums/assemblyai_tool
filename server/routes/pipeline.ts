@@ -572,6 +572,18 @@ export async function processAudioFile(
     analysis.confidenceScore = confidenceScore.toFixed(3);
     analysis.confidenceFactors = confidenceFactors;
 
+    // Sc-1: capture the RAW AI score (pre-calibration) so auto-calibration's
+    // drift math compares apples to apples. Without this, observed-mean
+    // converges to the calibration center and drift-vs-aiModelMean fires
+    // perpetually whenever SCORE_CALIBRATION_ENABLED=true. Null when AI
+    // didn't run; auto-calibration falls back to the legacy column read
+    // for pre-fix rows, then skips null.
+    if (typeof aiAnalysis?.performance_score === "number") {
+      (analysis.confidenceFactors as Record<string, unknown>).rawAiScore = aiAnalysis.performance_score;
+    } else {
+      (analysis.confidenceFactors as Record<string, unknown>).rawAiScore = null;
+    }
+
     if (aiAnalysis?.sub_scores) {
       const calConfig = getCalibrationConfig();
       const calibrated = calibrateSubScores(aiAnalysis.sub_scores, calConfig);
@@ -745,24 +757,39 @@ export async function processAudioFile(
           });
         }).catch(() => { /* dynamic import failure is non-critical */ });
       } else {
-        // A12/F11/F21: pass the freshly-built analysis through so the
-        // coaching service doesn't re-fetch it from storage.
-        checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources, {
-          feedback: analysis.feedback,
-          subScores: analysis.subScores,
-          flags: analysis.flags,
-        }).catch(err => {
-          logger.warn("pipeline: coaching alert failed (non-blocking)", { callId, error: (err as Error).message });
-          captureException(err as Error, { callId, errorType: "coaching_alert" });
-        });
+        // Audio-F1: skip coaching alerts AND badge eval when AI was
+        // unavailable. The score is fabricated (0) so any score-based
+        // trigger would create misleading coaching plans for an agent
+        // who never actually had their call analyzed. Mirrors the
+        // best-practice-ingest gate further down.
+        const analysisFlagsForGating = Array.isArray(analysis.flags) ? (analysis.flags as string[]) : [];
+        const hasAiUnavailableFlag = analysisFlagsForGating.some(f => f.startsWith("ai_unavailable"));
 
-        // Gamification: evaluate badges (non-blocking)
-        if (finalEmployeeId) {
-          const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
-          evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
-            logger.warn("pipeline: badge evaluation failed (non-blocking)", { callId, error: (err as Error).message });
-            captureException(err as Error, { callId, errorType: "badge_evaluation" });
+        if (hasAiUnavailableFlag) {
+          logger.info("pipeline: skipping coaching/badges — ai_unavailable flag present", {
+            callId,
+            flags: analysisFlagsForGating.filter(f => f.startsWith("ai_unavailable")),
           });
+        } else {
+          // A12/F11/F21: pass the freshly-built analysis through so the
+          // coaching service doesn't re-fetch it from storage.
+          checkAndCreateCoachingAlert(callId, performanceScore, finalEmployeeId, callSummary, ragSources, {
+            feedback: analysis.feedback,
+            subScores: analysis.subScores,
+            flags: analysis.flags,
+          }).catch(err => {
+            logger.warn("pipeline: coaching alert failed (non-blocking)", { callId, error: (err as Error).message });
+            captureException(err as Error, { callId, errorType: "coaching_alert" });
+          });
+
+          // Gamification: evaluate badges (non-blocking)
+          if (finalEmployeeId) {
+            const subScores = analysis.subScores as { compliance?: number; customerExperience?: number; communication?: number; resolution?: number } | undefined;
+            evaluateBadges(callId, finalEmployeeId, performanceScore, subScores).catch(err => {
+              logger.warn("pipeline: badge evaluation failed (non-blocking)", { callId, error: (err as Error).message });
+              captureException(err as Error, { callId, errorType: "badge_evaluation" });
+            });
+          }
         }
 
         // Best practice auto-ingestion: send exceptional calls (≥9.0) to the KB.
