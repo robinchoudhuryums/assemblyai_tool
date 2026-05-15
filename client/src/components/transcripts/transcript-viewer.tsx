@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, FileText, Flag, FloppyDisk, MagnifyingGlass, PencilSimple, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, Trophy, Warning, X } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, ClipboardText, Clock, ClockCounterClockwise, FileText, Flag, FloppyDisk, MagnifyingGlass, PencilSimple, Shield, ShieldStar, SkipForward, SpeakerHigh, SpeakerLow, SpeakerX, SpinnerGap, Trophy, Warning, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -59,7 +59,15 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [audioDuration, setAudioDuration] = useState(0);
-  const [audioReady, setAudioReady] = useState(false);
+  // Three-state machine for the audio element so the scrubber dock can
+  // distinguish "still loading" from "actually failed". Prior boolean
+  // collapsed both into a single fallback that said "Could not be loaded"
+  // during a multi-second load — read as terminal failure by users on
+  // the typical proxy-then-buffer audio path.
+  // Source of truth: <audio> events (loadedmetadata = ready, error = error).
+  // A 30s safety timeout escalates "loading" to "error" if neither event
+  // ever fires (silent network stall).
+  const [audioState, setAudioState] = useState<"loading" | "ready" | "error">("loading");
   // Volume + mute state. Persisted per-session in localStorage so a user's
   // preferred level sticks across navigations. Falls back to full volume.
   const [volume, setVolume] = useState<number>(() => {
@@ -344,11 +352,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   // Inline-feedback index: group AI feedback items by the transcript
   // segment they reference via the AI-emitted timestamp. Items without a
-  // parseable timestamp stay in the side rail only. Items whose timestamp
-  // falls before the first segment or after the last are attached to the
-  // nearest segment so nothing is silently dropped. `validateTimestamps`
+  // parseable timestamp stay in the side rail only. `validateTimestamps`
   // on the server already strips timestamps beyond call duration, so the
   // no-match case is extremely rare in practice.
+  //
+  // Matching: prefer a segment whose [start, end] contains the timestamp.
+  // If none contain it (timestamp lands in inter-segment silence — common
+  // for long pauses / hold music / dead air), pick the segment whose
+  // midpoint is closest. The prior "last segment whose start <= ts" rule
+  // could attach feedback to a segment many seconds before its true
+  // referent when the timestamp fell in a long silence between segments.
   // MUST be called before early returns to respect Rules of Hooks.
   type InlineFeedbackItem = { kind: "strength" | "suggestion"; text: string; timestampMs: number };
   const inlineFeedbackBySegment = useMemo<Record<number, InlineFeedbackItem[]>>(() => {
@@ -371,18 +384,30 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
         const ts = obj.timestamp;
         const timestampMs = parseAiTimestampToMs(ts);
         if (timestampMs == null) continue;
-        // Binary-search-ish linear scan for the segment containing this ms.
-        // transcriptSegments are sorted by start; pick the last segment
-        // whose start <= timestampMs.
+        // First pass: prefer a segment containing the timestamp.
         let segIdx = -1;
         for (let i = 0; i < transcriptSegments.length; i++) {
-          if (transcriptSegments[i].start <= timestampMs) {
+          const seg = transcriptSegments[i];
+          if (seg.start <= timestampMs && timestampMs <= seg.end) {
             segIdx = i;
-          } else {
             break;
           }
         }
-        if (segIdx === -1) segIdx = 0; // before first — attach to first
+        // Fallback: nearest segment by midpoint distance.
+        if (segIdx === -1) {
+          let bestIdx = 0;
+          let bestDist = Infinity;
+          for (let i = 0; i < transcriptSegments.length; i++) {
+            const seg = transcriptSegments[i];
+            const mid = (seg.start + seg.end) / 2;
+            const dist = Math.abs(timestampMs - mid);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = i;
+            }
+          }
+          segIdx = bestIdx;
+        }
         (result[segIdx] ||= []).push({ kind, text, timestampMs });
       }
     };
@@ -412,9 +437,9 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     const onEnded = () => setIsPlaying(false);
     const onLoadedMetadata = () => {
       setAudioDuration(audio.duration * 1000);
-      setAudioReady(true);
+      setAudioState("ready");
     };
-    const onError = () => setAudioReady(false);
+    const onError = () => setAudioState("error");
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
@@ -424,9 +449,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
     // If metadata already loaded (e.g. cached)
     if (audio.readyState >= 1) {
       setAudioDuration(audio.duration * 1000);
-      setAudioReady(true);
+      setAudioState("ready");
     }
+    // Safety timeout: if neither loadedmetadata nor error fires within 30s,
+    // escalate to "error" so users don't stare at a spinner forever on
+    // a silent network stall. Cleared on unmount or state transition.
+    const stallTimer = window.setTimeout(() => {
+      setAudioState((s) => (s === "loading" ? "error" : s));
+    }, 30000);
     return () => {
+      window.clearTimeout(stallTimer);
       audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
@@ -1488,7 +1520,7 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
         className="sticky bottom-0 left-0 right-0 z-20 mt-5 pt-4 border-t border-border bg-card"
         data-testid="scrubber-dock"
       >
-        {audioReady ? (
+        {audioState === "ready" ? (
           <Scrubber
             audioRef={audioRef}
             currentTime={currentTime}
@@ -1513,6 +1545,19 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
               if (audioRef.current) audioRef.current.playbackRate = r;
             }}
           />
+        ) : audioState === "loading" ? (
+          <div className="px-4 py-3 flex items-center gap-3" role="status" aria-live="polite">
+            <SpinnerGap className="w-4 h-4 animate-spin text-muted-foreground" weight="bold" />
+            <div
+              className="font-mono uppercase text-muted-foreground"
+              style={{ fontSize: 10, letterSpacing: "0.12em" }}
+            >
+              Audio
+            </div>
+            <div className="text-sm text-muted-foreground italic">
+              Loading audio…
+            </div>
+          </div>
         ) : (
           <div className="px-4 py-3 flex items-center gap-3" role="status">
             <div

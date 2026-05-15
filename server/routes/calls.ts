@@ -3,6 +3,8 @@ import path from "path";
 import fs from "fs";
 import { z } from "zod";
 import { createHash } from "crypto";
+import { pipeline as streamPipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { logger } from "../services/logger";
 import { storage } from "../storage";
 import { requireAuth, requireRole, requireMFASetup, getUserEmployeeId } from "../auth";
@@ -304,12 +306,6 @@ export function registerCallRoutes(
         return;
       }
 
-      const audioBuffer = await storage.downloadAudio(audioFiles[0]);
-      if (!audioBuffer) {
-        res.status(404).json({ message: "Audio file could not be retrieved" });
-        return;
-      }
-
       const ext = path.extname(audioFiles[0]).toLowerCase();
       const mimeTypes: Record<string, string> = {
         '.mp3': 'audio/mpeg',
@@ -320,6 +316,20 @@ export function registerCallRoutes(
         '.ogg': 'audio/ogg',
       };
       const contentType = mimeTypes[ext] || 'audio/mpeg';
+      const rawRangeHeader = req.headers.range;
+      // Reject multi-range / malformed Range at our edge before forwarding
+      // to S3 so we don't return S3's `multipart/byteranges` shape (which
+      // would confuse <audio> elements). Matches the prior single-range
+      // regex (A33/F38). Absent Range header is fine — pass through.
+      let rangeForUpstream: string | undefined;
+      if (rawRangeHeader) {
+        if (!/^bytes=\d+-\d*$/.test(rawRangeHeader)) {
+          res.setHeader("Content-Range", `bytes */*`);
+          res.status(416).end();
+          return;
+        }
+        rangeForUpstream = rawRangeHeader;
+      }
 
       if (req.query.download === 'true') {
         const rawName = call.fileName || `call-${req.params.id}${ext}`;
@@ -334,16 +344,57 @@ export function registerCallRoutes(
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
 
-      const rangeHeader = req.headers.range;
-      if (rangeHeader) {
-        // A33/F38: tight single-range regex; reject multi-range and malformed.
-        // Validate numeric bounds and 416 on invalid.
-        const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
-        if (!match) {
-          res.setHeader("Content-Range", `bytes */${audioBuffer.length}`);
-          res.status(416).end();
+      // STREAM_AUDIO=false flips back to the buffered path. Default is
+      // streaming. Set as a one-deploy safety net; remove the env var
+      // gate in a follow-on once production is stable on streaming.
+      const streamEnabled = (process.env.STREAM_AUDIO ?? "true").toLowerCase() !== "false";
+
+      if (streamEnabled) {
+        // Streaming path: pipe S3 response body directly to client.
+        // Eliminates the multi-second buffer-everything-first stall on
+        // the prior `downloadAudio` path. Time-to-first-byte drops from
+        // ~S3-fetch-duration to ~RTT. Auth + audit are already done.
+        const upstream = await storage.streamAudio(audioFiles[0], rangeForUpstream);
+        if (!upstream) {
+          res.status(404).json({ message: "Audio file could not be retrieved" });
           return;
         }
+
+        // Forward S3's Content-Length / Content-Range so seek + duration
+        // probe work end-to-end. S3 sets these on 200 and 206.
+        const upstreamLen = upstream.headers.get("content-length");
+        if (upstreamLen) res.setHeader("Content-Length", upstreamLen);
+        const upstreamRange = upstream.headers.get("content-range");
+        if (upstreamRange) res.setHeader("Content-Range", upstreamRange);
+
+        res.status(upstream.status);
+
+        // 416 (Range Not Satisfiable) has no body. End the response.
+        if (upstream.status === 416 || !upstream.body) {
+          res.end();
+          return;
+        }
+
+        // Pipe the Web ReadableStream from fetch into the Node Writable
+        // (res). `stream/promises.pipeline` handles backpressure AND
+        // propagates errors — bare `.pipe()` would swallow upstream
+        // errors and leave the connection half-open.
+        await streamPipeline(Readable.fromWeb(upstream.body as never), res);
+        return;
+      }
+
+      // Buffered fallback (STREAM_AUDIO=false). Preserved verbatim so
+      // operators can roll back without a rebuild.
+      const audioBuffer = await storage.downloadAudio(audioFiles[0]);
+      if (!audioBuffer) {
+        res.status(404).json({ message: "Audio file could not be retrieved" });
+        return;
+      }
+
+      if (rawRangeHeader) {
+        // rangeForUpstream regex already validated the shape; re-derive
+        // numeric bounds here for the buffered slice.
+        const match = /^bytes=(\d+)-(\d*)$/.exec(rawRangeHeader)!;
         const start = parseInt(match[1], 10);
         const end = match[2] ? parseInt(match[2], 10) : audioBuffer.length - 1;
         if (
@@ -366,7 +417,14 @@ export function registerCallRoutes(
       res.send(audioBuffer);
     } catch (error) {
       logger.error("failed to stream audio", { error });
-      res.status(500).json({ message: "Failed to stream audio" });
+      // If we've already started writing (streaming path), we can't send
+      // a JSON error — just kill the socket so the client sees a clean
+      // truncation rather than a hung response.
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to stream audio" });
+      } else {
+        res.destroy();
+      }
     }
   });
 

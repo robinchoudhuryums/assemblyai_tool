@@ -234,6 +234,26 @@ export class S3Client {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  /**
+   * Stream a binary object. Returns the raw fetch `Response` so callers
+   * can pipe `response.body` directly to a destination (e.g. an Express
+   * `res`) without buffering the full payload in Node heap. Returns
+   * undefined for 404.
+   *
+   * When `range` is provided, forwards it as the HTTP `Range` request
+   * header so S3 returns 206 + only the requested bytes. S3 also responds
+   * with 416 (Range Not Satisfiable) for malformed/out-of-range requests;
+   * both 206 and 416 are returned to the caller untouched so the caller
+   * can propagate them to the client without re-parsing.
+   *
+   * HIPAA: this method does not alter the access-control / audit-logging
+   * surface. Callers must perform `canViewerAccessCall` + `logPhiAccess`
+   * before invoking it, exactly as for the buffered `downloadFile` path.
+   */
+  async streamObject(objectName: string, range?: string): Promise<Response | undefined> {
+    return this.getObject(objectName, range);
+  }
+
   /** List all objects with a given prefix */
   async listObjects(prefix: string): Promise<string[]> {
     const names: string[] = [];
@@ -390,11 +410,17 @@ export class S3Client {
     }
   }
 
-  private async getObject(objectName: string): Promise<Response | undefined> {
-    const response = await this.request("GET", `/${objectName}`);
+  private async getObject(objectName: string, range?: string): Promise<Response | undefined> {
+    const response = await this.request("GET", `/${objectName}`, undefined, undefined, undefined, range);
     if (response.status === 404) return undefined;
     if (response.status === 403) {
       throw new Error(`S3 access denied (403) for ${objectName} in bucket ${this.bucketName} — check IAM permissions`);
+    }
+    // 206 (Partial Content) and 416 (Range Not Satisfiable) are valid
+    // responses to range-suffixed requests. Return them so the streaming
+    // caller can forward them verbatim to the HTTP client.
+    if (response.status === 206 || response.status === 416) {
+      return response;
     }
     if (!response.ok) {
       throw new Error(`S3 download failed for ${objectName}: ${await response.text()}`);
@@ -408,6 +434,7 @@ export class S3Client {
     queryString?: string,
     body?: Buffer,
     contentType?: string,
+    rangeHeader?: string,
   ): Promise<Response> {
     const creds = await this.ensureCredentials();
 
@@ -428,7 +455,7 @@ export class S3Client {
       ? `https://${this.host}${encodedPath}?${queryString}`
       : `https://${this.host}${encodedPath}`;
 
-    const headers = this.sign(method, encodedPath, queryString || "", body, contentType, creds);
+    const headers = this.sign(method, encodedPath, queryString || "", body, contentType, creds, rangeHeader);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), S3_TIMEOUT_MS);
     try {
@@ -452,6 +479,7 @@ export class S3Client {
     body?: Buffer,
     contentType?: string,
     creds?: AwsCredentials,
+    rangeHeader?: string,
   ): Record<string, string> {
     if (!creds) creds = this.credentials!;
 
@@ -467,6 +495,12 @@ export class S3Client {
     // HIPAA: Enforce server-side encryption at rest for all uploaded objects
     if (method === "PUT") {
       extraHeaders.push(["x-amz-server-side-encryption", "AES256"]);
+    }
+    // Range requests (streaming audio playback). Signed so the signature
+    // covers it — unsigned passthrough also works with S3, but signing is
+    // the more conservative posture and the SigV4 cost is negligible.
+    if (rangeHeader) {
+      extraHeaders.push(["range", rangeHeader]);
     }
 
     return signRequest({

@@ -88,6 +88,13 @@ export interface ObjectStorageClient {
   uploadFile(objectName: string, buffer: Buffer, contentType: string): Promise<void>;
   downloadJson<T>(objectName: string): Promise<T | undefined>;
   downloadFile(objectName: string): Promise<Buffer | undefined>;
+  /**
+   * Stream a binary object. Returns the raw fetch `Response` (with a
+   * ReadableStream body) so callers can pipe directly to a destination
+   * without buffering. Returns undefined for 404. Forwards an optional
+   * Range header to the upstream and returns 206 / 416 unchanged.
+   */
+  streamObject(objectName: string, range?: string): Promise<Response | undefined>;
   listObjects(prefix: string): Promise<string[]>;
   listObjectsWithMetadata(prefix: string): Promise<Array<{ name: string; size: string; updated: string }>>;
   listAndDownloadJson<T>(prefix: string): Promise<T[]>;
@@ -296,6 +303,17 @@ export interface IStorage {
   uploadAudio(callId: string, fileName: string, buffer: Buffer, contentType: string): Promise<void>;
   getAudioFiles(callId: string): Promise<string[]>;
   downloadAudio(objectName: string): Promise<Buffer | undefined>;
+  /**
+   * Stream a binary audio object. Returns a fetch-style `Response` whose
+   * `body` is a ReadableStream the caller can pipe directly to an Express
+   * response (no full-buffer hop through Node heap). Returns undefined
+   * for 404.
+   *
+   * `range` is forwarded as the HTTP Range request header — S3 returns
+   * 206 + Content-Range for valid range, 416 for malformed/out-of-range.
+   * Callers should propagate those statuses to the HTTP client unchanged.
+   */
+  streamAudio(objectName: string, range?: string): Promise<Response | undefined>;
   /** Get a pre-signed S3 URL for direct audio access (avoids buffering). Returns undefined if not supported. */
   getAudioPresignedUrl?(objectName: string): Promise<string | undefined>;
 
@@ -454,6 +472,54 @@ async function computeCoachingOutcomesInMemory(
     });
   }
   return result;
+}
+
+/**
+ * Build a fetch-style `Response` from an in-memory Buffer with HTTP
+ * Range semantics. Used by MemStorage so the dev streaming path matches
+ * the S3-backed `streamAudio` contract — 200 for no range, 206 for a
+ * valid single-range, 416 for malformed or out-of-range. Multi-range
+ * requests are intentionally not supported (matches the route's tight
+ * `^bytes=N-M?$` regex on the user side).
+ */
+function memBufferToResponse(buf: Buffer, range?: string): Response {
+  const total = buf.length;
+  if (!range) {
+    return new Response(new Uint8Array(buf), {
+      status: 200,
+      headers: {
+        "Content-Length": String(total),
+        "Accept-Ranges": "bytes",
+      },
+    });
+  }
+  const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+  if (!match) {
+    return new Response("", {
+      status: 416,
+      headers: { "Content-Range": `bytes */${total}` },
+    });
+  }
+  const start = parseInt(match[1], 10);
+  const end = match[2] ? parseInt(match[2], 10) : total - 1;
+  if (
+    !Number.isFinite(start) || !Number.isFinite(end) ||
+    start < 0 || end < start || end >= total
+  ) {
+    return new Response("", {
+      status: 416,
+      headers: { "Content-Range": `bytes */${total}` },
+    });
+  }
+  const slice = buf.subarray(start, end + 1);
+  return new Response(new Uint8Array(slice), {
+    status: 206,
+    headers: {
+      "Content-Length": String(slice.length),
+      "Content-Range": `bytes ${start}-${end}/${total}`,
+      "Accept-Ranges": "bytes",
+    },
+  });
 }
 
 /**
@@ -847,6 +913,18 @@ export class MemStorage implements IStorage {
   }
   async downloadAudio(objectName: string): Promise<Buffer | undefined> {
     return this.audioFiles.get(objectName);
+  }
+
+  /**
+   * MemStorage streaming parity: synthesize a fetch `Response` from the
+   * in-memory buffer, honoring HTTP Range request semantics (200 / 206 /
+   * 416) so the dev backend matches the S3-backed contract exactly.
+   * Used by `/api/calls/:id/audio` when `DATABASE_URL` is unset.
+   */
+  async streamAudio(objectName: string, range?: string): Promise<Response | undefined> {
+    const buf = this.audioFiles.get(objectName);
+    if (!buf) return undefined;
+    return memBufferToResponse(buf, range);
   }
 
   async getDashboardMetrics(): Promise<DashboardMetrics> {
@@ -1643,6 +1721,10 @@ export class CloudStorage implements IStorage {
 
   async downloadAudio(objectName: string): Promise<Buffer | undefined> {
     return this.client.downloadFile(objectName);
+  }
+
+  async streamAudio(objectName: string, range?: string): Promise<Response | undefined> {
+    return this.client.streamObject(objectName, range);
   }
 
   // --- Dashboard and Reporting Methods ---

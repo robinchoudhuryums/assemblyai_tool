@@ -938,6 +938,11 @@ export class PostgresStorage implements IStorage {
     return this.audioClient.downloadFile(objectName);
   }
 
+  async streamAudio(objectName: string, range?: string): Promise<Response | undefined> {
+    if (!this.audioClient) return undefined;
+    return this.audioClient.streamObject(objectName, range);
+  }
+
   async getAudioPresignedUrl(objectName: string): Promise<string | undefined> {
     if (!this.audioClient) return undefined;
     return this.audioClient.getPresignedUrl?.(objectName, 3600);
