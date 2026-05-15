@@ -114,6 +114,14 @@ async function processBatchResults(
         updatedAnalysis.confidenceScore = confidenceScore.toFixed(3);
         updatedAnalysis.confidenceFactors = confidenceFactors;
 
+        // Sc-1: capture the RAW AI score (pre-calibration) for auto-calibration.
+        // Same contract as the on-demand pipeline path — see pipeline.ts.
+        if (typeof analysis.performance_score === "number") {
+          (updatedAnalysis.confidenceFactors as Record<string, unknown>).rawAiScore = analysis.performance_score;
+        } else {
+          (updatedAnalysis.confidenceFactors as Record<string, unknown>).rawAiScore = null;
+        }
+
         if (analysis.sub_scores) {
           // F-09: validate sub-scores are numbers clamped to [0, 10]. AI may
           // return strings ("high") or out-of-range values; coerce or default

@@ -276,46 +276,86 @@ export async function consumeRecoveryCode(username: string, plaintext: string): 
   if (!/^[A-Z0-9]{10}$/.test(normalized)) return false;
 
   const pool = getPool();
-  let records: RecoveryCodeRecord[];
   if (pool) {
-    const result = await pool.query(
-      "SELECT recovery_codes FROM mfa_secrets WHERE username = $1 FOR UPDATE",
-      [username]
-    );
-    if (result.rows.length === 0) return false;
-    records = (result.rows[0].recovery_codes as RecoveryCodeRecord[]) || [];
-  } else {
-    const rec = mfaMemoryStore.get(username);
-    records = rec ? ((rec as any).recoveryCodes as RecoveryCodeRecord[]) || [] : [];
-  }
+    // Sec-F4 / INV-25: SELECT FOR UPDATE only locks within the SAME
+    // transaction. Previously this used pool.query() which checks out a
+    // fresh connection per call — the row lock died immediately and two
+    // concurrent consumeRecoveryCode() calls each saw the same unused
+    // record and both wrote `used: true`. Now we acquire a dedicated
+    // client, BEGIN, hold the row lock through the read+compute+UPDATE,
+    // and COMMIT (or ROLLBACK on error). The second concurrent caller
+    // blocks on the row lock and re-reads the already-marked record.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "SELECT recovery_codes FROM mfa_secrets WHERE username = $1 FOR UPDATE",
+        [username]
+      );
+      if (result.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const records = (result.rows[0].recovery_codes as RecoveryCodeRecord[]) || [];
 
-  const candidateHash = await hashRecoveryCode(normalized, username);
-  const candidateBuf = Buffer.from(candidateHash, "hex");
+      const candidateHash = await hashRecoveryCode(normalized, username);
+      const candidateBuf = Buffer.from(candidateHash, "hex");
 
-  let matchedIdx = -1;
-  for (let i = 0; i < records.length; i++) {
-    const r = records[i];
-    if (r.used) continue;
-    const storedBuf = Buffer.from(r.hash, "hex");
-    if (storedBuf.length !== candidateBuf.length) continue;
-    if (timingSafeEqual(storedBuf, candidateBuf)) {
-      matchedIdx = i;
-      // Don't break — keep comparing to avoid timing signal on early match.
+      let matchedIdx = -1;
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        if (r.used) continue;
+        const storedBuf = Buffer.from(r.hash, "hex");
+        if (storedBuf.length !== candidateBuf.length) continue;
+        if (timingSafeEqual(storedBuf, candidateBuf)) {
+          matchedIdx = i;
+          // Don't break — keep comparing to avoid timing signal on early match.
+        }
+      }
+      if (matchedIdx === -1) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      records[matchedIdx] = { ...records[matchedIdx], used: true, usedAt: new Date().toISOString() };
+      await client.query(
+        "UPDATE mfa_secrets SET recovery_codes = $2 WHERE username = $1",
+        [username, JSON.stringify(records)]
+      );
+      await client.query("COMMIT");
+      return true;
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch { /* best-effort */ }
+      throw err;
+    } finally {
+      client.release();
     }
-  }
-  if (matchedIdx === -1) return false;
-
-  records[matchedIdx] = { ...records[matchedIdx], used: true, usedAt: new Date().toISOString() };
-  if (pool) {
-    await pool.query(
-      "UPDATE mfa_secrets SET recovery_codes = $2 WHERE username = $1",
-      [username, JSON.stringify(records)]
-    );
   } else {
+    // Memory backend (dev only) — JS single-thread semantics make the
+    // read+compute+write atomic because there are no awaits between
+    // candidate selection and the records.set assignment below.
     const rec = mfaMemoryStore.get(username);
+    const records = rec ? ((rec as any).recoveryCodes as RecoveryCodeRecord[]) || [] : [];
+
+    const candidateHash = await hashRecoveryCode(normalized, username);
+    const candidateBuf = Buffer.from(candidateHash, "hex");
+
+    let matchedIdx = -1;
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      if (r.used) continue;
+      const storedBuf = Buffer.from(r.hash, "hex");
+      if (storedBuf.length !== candidateBuf.length) continue;
+      if (timingSafeEqual(storedBuf, candidateBuf)) {
+        matchedIdx = i;
+      }
+    }
+    if (matchedIdx === -1) return false;
+
+    records[matchedIdx] = { ...records[matchedIdx], used: true, usedAt: new Date().toISOString() };
     if (rec) (rec as any).recoveryCodes = records;
+    return true;
   }
-  return true;
 }
 
 /**

@@ -80,13 +80,32 @@ export async function analyzeScoreDistribution(windowDays?: number): Promise<Cal
     const callIds = recentScoredCalls.map(c => c.id);
     const analysesMap = await storage.getCallAnalysesBulk(callIds);
 
+    // Sc-1: read PRE-calibration scores so drift detection actually compares
+    // raw AI output against the configured aiModelMean. Pre-fix rows lack
+    // confidenceFactors.rawAiScore — for those, fall back to the persisted
+    // performanceScore column (which is the calibrated value when calibration
+    // was on at write time, or the raw value when it wasn't). The fallback
+    // skews the distribution toward calibration-center for legacy rows in
+    // calibration-on tenants — accepted as a transition-period inaccuracy
+    // that decays as new analyses overwrite the bulk of the window.
     const rawScores: number[] = [];
     for (const [, analysis] of analysesMap) {
-      if (analysis?.performanceScore) {
-        const score = parseFloat(String(analysis.performanceScore));
-        if (Number.isFinite(score) && score >= 0 && score <= 10) {
-          rawScores.push(score);
-        }
+      if (!analysis) continue;
+      const factors = (analysis.confidenceFactors ?? {}) as Record<string, unknown>;
+      const stored = factors.rawAiScore;
+      let score: number | null = null;
+      if (typeof stored === "number" && Number.isFinite(stored)) {
+        score = stored;
+      } else if (stored === null) {
+        // AI didn't run — skip this row from the calibration sample.
+        continue;
+      } else if (analysis.performanceScore) {
+        // Legacy row without rawAiScore — fall back to persisted column.
+        const parsed = parseFloat(String(analysis.performanceScore));
+        if (Number.isFinite(parsed)) score = parsed;
+      }
+      if (score !== null && score >= 0 && score <= 10) {
+        rawScores.push(score);
       }
     }
 
