@@ -418,6 +418,96 @@ describe("Call endpoints (real routes)", () => {
     assert.equal(status, 404);
   });
 
+  // =====================================================================
+  // AUDIO STREAMING — verifies the route's Range-forwarding, edge regex,
+  // STREAM_AUDIO env-var gate, and auth-before-stream ordering. Storage-
+  // primitive Range semantics are covered separately in
+  // tests/streaming-audio.test.ts; these tests exercise the full route
+  // handler (auth → audit → header forwarding → pipe to response).
+  // =====================================================================
+
+  it("GET /api/calls/:id/audio returns 200 + full body when no Range header", async () => {
+    const call = await storage.createCall({ fileName: "audio-stream.mp3", duration: 60, status: "completed" });
+    const SAMPLE = Buffer.from("0123456789ABCDEFGHIJ");
+    await storage.uploadAudio(call.id, "audio-stream.mp3", SAMPLE, "audio/mpeg");
+    const { status, headers, buffer } = await reqBinary(baseUrl, "GET", `/api/calls/${call.id}/audio`);
+    assert.equal(status, 200);
+    assert.equal(headers.get("content-type"), "audio/mpeg");
+    assert.equal(headers.get("accept-ranges"), "bytes");
+    assert.match(headers.get("cache-control") ?? "", /no-store/);
+    assert.deepEqual(buffer, SAMPLE);
+  });
+
+  it("GET /api/calls/:id/audio honors Range header and returns 206 + sliced body", async () => {
+    const call = await storage.createCall({ fileName: "audio-range.mp3", duration: 60, status: "completed" });
+    const SAMPLE = Buffer.from("0123456789ABCDEFGHIJ");
+    await storage.uploadAudio(call.id, "audio-range.mp3", SAMPLE, "audio/mpeg");
+    const res = await fetch(`${baseUrl}/api/calls/${call.id}/audio`, {
+      headers: {
+        "User-Agent": TEST_UA,
+        "Accept-Language": TEST_LANG,
+        "X-Test-Role": "admin",
+        "Range": "bytes=5-9",
+      },
+    });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), `bytes 5-9/${SAMPLE.length}`);
+    const slice = Buffer.from(await res.arrayBuffer());
+    assert.deepEqual(slice, SAMPLE.subarray(5, 10));
+  });
+
+  it("GET /api/calls/:id/audio rejects multi-range / malformed Range with 416 at the edge", async () => {
+    const call = await storage.createCall({ fileName: "audio-bad-range.mp3", duration: 60, status: "completed" });
+    const SAMPLE = Buffer.from("0123456789");
+    await storage.uploadAudio(call.id, "audio-bad-range.mp3", SAMPLE, "audio/mpeg");
+    // Multi-range: legal HTTP, but we reject so <audio> never sees multipart/byteranges
+    const res = await fetch(`${baseUrl}/api/calls/${call.id}/audio`, {
+      headers: {
+        "User-Agent": TEST_UA,
+        "Accept-Language": TEST_LANG,
+        "X-Test-Role": "admin",
+        "Range": "bytes=0-2,5-7",
+      },
+    });
+    assert.equal(res.status, 416);
+  });
+
+  it("GET /api/calls/:id/audio STREAM_AUDIO=false uses buffered fallback and returns identical bytes", async () => {
+    const call = await storage.createCall({ fileName: "audio-buffered.mp3", duration: 60, status: "completed" });
+    const SAMPLE = Buffer.from("BUFFERED_FALLBACK_PATH_BYTES_0123456789");
+    await storage.uploadAudio(call.id, "audio-buffered.mp3", SAMPLE, "audio/mpeg");
+    const prev = process.env.STREAM_AUDIO;
+    process.env.STREAM_AUDIO = "false";
+    try {
+      const { status, buffer } = await reqBinary(baseUrl, "GET", `/api/calls/${call.id}/audio`);
+      assert.equal(status, 200);
+      assert.deepEqual(buffer, SAMPLE);
+    } finally {
+      if (prev === undefined) delete process.env.STREAM_AUDIO;
+      else process.env.STREAM_AUDIO = prev;
+    }
+  });
+
+  it("GET /api/calls/:id/audio returns 401 when unauthenticated — no stream begins", async () => {
+    const call = await storage.createCall({ fileName: "audio-auth.mp3", duration: 60, status: "completed" });
+    await storage.uploadAudio(call.id, "audio-auth.mp3", Buffer.from("DATA"), "audio/mpeg");
+    const res = await fetch(`${baseUrl}/api/calls/${call.id}/audio`, {
+      headers: {
+        "User-Agent": TEST_UA,
+        "Accept-Language": TEST_LANG,
+        "X-Test-Role": "none",
+      },
+    });
+    assert.equal(res.status, 401);
+  });
+
+  it("GET /api/calls/:id/audio returns 404 when no archived audio", async () => {
+    const call = await storage.createCall({ fileName: "audio-missing.mp3", duration: 60, status: "completed" });
+    // No uploadAudio — getAudioFiles returns []
+    const { status } = await req(baseUrl, "GET", `/api/calls/${call.id}/audio`);
+    assert.equal(status, 404);
+  });
+
   after((_, done) => {
     server.close(done);
   });
