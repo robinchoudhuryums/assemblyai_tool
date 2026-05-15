@@ -203,6 +203,23 @@ export const getQueryFn: <T>(options?: {
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+      // Trigger an immediate /api/auth/me re-check so AuthenticatedApp
+      // detects session expiry without waiting up to 60s for the next
+      // poll. Without this, a server-side fingerprint kill or session
+      // delete leaves background pages rendering with `null` data
+      // (looks like "Call not found" / generic empty state) for up to
+      // a minute before the auth poll catches up.
+      //
+      // Skip during the login grace period so a transient 401 between
+      // login response and cookie propagation doesn't invalidate the
+      // auth query mid-handshake. Skip when the failing query IS
+      // /api/auth/me — that query returning null already signals
+      // expiry to AuthenticatedApp, and invalidating itself would just
+      // hammer the endpoint.
+      const inLoginGrace = lastLoginAt && Date.now() - lastLoginAt < LOGIN_GRACE_MS;
+      if (!inLoginGrace && url !== "/api/auth/me") {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      }
       return null;
     }
 

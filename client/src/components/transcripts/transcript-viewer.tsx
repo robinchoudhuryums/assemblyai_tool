@@ -344,11 +344,16 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
 
   // Inline-feedback index: group AI feedback items by the transcript
   // segment they reference via the AI-emitted timestamp. Items without a
-  // parseable timestamp stay in the side rail only. Items whose timestamp
-  // falls before the first segment or after the last are attached to the
-  // nearest segment so nothing is silently dropped. `validateTimestamps`
+  // parseable timestamp stay in the side rail only. `validateTimestamps`
   // on the server already strips timestamps beyond call duration, so the
   // no-match case is extremely rare in practice.
+  //
+  // Matching: prefer a segment whose [start, end] contains the timestamp.
+  // If none contain it (timestamp lands in inter-segment silence — common
+  // for long pauses / hold music / dead air), pick the segment whose
+  // midpoint is closest. The prior "last segment whose start <= ts" rule
+  // could attach feedback to a segment many seconds before its true
+  // referent when the timestamp fell in a long silence between segments.
   // MUST be called before early returns to respect Rules of Hooks.
   type InlineFeedbackItem = { kind: "strength" | "suggestion"; text: string; timestampMs: number };
   const inlineFeedbackBySegment = useMemo<Record<number, InlineFeedbackItem[]>>(() => {
@@ -371,18 +376,30 @@ export default function TranscriptViewer({ callId }: TranscriptViewerProps) {
         const ts = obj.timestamp;
         const timestampMs = parseAiTimestampToMs(ts);
         if (timestampMs == null) continue;
-        // Binary-search-ish linear scan for the segment containing this ms.
-        // transcriptSegments are sorted by start; pick the last segment
-        // whose start <= timestampMs.
+        // First pass: prefer a segment containing the timestamp.
         let segIdx = -1;
         for (let i = 0; i < transcriptSegments.length; i++) {
-          if (transcriptSegments[i].start <= timestampMs) {
+          const seg = transcriptSegments[i];
+          if (seg.start <= timestampMs && timestampMs <= seg.end) {
             segIdx = i;
-          } else {
             break;
           }
         }
-        if (segIdx === -1) segIdx = 0; // before first — attach to first
+        // Fallback: nearest segment by midpoint distance.
+        if (segIdx === -1) {
+          let bestIdx = 0;
+          let bestDist = Infinity;
+          for (let i = 0; i < transcriptSegments.length; i++) {
+            const seg = transcriptSegments[i];
+            const mid = (seg.start + seg.end) / 2;
+            const dist = Math.abs(timestampMs - mid);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestIdx = i;
+            }
+          }
+          segIdx = bestIdx;
+        }
         (result[segIdx] ||= []).push({ kind, text, timestampMs });
       }
     };
